@@ -1,0 +1,13 @@
+entity: pwi4_service
+key: PWI4Config
+value:
+  endpoints:
+    - host: planewave-sim
+      port: 8220
+      devices:
+        - entity: sim_mount
+          device_type: mount
+          status_frequency: 1.0
+          park_absolute: true
+          park_axis0_degrees: 30
+          park_axis1_degrees: 0

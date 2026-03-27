@@ -1,0 +1,43 @@
+[project]
+site_name = "SensorKit"
+site_description = ""
+site_author = ""
+docs_dir = "docs"
+site_dir = "site"
+
+nav = [
+  { "Home" = "index.md" },
+  { "Installation" = "installation.md" },
+  { "Configuration" = "configuration.md" },
+  { "Device services" = "devices.md" },
+  { "Sensor controller" = "sensor.md" },
+  { "Agent" = "agent.md" },
+  { "CLI reference" = "cli.md" },
+  { "API reference" = "api.md" },
+]
+
+[project.theme]
+language = "en"
+features = [
+    "content.code.annotate",
+    "content.code.copy",
+    "navigation.footer",
+    "navigation.indexes",
+    "navigation.instant",
+    "navigation.instant.prefetch",
+    "navigation.path",
+    "navigation.sections",
+    "navigation.top",
+    "navigation.tracking",
+    "search.highlight",
+]
+
+[[project.theme.palette]]
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"

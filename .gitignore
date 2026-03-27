@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+/build/
+/dist/
+/wheels/
+*.egg-info
+
+# Development
+/.venv
+/.idea/
+/.claude/
+/.coverage
+/.pytest_cache
+/.vscode
+
+# Other
+.env
+.sensorkit/
+appdata/
+certs/
+logs/
+tmp/
+de421.bsp
+/site/

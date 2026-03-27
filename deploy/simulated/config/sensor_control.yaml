@@ -1,0 +1,26 @@
+entity: controller_service
+key: SensorConfig
+value:
+  controller_name: sim_sensor
+
+  devices:
+    mount: sim_mount
+    camera: sim_camera
+    dome: sim_dome
+    filter_wheel: sim_fw
+    rotator: sim_rotator
+    focuser: sim_focuser
+
+  site_position: 
+    latitude_degrees: 36.063067
+    longitude_degrees: -115.144828
+    altitude_km: .05
+
+  policies:
+    concurrent_dome_and_mount_init: false
+    concurrent_dome_and_mount_deinit: false
+    dome_open_close_timeout: 120.0
+    concurrent_mount_and_mirror_cover_init: false
+    mirror_cover_open_close_timeout: 60.0
+    mount_init_timeout: 30.0
+    mount_home_timeout: 300.0

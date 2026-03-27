@@ -1,0 +1,311 @@
+from __future__ import annotations
+
+import asyncio
+from typing import Literal, override
+
+from loguru import logger
+
+import sensorkit.api as sk
+from sensorkit.models.devices import Connected, Opened
+from sensorkit.thesky.device import (
+    TheSkyDevice,
+    TheSkyDeviceConfig,
+    TheSkyDeviceState,
+)
+
+
+@sk.declare_device
+class TheSkyDome(TheSkyDevice):
+    """TheSky Dome implementation."""
+    config: TheSkyDomeConfig
+    device_name = "Dome"
+
+    # NOTE: the current implementation assumes that the dome is slaved to the mount (or that a clamshell style dome is
+    # being used). A future version will support a dome that can rotate independently of the mount, but such
+    # functionality would also be required at the core SensorKit level. Additional note: the dome must be unparked
+    # before a GotoAzEl command but not before a FindHome command.
+
+    @sk.on_attach
+    async def entity_init(self):
+        """Restore last known state."""
+        device = sk.device()
+
+        # Restore last known state
+        try:
+            self.state = await device.kv_get_model(TheSkyDomeState)
+            logger.debug(f"restoring state for {device.entity}")
+        except Exception:
+            logger.warning(f"No saved state for {device.entity}")
+            self.state = TheSkyDomeState()
+
+        # Initialize the dome
+        # FIXME: this is temporary, while awaiting updates to the standard controller
+        await self.dome_init(sk.Init())
+
+    @sk.command_handler
+    async def dome_init(self, cmd: sk.Init):
+        """Connect to the hardware, start publishing status, home as needed."""
+        # Connect to the hardware
+        await self.dome_connect(sk.Connect())
+
+        # Start dome status publishing
+        # TODO: Use service context ThreadGroup.
+        logger.debug("starting thesky dome status loop")
+        self._status_task = asyncio.create_task(self.status_publish())
+
+        # Home as needed
+        if self.config.needs_homed:
+            if not self.state.has_been_homed:
+                await self.dome_home(sk.Home())
+
+    @sk.command_handler
+    async def dome_deinit(self, cmd: sk.Deinit):
+        """Stop all motion, send dome to safe position, stop publishing status, disconnect from the hardware."""
+        # Stop all current dome motion
+        await self.dome_stop(sk.Stop())
+
+        # Send the dome to its park position
+        await self.dome_park(sk.MoveToPark())
+
+        # Stop dome status publishing
+        logger.debug("stopping thesky dome status loop")
+        if hasattr(self, "_status_task"):
+            self._status_task.cancel()
+            try:
+                await self._status_task
+            except asyncio.CancelledError:
+                pass
+
+        # Disconnect from the hardware
+        await self.dome_disconnect(sk.Disconnect())
+
+    @sk.on_detach
+    async def entity_deinit(self):
+        """Save current state."""
+        await sk.device().kv_put_model(self.state)
+
+        # De-initialize the dome
+        # FIXME: this is temporary, while awaiting updates to the standard controller
+        await self.dome_deinit(sk.Deinit())
+
+    @sk.command_handler
+    async def dome_connect(self, cmd: sk.Connect):
+        logger.debug("connecting to thesky dome")
+        await self.execute(
+            """
+            sky6Dome.Connect();
+            """
+        )
+
+        # Wait for the dome to connect
+        async with asyncio.timeout(self.config.timeout):
+            await self.poll("""sky6Dome.IsConnected;""", "1")
+
+        self.device_connected = True
+        await sk.device().publish(Connected(is_connected=True))
+
+        logger.debug("connected to thesky dome")
+
+    @sk.command_handler
+    async def dome_disconnect(self, cmd: sk.Disconnect):
+        logger.debug("disconnecting from thesky dome")
+        await self.execute(
+            """
+            sky6Dome.Disconnect();
+            """
+        )
+
+        # Wait for the dome to disconnect
+        async with asyncio.timeout(self.config.timeout):
+            await self.poll("""sky6Dome.IsConnected;""", "0")
+
+        self.device_connected = False
+        await sk.device().publish(Connected(is_connected=False))
+
+        logger.debug("disconnected from thesky dome")
+
+    @sk.command_handler
+    async def dome_park(self, cmd: sk.MoveToPark):
+        self.require_connected()
+        logger.debug("parking thesky dome")
+        await self.execute(
+            """
+            sky6Dome.Park();
+            """
+        )
+
+        # Wait for the dome to finish parking
+        async with asyncio.timeout(self.config.timeout):
+            await self.poll("""sky6Dome.IsParkComplete;""", "1")
+        logger.debug("parked thesky dome")
+
+    async def dome_unpark(self):
+        # This is unique to TheSky. It requires you to unpark the dome before issuing any
+        # other motion command.
+        self.require_connected()
+        logger.debug("unparking thesky dome")
+        await self.execute(
+            """
+            sky6Dome.Unpark();
+            """
+        )
+
+        # Wait for the dome to finish unparking
+        async with asyncio.timeout(self.config.timeout):
+            await self.poll("""sky6Dome.IsUnparkComplete;""", "1")
+        logger.debug("unparked thesky dome")
+
+    @sk.command_handler
+    async def dome_home(self, cmd: sk.Home):
+        self.require_connected()
+        logger.debug("homing thesky dome")
+        await self.execute(
+            """
+            sky6Dome.FindHome();
+            """
+        )
+
+        # Wait for the dome to finish homing
+        async with asyncio.timeout(self.config.timeout):
+            await self.poll("sky6Dome.IsFindHomeComplete;", "1")
+        logger.debug("homed thesky dome")
+
+        # Persist to state
+        self.state.has_been_homed = True
+        await sk.device().kv_put_model(self.state)
+
+    @sk.command_handler
+    async def dome_stop(self, cmd: sk.Stop):
+        self.require_connected()
+        logger.debug("stopping thesky dome")
+        await self.execute(
+            """
+            sky6Dome.Abort();
+            """
+        )
+        await asyncio.sleep(0.1)
+
+        # Wait for the dome to stop
+        async with asyncio.timeout(self.config.timeout):
+            await self.poll("sky6Dome.lastError();", "0")
+        logger.debug("stopped thesky dome")
+
+    @sk.command_handler
+    async def dome_open(self, cmd: sk.Open):
+        # NOTE: the SensorKit agent will send an Init task any time the demand state changes, which is any of service
+        # up/down, target program, and/or context. In the case of the dome, that means opening it. Since opening is a
+        # non-blocking operation in TheSky and may take several minutes, depending on the dome, we first check whether
+        # it is currently opening or is already opened (via state) and return if so. While commanding an 'OpenSlit' on
+        # an already opened dome ought to return instantly in TheSky, their dome simulator executes a non-negligible
+        # time-consuming operation. And finally, slit status is persisted to state to account for domes with no position
+        # recording (and so rely on TheSky recording state transitions).
+        self.require_connected()
+
+        # Wait for homing to complete, e.g. on initial startup
+        if self.config.needs_homed:
+            async with asyncio.timeout(self.config.timeout):
+                while not self.state.has_been_homed:
+                    await asyncio.sleep(self.config.status_frequency)
+
+        logger.debug("opening thesky dome")
+        if self.state.slit_status in ["opening", "open"]:
+            return
+
+        await self.execute(
+            """
+            sky6Dome.OpenSlit();
+            """
+        )
+
+        # Wait for the dome to open
+        async with asyncio.timeout(self.config.timeout):
+            await self.poll("""sky6Dome.IsOpenComplete;""", "1")
+        logger.debug("opened thesky dome")
+
+    @sk.command_handler
+    async def dome_close(self, cmd: sk.Close):
+        # NOTE: see note in dome_open
+        self.require_connected()
+        logger.debug("closing thesky dome")
+        if self.state.slit_status in ["closing", "closed"]:
+            return
+
+        await self.execute(
+            """
+            sky6Dome.CloseSlit();
+            """
+        )
+
+        # Wait for the dome to close
+        async with asyncio.timeout(self.config.timeout):
+            await self.poll("""sky6Dome.IsCloseComplete;""", "1")
+        logger.debug("closed thesky dome")
+
+    async def status_publish(self):
+        while True:
+            try:
+                resp = await self.execute(
+                    """
+                    var Out;
+                    sky6Dome.GetAzEl();
+                    Out = [
+                        sky6Dome.IsConnected,
+                        sky6Dome.slitState(),
+                        sky6Dome.dAz
+                    ];                    
+                    """
+                )
+            except Exception as e:
+                logger.exception(f"Error in status_publish execute: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
+
+            try:
+                #0=unknown, 1=open, 2=closed
+                connected, slit_num, az = [float(x) for x in resp.split(',')]
+                slit_str = {0: "unknown", 1: "open", 2: "closed"}.get(int(slit_num), "unknown")
+
+                connected = bool(connected)
+                self.device_connected = connected
+
+                if self.state.slit_status is None:
+                    self.state.slit_status = "unknown"
+                elif slit_str in ("open", "closed"):
+                    self.state.slit_status = slit_str
+                await sk.device().kv_put_model(self.state)
+
+                # logger.debug(
+                #     f"TheSky dome status: connected={connected}, slit={self.state.slit_status}, az={az}"
+                # )
+
+                device = sk.device()
+                await device.publish(Connected(is_connected=connected))
+                await device.publish(
+                    Opened(is_open=int(slit_num) in (0, 1))
+                )
+
+            except Exception as e:
+                logger.warning(f"Failed to update TheSky dome status ({e})")
+                continue
+
+            # FIXME: Account for query time
+            await asyncio.sleep(self.config.status_frequency)
+
+
+class TheSkyDomeConfig(TheSkyDeviceConfig[TheSkyDome]):
+    """TheSky Dome configuration."""
+    device_type: Literal["dome"] = "dome"
+    needs_homed: bool
+    timeout: float = 300.0
+    status_frequency: float = 1.0
+
+    @override
+    def create_device(self):
+        return TheSkyDome(self)
+
+
+class TheSkyDomeState(TheSkyDeviceState):
+    """TheSky Dome state."""
+    device_type: Literal["dome"] = "dome"
+    has_been_homed: bool = False
+    slit_status: str = "unknown"

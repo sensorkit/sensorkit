@@ -1,0 +1,111 @@
+services:
+  nats:
+    image: nats:2.12-alpine
+    ports:
+      - "4222:4222"
+    command: "-js -m 8222"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8222/varz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  planewave-sim:
+    build: pwi4
+    image: pwi4-sim
+    ports:
+      - "8220:8220"
+      - "6080:6080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8220"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  alpaca-sim:
+    build: ascom
+    image: ascom-sim
+    ports:
+      - "30000:32323"
+    command: "dotnet ascom.alpaca.simulators.dll"
+    restart: unless-stopped
+
+  sk-bootstrap:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    image: sensorkit
+    depends_on:
+      nats:
+        condition: service_healthy
+#      planewave-sim:
+#        condition: service_healthy
+      alpaca-sim:
+        condition: service_started
+    command: kv load /config/*.yaml
+    environment:
+      SENSORKIT_BACKEND_ARG: nats
+    volumes:
+      - ./config:/config:ro
+
+  sk-agent:
+    image: sensorkit
+    command: service run agent sensorkit.auto.agent
+    environment:
+      SENSORKIT_BACKEND_ARG: nats
+    restart: unless-stopped
+    depends_on:
+      sk-bootstrap:
+        condition: service_completed_successfully
+      sk-controller: 
+        condition: service_started
+      sk-planewave:
+        condition: service_started
+      sk-ascom: 
+        condition: service_started
+
+  sk-controller:
+    image: sensorkit
+    command: service run controller_service sensorkit.std.sensor
+    environment:
+      SENSORKIT_BACKEND_ARG: nats
+    restart: unless-stopped
+    depends_on:
+      sk-bootstrap:
+        condition: service_completed_successfully
+
+  sk-ascom:
+    image: sensorkit
+    command: service run ascom_service sensorkit.ascom.service
+    environment:
+      SENSORKIT_BACKEND_ARG: nats
+    restart: unless-stopped
+    depends_on:
+      sk-bootstrap:
+        condition: service_completed_successfully
+
+  sk-planewave:
+    image: sensorkit
+    command: service run pwi4_service sensorkit.pwi4.service
+    environment:
+      SENSORKIT_BACKEND_ARG: nats
+    restart: unless-stopped
+    depends_on:
+      sk-bootstrap:
+        condition: service_completed_successfully
+
+  sk-program:
+    image: sensorkit
+    command: service run sim_program /app/program.py
+    environment:
+      SENSORKIT_BACKEND_ARG: nats
+    volumes:
+      - ./program.py:/app/program.py
+    restart: unless-stopped
+    depends_on:
+      sk-bootstrap:
+        condition: service_completed_successfully
