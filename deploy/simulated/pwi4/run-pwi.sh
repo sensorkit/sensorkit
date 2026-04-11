@@ -1,4 +1,4 @@
-!/usr/bin/bash
+#!/usr/bin/bash
 # Adapted from https://github.com/sdss/lvmpwi/blob/main/container/run-pwi.sh
 
 # Start VNC server.
