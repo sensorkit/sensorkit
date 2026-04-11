@@ -145,7 +145,7 @@ def _service_loop(
         # Loop while we have not had too many consecutive failed restarts.
         while max_restarts == -1 or restarts <= max_restarts:
             # Backoff if required, waking early if the shutdown signal fires.
-            if backoff > 0.0:
+            if backoff > 0.0 and not shutdown_signal.done():
                 logger.info(f"Waiting {backoff:1.0f} sec before restarting {name} ...")
 
             try:
