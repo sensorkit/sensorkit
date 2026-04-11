@@ -1481,7 +1481,6 @@ wheels = [
 
 [[package]]
 name = "sensorkit"
-version = "2.1.25"
 source = { editable = "." }
 dependencies = [
     { name = "astropy" },
@@ -1579,7 +1578,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'ascom'", specifier = ">=0.34.0" },
     { name = "watchdog", marker = "extra == 'filesys'", specifier = ">=6.0.0" },
 ]
-provides-extras = ["filesys", "ascom", "node-platform", "otto", "pwi4", "thesky", "thesky-simulator"]
+provides-extras = ["ascom", "filesys", "node-platform", "otto", "pwi4", "thesky", "thesky-simulator"]
 
 [package.metadata.requires-dev]
 dev = [

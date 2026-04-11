@@ -27,6 +27,10 @@ class LeaseUnavailableError(BackendError):
     """Raised when a lease cannot be acquired because the key is already held."""
 
 
+class LeaseAbandonedError(BackendError):
+    """Raised when a lease is lost unexpectedly (TTL expiry or external deletion)."""
+
+
 class Lease[M: BaseModel | None]:
     """A distributed, TTL-backed lock stored in the KV backend.
 
@@ -81,6 +85,7 @@ class Lease[M: BaseModel | None]:
         self.ttl = ttl
         self._revision = revision
         self.model = model
+        self.expire_called = False
         self._expired = asyncio.Event()
         self._lock = asyncio.Lock()
         self._task = asyncio.create_task(self._expiry_monitor())
@@ -135,6 +140,7 @@ class Lease[M: BaseModel | None]:
         """Expire the lease if it isn't already expired."""
         async with self._lock:
             if not self._expired.is_set():
+                self.expire_called = True
                 logger.debug(f"expiring lease for {self._kv.entity.subject(self._key)}")
 
                 async with asyncio.timeout(1.0):
@@ -203,6 +209,7 @@ class LeaseGroup:
               this happening, and TTLs can always be tuned longer. However, a callback-based
               implementation where refreshes can be performed concurrently could be considered.
         """
+        abandoned = []
         try:
             while True:
                 lease = self._schedule_pop()
@@ -218,10 +225,15 @@ class LeaseGroup:
                 # Wait for a lease to expire, a new lease to be added, or until our next scheduled
                 # refresh. If the return value is False, an expiration occurred.
                 if not await self._wait_for_event():
+                    abandoned = [lease for lease in self._lease_waiters if lease.expired and not lease.expire_called]
                     break
         finally:
             # Expire all leases in the group on expiration of any lease or on error.
             await self.expire()
+
+        if abandoned:
+            keys = ", ".join(lease._key for lease in abandoned)
+            raise LeaseAbandonedError(f"Lease(s) lost unexpectedly: {keys}")
 
     async def expire(self):
         """Expire all leases in the group."""
