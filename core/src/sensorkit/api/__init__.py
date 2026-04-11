@@ -38,7 +38,7 @@ from sensorkit.backend.event import Event, UnknownEvent
 from sensorkit.backend.request import CallContext, CallError, ExtendedResponse, Request
 from sensorkit.common.keyword import Keyword, KeywordDict, declare_keyword
 from sensorkit.core.client import SensorKit, ServiceContext, ServiceRecord, ServiceStatus
-from sensorkit.core.controller import ControllerClient, ControllerState
+from sensorkit.core.controller import ControllerClient, ControllerState, ControllerRef
 from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.device import (
     Abort,
@@ -47,9 +47,10 @@ from sensorkit.core.device import (
     DeviceClient,
     DeviceCommand,
     DeviceListing,
+    DeviceRef,
 )
 from sensorkit.core.impl.device import DeviceImpl
-from sensorkit.core.entity import EntityClient
+from sensorkit.core.entity import EntityClient, EntityRef
 from sensorkit.core.impl.entity import EntityImpl
 from sensorkit.core.state import EventSourcedState
 from sensorkit.core.task import (
@@ -66,6 +67,7 @@ from sensorkit.core.program import (
     OfferInterval,
     ProgramClient,
     ProgramOffering,
+    ProgramRef,
     ProgramState,
 )
 from sensorkit.core.impl.program import ProgramOffers, ProgramImpl
