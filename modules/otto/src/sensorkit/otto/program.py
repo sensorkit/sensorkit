@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 import sensorkit.api as sk
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
-from sensorkit.core.controller import ControllerClient
 from sensorkit.models.devices import SitePosition
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 
@@ -41,9 +40,7 @@ class TLECache(BaseModel):
 @sk.declare_program
 class OttoProgram:
 
-    def __init__(self, config: OttoConfig):
-        self.config = config
-
+    def __init__(self):
         self.task_queue: TaskQueue | None = None
 
         self.tles: Dict[str, Dict[str, str]] = {}
@@ -53,7 +50,7 @@ class OttoProgram:
         self._task_generator: asyncio.Task | None = None
         self._publisher: asyncio.Task | None = None
 
-        self.state: OttoState = OttoState()
+        self.state = OttoState()
         self.list_manager: ObjectListManager | None = None
 
     async def _save_state(self):
@@ -62,17 +59,33 @@ class OttoProgram:
         except Exception as e:
             logger.warning(f"Failed to save state: {e}")
 
-    @sk.on_enable
-    async def program_enable(self):
-        pass
-    #     self.controller_client = ControllerClient(self.program.binding.backend, sk.Entity.at(self.config.controller))
-    #     self._controller_location = await self.controller_client.kv_get_model(SitePosition)
-    #     self.latitude = self._controller_location.latitude_degrees
-    #     self.longitude = self._controller_location.longitude_degrees
-    #     self.altitude_km = self._controller_location.altitude_km
-    #
-    #     # Start automated task generation
-    #     self._task_generator = asyncio.create_task(self.generate_tasks())
+    async def _reload_config(self, future: asyncio.Future[OttoConfig]):
+        async for config in self.program.kv_monitor_model(OttoConfig):
+            self.config = config
+
+            # Determine whether the new configuration has a different object list from current.
+            objs_from_state = set(
+                self.state.whitelist + self.state.graylist + self.state.blacklist
+            )
+
+            if set(config.task.objects) != objs_from_state:
+                # New config. Clear our object lists and start fresh.
+                self.state.whitelist = config.task.objects
+                self.state.graylist = []
+                self.state.blacklist = []
+                logger.info(f"Loaded {len(config.task.objects)} objects from config")
+
+            if not future.done():
+                future.set_result(config)
+
+    async def _load_config(self) -> OttoConfig:
+        fut = asyncio.get_event_loop().create_future()
+
+        # Reload config when it changes
+        self.program.task_group.create_task(self._reload_config(fut))
+
+        await fut
+        return fut.result()
 
     @sk.on_attach
     async def program_init(self):
@@ -84,7 +97,9 @@ class OttoProgram:
             self.state = await self.program.kv_get_model(OttoState)
         except Exception:
             logger.warning(f"No saved state for {self.program.entity}")
-            self.state.whitelist, self.state.graylist, self.state.blacklist = self.config.task.objects, [], []
+
+        # Load initial config
+        await self._load_config()
 
         # Initialize list manager
         self.list_manager = ObjectListManager(self.state, self._save_state)
@@ -121,7 +136,7 @@ class OttoProgram:
         )
 
         # Get site location
-        self.controller_client = ControllerClient(self.program.backend, sk.Entity.at(self.config.controller))
+        self.controller_client = self.program.sensorkit().controller(self.config.controller)
         self._controller_location = await self.controller_client.kv_get_model(SitePosition)
         self.latitude = self._controller_location.latitude_degrees
         self.longitude = self._controller_location.longitude_degrees
@@ -134,8 +149,6 @@ class OttoProgram:
         if self.config.publish.upload:
             logger.debug(f"publishing Otto data for {self.config.publish.sensor_name}")
             self._publisher = asyncio.create_task(self.data_publisher())
-
-        await asyncio.sleep(0.1)
 
     @sk.on_detach
     async def program_deinit(self):

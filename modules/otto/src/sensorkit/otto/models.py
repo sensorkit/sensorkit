@@ -71,7 +71,6 @@ class ServerConfig(BaseModel):
 
 
 class OttoConfig(BaseModel):
-    entity: str
     controller: str
     task: TaskConfig
     collect: CollectConfig

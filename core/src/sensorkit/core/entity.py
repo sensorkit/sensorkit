@@ -93,6 +93,15 @@ class EntityBase:
         entry = await self._kv.get(model_type.__name__)
         return model_type.model_validate_json(entry.value)
 
+    async def kv_monitor_model[M: BaseModel](self, model_type: type[M]):
+        """Monitor changes to a model in the KV store by its class name."""
+        stream = await self._kv.monitor(model_type.__name__)
+
+        async for entry in stream:
+            if not entry.deleted():
+                with contextlib.suppress(ValidationError):
+                    yield model_type.model_validate_json(entry.value)
+
 
 class EntityClient(EntityBase):
     """Object that exposes client-side functionality of an entity."""

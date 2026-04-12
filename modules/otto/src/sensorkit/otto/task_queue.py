@@ -4,6 +4,7 @@ from typing import Union
 
 from loguru import logger
 
+import sensorkit.api as sk
 from sensorkit.std.collect import StandardCollectTask
 
 
@@ -89,9 +90,8 @@ class TaskQueue:
 
 def get_registered_collect_tasks():
     """Get all registered collect task types."""
-    from sensorkit.core.controller import _task_registry
     return tuple(
-        obj for obj in _task_registry._types
+        obj for obj in sk.ControllerTask.registry.entries
         if obj is StandardCollectTask or issubclass(obj, StandardCollectTask)
     )
 
