@@ -46,7 +46,6 @@ from sensorkit.core.device import (
     CommandStarted,
     DeviceClient,
     DeviceCommand,
-    DeviceListing,
     DeviceRef,
 )
 from sensorkit.core.impl.device import DeviceImpl

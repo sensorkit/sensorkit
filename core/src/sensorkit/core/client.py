@@ -10,19 +10,14 @@ from pydantic import BaseModel
 from sensorkit.backend.base import Backend, BackendError, BackendImpl, Entity, ServiceInfo
 from sensorkit.backend.lease import LeaseGroup
 from sensorkit.core.controller import ControllerClient
+from sensorkit.core.device import DeviceClient
+from sensorkit.core.entity import DeviceDetails, EntityClient, EntityInfo
 from sensorkit.core.impl.controller import ControllerImpl
-from sensorkit.core.device import DeviceClient, DeviceListing
 from sensorkit.core.impl.device import DeviceImpl
-from sensorkit.core.entity import EntityClient, EntityInfo, DeviceDetails
 from sensorkit.core.impl.entity import EntityImpl
-from sensorkit.core.program import ProgramClient
 from sensorkit.core.impl.program import ProgramImpl
-from sensorkit.core.trait import (
-    Trait,
-    get_registered_traits,
-    match_archetype,
-    match_traits,
-)
+from sensorkit.core.program import ProgramClient
+from sensorkit.core.trait import Trait
 
 
 class SensorKit:
@@ -67,35 +62,10 @@ class SensorKit:
     async def list_entities(self):
         """Return a mapping of entity to lease-value string for all currently online entities."""
         return {
-            entry.key.entity(): entry.value.decode()
+            entry.key.entity(): EntityInfo.model_validate_json(entry.value)
             for entry in await self.backend.key_value().get_all(deep=True)
-            if entry.key.prop == "EntityLease"
+            if entry.key.prop == "EntityInfo"
         }
-
-    async def list_devices(self) -> list[DeviceListing]:
-        """List all online devices with their resolved traits and archetypes."""
-        all_traits = get_registered_traits()
-        listings: list[DeviceListing] = []
-
-        for entry in await self.backend.key_value().get_all(deep=True):
-            if entry.key.prop != "EntityInfo":
-                continue
-
-            info = EntityInfo.model_validate_json(entry.value)
-            if not isinstance(info.details, DeviceDetails):
-                continue
-
-            entity = entry.key.entity()
-            listings.append(
-                DeviceListing(
-                    name=str(entity),
-                    entity=entity,
-                    archetype=match_archetype(info.details),
-                    traits=match_traits(info.details, all_traits),
-                )
-            )
-
-        return listings
 
     async def find_devices(self, *, match_trait: Trait) -> list[DeviceClient]:
         """Return DeviceClients for all online devices matching the given trait."""

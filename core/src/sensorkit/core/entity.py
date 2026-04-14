@@ -25,6 +25,7 @@ from sensorkit.common.keyword import (
     get_keyword_info,
     validate_keyword_json,
 )
+from sensorkit.core.trait import match_archetype, match_traits
 from sensorkit.data.graph import DataGraph
 
 if TYPE_CHECKING:
@@ -46,6 +47,14 @@ class DeviceDetails(BaseModel):
 
     supported_commands: set[str]
     """Identifiers of each command supported by this device."""
+
+    @functools.cached_property
+    def archetype(self):
+        return match_archetype(self)
+
+    @functools.cached_property
+    def traits(self):
+        return match_traits(self)
 
 
 class ControllerDetails(BaseModel):

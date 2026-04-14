@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sensorkit.core.entity import DeviceDetails
     from sensorkit.core.device import DeviceCommand
+    from sensorkit.core.entity import DeviceDetails
 
 # Global registries, auto-populated by declare_trait() and declare_archetype().
 _trait_registry: set[Trait] = set()
@@ -127,9 +127,10 @@ def get_registered_archetypes() -> frozenset[Archetype]:
     return frozenset(_archetype_registry)
 
 
-def match_traits(details: DeviceDetails, traits: Iterable[Trait]) -> list[Trait]:
+def match_traits(details: DeviceDetails, traits: Iterable[Trait] | None = None) -> list[Trait]:
     """Return all traits from the given iterable that the device satisfies."""
-    return [t for t in traits if t.match(details)]
+    traits_iter = traits if traits is not None else _trait_registry
+    return [t for t in traits_iter if t.match(details)]
 
 
 def match_archetype(details: DeviceDetails) -> Archetype | None:

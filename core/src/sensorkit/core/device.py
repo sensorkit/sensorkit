@@ -90,14 +90,6 @@ run_command_request = Request.define(
     result=CommandResult,
 )
 
-@dataclass
-class DeviceListing:
-    """Describes a discovered device and its resolved traits."""
-    name: str
-    entity: Entity
-    archetype: Trait | None
-    traits: list[Trait]
-
 
 class DeviceClient(EntityClient):
     """Object that exposes client-side functionality of a Device."""

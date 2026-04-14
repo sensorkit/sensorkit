@@ -4,6 +4,8 @@ import asyncio
 
 import pytest
 
+from sensorkit.core.entity import EntityInfo
+
 
 @pytest.mark.asyncio
 async def test_register_service(kit):
@@ -55,9 +57,10 @@ async def test_list_entities(kit, service_context):
         gen = await service_context.register_entity("generic")
         dev = await service_context.register_device("device")
 
-        # Publish EntityInfo for both so they are fully visible (not strictly required for leases)
+        # Publish EntityInfo for all so they are fully visible
         await gen.publish_entity_info()
         await dev.publish_entity_info()
+        await service_context.publish_entity_info()
 
         entities = await kit.list_entities()
 
@@ -67,30 +70,5 @@ async def test_list_entities(kit, service_context):
         assert service_context.entity in entities
 
         # Lease values are bytes->str JSON of ServiceInfo; sanity check it's a string
-        assert isinstance(entities[gen.entity], str)
-        assert isinstance(entities[dev.entity], str)
-
-
-@pytest.mark.asyncio
-async def test_list_devices(kit, service_context):
-    async with asyncio.timeout(2.0):
-        # Register one device and one generic entity
-        dev = await service_context.register_device("dev1")
-        gen = await service_context.register_entity("gen1")
-
-        # Publish EntityInfo so list_devices can discover from KV
-        await dev.publish_entity_info()
-        await gen.publish_entity_info()
-
-        listings = await kit.list_devices()
-
-        # Only the device should be listed
-        assert any(l.entity == dev.entity for l in listings)
-        assert all(l.entity != gen.entity for l in listings)
-
-        # Validate key fields on the found listing
-        listing = next(l for l in listings if l.entity == dev.entity)
-        assert listing.name == str(dev.entity)
-        # With no registered traits, expect empty traits and no archetype
-        assert listing.traits == []
-        assert listing.archetype is None
+        assert isinstance(entities[gen.entity], EntityInfo)
+        assert isinstance(entities[dev.entity], EntityInfo)
