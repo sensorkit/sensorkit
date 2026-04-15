@@ -14,6 +14,7 @@ from sensorkit.thesky.device import (
     TheSkyDeviceState,
 )
 
+
 @sk.declare_keyword
 class GoodToGo(BaseModel):
     good_to_go: bool
@@ -22,12 +23,12 @@ class GoodToGo(BaseModel):
 @sk.declare_device
 class TheSkyWeather(TheSkyDevice):
     """TheSky Weather implementation."""
+
     config: TheSkyDeviceConfig
     device_name = "Weather"
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state and start status publishing."""
         device = sk.device()
 
         # Restore last known state
@@ -42,15 +43,22 @@ class TheSkyWeather(TheSkyDevice):
         # FIXME: this is temporary, while awaiting updates to the standard controller
         await self.weather_init(sk.Init())
 
+    @sk.on_detach
+    async def entity_deinit(self):
+        await sk.device().kv_put_model(self.state)
+
+        # De-initialize the weather
+        # FIXME: this is temporary, while awaiting updates to the standard controller
+        await self.weather_deinit(sk.Deinit())
+
     @sk.command_handler
     async def weather_init(self, cmd: sk.Init):
-        """Connect to the hardware, start publishing status."""
         # Connect to the hardware
         await self.weather_connect(sk.Connect())
 
         # Start weather status publishing
         logger.debug("starting thesky weather status loop")
-        self._status_task = asyncio.create_task(self.status_publish())
+        self.start_status_loop(self.status_publish())
 
         # Wait for initial status
         async with asyncio.timeout(self.config.timeout):
@@ -59,27 +67,15 @@ class TheSkyWeather(TheSkyDevice):
 
     @sk.command_handler
     async def weather_deinit(self, cmd: sk.Deinit):
-        """Stop publishing status, disconnect from the hardware."""
+        # Connect to the hardware
+        await self.weather_connect(sk.Connect())
+
         # Stop weather status publishing
         logger.debug("stopping thesky weather status loop")
-        if hasattr(self, "_status_task"):
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
+        await self.stop_status_loop()
 
         # Disconnect from the hardware
         await self.weather_disconnect(sk.Disconnect())
-
-    @sk.on_detach
-    async def entity_deinit(self):
-        """Save current state."""
-        await sk.device().kv_put_model(self.state)
-
-        # De-initialize the weather
-        # FIXME: this is temporary, while awaiting updates to the standard controller
-        await self.weather_deinit(sk.Deinit())
 
     @sk.command_handler
     async def weather_connect(self, cmd: sk.Connect):
@@ -138,7 +134,7 @@ class TheSkyWeather(TheSkyDevice):
                 continue
 
             try:
-                connected, good_to_go = [float(x) for x in resp.split(',')]
+                connected, good_to_go = [float(x) for x in resp.split(",")]
 
                 connected = bool(connected)
                 self.device_connected = connected
@@ -161,6 +157,7 @@ class TheSkyWeather(TheSkyDevice):
 
 class TheSkyWeatherConfig(TheSkyDeviceConfig[TheSkyWeather]):
     """TheSky Weather configuration."""
+
     device_type: Literal["weather"] = "weather"
     timeout: float = 60.0
     status_frequency: float = 5.0
@@ -172,5 +169,5 @@ class TheSkyWeatherConfig(TheSkyDeviceConfig[TheSkyWeather]):
 
 class TheSkyWeatherState(TheSkyDeviceState):
     """TheSky Weather state."""
+
     device_type: Literal["weather"] = "weather"
-    # Add weather-specific state fields here as needed in the future

@@ -1,17 +1,25 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal
+import math
+from typing import Any, Literal, override
 
 from astropy import units as u
-from astropy.coordinates import ICRS, AltAz as AstropyAltAz, EarthLocation, SkyCoord
+from astropy.coordinates import ICRS, EarthLocation, SkyCoord
+from astropy.coordinates import AltAz as AstropyAltAz
 from astropy.time import Time
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.astro.common import Geodetic
-from sensorkit.astro.target import AltAzTarget, EphemerisTarget, FrameTarget, ICRSTarget, TLETarget
+from sensorkit.astro.target import (
+    AltAzTarget,
+    EphemerisTarget,
+    FrameTarget,
+    ICRSTarget,
+    TLETarget,
+)
 from sensorkit.models.devices import (
     AltAzArcseconds,
     AltAzPointing,
@@ -35,196 +43,260 @@ from sensorkit.models.devices import (
     SetAzimuthWrapRangeMin,
     SetParkPosition,
 )
-from sensorkit.pwi4._async_driver import AsyncPWI4
-from sensorkit.pwi4.api import PWI4, MountAPI
-from sensorkit.pwi4.models import PWI4StatusModel
+from sensorkit.pwi4.device import (
+    PWI4Client,
+    PWI4Device,
+    PWI4DeviceConfig,
+    PWI4DeviceState,
+)
 
-
-class MountConfig(BaseModel):
-    """Configuration specific to mount devices."""
-    device_type: Literal["mount"] = "mount"
-    entity: str
-    status_frequency: float = 1.0
-
-    park_absolute: bool = False
-    park_axis0_degrees: float | None = None
-    park_axis1_degrees: float | None = None
-
-    disable_axis_on_deinit: bool = False
-
-@sk.declare_keyword
-class MountAxisRates(BaseModel):
-    axis: list[AxisRate]
 
 @sk.declare_keyword
 class MountAxisEnabled(BaseModel):
     axis: list[AxisEnabled]
 
+
 @sk.declare_keyword
 class MountTargetDistance(BaseModel):
     axis: list[sk.AxisTargetDistance]
 
-class CustomPathNew(sk.DeviceCommand):
-    command_id: Literal["CustomPathNew"] = "CustomPathNew"
-    coord_type: str
+
+async def wrap_autocenter_loop(
+    client: PWI4Client,
+    interval: float = 60.0,
+    deadband_deg: float = 10.0,
+):
+    """Background task that keeps azimuth wrap centered.
+
+    Periodically reads the current axis0 position and adjusts the wrap
+    range minimum to keep it centered, preventing the mount from hitting
+    a cable wrap limit during long tracking sessions.
+    """
+
+    while True:
+        try:
+            st = await client.status()
+
+            pos = client.get_float(st, "mount.axis0.position_degs")
+            min_mech = client.get_float(st, "mount.axis0.min_mech_position_degs")
+            max_mech = client.get_float(st, "mount.axis0.max_mech_position_degs")
+            current_min = client.get_float(st, "mount.axis0_wrap_range_min_degs")
+
+            desired_min = pos - 180.0
+            desired_min = max(desired_min, min_mech)
+            desired_min = min(desired_min, max_mech - 360.0)
+
+            if abs(desired_min - current_min) >= deadband_deg:
+                await client.request(
+                    "/mount/set_axis0_wrap_range_min",
+                    params={"degs": desired_min},
+                )
+        except Exception:
+            pass
+
+        await asyncio.sleep(interval)
 
 
-class CustomPathAddPointList(sk.DeviceCommand):
-    command_id: Literal["CustomPathAddPointList"] = "CustomPathAddPointList"
-    points: list[tuple[float, float, float]]  # (jdUTC, altDeg, azDeg)
+def altaz_rates_to_radec_rates(
+    alt_deg: float,
+    az_deg: float,
+    alt_rate: float,
+    az_rate: float,
+    location: EarthLocation,
+    time: Time,
+) -> tuple[float, float, float, float]:
+    """Convert Alt/Az rates to RA/Dec rates via numerical differentiation.
 
+    Returns (ra_deg, dec_deg, ra_rate_deg_per_sec, dec_rate_deg_per_sec).
+    """
 
-class CustomPathApply(sk.DeviceCommand):
-    command_id: Literal["CustomPathApply"] = "CustomPathApply"
-    update_wrap: bool = False
+    frame = AstropyAltAz(obstime=time, location=location)
+    coord = SkyCoord(alt=alt_deg * u.deg, az=az_deg * u.deg, frame=frame)
+    radec = coord.transform_to(ICRS())
 
+    dt = 0.01
+    new_coord = SkyCoord(
+        alt=(alt_deg + alt_rate * dt) * u.deg,
+        az=(az_deg + az_rate * dt) * u.deg,
+        frame=frame,
+    )
+    new_radec = new_coord.transform_to(ICRS())
 
-class SetSlewTimeConstant(sk.DeviceCommand):
-    command_id: Literal["SetSlewTimeConstant"] = "SetSlewTimeConstant"
-    value: float = Field(...)
+    ra_rate_dps = (new_radec.ra.deg - radec.ra.deg) / dt
+    dec_rate_dps = (new_radec.dec.deg - radec.dec.deg) / dt
+
+    return radec.ra.deg, radec.dec.deg, ra_rate_dps, dec_rate_dps
 
 
 @sk.declare_device
-class MountDevice:
+class PWI4Mount(PWI4Device):
+    """PWI4 mount implementation."""
 
-    def __init__(
-        self,
-        pwi: PWI4,
-        config: MountConfig,
-    ):
-        self.mount: MountAPI = pwi.mount
-        self.config = config
-        self.telemetry: MountTelemetryPublisher | None = None
+    config: PWI4MountConfig
+
+    def __init__(self, config: PWI4MountConfig, client: PWI4Client):
+        super().__init__(config=config, client=client)
+        self._geodetic: Geodetic | None = None
+        self._location: EarthLocation | None = None
+        self._wrap_task: asyncio.Task | None = None
 
     @sk.on_attach
-    async def startup(self):
+    async def entity_init(self):
+        device = sk.device()
         try:
-            async with asyncio.timeout(10.0):
-                await self.mount.connect()
+            self.state = await device.kv_get_model(PWI4MountState)
+        except Exception:
+            self.state = PWI4MountState()
 
-                # Fetch initial status before any commands can arrive.
-                self.current_status = await self.mount.status()
+        await self.mount_init(sk.Init())
 
-            # Start polling status.
-            self._monitor_task = asyncio.create_task(self.monitor())
-
-            self.telemetry = MountTelemetryPublisher(
-                binding=sk.device(),
-                api=self.mount,
-                frequency=self.config.status_frequency,
-            )
-            await self.telemetry.start()
-        except Exception as e:
-            logger.exception("PWI4 mount startup failed")
-            raise RuntimeError("Mount startup failed") from e
+        # Site location
+        st = await self.client.status()
+        lat = self.client.get_float(st, "site.latitude_degs")
+        lon = self.client.get_float(st, "site.longitude_degs")
+        height_m = self.client.get_float(st, "site.height_meters")
+        self._geodetic = Geodetic(lon=lon, lat=lat, elev=height_m / 1000)
+        self._location = EarthLocation.from_geodetic(lon=lon, lat=lat, height=height_m)
 
     @sk.on_detach
-    async def shutdown(self):
-        try:
-            await self.mount.disconnect()
-            await self.telemetry.stop()
-        except Exception:
-            logger.exception("PWI4 mount shutdown encountered an error")
-
-    async def monitor(self):
-        backoff = 1.0
-        while True:
-            try:
-                self.current_status = await self.mount.status()
-                backoff = 1.0
-                await asyncio.sleep(self.config.status_frequency)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning(f"PWI4 status polling failed: {e}")
-                await asyncio.sleep(backoff)
-                backoff = min(10.0, backoff * 2)
-
-    async def park_mount(self):
-        if self.config.park_absolute:
-            await self.mount.goto_raw(
-                self.config.park_axis0_degrees,
-                self.config.park_axis1_degrees,
-            )
-            await self.mount.stop()
-            await self.mount.set_park_here()
-        else:
-            await self.mount.park()
+    async def entity_deinit(self):
+        await self.mount_deinit(sk.Deinit())
+        await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def connect(self, cmd: sk.Connect):
-        try:
-            await self.mount.connect()
-        except Exception as e:
-            logger.exception("Mount connect failed")
-            raise RuntimeError("Connect failed") from e
+    async def mount_init(self, cmd: sk.Init):
+        self.device_name = "Mount"
 
-    @sk.command_handler
-    async def disconnect(self, cmd: sk.Disconnect):
-        try:
-            await self.mount.disconnect()
-        except Exception as e:
-            logger.exception("Mount disconnect failed")
-            raise RuntimeError("Disconnect failed") from e
+        await self.mount_connect(sk.Connect())
+        self.start_status_loop(self.status_publish())
 
-    @sk.command_handler
-    async def init(self, cmd: sk.Init):
-        try:
-            await self.mount.connect()
-            await asyncio.gather(
-                self.mount.enable(0),
-                self.mount.enable(1)
-            )
+        await asyncio.gather(
+            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.AZIMUTH)),
+            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.ALTITUDE)),
+        )
 
-            status: PWI4StatusModel = await self.mount.status()
-            if (
-                not status.mount.axis0.is_position_initialized
-                or not status.mount.axis1.is_position_initialized
-            ):
-                await self.mount.find_home()
-        except Exception as e:
-            logger.exception("Mount init failed")
-            raise RuntimeError("Init failed") from e
+        await self.mount_home(sk.Home())
 
-    @sk.command_handler
-    async def deinit(self, cmd: sk.Deinit):
-        try:
-            await self.park_mount()
+        await self.setup_ota()
 
-            if self.config.disable_axis_on_deinit:
-                await asyncio.gather(
-                    self.mount.disable(0),
-                    self.mount.disable(1)
+        if self.config.wrap_autocenter:
+            self._wrap_task = asyncio.create_task(
+                wrap_autocenter_loop(
+                    self.client,
+                    interval=self.config.wrap_interval,
+                    deadband_deg=self.config.wrap_deadband_deg,
                 )
-        except Exception as e:
-            logger.exception("Mount deinit failed")
-            raise RuntimeError("Deinit failed") from e
+            )
 
-
-    @sk.command_handler
-    async def enable_altitude(self, cmd: sk.EnableAxis):
-        try:
-            if cmd.axis == MountAxis.ALTITUDE:
-                await self.mount.enable(1)
-            elif cmd.axis == MountAxis.AZIMUTH:
-                await self.mount.enable(0)
-        except Exception as e:
-            logger.exception("Enable axis failed")
-            raise RuntimeError("EnableAxis failed") from e
+        async with asyncio.timeout(self.config.timeout):
+            while self.device_connected is None:
+                await asyncio.sleep(self.config.status_frequency)
 
     @sk.command_handler
-    async def disable_axis(self, cmd: sk.DisableAxis):
-        try:
-            if cmd.axis == MountAxis.ALTITUDE:
-                await self.mount.disable(1)
-            elif cmd.axis == MountAxis.AZIMUTH:
-                await self.mount.disable(0)
-        except Exception as e:
-            logger.exception("Disable axis failed")
-            raise RuntimeError("DisableAxis failed") from e
+    async def mount_deinit(self, cmd: sk.Deinit):
+        if self._wrap_task is not None:
+            self._wrap_task.cancel()
+            try:
+                await self._wrap_task
+            except asyncio.CancelledError:
+                pass
+
+        await self.mount_park(sk.MoveToPark())
+
+        await asyncio.gather(
+            self.mount_disable_axis(sk.DisableAxis(axis=MountAxis.AZIMUTH)),
+            self.mount_disable_axis(sk.DisableAxis(axis=MountAxis.ALTITUDE)),
+        )
+
+        await self.stop_status_loop()
 
     @sk.command_handler
-    async def follow_target(self, cmd: sk.FollowTarget):
+    async def mount_connect(self, cmd: sk.Connect):
+        logger.debug("connecting to mount")
+        await self.client.request("/mount/connect")
+
+        async with asyncio.timeout(self.config.timeout):
+            await self.client.poll(
+                lambda s: self.client.get_bool(s, "mount.is_connected"),
+            )
+
+        self.device_connected = True
+        await sk.device().publish(Connected(is_connected=True))
+        logger.debug("connected to mount")
+
+    @sk.command_handler
+    async def mount_disconnect(self, cmd: sk.Disconnect):
+        logger.debug("disconnecting from mount")
+        await self.client.request("/mount/disconnect")
+
+        async with asyncio.timeout(self.config.timeout):
+            await self.client.poll(
+                lambda s: not self.client.get_bool(s, "mount.is_connected"),
+            )
+
+        self.device_connected = False
+        await sk.device().publish(Connected(is_connected=False))
+        logger.debug("disconnected from mount")
+
+    @sk.command_handler
+    async def mount_home(self, cmd: sk.Home):
+        self.require_connected()
+
+        # Check if mount has already homed
+        st = await self.client.status()
+        if self.client.get_bool(
+            st, "mount.axis0.is_position_initialized"
+        ) and self.client.get_bool(st, "mount.axis1.is_position_initialized"):
+            return
+
+        logger.debug("homing mount")
+        await self.client.request("/mount/find_home")
+        await self.client.poll(
+            lambda s: (
+                self.client.get_bool(s, "mount.axis0.is_position_initialized")
+                and self.client.get_bool(s, "mount.axis1.is_position_initialized")
+            ),
+        )
+        logger.debug("homed mount")
+
+    @sk.command_handler
+    async def mount_stop(self, cmd: sk.Stop):
+        logger.debug("stopping mount")
+        await self.client.request("/mount/stop")
+        await self.client.poll(
+            lambda s: (
+                not self.client.get_bool(s, "mount.is_slewing")
+                and not self.client.get_bool(s, "mount.is_tracking")
+            ),
+        )
+        logger.debug("stopped mount")
+
+    @sk.command_handler
+    async def mount_park(self, cmd: sk.MoveToPark):
+        logger.debug("parking mount")
+        await self.client.request("/mount/park")
+        await self.client.poll(
+            lambda s: (
+                not self.client.get_bool(s, "mount.is_slewing")
+                and not self.client.get_bool(s, "mount.is_tracking")
+            ),
+        )
+        logger.debug("parked mount")
+
+    @sk.command_handler
+    async def mount_enable_axis(self, cmd: sk.EnableAxis):
+        axis = 0 if cmd.axis == MountAxis.AZIMUTH else 1
+        await self.client.request("/mount/enable", params={"axis": axis})
+
+    @sk.command_handler
+    async def mount_disable_axis(self, cmd: sk.DisableAxis):
+        axis = 0 if cmd.axis == MountAxis.AZIMUTH else 1
+        await self.client.request("/mount/disable", params={"axis": axis})
+
+    @sk.command_handler
+    async def mount_follow_target(self, cmd: sk.FollowTarget):
+        self.require_connected()
+
         target = await cmd.target.adapt(
             ICRSTarget,
             AltAzTarget,
@@ -232,400 +304,346 @@ class MountDevice:
             (FrameTarget, ReferenceFrame.ALTAZ),
             TLETarget,
             (EphemerisTarget, ReferenceFrame.ICRF),
-            observer=Geodetic(
-                lon=self.current_status.site.longitude_degs,
-                lat=self.current_status.site.latitude_degs,
-                elev=self.current_status.site.height_meters / 1000,
-            )
+            observer=self._geodetic,
         )
 
         match target:
             case ICRSTarget():
-                await self.mount.goto_ra_dec_j2000(
-                    ra_hours=target.coords.ra,
-                    dec_degs=target.coords.dec,
+                logger.debug("executing RADec follow")
+                await self.client.request(
+                    "/mount/goto_ra_dec_j2000",
+                    params={
+                        "ra_hours": target.coords.ra,
+                        "dec_degs": target.coords.dec,
+                    },
                 )
+
+                await self.client.poll(
+                    lambda s: (
+                        not self.client.get_bool(s, "mount.is_slewing")
+                        and self.client.get_bool(s, "mount.is_tracking")
+                    ),
+                    delay=1,
+                )
+
+                logger.debug("following RADec target")
+
             case AltAzTarget():
-                await self.mount.goto_alt_az(
-                    alt_degs=target.coords.alt,
-                    az_degs=target.coords.az,
+                await self.client.request(
+                    "/mount/goto_alt_az",
+                    params={
+                        "alt_degs": target.coords.alt,
+                        "az_degs": target.coords.az,
+                    },
                 )
+
+                await self.client.poll(
+                    lambda s: not self.client.get_bool(s, "mount.is_slewing"),
+                    delay=1,
+                )
+
             case TLETarget():
-                await self.mount.follow_tle(
-                    line1=target.tle.line0,
-                    line2=target.tle.line1,
-                    line3=target.tle.line2,
+                await self.client.request(
+                    "/mount/follow_tle",
+                    params={
+                        "line1": target.tle.line0,
+                        "line2": target.tle.line1,
+                        "line3": target.tle.line2,
+                    },
                 )
+
+                await self.client.poll(
+                    lambda s: (
+                        not self.client.get_bool(s, "mount.is_slewing")
+                        and self.client.get_bool(s, "mount.is_tracking")
+                    ),
+                    delay=1,
+                )
+
             case EphemerisTarget():
-                await self.mount.radecpath_new()
-
+                await self.client.request("/mount/radecpath/new")
                 for i in range(len(target.jds)):
-                    await self.mount.radecpath_add_point(
-                        jd=target.jds[i],
-                        ra_j2000_hours=target.points[i].ra / 15,
-                        dec_j2000_degs=target.points[i].dec,
+                    await self.client.request(
+                        "/mount/radecpath/add_point",
+                        params={
+                            "jd": target.jds[i],
+                            "ra_j2000_hours": target.points[i].ra / 15,
+                            "dec_j2000_degs": target.points[i].dec,
+                        },
                     )
+                await self.client.request("/mount/radecpath/apply")
 
-                await self.mount.radecpath_apply()
+                await self.client.poll(
+                    lambda s: (
+                        not self.client.get_bool(s, "mount.is_slewing")
+                        and self.client.get_bool(s, "mount.is_tracking")
+                    ),
+                    delay=1,
+                )
+
             case FrameTarget():
-                match cmd.target.frame:
+                match target.frame:
                     case ReferenceFrame.ALTAZ:
-                        await self.mount.tracking_off()
+                        await self.client.request("/mount/tracking_off")
+                        await self.client.poll(
+                            lambda s: not self.client.get_bool(s, "mount.is_tracking"),
+                        )
                     case ReferenceFrame.ICRF:
-                        await self.mount.tracking_on()
-                    case _:
-                        raise RuntimeError(f"Need specific target to track {cmd.target.frame}")
-
-
-    @sk.command_handler
-    async def park(self, cmd: sk.MoveToPark):
-        try:
-            await self.park_mount()
-
-        except Exception as e:
-            logger.exception("MoveToPark failed")
-            raise RuntimeError("MoveToPark failed") from e
+                        await self.client.request("/mount/tracking_on")
+                        await self.client.poll(
+                            lambda s: self.client.get_bool(s, "mount.is_tracking"),
+                        )
 
     @sk.command_handler
-    async def set_park_here(self, cmd: SetParkPosition):
-        try:
-            # Move to requested park position before setting it
-            await self.mount.goto_alt_az(
-                alt_degs=cmd.altitude_degrees, az_degs=getattr(cmd, "azimuth_degrees", None) or cmd.azimuth_degrees, tolerance_deg=0.05
+    async def mount_offset(self, cmd: ApplyOffset):
+        self.require_connected()
+        if isinstance(cmd.offset, RADecArcseconds):
+            await self.client.request(
+                "/mount/offset",
+                params={
+                    "ra_add_arcsec": cmd.offset.right_ascension_arcseconds,
+                    "dec_add_arcsec": cmd.offset.declination_arcseconds,
+                },
             )
-            await self.mount.set_park_here()
-        except Exception as e:
-            logger.exception("SetParkPosition failed")
-            raise RuntimeError("SetParkPosition failed") from e
-
-    @sk.command_handler
-    async def move_home(self, cmd: sk.Home):
-        try:
-            await self.mount.find_home()
-        except Exception as e:
-            logger.exception("Home failed")
-            raise RuntimeError("Home failed") from e
-
-    @sk.command_handler
-    async def halt(self, cmd: sk.Stop):
-        try:
-            await self.mount.stop()
-        except Exception as e:
-            logger.exception("Stop failed")
-            raise RuntimeError("Stop failed") from e
-
-    @sk.command_handler
-    async def offset(self, cmd: ApplyOffset):
-        try:
-            if isinstance(cmd.offset, RADecArcseconds):
-                await self.mount.offset(
-                    ra_arcsec=cmd.offset.right_ascension_arcseconds,
-                    dec_arcsec=cmd.offset.declination_arcseconds,
-                )
-            elif isinstance(cmd.offset, AltAzArcseconds):
-                await self.mount.offset(
-                    axis0_arcsec=cmd.offset.azimuth_arcseconds,
-                    axis1_arcsec=cmd.offset.altitude_arcseconds,
-                )
-            else:
-                raise ValueError("Unsupported offset type")
-        except Exception as e:
-            logger.exception("ApplyOffset failed")
-            raise RuntimeError("ApplyOffset failed") from e
-
-    @sk.command_handler
-    async def set_slew_time_constant(self, cmd: SetSlewTimeConstant):
-        try:
-            await self.mount.set_slew_time_constant(cmd.value)
-        except Exception as e:
-            logger.exception("SetSlewTimeConstant failed")
-            raise RuntimeError("SetSlewTimeConstant failed") from e
-
-    @sk.command_handler
-    async def set_azimuth_wrap_range_min(self, cmd: SetAzimuthWrapRangeMin):
-        try:
-            await self.mount.set_axis0_wrap_range_min(cmd.min)
-            await sk.device().publish(
-                AzimuthWrapRange(min=cmd.min, max=(cmd.min + 360))
+        elif isinstance(cmd.offset, AltAzArcseconds):
+            await self.client.request(
+                "/mount/offset",
+                params={
+                    "axis0_add_arcsec": cmd.offset.azimuth_arcseconds,
+                    "axis1_add_arcsec": cmd.offset.altitude_arcseconds,
+                },
             )
-        except Exception as e:
-            logger.exception("SetAzimuthWrapRangeMin failed")
-            raise RuntimeError("SetAzimuthWrapRangeMin failed") from e
+
+    @sk.command_handler
+    async def mount_set_wrap_range_min(self, cmd: SetAzimuthWrapRangeMin):
+        await self.client.request("/mount/set_axis0_wrap_range_min", params={"degs": cmd.min})
+        await sk.device().publish(AzimuthWrapRange(min=cmd.min, max=cmd.min + 360))
 
     @sk.command_handler
     async def model_add_point(self, cmd: ModelAddPoint):
-        if cmd.reference_frame == ReferenceFrame.ICRF:
-            await self.mount.model_add_point(
-                cmd.right_ascension_hours, cmd.declination_degrees
-            )
-        else:
+        if cmd.reference_frame != ReferenceFrame.ICRF:
             raise ValueError("Mount model points must be ICRF")
+        await self.client.request(
+            "/mount/model/add_point",
+            params={
+                "ra_j2000_hours": cmd.right_ascension_hours,
+                "dec_j2000_degs": cmd.declination_degrees,
+            },
+        )
 
     @sk.command_handler
     async def model_delete_point(self, cmd: ModelDeletePoint):
-        try:
-            await self.mount.model_delete_point(*cmd.indexes)
-        except Exception as e:
-            logger.exception("ModelDeletePoint failed")
-            raise RuntimeError("ModelDeletePoint failed") from e
+        await self.client.request(
+            "/mount/model/delete_point",
+            params={"index": ",".join(str(i) for i in cmd.indexes)},
+        )
 
     @sk.command_handler
     async def model_enable_point(self, cmd: ModelEnablePoint):
-        try:
-            await self.mount.model_enable_point(*cmd.indexes)
-        except Exception as e:
-            logger.exception("ModelEnablePoint failed")
-            raise RuntimeError("ModelEnablePoint failed") from e
+        await self.client.request(
+            "/mount/model/enable_point",
+            params={"index": ",".join(str(i) for i in cmd.indexes)},
+        )
 
     @sk.command_handler
     async def model_disable_point(self, cmd: ModelDisablePoint):
-        try:
-            await self.mount.model_disable_point(*cmd.indexes)
-        except Exception as e:
-            logger.exception("ModelDisablePoint failed")
-            raise RuntimeError("ModelDisablePoint failed") from e
+        await self.client.request(
+            "/mount/model/disable_point",
+            params={"index": ",".join(str(i) for i in cmd.indexes)},
+        )
 
     @sk.command_handler
     async def model_clear_points(self, cmd: ModelClearPoints):
-        try:
-            await self.mount.model_clear_points()
-        except Exception as e:
-            logger.exception("ModelClearPoints failed")
-            raise RuntimeError("ModelClearPoints failed") from e
+        await self.client.request("/mount/model/clear_points")
 
     @sk.command_handler
     async def model_save(self, cmd: ModelSave):
-        try:
-            await self.mount.model_save(cmd.filename)
-        except Exception as e:
-            logger.exception("ModelSave failed")
-            raise RuntimeError("ModelSave failed") from e
+        await self.client.request("/mount/model/save", params={"filename": cmd.filename})
 
     @sk.command_handler
     async def model_load(self, cmd: ModelLoad):
-        try:
-            await self.mount.model_load(cmd.filename)
-        except Exception as e:
-            logger.exception("ModelLoad failed")
-            raise RuntimeError("ModelLoad failed") from e
+        await self.client.request("/mount/model/load", params={"filename": cmd.filename})
 
-class MountTelemetryPublisher:
-    def __init__(self, *, binding: sk.DeviceImpl, api: AsyncPWI4, frequency: float = 1.0):
-        self.binding = binding
-        self.api = api
-        self.frequency = frequency
-        self._task: asyncio.Task | None = None
-
-    async def start(self):
-        self._task = asyncio.create_task(self._run())
-
-    async def stop(self):
-        self._task.cancel()
-
-    async def _run(self):
+    async def status_publish(self):
         backoff = 1.0
         while True:
             try:
-                status: PWI4StatusModel = await self.api.status()
+                st = await self.client.status()
                 backoff = 1.0
-                await asyncio.gather(
-                    self.publish_altaz_pointing(status),
-                    self.publish_axisrates(status),
-                    self.publish_connected(status),
-                    self.publish_radec_pointing(status),
-                    self.publish_sensor_position(status),
-                    self.publish_tracking_error(status),
-                    self.publish_axis_enabled(status),
-                )
-                await asyncio.sleep(self.frequency)
-            except asyncio.CancelledError:
-                break
             except Exception as e:
-                logger.warning(f"PWI4 status polling failed: {e}")
-                # Exponential backoff up to 10s
+                logger.warning(f"PWI4 mount status poll failed: {e}")
                 await asyncio.sleep(backoff)
                 backoff = min(10.0, backoff * 2)
+                continue
 
-    async def publish_sensor_position(self, s: PWI4StatusModel):
-        try:
-            await self.binding.publish(
-                sk.SitePosition(
-                    latitude_degrees=s.site.latitude_degs,
-                    longitude_degrees=s.site.longitude_degs,
-                    altitude_km=((s.site.height_meters) / 1000),
-                )
-            )
-        except Exception:
-            return None
+            try:
+                connected = self.client.get_bool(st, "mount.is_connected")
+                self.device_connected = connected
 
-    async def publish_altaz_pointing(self, s: PWI4StatusModel):
-        try:
-            await self.binding.publish(AltAzPointing(
-                altitude_degrees=s.mount.altitude_degs,
-                azimuth_degrees=s.mount.azimuth_degs,
-            ))
-        except Exception:
-            return None
+                device = sk.device()
+                await device.publish(Connected(is_connected=connected))
 
-    async def publish_radec_pointing(self, s: PWI4StatusModel):
-        try:
-            await self.binding.publish(RADecPointing(
-                right_ascension_hours=s.mount.ra_j2000_hours,
-                declination_degrees=s.mount.dec_j2000_degs,
-                reference_frame=ReferenceFrame.ICRF,
-            ))
-        except Exception:
-            return None
+                if connected:
+                    ra_hours = self.client.get_float(st, "mount.ra_j2000_hours")
+                    dec_degs = self.client.get_float(st, "mount.dec_j2000_degs")
+                    alt_degs = self.client.get_float(st, "mount.altitude_degs")
+                    az_degs = self.client.get_float(st, "mount.azimuth_degs")
 
-
-    async def publish_tracking_error(self, s: PWI4StatusModel):
-        try:
-            await self.binding.publish(
-                MountTargetDistance(
-                    axis=[
-                        sk.AxisTargetDistance(
-                            distance_arcseconds=s.mount.axis0.dist_to_target_arcsec,
-                            rms_error_arcseconds=s.mount.axis0.rms_error_arcsec,
-                            axis=sk.MountAxis.AZIMUTH
-                        ),
-                        sk.AxisTargetDistance(
-                            distance_arcseconds=s.mount.axis1.dist_to_target_arcsec,
-                            rms_error_arcseconds=s.mount.axis1.rms_error_arcsec,
-                            axis=sk.MountAxis.ALTITUDE
+                    await device.publish(
+                        RADecPointing(
+                            right_ascension_hours=ra_hours,
+                            declination_degrees=dec_degs,
+                            reference_frame=ReferenceFrame.ICRF,
                         )
-                    ]
-                )
-            )
+                    )
+                    await device.publish(
+                        AltAzPointing(
+                            altitude_degrees=alt_degs,
+                            azimuth_degrees=az_degs,
+                        )
+                    )
+                    if self._geodetic is not None:
+                        await device.publish(
+                            sk.SitePosition(
+                                latitude_degrees=self._geodetic.lat,
+                                longitude_degrees=self._geodetic.lon,
+                                altitude_km=self._geodetic.elev,
+                            )
+                        )
 
-        except Exception:
-            return None
+                    # Axis rates + RA/Dec rate conversion
+                    az_rate = self.client.get_float(
+                        st, "mount.axis0.measured_velocity_degs_per_sec"
+                    )
+                    alt_rate = self.client.get_float(
+                        st, "mount.axis1.measured_velocity_degs_per_sec"
+                    )
+
+                    if self._location is not None:
+                        _, _, ra_rate, dec_rate = altaz_rates_to_radec_rates(
+                            alt_degs, az_degs, alt_rate, az_rate, self._location, Time.now()
+                        )
+
+                        await device.publish(
+                            AxisRates(
+                                azimuth=AxisRate(
+                                    velocity=az_rate,
+                                    max_velocity=self.client.get_float(
+                                        st, "mount.axis0.max_velocity_degs_per_sec"
+                                    ),
+                                    max_acceleration=self.client.get_float(
+                                        st, "mount.axis0.acceleration_degs_per_sec_sqr"
+                                    ),
+                                    mechanical_position=self.client.get_float(
+                                        st, "mount.axis0.position_degs"
+                                    ),
+                                    min_mechanical_position=self.client.get_float(
+                                        st, "mount.axis0.min_mech_position_degs"
+                                    ),
+                                    max_mechanical_position=self.client.get_float(
+                                        st, "mount.axis0.max_mech_position_degs"
+                                    ),
+                                    axis=MountAxis.AZIMUTH,
+                                ),
+                                altitude=AxisRate(
+                                    velocity=alt_rate,
+                                    max_velocity=self.client.get_float(
+                                        st, "mount.axis1.max_velocity_degs_per_sec"
+                                    ),
+                                    max_acceleration=self.client.get_float(
+                                        st, "mount.axis1.acceleration_degs_per_sec_sqr"
+                                    ),
+                                    mechanical_position=self.client.get_float(
+                                        st, "mount.axis1.position_degs"
+                                    ),
+                                    min_mechanical_position=self.client.get_float(
+                                        st, "mount.axis1.min_mech_position_degs"
+                                    ),
+                                    max_mechanical_position=self.client.get_float(
+                                        st, "mount.axis1.max_mech_position_degs"
+                                    ),
+                                    axis=MountAxis.ALTITUDE,
+                                ),
+                                right_ascension=AxisRate(
+                                    velocity=ra_rate, axis=MountAxis.RIGHT_ASCENSION
+                                ),
+                                declination=AxisRate(
+                                    velocity=dec_rate, axis=MountAxis.DECLINATION
+                                ),
+                            )
+                        )
+
+                    await device.publish(
+                        MountTargetDistance(
+                            axis=[
+                                sk.AxisTargetDistance(
+                                    distance_arcseconds=self.client.get_float(
+                                        st, "mount.axis0.dist_to_target_arcsec"
+                                    ),
+                                    rms_error_arcseconds=self.client.get_float(
+                                        st, "mount.axis0.rms_error_arcsec"
+                                    ),
+                                    axis=MountAxis.AZIMUTH,
+                                ),
+                                sk.AxisTargetDistance(
+                                    distance_arcseconds=self.client.get_float(
+                                        st, "mount.axis1.dist_to_target_arcsec"
+                                    ),
+                                    rms_error_arcseconds=self.client.get_float(
+                                        st, "mount.axis1.rms_error_arcsec"
+                                    ),
+                                    axis=MountAxis.ALTITUDE,
+                                ),
+                            ]
+                        )
+                    )
+
+                    await device.publish(
+                        MountAxisEnabled(
+                            axis=[
+                                AxisEnabled(
+                                    axis=MountAxis.AZIMUTH,
+                                    enabled=self.client.get_bool(st, "mount.axis0.is_enabled"),
+                                ),
+                                AxisEnabled(
+                                    axis=MountAxis.ALTITUDE,
+                                    enabled=self.client.get_bool(st, "mount.axis1.is_enabled"),
+                                ),
+                            ]
+                        )
+                    )
+
+            except Exception as e:
+                logger.warning(f"PWI4 mount status publish failed: {e}")
+
+            await asyncio.sleep(self.config.status_frequency)
+
+    async def setup_ota(self):
+        """Set heater power levels and turn on fans."""
+
+        for role, power in self.config.heaters.items():
+            await self.client.request("/heaters/set", params={"role": role, "power": int(power)})
+            logger.debug(f"set {role} heater power to {power:.0f}%")
+
+        if self.config.fans:
+            roles = ",".join(self.config.fans)
+            await self.client.request("/fans/on", params={"roles": roles})
+            logger.debug(f"set {roles} fans to on")
 
 
-    async def publish_axisrates(self, s: PWI4StatusModel):
-        try:
-            az_rate_dps, alt_rate_dps, t = (
-                s.mount.axis0.measured_velocity_degs_per_sec,
-                s.mount.axis1.measured_velocity_degs_per_sec,
-                Time.now()
-            )
+class PWI4MountConfig(PWI4DeviceConfig[PWI4Mount]):
+    device_type: Literal["mount"] = "mount"
+    status_frequency: float = 1.0
+    wrap_autocenter: bool = False
+    wrap_interval: float = 60.0
+    wrap_deadband_deg: float = 10.0
+    fans: list[str] = []
+    heaters: dict[str, float] = {}
 
-            _, _, ra_rate_dps, dec_rate_dps = self.altaz_rates_to_radec_rates(
-                alt_deg=s.mount.altitude_degs,
-                az_deg=s.mount.azimuth_degs,
-                alt_rate_deg_per_sec=alt_rate_dps,
-                az_rate_deg_per_sec=az_rate_dps,
-                time=t,
-                location=EarthLocation.from_geodetic(
-                    lon=s.site.longitude_degs,
-                    lat=s.site.latitude_degs,
-                    height=s.site.height_meters
-                ),
-            )
+    @override
+    def create_device(self, client: PWI4Client):
+        return PWI4Mount(config=self, client=client)
 
-            await self.binding.publish(
-                AxisRates(
-                    azimuth=AxisRate(
-                        max_acceleration=s.mount.axis0.acceleration_degs_per_sec_sqr,
-                        velocity=s.mount.axis0.measured_velocity_degs_per_sec,
-                        max_velocity=s.mount.axis0.max_velocity_degs_per_sec,
-                        mechanical_position=s.mount.axis0.position_degs,
-                        min_mechanical_position=s.mount.axis0.min_mech_position_degs,
-                        max_mechanical_position=s.mount.axis0.max_mech_position_degs,
-                        axis=sk.MountAxis.AZIMUTH,
-                    ),
-                    altitude=AxisRate(
-                        max_velocity=s.mount.axis1.max_velocity_degs_per_sec,
-                        max_acceleration=s.mount.axis1.acceleration_degs_per_sec_sqr,
-                        velocity=s.mount.axis1.measured_velocity_degs_per_sec,
-                        mechanical_position=s.mount.axis1.position_degs,
-                        min_mechanical_position=s.mount.axis1.min_mech_position_degs,
-                        max_mechanical_position=s.mount.axis1.max_mech_position_degs,
-                        axis=sk.MountAxis.ALTITUDE,
-                    ),
-                    declination=AxisRate(
-                        velocity=dec_rate_dps,
-                        axis=sk.MountAxis.DECLINATION,
-                    ),
-                    right_ascension=AxisRate(
-                        velocity=ra_rate_dps,
-                        axis=sk.MountAxis.RIGHT_ASCENSION,
-                    ),
-                )
-            )
-        except Exception:
-            return None
 
-    async def publish_axis_enabled(self, s: PWI4StatusModel):
-        try:
-            await self.binding.publish(
-                MountAxisEnabled(
-                    axis=[
-                        AxisEnabled(axis=sk.MountAxis.AZIMUTH, enabled=s.mount.axis0.is_enabled),
-                        AxisEnabled(axis=sk.MountAxis.ALTITUDE, enabled=s.mount.axis1.is_enabled)
-                    ]
-                )
-            )
-        except Exception:
-            return None
-
-    async def publish_connected(self, s: PWI4StatusModel):
-        try:
-            await self.binding.publish(
-                Connected(is_connected=bool(s.mount.is_connected) if s else False)
-            )
-        except Exception:
-            await self.binding.publish(
-                Connected(is_connected=False)
-            )
-
-    def altaz_rates_to_radec_rates(
-            self,
-            alt_deg: float,
-            az_deg: float,
-            alt_rate_deg_per_sec: float,
-            az_rate_deg_per_sec: float,
-            location: EarthLocation,
-            time: Time,
-    ) -> tuple[float, float, float, float]:
-        """
-        Convert Alt/Az position and angular rates (deg/sec) into RA/Dec position and rates.
-
-        Returns
-        -------
-        ra_deg : float
-            Right ascension (degrees)
-        dec_deg : float
-            Declination (degrees)
-        ra_rate_deg_per_sec : float
-            d(RA)/dt in deg/sec
-        dec_rate_deg_per_sec : float
-            d(Dec)/dt in deg/sec
-        """
-
-        # Current AltAz coordinate
-        altaz_frame = AstropyAltAz(obstime=time, location=location)
-        coord_altaz = SkyCoord(alt=alt_deg * u.deg, az=az_deg * u.deg, frame=altaz_frame)
-
-        # Convert to RA/Dec
-        coord_radec = coord_altaz.transform_to(ICRS())
-        ra_deg = coord_radec.ra.deg
-        dec_deg = coord_radec.dec.deg
-
-        # === Numerical derivative for rates ===
-        dt = 0.01  # seconds
-
-        # New alt/az after dt
-        new_alt = alt_deg + alt_rate_deg_per_sec * dt
-        new_az = az_deg + az_rate_deg_per_sec * dt
-
-        # Create coordinate at new Alt/Az
-        new_coord_altaz = SkyCoord(alt=new_alt * u.deg, az=new_az * u.deg, frame=altaz_frame)
-
-        # Transform to RA/Dec
-        new_coord_radec = new_coord_altaz.transform_to(ICRS())
-
-        # Compute rates in deg/sec
-        ra_rate_deg_per_sec = (new_coord_radec.ra.deg - ra_deg) / dt
-        dec_rate_deg_per_sec = (new_coord_radec.dec.deg - dec_deg) / dt
-
-        return ra_deg, dec_deg, ra_rate_deg_per_sec, dec_rate_deg_per_sec
+class PWI4MountState(PWI4DeviceState):
+    device_type: Literal["mount"] = "mount"

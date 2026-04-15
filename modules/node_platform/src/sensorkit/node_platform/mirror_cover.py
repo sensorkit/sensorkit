@@ -39,7 +39,7 @@ class NodePlatformMirrorCover(NodePlatformDevice):
 
         # Start mirror cover status publishing
         logger.debug("starting node_platform mirror cover status loop")
-        self._status_task = asyncio.create_task(self.status_publish())
+        self.start_status_loop(self.status_publish())
 
         # Wait for initial status
         async with asyncio.timeout(self.config.timeout):
@@ -60,12 +60,7 @@ class NodePlatformMirrorCover(NodePlatformDevice):
     async def entity_deinit(self):
         """Save current state and stop status publishing."""
         logger.debug("stopping node_platform mirror cover status loop")
-        if hasattr(self, "_status_task"):
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
+        await self.stop_status_loop()
 
         await sk.device().kv_put_model(self.state)
         await self.api.close()

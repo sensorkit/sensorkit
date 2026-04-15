@@ -50,7 +50,7 @@ def parse_thesky_response(response: bytes):
                 if code == 0:
                     return left[:sep].decode(errors="ignore")
                 else:
-                    raise TheSkyError(message=left[sep+1:].decode(errors="ignore"), code=code)
+                    raise TheSkyError(message=left[sep + 1 :].decode(errors="ignore"), code=code)
         case (left, middle, _):
             sep = middle.find(b"|")
             code = int(float(middle[:sep]))
@@ -65,20 +65,19 @@ def parse_thesky_response(response: bytes):
 @dataclass
 class TheSkyDevice:
     """Generic TheSky device."""
+
     config: TheSkyDeviceConfig
 
     device_connected: bool | None = field(default=None, init=False)
     device_name: str = "Device"
+    _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
 
     def require_connected(self):
         """Raise DeviceConnectionError if device is not connected."""
         if not self.device_connected:
             raise DeviceConnectionError(message=f"{self.device_name} not connected", code=-1)
 
-    async def execute(
-        self,
-        script: str
-    ):
+    async def execute(self, script: str):
         """Execute a TheSky script.
 
         Parameters
@@ -89,16 +88,28 @@ class TheSkyDevice:
         lock = _get_script_lock(self.config.host, self.config.port)
 
         async with lock:
-            response = await send_thesky_script(self.config.host, self.config.port, script.encode())
+            response = await send_thesky_script(
+                self.config.host, self.config.port, script.encode()
+            )
             return parse_thesky_response(response)
 
-    async def poll(
-        self,
-        script: str,
-        expected: str,
-        delay: float = 0.1,
-        interval: float = 1.0
-    ):
+    def start_status_loop(self, coro):
+        """Start a background status publishing task, cancelling any existing one."""
+        if self._status_task is not None and not self._status_task.done():
+            self._status_task.cancel()
+        self._status_task = asyncio.create_task(coro)
+
+    async def stop_status_loop(self):
+        """Cancel the background status publishing task."""
+        if self._status_task is not None:
+            self._status_task.cancel()
+            try:
+                await self._status_task
+            except asyncio.CancelledError:
+                pass
+            self._status_task = None
+
+    async def poll(self, script: str, expected: str, delay: float = 0.1, interval: float = 1.0):
         """Poll TheSky for script completion.
 
         Parameters
@@ -122,6 +133,7 @@ class TheSkyDevice:
 
 class TheSkyDeviceConfig[T: TheSkyDevice = TheSkyDevice](BaseModel):
     """Generic TheSky device configuration."""
+
     device_type: Literal[None]
     host: str
     port: int = 3040
@@ -132,10 +144,13 @@ class TheSkyDeviceConfig[T: TheSkyDevice = TheSkyDevice](BaseModel):
 
 class TheSkyDeviceState(BaseModel):
     """Generic TheSky device state."""
+
     device_type: Literal[None]
 
 
 class TheSkyError(Exception):
+    """Base exception for TheSky device errors."""
+
     subtypes: ClassVar[dict[int, type[TheSkyError]]] = {}
     code: int = 0
 
@@ -201,3 +216,11 @@ class ObjectNotFoundError(TheSkyError):
 
 class UnknownCommandError(TheSkyError):
     code = 303
+
+
+class BadWeatherError(TheSkyError):
+    code = 737
+
+
+class TargetLostError(TheSkyError):
+    code = 7501

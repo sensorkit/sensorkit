@@ -1,0 +1,353 @@
+from __future__ import annotations
+
+import asyncio
+from typing import Literal, override
+
+from loguru import logger
+from pydantic import BaseModel
+
+import sensorkit.api as sk
+from alpaca.dome import Dome
+from sensorkit.alpaca.device import (
+    AlpacaDevice,
+    AlpacaDeviceConfig,
+    AlpacaDeviceState,
+)
+from sensorkit.models.devices import Connected, Opened
+from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
+
+_SHUTTER_OPEN = 0
+_SHUTTER_CLOSED = 1
+_SHUTTER_OPENING = 2
+_SHUTTER_CLOSING = 3
+_SHUTTER_ERROR = 4
+
+_SHUTTER_NAMES = {
+    0: "open",
+    1: "closed",
+    2: "opening",
+    3: "closing",
+    4: "error",
+}
+
+
+@sk.declare_keyword
+class AlpacaDomeStatus(BaseModel):
+    """IDomeV3 properties."""
+
+    # State
+    shutter_status: str = "unknown"
+    slewing: bool = False
+    at_home: bool = False
+    at_park: bool = False
+    slaved: bool = False
+
+    # Pointing
+    azimuth: float | None = None
+    altitude: float | None = None
+
+    # Capabilities
+    can_find_home: bool = False
+    can_park: bool = False
+    can_set_altitude: bool = False
+    can_set_azimuth: bool = False
+    can_set_park: bool = False
+    can_set_shutter: bool = False
+    can_slave: bool = False
+    can_sync_azimuth: bool = False
+
+
+@sk.declare_device
+class AlpacaDome(AlpacaDevice):
+    """Alpaca Dome implementation."""
+
+    config: AlpacaDomeConfig
+
+    @sk.on_attach
+    async def entity_init(self):
+        device = sk.device()
+        try:
+            self.state = await device.kv_get_model(AlpacaDomeState)
+        except Exception:
+            self.state = AlpacaDomeState()
+
+        await self.dome_init(sk.Init())
+
+    @sk.on_detach
+    async def entity_deinit(self):
+        await self.dome_deinit(sk.Deinit())
+        await sk.device().kv_put_model(self.state)
+
+    @sk.command_handler
+    async def dome_init(self, cmd: sk.Init):
+        self.device_name = "Dome"
+        self.dome = Dome(self.address, self.config.device_number, self.config.protocol)
+
+        await self.dome_connect(sk.Connect())
+
+        d = self.dome
+
+        # Read capabilities
+        self._can_set_azimuth = await self.get(d, "CanSetAzimuth", False)
+        self._can_set_altitude = await self.get(d, "CanSetAltitude", False)
+        self._can_set_shutter = await self.get(d, "CanSetShutter", False)
+        self._can_find_home = await self.get(d, "CanFindHome", False)
+        self._can_park = await self.get(d, "CanPark", False)
+        self._can_set_park = await self.get(d, "CanSetPark", False)
+        self._can_slave = await self.get(d, "CanSlave", False)
+        self._can_sync_azimuth = await self.get(d, "CanSyncAzimuth", False)
+
+        self.start_status_loop(self.status_publish())
+
+        if self.config.needs_homed and not self.state.has_been_homed:
+            await self.dome_home(sk.Home())
+
+    @sk.command_handler
+    async def dome_deinit(self, cmd: sk.Deinit):
+        await self.stop_status_loop()
+        await self.dome_park(sk.MoveToPark())
+        await self.dome_disconnect(sk.Disconnect())
+
+    @sk.command_handler
+    async def dome_connect(self, cmd: sk.Connect):
+        await self.connect(self.dome, timeout=self.config.timeout)
+        await sk.device().publish(Connected(is_connected=True))
+
+    @sk.command_handler
+    async def dome_disconnect(self, cmd: sk.Disconnect):
+        await self.disconnect(self.dome)
+        await sk.device().publish(Connected(is_connected=False))
+
+    @sk.command_handler
+    async def dome_home(self, cmd: sk.Home):
+        self.require_connected()
+        if not self._can_find_home:
+            logger.warning("Cannot find home")
+            return
+
+        logger.debug("homing dome")
+
+        await self.call(self.dome, "FindHome")
+        await asyncio.sleep(0.5)
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                at_home = await self.get(self.dome, "AtHome", False)
+                slewing = await self.get(self.dome, "Slewing", True)
+                if at_home and not slewing:
+                    break
+                await asyncio.sleep(self.config.status_frequency)
+
+        self.state.has_been_homed = True
+        await sk.device().kv_put_model(self.state)
+
+        logger.debug("homed dome")
+
+    @sk.command_handler
+    async def dome_park(self, cmd: sk.MoveToPark):
+        self.require_connected()
+        if not self._can_park:
+            logger.warning("Cannot park")
+            return
+
+        logger.debug("parking dome")
+        await self.call(self.dome, "Park")
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                at_park = await self.get(self.dome, "AtPark", False)
+                if at_park:
+                    break
+                await asyncio.sleep(self.config.status_frequency)
+
+        logger.debug("parked dome")
+
+    @sk.command_handler
+    async def dome_stop(self, cmd: sk.Stop):
+        self.require_connected()
+        logger.debug("aborting slew")
+        await self.call(self.dome, "AbortSlew")
+        logger.debug("aborted slew")
+
+    @sk.command_handler
+    async def dome_open(self, cmd: OpenEnclosure):
+        self.require_connected()
+        if not self._can_set_shutter:
+            logger.warning("Cannot set shutter")
+            return
+
+        if self.state.shutter_state == "open":
+            return
+
+        logger.debug("opening shutter")
+
+        await self.call(self.dome, "OpenShutter")
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                status = await self.get(self.dome, "ShutterStatus", None)
+                if status == _SHUTTER_OPEN:
+                    break
+                await asyncio.sleep(self.config.status_frequency)
+
+        self.state.shutter_state = "open"
+        await sk.device().kv_put_model(self.state)
+
+        logger.debug("opened shutter")
+
+    @sk.command_handler
+    async def dome_close(self, cmd: CloseEnclosure):
+        self.require_connected()
+        if not self._can_set_shutter:
+            logger.warning("Cannot set shutter")
+            return
+
+        if self.state.shutter_state == "closed":
+            return
+
+        logger.debug("closing shutter")
+
+        await self.call(self.dome, "CloseShutter")
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                status = await self.get(self.dome, "ShutterStatus", None)
+                if status == _SHUTTER_CLOSED:
+                    break
+                await asyncio.sleep(self.config.status_frequency)
+
+        self.state.shutter_state = "closed"
+        await sk.device().kv_put_model(self.state)
+
+        logger.debug("closed shutter")
+
+    @sk.command_handler
+    async def dome_move(self, cmd: MoveEnclosure):
+        self.require_connected()
+        if not self._can_set_azimuth:
+            logger.warning("Cannot set azimuth")
+            return
+
+        logger.debug(
+            f"slewing to altitude={cmd.target_altitude}°, azimuth {cmd.target_azimuth:.1f}°"
+        )
+
+        await self.call(self.dome, "SlewToAzimuth", cmd.target_azimuth)
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                slewing = await self.get(self.dome, "Slewing", True)
+                if not slewing:
+                    break
+                await asyncio.sleep(self.config.status_frequency)
+
+        if cmd.target_altitude is not None and self._can_set_altitude:
+            await self.call(self.dome, "SlewToAltitude", cmd.target_altitude)
+            async with asyncio.timeout(self.config.timeout):
+                while True:
+                    slewing = await self.get(self.dome, "Slewing", True)
+                    if not slewing:
+                        break
+                    await asyncio.sleep(self.config.status_frequency)
+
+        logger.debug(
+            f"slewed to altitude={cmd.target_altitude}°, azimuth {cmd.target_azimuth:.1f}°"
+        )
+
+    async def status_publish(self):
+        while True:
+            try:
+                d = self.dome
+                connected = await self.get(d, "Connected", False)
+                self.device_connected = connected
+
+                device = sk.device()
+                await device.publish(Connected(is_connected=connected))
+
+                if connected:
+                    shutter_status = await self.get(d, "ShutterStatus", None)
+                    slewing = await self.get(d, "Slewing", False)
+                    at_home = await self.get(d, "AtHome", False)
+                    at_park = await self.get(d, "AtPark", False)
+
+                    shutter_name = (
+                        _SHUTTER_NAMES.get(shutter_status, "unknown")
+                        if shutter_status is not None
+                        else "unknown"
+                    )
+                    is_open = (
+                        shutter_status in (_SHUTTER_OPEN, _SHUTTER_OPENING)
+                        if shutter_status is not None
+                        else False
+                    )
+
+                    if shutter_status == _SHUTTER_OPEN:
+                        self.state.shutter_state = "open"
+                    elif shutter_status == _SHUTTER_CLOSED:
+                        self.state.shutter_state = "closed"
+
+                    await device.publish(Opened(is_open=is_open))
+
+                    # Full IDomeV3 status — only include properties the dome supports
+                    properties: dict = {
+                        "shutter_status": shutter_name,
+                        "slewing": slewing,
+                        "at_home": at_home,
+                        "at_park": at_park,
+                    }
+
+                    if self._can_set_azimuth:
+                        properties["can_set_azimuth"] = True
+                        azimuth = await self.get(d, "Azimuth", None)
+                        if azimuth is not None:
+                            properties["azimuth"] = azimuth
+
+                    if self._can_set_altitude:
+                        properties["can_set_altitude"] = True
+                        altitude = await self.get(d, "Altitude", None)
+                        if altitude is not None:
+                            properties["altitude"] = altitude
+
+                    if self._can_slave:
+                        properties["can_slave"] = True
+                        properties["slaved"] = await self.get(d, "Slaved", False)
+
+                    if self._can_find_home:
+                        properties["can_find_home"] = True
+                    if self._can_park:
+                        properties["can_park"] = True
+                    if self._can_set_park:
+                        properties["can_set_park"] = True
+                    if self._can_set_shutter:
+                        properties["can_set_shutter"] = True
+                    if self._can_sync_azimuth:
+                        properties["can_sync_azimuth"] = True
+
+                    properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+                    # logger.debug(
+                    #     f"Alpaca dome status: connected={connected}, shutter_status={shutter_status}, "
+                    #     f"slewing={slewing}, {properties_str}"
+                    # )
+
+                    await device.publish(AlpacaDomeStatus(**properties))
+            except Exception as e:
+                logger.exception(f"Error in dome status publish: {e}")
+
+            await asyncio.sleep(self.config.status_frequency)
+
+
+class AlpacaDomeConfig(AlpacaDeviceConfig[AlpacaDome]):
+    device_type: Literal["dome"] = "dome"
+    needs_homed: bool = False
+    timeout: float = 300.0
+    status_frequency: float = 1.0
+
+    @override
+    def create_device(self):
+        return AlpacaDome(self)
+
+
+class AlpacaDomeState(AlpacaDeviceState):
+    device_type: Literal["dome"] = "dome"
+    has_been_homed: bool = False
+    shutter_state: str = "unknown"

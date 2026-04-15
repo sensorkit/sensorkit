@@ -86,7 +86,7 @@ class NodePlatformWeather(NodePlatformDevice):
 
         # Start weather status publishing
         logger.debug("starting node_platform weather status loop")
-        self._status_task = asyncio.create_task(self.status_publish())
+        self.start_status_loop(self.status_publish())
 
         # Wait for initial connected status
         async with asyncio.timeout(self.config.timeout):
@@ -107,12 +107,7 @@ class NodePlatformWeather(NodePlatformDevice):
     async def entity_deinit(self):
         """Stop status publishing, save state, put the mount back into MANUAL mode."""
         logger.debug("stopping node_platform weather status loop")
-        if hasattr(self, "_status_task"):
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
+        await self.stop_status_loop()
 
         await sk.device().kv_put_model(self.state)
 

@@ -1,0 +1,359 @@
+from __future__ import annotations
+
+import asyncio
+import uuid
+from datetime import UTC, datetime
+from typing import Literal, override
+
+from loguru import logger
+from pydantic import BaseModel
+
+import sensorkit.api as sk
+from sensorkit.data.fits import ArrayInfo
+from sensorkit.models.devices import (
+    CameraSensorSize,
+    Connected,
+    TemperatureUnit,
+)
+from sensorkit.nina.device import (
+    NinaDevice,
+    NinaDeviceConfig,
+    NinaDeviceState,
+)
+from sensorkit.std.instrument import (
+    Binning,
+    CameraSensorTemperature,
+    ConfigureCameraCooler,
+    ConfigureCameraSensor,
+)
+
+
+@sk.declare_keyword
+class NinaCameraStatus(BaseModel):
+    """NINA camera status from /equipment/camera/info."""
+
+    # Identity
+    name: str | None = None
+    display_name: str | None = None
+    device_id: str | None = None
+    connected: bool = False
+
+    # State
+    camera_state: str = "NoState"
+    is_exposing: bool = False
+    exposure_end_time: str | None = None
+    last_download_time: float | None = None
+
+    # Sensor
+    sensor_type: str | None = None
+    x_size: int | None = None
+    y_size: int | None = None
+    pixel_size: float | None = None
+    bit_depth: int | None = None
+    bayer_offset_x: int | None = None
+    bayer_offset_y: int | None = None
+    electrons_per_adu: float | None = None
+
+    # Binning
+    bin_x: int = 1
+    bin_y: int = 1
+    binning_modes: list[dict] | None = None
+
+    # Temperature
+    temperature: float | None = None
+    target_temp: float | None = None
+    temperature_set_point: float | None = None
+    at_target_temp: bool | None = None
+    can_set_temperature: bool = False
+    cooler_on: bool = False
+    cooler_power: float | None = None
+    has_dew_heater: bool = False
+    dew_heater_on: bool = False
+
+    # Gain / Offset
+    gain: int | None = None
+    default_gain: int | None = None
+    gain_min: int | None = None
+    gain_max: int | None = None
+    can_set_gain: bool = False
+    can_get_gain: bool = False
+    gains: list[int] | None = None
+    offset: int | None = None
+    default_offset: int | None = None
+    offset_min: int | None = None
+    offset_max: int | None = None
+    can_set_offset: bool = False
+
+    # USB
+    usb_limit: int | None = None
+    usb_limit_min: int | None = None
+    usb_limit_max: int | None = None
+    can_set_usb_limit: bool = False
+
+    # Readout
+    readout_mode: int | None = None
+    readout_modes: list[str] | None = None
+    readout_mode_for_snap_images: int | None = None
+    readout_mode_for_normal_images: int | None = None
+
+    # Exposure limits
+    exposure_max: float | None = None
+    exposure_min: float | None = None
+
+    # Subsampling
+    can_sub_sample: bool = False
+    is_sub_sample_enabled: bool = False
+    sub_sample_x: int | None = None
+    sub_sample_y: int | None = None
+    sub_sample_width: int | None = None
+    sub_sample_height: int | None = None
+
+    # Misc
+    has_shutter: bool = False
+    battery: float | None = None
+    live_view_enabled: bool = False
+    can_show_live_view: bool = False
+    supported_actions: list[str] | None = None
+
+
+@sk.declare_device
+class NinaCamera(NinaDevice):
+    """NINA Camera implementation."""
+
+    config: NinaCameraConfig
+
+    @sk.on_attach
+    async def entity_init(self):
+        device = sk.device()
+        try:
+            self.state = await device.kv_get_model(NinaCameraState)
+        except Exception:
+            self.state = NinaCameraState()
+
+        await self.camera_init(sk.Init())
+
+    @sk.on_detach
+    async def entity_deinit(self):
+        await self.camera_deinit(sk.Deinit())
+        await sk.device().kv_put_model(self.state)
+
+    @sk.command_handler
+    async def camera_init(self, cmd: sk.Init):
+        self.device_name = "Camera"
+        self._sensor_width: int = 0
+        self._sensor_height: int = 0
+
+        await self.connect("camera")
+        await sk.device().publish(Connected(is_connected=True))
+
+        # Read initial info for sensor dimensions
+        info = await self.info("camera")
+        self._x_size = info.get("XSize", 0)
+        self._y_size = info.get("YSize", 0)
+
+        self.start_status_loop(self.status_publish())
+
+    @sk.command_handler
+    async def camera_deinit(self, cmd: sk.Deinit):
+        await self.stop_status_loop()
+        await self.disconnect("camera")
+        await sk.device().publish(Connected(is_connected=False))
+
+    @sk.command_handler
+    async def camera_connect(self, cmd: sk.Connect):
+        await self.connect("camera")
+        await sk.device().publish(Connected(is_connected=True))
+
+    @sk.command_handler
+    async def camera_disconnect(self, cmd: sk.Disconnect):
+        await self.disconnect("camera")
+        await sk.device().publish(Connected(is_connected=False))
+
+    @sk.command_handler
+    async def camera_set_binning(self, cmd: ConfigureCameraSensor):
+        self.require_connected()
+        if cmd.binning is None:
+            return
+        binning = f"{int(cmd.binning.x)}x{int(cmd.binning.y)}"
+        logger.debug(f"setting binning to {binning}")
+        await self.client.get("/equipment/camera/set-binning", binning=binning)
+        logger.debug(f"set binning to {binning}")
+
+    @sk.command_handler
+    async def camera_set_temperature(self, cmd: ConfigureCameraCooler):
+        self.require_connected()
+        target = cmd.setpoint.temperature
+        logger.debug(f"setting temperature to {target} °C")
+        await self.client.get(
+            "/equipment/camera/cool",
+            temperature=target,
+            minutes=5.0,
+        )
+        logger.debug(f"set temperature to {target} °C")
+
+    @sk.command_handler
+    async def camera_capture(self, cmd: sk.CameraCapture):
+        self.require_connected()
+        exposure_seconds = float(cmd.integration_time)
+
+        logger.debug(f"starting {exposure_seconds:.3f} s Light exposure")
+
+        exposure_start = datetime.now(UTC)
+
+        # Capture with streaming for image data
+        resp = await self.client.get_raw(
+            "/equipment/camera/capture",
+            duration=exposure_seconds,
+            getResult=True,
+            stream=True,
+            waitForResult=True,
+            imageType="LIGHT",
+            omitImage=True,
+        )
+
+        # Get the image data separately after capture completes
+        # NINA returns capture metadata; actual image is via save or separate fetch
+        # For now, we note the capture completed and let NINA save the file
+        # The DataGraph can watch NINA's output directory
+
+        context = cmd.context
+        context["date_obs"] = str(exposure_start)
+        context["exptime"] = exposure_seconds
+        context["instrume"] = str(sk.device().entity)
+        context["xbinning"] = 1
+        context["ybinning"] = 1
+
+        if not context.get("file_name", None):
+            context["file_name"] = f"{uuid.uuid1()}.fits"
+
+        logger.debug(f"capture completed ({exposure_seconds:.3f}s)")
+
+    @sk.command_handler
+    async def camera_abort(self, cmd: sk.Abort):
+        self.require_connected()
+        logger.debug("aborting exposure")
+        await self.client.get("/equipment/camera/abort-exposure")
+        logger.debug("aborted exposure")
+
+    async def status_publish(self):
+        while True:
+            try:
+                info = await self.info("camera")
+                connected = info.get("Connected", False)
+                self.device_connected = connected
+
+                device = sk.device()
+                await device.publish(Connected(is_connected=connected))
+
+                if connected:
+                    temperature = info.get("Temperature")
+                    bin_x = info.get("BinX", 1)
+                    bin_y = info.get("BinY", 1)
+                    x_size = info.get("XSize", 0)
+                    y_size = info.get("YSize", 0)
+
+                    await device.publish(Binning(x=bin_x, y=bin_y))
+
+                    if x_size and y_size:
+                        await device.publish(CameraSensorSize(x=x_size, y=y_size))
+
+                    if temperature is not None:
+                        await device.publish(
+                            CameraSensorTemperature(
+                                temperature=temperature,
+                                units=TemperatureUnit.CELSIUS,
+                            )
+                        )
+
+                    # Map all NINA camera info fields to NinaCameraStatus
+                    _FIELD_MAP = {
+                        "name": "Name",
+                        "display_name": "DisplayName",
+                        "device_id": "DeviceId",
+                        "camera_state": "CameraState",
+                        "is_exposing": "IsExposing",
+                        "exposure_end_time": "ExposureEndTime",
+                        "last_download_time": "LastDownloadTime",
+                        "sensor_type": "SensorType",
+                        "x_size": "XSize",
+                        "y_size": "YSize",
+                        "pixel_size": "PixelSize",
+                        "bit_depth": "BitDepth",
+                        "bayer_offset_x": "BayerOffsetX",
+                        "bayer_offset_y": "BayerOffsetY",
+                        "electrons_per_adu": "ElectronsPerADU",
+                        "bin_x": "BinX",
+                        "bin_y": "BinY",
+                        "binning_modes": "BinningModes",
+                        "temperature": "Temperature",
+                        "target_temp": "TargetTemp",
+                        "temperature_set_point": "TemperatureSetPoint",
+                        "at_target_temp": "AtTargetTemp",
+                        "can_set_temperature": "CanSetTemperature",
+                        "cooler_on": "CoolerOn",
+                        "cooler_power": "CoolerPower",
+                        "has_dew_heater": "HasDewHeater",
+                        "dew_heater_on": "DewHeaterOn",
+                        "gain": "Gain",
+                        "default_gain": "DefaultGain",
+                        "gain_min": "GainMin",
+                        "gain_max": "GainMax",
+                        "can_set_gain": "CanSetGain",
+                        "can_get_gain": "CanGetGain",
+                        "gains": "Gains",
+                        "offset": "Offset",
+                        "default_offset": "DefaultOffset",
+                        "offset_min": "OffsetMin",
+                        "offset_max": "OffsetMax",
+                        "can_set_offset": "CanSetOffset",
+                        "usb_limit": "USBLimit",
+                        "usb_limit_min": "USBLimitMin",
+                        "usb_limit_max": "USBLimitMax",
+                        "can_set_usb_limit": "CanSetUSBLimit",
+                        "readout_mode": "ReadoutMode",
+                        "readout_modes": "ReadoutModes",
+                        "readout_mode_for_snap_images": "ReadoutModeForSnapImages",
+                        "readout_mode_for_normal_images": "ReadoutModeForNormalImages",
+                        "exposure_max": "ExposureMax",
+                        "exposure_min": "ExposureMin",
+                        "can_sub_sample": "CanSubSample",
+                        "is_sub_sample_enabled": "IsSubSampleEnabled",
+                        "sub_sample_x": "SubSampleX",
+                        "sub_sample_y": "SubSampleY",
+                        "sub_sample_width": "SubSampleWidth",
+                        "sub_sample_height": "SubSampleHeight",
+                        "has_shutter": "HasShutter",
+                        "battery": "Battery",
+                        "live_view_enabled": "LiveViewEnabled",
+                        "can_show_live_view": "CanShowLiveView",
+                        "supported_actions": "SupportedActions",
+                    }
+
+                    fields: dict = {"connected": True}
+                    for field_name, info_key in _FIELD_MAP.items():
+                        val = info.get(info_key)
+                        if val is not None:
+                            fields[field_name] = val
+
+                    fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+                    logger.debug(f"NINA camera status: {fields_str}")
+
+                    await device.publish(NinaCameraStatus(**fields))
+            except Exception as e:
+                logger.exception(f"Error in camera status publish: {e}")
+
+            await asyncio.sleep(self.config.status_frequency)
+
+
+class NinaCameraConfig(NinaDeviceConfig[NinaCamera]):
+    device_type: Literal["camera"] = "camera"
+    timeout: float = 60.0
+    status_frequency: float = 1.0
+
+    @override
+    def create_device(self):
+        return NinaCamera(self)
+
+
+class NinaCameraState(NinaDeviceState):
+    device_type: Literal["camera"] = "camera"

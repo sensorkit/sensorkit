@@ -11,12 +11,16 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.data.fits import ArrayInfo
 from sensorkit.models.devices import (
-    Binning,
     CameraSensorSize,
     Connected,
     TemperatureUnit,
 )
-from sensorkit.std.instrument import CameraSensorTemperature
+from sensorkit.std.instrument import (
+    Binning,
+    CameraSensorTemperature,
+    ConfigureCameraCooler,
+    ConfigureCameraSensor,
+)
 from sensorkit.thesky.device import (
     TheSkyDevice,
     TheSkyDeviceConfig,
@@ -53,12 +57,12 @@ _dtype_to_bitpix = {
 @sk.declare_device
 class TheSkyCamera(TheSkyDevice):
     """TheSky Camera implementation."""
+
     config: TheSkyCameraConfig
     device_name = "Camera"
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state."""
         device = sk.device()
 
         # Restore last known state
@@ -73,41 +77,8 @@ class TheSkyCamera(TheSkyDevice):
         # FIXME: this is temporary, while awaiting updates to the standard controller
         await self.camera_init(sk.Init())
 
-    @sk.command_handler
-    async def camera_init(self, cmd: sk.Init):
-        """Connect to the hardware, start publishing status, start cooling the camera."""
-        # Connect to the hardware
-        await self.camera_connect(sk.Connect())
-
-        # Start camera status publishing
-        # TODO: Use service context ThreadGroup.
-        logger.debug("starting thesky camera status loop")
-        self._status_task = asyncio.create_task(self.status_publish())
-
-        # Set the camera temperature
-        await self.set_temperature(sk.SetTemperature(
-            temperature=self.config.temperature,
-            units=TemperatureUnit.CELSIUS
-        ))
-
-    @sk.command_handler
-    async def camera_deinit(self, cmd: sk.Deinit):
-        """Stop publishing status, disconnect from the hardware."""
-        # Stop camera status publishing
-        logger.debug("stopping thesky camera status loop")
-        if hasattr(self, "_status_task"):
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
-
-        # Disconnect from the hardware
-        await self.camera_disconnect(sk.Disconnect())
-
     @sk.on_detach
     async def entity_deinit(self):
-        """Save current state."""
         await sk.device().kv_put_model(self.state)
 
         # De-initialize the camera
@@ -115,11 +86,42 @@ class TheSkyCamera(TheSkyDevice):
         await self.camera_deinit(sk.Deinit())
 
     @sk.command_handler
+    async def camera_init(self, cmd: sk.Init):
+        # Connect to the hardware
+        await self.camera_connect(sk.Connect())
+
+        # Start camera status publishing
+        # TODO: Use service context ThreadGroup.
+        logger.debug("starting thesky camera status loop")
+        self.start_status_loop(self.status_publish())
+
+        # Set the camera temperature
+        await self.set_temperature(
+            ConfigureCameraCooler(
+                enable=True,
+                setpoint=CameraSensorTemperature(
+                    temperature=self.config.temperature, units=TemperatureUnit.CELSIUS
+                ),
+            )
+        )
+
+    @sk.command_handler
+    async def camera_deinit(self, cmd: sk.Deinit):
+        # Connect to the hardware
+        await self.camera_connect(sk.Connect())
+
+        # Stop camera status publishing
+        logger.debug("stopping thesky camera status loop")
+        await self.stop_status_loop()
+
+        # Disconnect from the hardware
+        await self.camera_disconnect(sk.Disconnect())
+
+    @sk.command_handler
     async def camera_connect(self, cmd: sk.Connect):
-        """Establish connection, start cooling, start publishing status."""
         logger.debug("connecting to thesky camera")
         await self.execute(
-            f"""
+            """
             ccdsoftCamera.Asynchronous = 1;
             ccdsoftCamera.ShutDownTemperatureRegulationOnDisconnect = 1;
             ccdsoftCamera.Connect();
@@ -154,13 +156,14 @@ class TheSkyCamera(TheSkyDevice):
         logger.debug("disconnected from thesky camera")
 
     @sk.command_handler
-    async def set_temperature(self, cmd: sk.SetTemperature):
+    async def set_temperature(self, cmd: ConfigureCameraCooler):
         self.require_connected()
-        logger.debug(f"setting thesky camera temperature to {cmd.temperature}")
+        target = cmd.setpoint.temperature
+        logger.debug(f"setting thesky camera temperature to {target}")
         await self.execute(
             f"""
-            ccdsoftCamera.TemperatureSetPoint = {cmd.temperature};
-            ccdsoftCamera.RegulateTemperature = 1;
+            ccdsoftCamera.TemperatureSetPoint = {target};
+            ccdsoftCamera.RegulateTemperature = {1 if cmd.enable else 0};
             """
         )
 
@@ -171,19 +174,22 @@ class TheSkyCamera(TheSkyDevice):
             """
         )
         temp = float(resp)
-        if temp != cmd.temperature:
-            logger.warning(f"Requested camera temperature of {cmd.temperature} C, got {temp} C")
+        if temp != target:
+            logger.warning(f"Requested camera temperature of {target} C, got {temp} C")
         else:
-            logger.debug(f"set thesky camera temperature to {cmd.temperature} C")
+            logger.debug(f"set thesky camera temperature to {target} C")
 
     @sk.command_handler
-    async def set_binning(self, cmd: sk.SetBinning):
+    async def set_binning(self, cmd: ConfigureCameraSensor):
         self.require_connected()
-        logger.debug(f"setting thesky camera binning to ({cmd.x}, {cmd.y})")
+        if cmd.binning is None:
+            return
+        bin_x, bin_y = int(cmd.binning.x), int(cmd.binning.y)
+        logger.debug(f"setting thesky camera binning to ({bin_x}, {bin_y})")
         await self.execute(
             f"""
-            ccdsoftCamera.BinX = {cmd.x};
-            ccdsoftCamera.BinY = {cmd.y};
+            ccdsoftCamera.BinX = {bin_x};
+            ccdsoftCamera.BinY = {bin_y};
             """
         )
 
@@ -197,11 +203,13 @@ class TheSkyCamera(TheSkyDevice):
             ];
             """
         )
-        binx, biny = [int(x) for x in resp.split(',')]
-        if binx != cmd.x or biny != cmd.y:
-            logger.warning(f"Requested camera binning of ({cmd.x}, {cmd.y}), got ({binx}, {biny})")
+        actual_x, actual_y = [int(x) for x in resp.split(",")]
+        if actual_x != bin_x or actual_y != bin_y:
+            logger.warning(
+                f"Requested camera binning of ({bin_x}, {bin_y}), got ({actual_x}, {actual_y})"
+            )
         else:
-            logger.debug(f"set thesky camera binning to ({binx}, {biny})")
+            logger.debug(f"set thesky camera binning to ({actual_x}, {actual_y})")
 
     @sk.command_handler
     async def abort(self, cmd: sk.Abort):
@@ -261,7 +269,9 @@ class TheSkyCamera(TheSkyDevice):
             return
 
         dtype = _array_typecode_to_dtype.get(data[0].typecode)
-        logger.info(f"Got TheSky image array with {len(data)} rows, {len(data[0])} cols, dtype {dtype}")
+        logger.info(
+            f"Got TheSky image array with {len(data)} rows, {len(data[0])} cols, dtype {dtype}"
+        )
 
         # Set context
         resp = await self.execute(
@@ -273,10 +283,10 @@ class TheSkyCamera(TheSkyDevice):
             ];
             """
         )
-        jd, bpp = [float(x) for x in resp.split(',')]
-        cmd.context["date_obs"] = Time(jd, format='jd', scale='utc').isot
-        cmd.context["etime"] = cmd.integration_time
-        cmd.context["bits_per_pixel"] = _dtype_to_bitpix.get(dtype, 16)  #int(bpp)
+        jd, bpp = [float(x) for x in resp.split(",")]
+        cmd.context["date_obs"] = Time(jd, format="jd", scale="utc").isot
+        cmd.context["exptime"] = cmd.integration_time
+        cmd.context["bitpix"] = _dtype_to_bitpix.get(dtype, 16)  # int(bpp)
 
         if graph := await sk.device().data_graph():
             source = graph.app_source()
@@ -316,6 +326,7 @@ class TheSkyCamera(TheSkyDevice):
             "1,2,3;10,20,30;100,200,300"
         into a list of array.array rows.
         """
+
         # Reverse mapping: dtype string to typecode
         dtype_to_typecode = {v: k for k, v in _array_typecode_to_dtype.items()}
         typecode = dtype_to_typecode[dtype]
@@ -352,7 +363,7 @@ class TheSkyCamera(TheSkyDevice):
                 continue
 
             try:
-                parts = resp.split(',')
+                parts = resp.split(",")
                 temp, left, top, right, bottom, binx, biny = map(float, parts[1:])
 
                 connected = parts[0] != "Not Connected"
@@ -370,12 +381,8 @@ class TheSkyCamera(TheSkyDevice):
                 await device.publish(
                     CameraSensorTemperature(temperature=temp, units=TemperatureUnit.CELSIUS)
                 )
-                await device.publish(
-                    CameraSensorSize(x=width, y=height)
-                )
-                await device.publish(
-                    Binning(x=int(binx), y=int(biny))
-                )
+                await device.publish(CameraSensorSize(x=width, y=height))
+                await device.publish(Binning(x=int(binx), y=int(biny)))
 
             except Exception as e:
                 logger.warning(f"Failed to update TheSky camera status ({e})")
@@ -387,6 +394,7 @@ class TheSkyCamera(TheSkyDevice):
 
 class TheSkyCameraConfig(TheSkyDeviceConfig[TheSkyCamera]):
     """TheSky Camera configuration."""
+
     device_type: Literal["camera"] = "camera"
     temperature: float
     timeout: float
@@ -399,5 +407,5 @@ class TheSkyCameraConfig(TheSkyDeviceConfig[TheSkyCamera]):
 
 class TheSkyCameraState(TheSkyDeviceState):
     """TheSky Camera state."""
+
     device_type: Literal["camera"] = "camera"
-    # Add camera-specific state fields here as needed in the future

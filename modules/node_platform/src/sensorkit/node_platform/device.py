@@ -16,6 +16,7 @@ class NodePlatformDevice:
 
     device_connected: bool | None = field(default=None, init=False)
     device_name: str = "Device"
+    _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
 
     @property
     def api(self) -> NodePlatformAPI:
@@ -28,6 +29,22 @@ class NodePlatformDevice:
                 lineage_id=self.config.lineage_id,
             )
         return self._api
+
+    def start_status_loop(self, coro):
+        """Start a background status publishing task, cancelling any existing one."""
+        if self._status_task is not None and not self._status_task.done():
+            self._status_task.cancel()
+        self._status_task = asyncio.create_task(coro)
+
+    async def stop_status_loop(self):
+        """Cancel the background status publishing task."""
+        if self._status_task is not None:
+            self._status_task.cancel()
+            try:
+                await self._status_task
+            except asyncio.CancelledError:
+                pass
+            self._status_task = None
 
     def require_connected(self):
         """Raise DeviceConnectionError if device is not connected."""

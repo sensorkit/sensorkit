@@ -1,8 +1,8 @@
 import asyncio
-from datetime import datetime, timedelta, UTC
 import random
-from typing import Dict, List
 import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Dict, List
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -11,17 +11,16 @@ import sensorkit.api as sk
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
 from sensorkit.models.devices import SitePosition
-from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
-
 from sensorkit.otto.models import OttoConfig
 from sensorkit.otto.task_queue import TaskQueue, start_fastapi
 from sensorkit.otto.utils import (
-    fetch_tles,
+    ListType,
+    ObjectListManager,
     check_satellite_visibility,
     dither_tle,
-    ObjectListManager,
-    ListType,
+    fetch_tles,
 )
+from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 
 
 class OttoState(BaseModel):

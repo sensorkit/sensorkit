@@ -7,7 +7,7 @@ from sensorkit.thesky.camera import TheSkyCameraConfig
 from sensorkit.thesky.dome import TheSkyDomeConfig
 from sensorkit.thesky.filter_wheel import TheSkyFilterWheelConfig
 from sensorkit.thesky.focuser import TheSkyFocuserConfig
-from sensorkit.thesky.mirror_cover import TheSkyMirrorCoverConfig
+from sensorkit.thesky.ota import TheSkyOTAConfig
 from sensorkit.thesky.mount import TheSkyMountConfig
 from sensorkit.thesky.rotator import TheSkyRotatorConfig
 from sensorkit.thesky.weather import TheSkyWeatherConfig
@@ -17,7 +17,7 @@ type TheSkyDeviceConfigs = Annotated[
     | TheSkyDomeConfig
     | TheSkyFocuserConfig
     | TheSkyFilterWheelConfig
-    | TheSkyMirrorCoverConfig
+    | TheSkyOTAConfig
     | TheSkyMountConfig
     | TheSkyRotatorConfig
     | TheSkyWeatherConfig,

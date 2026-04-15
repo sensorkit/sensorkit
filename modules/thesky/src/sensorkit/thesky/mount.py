@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 import tempfile
+from pathlib import Path
 from typing import Literal, override
 
 import astropy.units as u
 from astropy.coordinates import ICRS, AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
+
+# Prevent IERS-A (Earth orientation parameters) download, which can take long enough to cause a lease expiry
+from astropy.utils import iers
 from loguru import logger
 
 import sensorkit.api as sk
@@ -36,17 +39,17 @@ from sensorkit.thesky.device import (
     TheSkyDeviceState,
 )
 
-# Prevent IERS-A (Earth orientation parameters) download, which can take long enough to cause a lease expiry
-from astropy.utils import iers
 iers.conf.auto_download = False
 # Suppress the warning that results from the above decision
 from astropy.utils.iers import conf
+
 conf.auto_max_age = None
 
 
 @sk.declare_device
 class TheSkyMount(TheSkyDevice):
     """TheSky Mount implementation."""
+
     config: TheSkyMountConfig
     device_name = "Mount"
 
@@ -57,7 +60,6 @@ class TheSkyMount(TheSkyDevice):
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state. Define site location."""
         device = sk.device()
 
         # Restore last known state
@@ -92,19 +94,28 @@ class TheSkyMount(TheSkyDevice):
             ];
             """
         )
-        latitude, longitude, time_zone, elevation = [float(x) for x in resp.split(',')]
+        latitude, longitude, time_zone, elevation = [float(x) for x in resp.split(",")]
         longitude = -longitude if time_zone < 0 else longitude
-        self._location = EarthLocation(lat=latitude * u.deg, lon=longitude * u.deg, height=elevation * u.m)
+        self._location = EarthLocation(
+            lat=latitude * u.deg, lon=longitude * u.deg, height=elevation * u.m
+        )
+
+    @sk.on_detach
+    async def entity_deinit(self):
+        await sk.device().kv_put_model(self.state)
+
+        # De-initialize the mount
+        # FIXME: this is temporary, while awaiting updates to the standard controller
+        await self.mount_deinit(sk.Deinit())
 
     @sk.command_handler
     async def mount_init(self, cmd: sk.Init):
-        """Connect to the hardware, start publishing status, home as needed."""
         # Connect to the hardware
         await self.mount_connect(sk.Connect())
 
         # Start mount status publishing
         logger.debug("starting thesky mount status loop")
-        self._status_task = asyncio.create_task(self.status_publish())
+        self.start_status_loop(self.status_publish())
 
         # Home as needed
         if self.config.needs_homed:
@@ -113,7 +124,9 @@ class TheSkyMount(TheSkyDevice):
 
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
-        """Stop all motion, send mount to park position, stop publishing status, disconnect from the hardware."""
+        # Connect to the hardware
+        await self.mount_connect(sk.Connect())
+
         # Stop all current mount motion
         await self.mount_stop(sk.Stop())
 
@@ -122,24 +135,10 @@ class TheSkyMount(TheSkyDevice):
 
         # Stop mount status publishing
         logger.debug("stopping thesky mount status loop")
-        if hasattr(self, "_status_task"):
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
+        await self.stop_status_loop()
 
         # Disconnect from the hardware
         await self.mount_disconnect(sk.Disconnect())
-
-    @sk.on_detach
-    async def entity_deinit(self):
-        """Save current state."""
-        await sk.device().kv_put_model(self.state)
-
-        # De-initialize the mount
-        # FIXME: this is temporary, while awaiting updates to the standard controller
-        await self.mount_deinit(sk.Deinit())
 
     @sk.command_handler
     async def mount_connect(self, cmd: sk.Connect):
@@ -249,10 +248,11 @@ class TheSkyMount(TheSkyDevice):
     async def mount_stop(self, cmd: sk.Stop):
         self.require_connected()
         logger.debug("stopping thesky mount")
+        await self.mount_unpark()
         await self.execute(
             """
             sky6RASCOMTele.Abort();
-            sky6RASCOMTele.SetTracking(0,1,0,0);            
+            sky6RASCOMTele.SetTracking(0,1,0,0);
             """
         )
 
@@ -265,6 +265,13 @@ class TheSkyMount(TheSkyDevice):
     async def mount_follow_target(self, cmd: sk.FollowTarget):
         self.require_connected()
         await self.mount_unpark()
+
+        # Clear previous error(s)
+        try:
+            await self.execute("""Raven3.trackLEOAbort();""")
+        except Exception as e:
+            logger.warning(f"Unable to abort track: {e}")
+
         match cmd.target:
             case ICRSTarget():
                 logger.debug("executing RADec follow")
@@ -273,8 +280,8 @@ class TheSkyMount(TheSkyDevice):
                 await self.execute(
                     f"""
                     sky6RASCOMTele.SlewToRaDec(
-                        {cmd.target.right_ascension_hours:0.6f},
-                        {cmd.target.declination_degrees:0.6f},
+                        {cmd.target.coords.ra:0.6f},
+                        {cmd.target.coords.dec:0.6f},
                         "object"
                     );
                     """
@@ -293,8 +300,8 @@ class TheSkyMount(TheSkyDevice):
                 await self.execute(
                     f"""
                     sky6RASCOMTele.SlewToAzAlt(
-                        {cmd.target.azimuth_degrees:0.6f},
-                        {cmd.target.altitude_degrees:0.6f},
+                        {cmd.target.coords.az:0.6f},
+                        {cmd.target.coords.alt:0.6f},
                         "object"
                     );
                     """
@@ -395,6 +402,7 @@ class TheSkyMount(TheSkyDevice):
 
     def write_tle(self, target: TLE) -> str:
         """Write TLE to a temp file and return the path for TheSky use."""
+
         lines = []
         if target.line0 is not None:
             lines.append(target.line0)
@@ -437,7 +445,9 @@ class TheSkyMount(TheSkyDevice):
                 continue
 
             try:
-                connected, ra, ra_rate, dec, dec_rate, alt, az = [float(x) for x in resp.split(',')]
+                connected, ra, ra_rate, dec, dec_rate, alt, az = [
+                    float(x) for x in resp.split(",")
+                ]
 
                 connected = bool(connected)
                 self.device_connected = connected
@@ -452,9 +462,7 @@ class TheSkyMount(TheSkyDevice):
                 await device.publish(
                     RADecPointing(right_ascension_hours=ra, declination_degrees=dec)
                 )
-                await device.publish(
-                    AltAzPointing(altitude_degrees=alt, azimuth_degrees=az)
-                )
+                await device.publish(AltAzPointing(altitude_degrees=alt, azimuth_degrees=az))
 
                 # Convert RA/Dec rates from arcsec/sec to deg/sec
                 ra_rate /= 3600
@@ -467,14 +475,16 @@ class TheSkyMount(TheSkyDevice):
                         ra_rate_deg_per_sec=ra_rate,
                         dec_rate_deg_per_sec=dec_rate,
                         location=self._location,
-                        time=Time.now()
+                        time=Time.now(),
                     )
 
                     await device.publish(
                         AxisRates(
                             azimuth=AxisRate(velocity=az_rate, axis=MountAxis.AZIMUTH),
                             altitude=AxisRate(velocity=alt_rate, axis=MountAxis.ALTITUDE),
-                            right_ascension=AxisRate(velocity=ra_rate, axis=MountAxis.RIGHT_ASCENSION),
+                            right_ascension=AxisRate(
+                                velocity=ra_rate, axis=MountAxis.RIGHT_ASCENSION
+                            ),
                             declination=AxisRate(velocity=dec_rate, axis=MountAxis.DECLINATION),
                         )
                     )
@@ -485,15 +495,14 @@ class TheSkyMount(TheSkyDevice):
             # FIXME: Account for query time
             await asyncio.sleep(self.config.status_frequency)
 
-
     def radec_rates_to_altaz_rates(
-            self,
-            ra_hr: float,
-            dec_deg: float,
-            ra_rate_deg_per_sec: float,
-            dec_rate_deg_per_sec: float,
-            location: EarthLocation,
-            time: Time,
+        self,
+        ra_hr: float,
+        dec_deg: float,
+        ra_rate_deg_per_sec: float,
+        dec_rate_deg_per_sec: float,
+        location: EarthLocation,
+        time: Time,
     ) -> tuple[float, float]:
         """
         Convert RA/Dec rates to Alt/Az rates.
@@ -518,6 +527,7 @@ class TheSkyMount(TheSkyDevice):
         tuple[float, float]
             (alt_rate, az_rate) all in degrees per second.
         """
+
         # Convert RA from hours to degrees
         ra_deg = ra_hr * 15.0
 
@@ -550,6 +560,7 @@ class TheSkyMount(TheSkyDevice):
 
 class TheSkyMountConfig(TheSkyDeviceConfig[TheSkyMount]):
     """TheSky Mount configuration."""
+
     device_type: Literal["mount"] = "mount"
     needs_homed: bool
     timeout: float = 300.0
@@ -562,5 +573,6 @@ class TheSkyMountConfig(TheSkyDeviceConfig[TheSkyMount]):
 
 class TheSkyMountState(TheSkyDeviceState):
     """TheSky Mount state."""
+
     device_type: Literal["mount"] = "mount"
     has_been_homed: bool = False

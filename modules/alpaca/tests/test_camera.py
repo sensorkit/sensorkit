@@ -1,0 +1,182 @@
+"""Tests for Alpaca camera device."""
+
+import array
+import asyncio
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from conftest import MockAlpacaSDKDevice
+from sensorkit.alpaca.camera import (
+    AlpacaCamera,
+    AlpacaCameraConfig,
+    AlpacaCameraState,
+    _array_typecode_to_dtype,
+    _dtype_to_bitpix,
+    _dtype_to_bzero,
+)
+
+
+class TestCameraCapture:
+    def test_do_capture_returns_image_data(self):
+        """Test the synchronous capture method with a mock camera."""
+        config = AlpacaCameraConfig(host="localhost")
+        cam = config.create_device()
+
+        # Mock the camera object
+        mock_camera = MagicMock()
+        mock_camera.ImageReady = True
+        mock_camera.ImageArray = [
+            array.array("H", [100, 200, 300]),
+            array.array("H", [400, 500, 600]),
+        ]
+        cam.camera = mock_camera
+
+        result = cam._do_capture(1.0, True, 10.0)
+        assert len(result) == 2
+        assert len(result[0]) == 3
+        mock_camera.StartExposure.assert_called_once_with(1.0, True)
+
+    def test_do_capture_polls_until_ready(self):
+        """Test that capture polls ImageReady until True."""
+        config = AlpacaCameraConfig(host="localhost")
+        cam = config.create_device()
+
+        ready_calls = [False, False, True]
+        mock_camera = MagicMock()
+        type(mock_camera).ImageReady = property(lambda self: ready_calls.pop(0))
+        mock_camera.ImageArray = [array.array("H", [100])]
+        cam.camera = mock_camera
+
+        result = cam._do_capture(0.1, True, 10.0)
+        assert result == [array.array("H", [100])]
+
+    def test_do_capture_timeout(self):
+        """Test that capture raises RuntimeError on timeout."""
+        config = AlpacaCameraConfig(host="localhost")
+        cam = config.create_device()
+
+        mock_camera = MagicMock()
+        mock_camera.ImageReady = False
+        cam.camera = mock_camera
+
+        with pytest.raises(RuntimeError, match="timed out"):
+            cam._do_capture(0.0, True, 0.5)
+
+
+class TestDtypeMappings:
+    def test_typecode_to_dtype(self):
+        assert _array_typecode_to_dtype["H"] == "uint16"
+        assert _array_typecode_to_dtype["i"] == "int32"
+        assert _array_typecode_to_dtype["f"] == "float32"
+
+    def test_dtype_to_bitpix(self):
+        assert _dtype_to_bitpix["uint16"] == 16
+        assert _dtype_to_bitpix["int32"] == 32
+        assert _dtype_to_bitpix["float32"] == -32
+
+    def test_dtype_to_bzero(self):
+        assert _dtype_to_bzero["uint16"] == 32768
+        assert _dtype_to_bzero.get("int16") is None
+
+
+@pytest.fixture
+def camera():
+    config = AlpacaCameraConfig(host="localhost", timeout=5.0, status_frequency=0.1)
+    cam = config.create_device()
+    cam.state = AlpacaCameraState()
+    cam.device_name = "Camera"
+    mock = MockAlpacaSDKDevice(
+        Connected=True,
+        Connecting=False,
+        ImageReady=False,
+        CameraState=0,
+        BinX=1,
+        BinY=1,
+        MaxBinX=4,
+        MaxBinY=4,
+        CameraXSize=4096,
+        CameraYSize=4096,
+        CoolerOn=False,
+        CCDTemperature=-10.0,
+        SetCCDTemperature=-10.0,
+        CanAbortExposure=True,
+        CanStopExposure=True,
+        CanSetCCDTemperature=True,
+        CanGetCoolerPower=True,
+        CanAsymmetricBin=False,
+        CanPulseGuide=False,
+        HasShutter=True,
+    )
+    cam.camera = mock
+    cam.device_connected = True
+    cam._can_abort_exposure = True
+    cam._can_stop_exposure = True
+    cam._can_set_ccd_temperature = True
+    cam._can_get_cooler_power = True
+    cam._can_asymmetric_bin = False
+    cam._can_pulse_guide = False
+    cam._has_shutter = True
+    cam._camera_x_size = 4096
+    cam._camera_y_size = 4096
+    cam._max_bin_x = 4
+    cam._max_bin_y = 4
+    cam._data_tasks = set()
+    return cam
+
+
+class TestCameraLifecycle:
+    @pytest.mark.asyncio
+    async def test_camera_connect(self, camera):
+        import sensorkit.api as sk
+
+        camera.device_connected = False
+        camera.camera._properties["Connected"] = False
+        await camera.camera_connect(sk.Connect())
+        assert camera.device_connected is True
+
+    @pytest.mark.asyncio
+    async def test_camera_disconnect(self, camera):
+        import sensorkit.api as sk
+
+        await camera.camera_disconnect(sk.Disconnect())
+        assert camera.device_connected is False
+
+    @pytest.mark.asyncio
+    async def test_camera_set_temperature(self, camera):
+        from sensorkit.std.instrument import ConfigureCameraCooler, CameraSensorTemperature
+        from sensorkit.models.devices import TemperatureUnit
+
+        await camera.camera_set_temperature(
+            ConfigureCameraCooler(
+                enable=True,
+                setpoint=CameraSensorTemperature(
+                    temperature=-20.0,
+                    units=TemperatureUnit.CELSIUS,
+                ),
+            )
+        )
+        assert camera.camera._properties["CoolerOn"] is True
+        assert camera.camera._properties["SetCCDTemperature"] == -20.0
+
+    @pytest.mark.asyncio
+    async def test_camera_set_binning(self, camera):
+        from sensorkit.std.instrument import Binning, ConfigureCameraSensor
+
+        await camera.camera_set_binning(
+            ConfigureCameraSensor(binning=Binning(x=2, y=2))
+        )
+        assert camera.camera._properties["BinX"] == 2
+        assert camera.camera._properties["BinY"] == 2
+
+    @pytest.mark.asyncio
+    async def test_camera_stop(self, camera):
+        import sensorkit.api as sk
+
+        await camera.camera_stop(sk.Stop())
+
+    @pytest.mark.asyncio
+    async def test_camera_abort(self, camera):
+        import sensorkit.api as sk
+
+        await camera.camera_abort(sk.Abort())

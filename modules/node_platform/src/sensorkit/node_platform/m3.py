@@ -39,7 +39,7 @@ class NodePlatformM3(NodePlatformDevice):
 
         # Start M3 status publishing
         logger.debug("starting node_platform m3 status loop")
-        self._status_task = asyncio.create_task(self.status_publish())
+        self.start_status_loop(self.status_publish())
 
     @sk.command_handler
     async def m3_init(self, cmd: sk.Init):
@@ -55,12 +55,7 @@ class NodePlatformM3(NodePlatformDevice):
     async def entity_deinit(self):
         """Save current state and stop status publishing."""
         logger.debug("stopping node_platform m3 status loop")
-        if hasattr(self, "_status_task"):
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
+        await self.stop_status_loop()
 
         await sk.device().kv_put_model(self.state)
         await self.api.close()

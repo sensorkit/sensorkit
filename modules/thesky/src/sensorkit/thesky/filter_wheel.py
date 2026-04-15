@@ -6,7 +6,8 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected, Filter
+from sensorkit.models.devices import Connected
+from sensorkit.std.optics import Filter, SetFilter
 from sensorkit.thesky.device import (
     TheSkyDevice,
     TheSkyDeviceConfig,
@@ -17,6 +18,7 @@ from sensorkit.thesky.device import (
 @sk.declare_device
 class TheSkyFilterWheel(TheSkyDevice):
     """TheSky FilterWheel implementation."""
+
     config: TheSkyFilterWheelConfig
     device_name = "Filter Wheel"
 
@@ -27,7 +29,6 @@ class TheSkyFilterWheel(TheSkyDevice):
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state."""
         device = sk.device()
 
         # Restore last known state
@@ -48,16 +49,23 @@ class TheSkyFilterWheel(TheSkyDevice):
         # FIXME: this is temporary, while awaiting updates to the standard controller
         await self.filter_wheel_init(sk.Init())
 
+    @sk.on_detach
+    async def entity_deinit(self):
+        await sk.device().kv_put_model(self.state)
+
+        # De-initialize the filter wheel
+        # FIXME: this is temporary, while awaiting updates to the standard controller
+        await self.filter_wheel_deinit(sk.Deinit())
+
     @sk.command_handler
     async def filter_wheel_init(self, cmd: sk.Init):
-        """Connect to the hardware, start publishing status."""
         # Connect to the hardware
         await self.filter_wheel_connect(sk.Connect())
 
         # Start filter wheel status publishing
         # TODO: Use service context ThreadGroup.
         logger.debug("starting thesky filter wheel status loop")
-        self._status_task = asyncio.create_task(self.status_publish())
+        self.start_status_loop(self.status_publish())
 
         # Ensure an initial filter_wheel_position is received
         async with asyncio.timeout(self.config.timeout):
@@ -66,27 +74,15 @@ class TheSkyFilterWheel(TheSkyDevice):
 
     @sk.command_handler
     async def filter_wheel_deinit(self, cmd: sk.Deinit):
-        """Stop publishing status, disconnect from the hardware."""
+        # Connect to the hardware
+        await self.filter_wheel_connect(sk.Connect())
+
         # Stop filter wheel status publishing
         logger.debug("stopping thesky filter wheel status loop")
-        if hasattr(self, "_status_task"):
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
+        await self.stop_status_loop()
 
         # Disconnect from the hardware
         await self.filter_wheel_disconnect(sk.Disconnect())
-
-    @sk.on_detach
-    async def entity_deinit(self):
-        """Save current state."""
-        await sk.device().kv_put_model(self.state)
-
-        # De-initialize the filter wheel
-        # FIXME: this is temporary, while awaiting updates to the standard controller
-        await self.filter_wheel_deinit(sk.Deinit())
 
     @sk.command_handler
     async def filter_wheel_connect(self, cmd: sk.Connect):
@@ -126,7 +122,7 @@ class TheSkyFilterWheel(TheSkyDevice):
         logger.debug("disconnected from thesky filter wheel")
 
     @sk.command_handler
-    async def set_filter(self, cmd: sk.SetFilter):
+    async def set_filter(self, cmd: SetFilter):
         # NOTE: TheSky does not actually change the filter until a call to TakeImage() is received, so we will have to
         # account for that delay wherever it makes sense to do so.
         self.require_connected()
@@ -168,7 +164,7 @@ class TheSkyFilterWheel(TheSkyDevice):
                 continue
 
             try:
-                connected, position = [float(x) for x in resp.split(',')]
+                connected, position = [float(x) for x in resp.split(",")]
 
                 connected = bool(connected)
                 self.device_connected = connected
@@ -199,6 +195,7 @@ class TheSkyFilterWheel(TheSkyDevice):
 
 class TheSkyFilterWheelConfig(TheSkyDeviceConfig[TheSkyFilterWheel]):
     """TheSky FilterWheel configuration."""
+
     device_type: Literal["filter_wheel"] = "filter_wheel"
     filters: dict[str, int] = {}
     timeout: float = 60.0
@@ -211,5 +208,5 @@ class TheSkyFilterWheelConfig(TheSkyDeviceConfig[TheSkyFilterWheel]):
 
 class TheSkyFilterWheelState(TheSkyDeviceState):
     """TheSky FilterWheel state."""
+
     device_type: Literal["filter_wheel"] = "filter_wheel"
-    # Add filter_wheel-specific state fields here as needed in the future

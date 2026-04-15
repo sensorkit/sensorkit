@@ -14,19 +14,17 @@ from sensorkit.core import task
 from sensorkit.models.devices import (
     AltAzPointing,
     AxisRates,
-    CameraCapture,
-    Close,
     Connect,
     Deinit,
     FollowTarget,
     Init,
-    Open,
     RADecPointing,
-    SetBinning,
-    SetFilter,
     SitePosition,
     Stop,
 )
+from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
+from sensorkit.std.instrument import Binning, CameraCapture, ConfigureCameraSensor
+from sensorkit.std.optics import OpenMirrorCover, CloseMirrorCover, SetFilter
 from sensorkit.std.collect import StandardCollectTask
 
 
@@ -51,14 +49,14 @@ class Sensor:
         if self.dome:
             logger.info("Opening the dome")
             async with asyncio.timeout(self.policies.dome_open_close_timeout):
-                await self.dome.command(Open())
+                await self.dome.command(OpenEnclosure())
 
     async def deinit_dome(self):
         """Close the dome if one is configured."""
         if self.dome:
             logger.info("Closing the dome")
             async with asyncio.timeout(self.policies.dome_open_close_timeout):
-                await self.dome.command(Close())
+                await self.dome.command(CloseEnclosure())
 
     async def init_mount(self):
         """Initialize the mount."""
@@ -77,7 +75,7 @@ class Sensor:
             # Start opening the mirror cover.
             logger.info("Opening mirror cover")
             async with asyncio.timeout(self.policies.mirror_cover_open_close_timeout):
-                await self.mirror_cover.command(Open())
+                await self.mirror_cover.command(OpenMirrorCover())
 
     async def deinit_mirror_cover(self):
         """Close the mirror cover if one is configured."""
@@ -85,24 +83,20 @@ class Sensor:
             # Start closing the mirror cover.
             logger.info("Closing mirror cover")
             async with asyncio.timeout(self.policies.mirror_cover_open_close_timeout):
-                await self.mirror_cover.command(Close())
+                await self.mirror_cover.command(CloseMirrorCover())
 
     async def init_all(self, tg: asyncio.TaskGroup):
         """Init the mount and open the dome and mirror cover, if configured."""
         tasks = []
 
         # Open the dome, if any.
-        tasks.append(
-            tg.create_task(self.init_dome())
-        )
+        tasks.append(tg.create_task(self.init_dome()))
 
         if not self.policies.concurrent_dome_and_mount_init:
             await asyncio.wait(tasks)
 
         # Initialize the mount.
-        tasks.append(
-            tg.create_task(self.init_mount())
-        )
+        tasks.append(tg.create_task(self.init_mount()))
 
         if not self.policies.concurrent_mount_and_mirror_cover_init:
             await asyncio.wait(tasks)
@@ -193,8 +187,7 @@ class SensorControl:
 
         logger.info("Reached target")
 
-        if (task.camera_params.filter_name is not None
-            and self.sensor.filter_wheel is not None):
+        if task.camera_params.filter_name is not None and self.sensor.filter_wheel is not None:
             await self.sensor.filter_wheel.command(
                 SetFilter(filter=task.camera_params.filter_name)
             )
@@ -202,9 +195,11 @@ class SensorControl:
         # Configure camera capture parameters.
         if None not in (task.camera_params.binning_x, task.camera_params.binning_y):
             await self.sensor.camera.command(
-                SetBinning(
-                    x=task.camera_params.binning_x,
-                    y=task.camera_params.binning_y,
+                ConfigureCameraSensor(
+                    binning=Binning(
+                        x=task.camera_params.binning_x,
+                        y=task.camera_params.binning_y,
+                    ),
                 )
             )
 
@@ -265,6 +260,7 @@ class SensorControl:
     @sk.task_handler
     async def sensor_recover(self, task: task.RecoverTask):
         """Reconnect to all devices and stop any in-progress motion."""
+
         def assert_success_or_unsupported(results: tuple[Any]):
             logger.debug(f"{results=}")
 
@@ -312,6 +308,7 @@ class SensorControl:
 
 class SensorDevices(BaseModel):
     """Device entity references for sensor control."""
+
     mount: str
     camera: str
     focuser: str | None = None
@@ -357,6 +354,7 @@ class SensorPolicies(BaseModel):
 
 class SensorConfig(BaseModel):
     """Configuration for standard sensor control."""
+
     controller_name: str
     devices: SensorDevices
     site_position: SitePosition
@@ -366,6 +364,7 @@ class SensorConfig(BaseModel):
 # TODO: Phase out when UI code is updated to use ControllerInfo and SensorConfig for this info.
 class Capabilities(BaseModel):
     """Deprecated controller capability descriptor for the sensor service."""
+
     type: Literal["controller"] = "controller"
     tasks: list[str]
     devices: SensorDevices

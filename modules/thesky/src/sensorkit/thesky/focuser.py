@@ -6,7 +6,8 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected, FocusPosition
+from sensorkit.models.devices import Connected
+from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
 from sensorkit.thesky.device import (
     TheSkyDevice,
     TheSkyDeviceConfig,
@@ -17,12 +18,12 @@ from sensorkit.thesky.device import (
 @sk.declare_device
 class TheSkyFocuser(TheSkyDevice):
     """TheSky Focuser implementation."""
+
     config: TheSkyFocuserConfig
     device_name = "Focuser"
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state."""
         device = sk.device()
 
         # Restore last known state
@@ -39,16 +40,23 @@ class TheSkyFocuser(TheSkyDevice):
         # FIXME: this is temporary, while awaiting updates to the standard controller
         await self.focuser_init(sk.Init())
 
+    @sk.on_detach
+    async def entity_deinit(self):
+        await sk.device().kv_put_model(self.state)
+
+        # De-initialize the focuser
+        # FIXME: this is temporary, while awaiting updates to the standard controller
+        await self.focuser_deinit(sk.Deinit())
+
     @sk.command_handler
     async def focuser_init(self, cmd: sk.Init):
-        """Connect to the hardware, start publishing status."""
         # Connect to the hardware
         await self.focuser_connect(sk.Connect())
 
         # Start focuser status publishing
         # TODO: Use service context ThreadGroup.
         logger.debug("starting thesky focuser status loop")
-        self._status_task = asyncio.create_task(self.status_publish())
+        self.start_status_loop(self.status_publish())
 
         # Ensure an initial focuser_position is received
         async with asyncio.timeout(self.config.timeout):
@@ -57,27 +65,15 @@ class TheSkyFocuser(TheSkyDevice):
 
     @sk.command_handler
     async def focuser_deinit(self, cmd: sk.Deinit):
-        """Stop publishing status, disconnect from the hardware."""
+        # Connect to the hardware
+        await self.focuser_connect(sk.Connect())
+
         # Stop focuser status publishing
         logger.debug("stopping thesky focuser status loop")
-        if hasattr(self, "_status_task"):
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
+        await self.stop_status_loop()
 
         # Disconnect from the hardware
         await self.focuser_disconnect(sk.Disconnect())
-
-    @sk.on_detach
-    async def entity_deinit(self):
-        """Save current state."""
-        await sk.device().kv_put_model(self.state)
-
-        # De-initialize the focuser
-        # FIXME: this is temporary, while awaiting updates to the standard controller
-        await self.focuser_deinit(sk.Deinit())
 
     @sk.command_handler
     async def focuser_connect(self, cmd: sk.Connect):
@@ -117,7 +113,7 @@ class TheSkyFocuser(TheSkyDevice):
         logger.debug("disconnected from thesky focuser")
 
     @sk.command_handler
-    async def focuser_move(self, cmd: sk.ChangeFocusPosition):
+    async def focuser_move(self, cmd: ChangeFocusPosition):
         # NOTE: the TheSky focuser simulator does not allow setting limits (for testing). As of this release, we respect
         # limits set via config, but a future release ought to respect both config and TheSky limits.
         self.require_connected()
@@ -152,7 +148,7 @@ class TheSkyFocuser(TheSkyDevice):
         while True:
             try:
                 resp = await self.execute(
-                    f"""
+                    """
                     var Out;
                     Out = [
                         ccdsoftCamera.focIsConnected,
@@ -166,7 +162,7 @@ class TheSkyFocuser(TheSkyDevice):
                 continue
 
             try:
-                connected, position = [float(x) for x in resp.split(',')]
+                connected, position = [float(x) for x in resp.split(",")]
 
                 connected = bool(connected)
                 self.device_connected = connected
@@ -179,9 +175,7 @@ class TheSkyFocuser(TheSkyDevice):
 
                 device = sk.device()
                 await device.publish(Connected(is_connected=connected))
-                await device.publish(
-                    FocusPosition(position=self.focuser_position)
-                )
+                await device.publish(FocusPosition(position=self.focuser_position))
 
             except Exception as e:
                 logger.warning(f"Failed to update TheSky focuser status ({e})")
@@ -193,6 +187,7 @@ class TheSkyFocuser(TheSkyDevice):
 
 class TheSkyFocuserConfig(TheSkyDeviceConfig[TheSkyFocuser]):
     """TheSky Focuser configuration."""
+
     device_type: Literal["focuser"] = "focuser"
     limit_max: float
     limit_min: float
@@ -206,5 +201,5 @@ class TheSkyFocuserConfig(TheSkyDeviceConfig[TheSkyFocuser]):
 
 class TheSkyFocuserState(TheSkyDeviceState):
     """TheSky Focuser state."""
+
     device_type: Literal["focuser"] = "focuser"
-    # Add focuser-specific state fields here as needed in the future
