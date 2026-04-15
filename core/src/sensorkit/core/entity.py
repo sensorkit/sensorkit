@@ -34,14 +34,6 @@ if TYPE_CHECKING:
 type EntityType = Literal["generic", "device", "controller", "program"]
 
 
-@declare_keyword
-class EntityInfo(BaseModel):
-    """Keyword describing an entity's type and capability details, stored in the KV backend."""
-
-    entity_type: EntityType
-    details: DeviceDetails | ControllerDetails | None
-
-
 class DeviceDetails(BaseModel):
     """Device info."""
 
@@ -54,7 +46,7 @@ class DeviceDetails(BaseModel):
 
     @functools.cached_property
     def traits(self):
-        return match_traits(self)
+        return match_traits(self, exclude_archetypes=True)
 
 
 class ControllerDetails(BaseModel):
@@ -64,6 +56,14 @@ class ControllerDetails(BaseModel):
     """Identifiers of each task supported by this controller."""
     controlled_devices: list[str]
     """Names of each device commanded by this controller."""
+
+
+@declare_keyword
+class EntityInfo(BaseModel):
+    """Keyword describing an entity's type and capability details, stored in the KV backend."""
+
+    entity_type: EntityType
+    details: DeviceDetails | ControllerDetails | None
 
 
 class EntityBase:

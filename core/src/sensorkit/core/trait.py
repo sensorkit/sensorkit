@@ -127,10 +127,26 @@ def get_registered_archetypes() -> frozenset[Archetype]:
     return frozenset(_archetype_registry)
 
 
-def match_traits(details: DeviceDetails, traits: Iterable[Trait] | None = None) -> list[Trait]:
+def match_traits(
+    details: DeviceDetails,
+    traits: Iterable[Trait] | None = None,
+    *,
+    exclude_archetypes: bool = False,
+) -> list[Trait]:
     """Return all traits from the given iterable that the device satisfies."""
-    traits_iter = traits if traits is not None else _trait_registry
-    return [t for t in traits_iter if t.match(details)]
+    if traits is None:
+        traits = _trait_registry
+
+    output = []
+
+    for trait in traits:
+        if exclude_archetypes and isinstance(trait, Archetype):
+            continue
+
+        if trait.match(details):
+            output.append(trait)
+
+    return output
 
 
 def match_archetype(details: DeviceDetails) -> Archetype | None:
