@@ -52,6 +52,18 @@ services:
     volumes:
       - ./config:/config:ro
 
+  sk-webapi:
+    image: sensorkit
+    ports:
+      - "8000:8000"
+    command: service run webapi sensorkit.webapi
+    environment:
+      SENSORKIT_BACKEND_ARG: nats
+    restart: unless-stopped
+    depends_on:
+      sk-bootstrap:
+        condition: service_completed_successfully
+
   sk-agent:
     image: sensorkit
     command: service run agent sensorkit.auto.agent

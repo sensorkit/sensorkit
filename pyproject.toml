@@ -116,6 +116,7 @@ layers = [
     sensorkit.thesky
     """,
     "sensorkit.cli",
+    "sensorkit.webapi",
     "sensorkit.auto",
     "sensorkit.std",
     #"sensorkit.astro", # FIXME: Temporary model imports in sensorkit.api break this check.
