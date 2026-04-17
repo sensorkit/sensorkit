@@ -148,8 +148,6 @@ class PWI4Mount(PWI4Device):
         except Exception:
             self.state = PWI4MountState()
 
-        await self.mount_init(sk.Init())
-
         # Site location
         st = await self.client.status()
         lat = self.client.get_float(st, "site.latitude_degs")

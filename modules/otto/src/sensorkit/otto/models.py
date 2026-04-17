@@ -1,7 +1,7 @@
 import os
-from typing import List
+from typing import List, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class EnvResolvingModel(BaseModel):
@@ -64,10 +64,18 @@ class PublishConfig(EnvResolvingModel):
     udl: UDLPublishConfig | None = None
 
 
+UvicornLogLevel = Literal["critical", "error", "warning", "info", "debug", "trace"]
+
+
 class ServerConfig(BaseModel):
     host: str
     port: int = 8000
-    log_level: str | None = None
+    log_level: UvicornLogLevel | None = None
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _normalize_log_level(cls, v):
+        return v.lower() if isinstance(v, str) else v
 
 
 class OttoConfig(BaseModel):
