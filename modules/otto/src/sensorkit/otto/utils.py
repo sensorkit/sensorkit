@@ -121,7 +121,6 @@ def check_satellite_visibility(
     """
     # Check if we have TLE for this object
     if object not in tles:
-        logger.warning(f"No TLE found for object {object}")
         return None
 
     tle_data = tles[object]

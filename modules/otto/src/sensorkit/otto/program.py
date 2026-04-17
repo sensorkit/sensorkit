@@ -297,6 +297,12 @@ class OttoProgram:
                     elevation=self.altitude_km*1000,
                 )
                 if result is None:
+                    logger.warning(f"Removing object {object} from the whitelist (no TLE available)")
+                    await self.list_manager.move_object(
+                        object,
+                        ListType.WHITELIST,
+                        ListType.BLACKLIST,
+                    )
                     continue
                 altitude, rising = result
 
