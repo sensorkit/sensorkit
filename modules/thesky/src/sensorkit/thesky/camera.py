@@ -279,11 +279,13 @@ class TheSkyCamera(TheSkyDevice):
             var Out;
             Out = [
                 ccdsoftCameraImage.JulianDay,
-                ccdsoftCameraImage.FITSKeyword("BITPIX")
+                ccdsoftCameraImage.FITSKeyword("BITPIX"),
+                ccdsoftCamera.BinX,
+                ccdsoftCamera.BinY                                
             ];
             """
         )
-        jd, bpp = [float(x) for x in resp.split(",")]
+        jd, bpp, binx, biny = [float(x) for x in resp.split(",")]
         cmd.context["date_obs"] = Time(jd, format="jd", scale="utc").isot
         cmd.context["exptime"] = cmd.integration_time
         cmd.context["bitpix"] = _dtype_to_bitpix.get(dtype, 16)  # int(bpp)
@@ -297,6 +299,11 @@ class TheSkyCamera(TheSkyDevice):
                     dtype=dtype,
                 )
             )
+
+            instrume = await self.execute("""SelectedHardware.cameraModel;""")
+            cmd.context["instrume"] = instrume
+            cmd.context["xbinning"] = int(binx)
+            cmd.context["ybinning"] = int(biny)
 
             if not cmd.context.get("file_name", None):
                 cmd.context["file_name"] = f"{str(uuid.uuid1())}.fits"

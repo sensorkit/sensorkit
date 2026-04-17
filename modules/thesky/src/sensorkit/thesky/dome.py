@@ -12,6 +12,7 @@ from sensorkit.thesky.device import (
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
+    DomeCommandInProgressError,
 )
 
 
@@ -21,6 +22,7 @@ class TheSkyDome(TheSkyDevice):
 
     config: TheSkyDomeConfig
     device_name = "Dome"
+    _home_task: asyncio.Task | None = None
 
     # NOTE: the current implementation assumes that the dome is slaved to the mount (or that a clamshell style dome is
     # being used). A future version will support a dome that can rotate independently of the mount, but such
@@ -64,12 +66,19 @@ class TheSkyDome(TheSkyDevice):
         # Home as needed
         if self.config.needs_homed:
             if not self.state.has_been_homed:
-                await self.dome_home(sk.Home())
+                self._home_task = asyncio.create_task(self.dome_home(sk.Home()))
 
     @sk.command_handler
     async def dome_deinit(self, cmd: sk.Deinit):
         # Connect to the hardware
         await self.dome_connect(sk.Connect())
+
+        if self._home_task is not None:
+            self._home_task.cancel()
+            try:
+                await self._home_task
+            except asyncio.CancelledError:
+                pass
 
         # Stop all current dome motion
         await self.dome_stop(sk.Stop())
@@ -143,13 +152,19 @@ class TheSkyDome(TheSkyDevice):
         # other motion command.
         self.require_connected()
         logger.debug("unparking thesky dome")
-        await self.execute(
-            """
-            sky6Dome.Unpark();
-            """
-        )
 
-        # Wait for the dome to finish unparking
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                try:
+                    await self.execute(
+                        """
+                        sky6Dome.Unpark();
+                        """
+                    )
+                    break
+                except DomeCommandInProgressError:
+                    await asyncio.sleep(0.5)
+
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6Dome.IsUnparkComplete;""", "1")
         logger.debug("unparked thesky dome")

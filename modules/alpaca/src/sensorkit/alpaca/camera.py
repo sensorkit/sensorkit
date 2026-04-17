@@ -366,9 +366,6 @@ class AlpacaCamera(AlpacaDevice):
             else exposure_seconds
         )
 
-        context["instrume"] = await self.get(
-            self.camera, "Name", str(sk.device().entity)
-        )
         context["instrume"] = await self.get(self.camera, "SensorName", "")
         context["xbinning"] = await self.get(self.camera, "BinX", 1)
         context["ybinning"] = await self.get(self.camera, "BinY", 1)
