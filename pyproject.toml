@@ -38,13 +38,6 @@ alpaca = [
     "alpyca>=3.1.1",
     "numpy>=1.24.0",
 ]
-ascom = [
-    "alpyca>=3.1.0",
-    "click>=8.1.8",
-    "fastapi>=0.115.8",
-    "pyyaml>=6.0.2",
-    "uvicorn>=0.34.0",
-]
 nina = [
     "httpx",
 ]
@@ -117,7 +110,6 @@ type = "layers"
 layers = [
     """
     sensorkit.alpaca |
-    sensorkit.ascom |
     sensorkit.nina |
     sensorkit.node_platform |
     sensorkit.otto |
@@ -143,7 +135,6 @@ packages = ["core/src/sensorkit"]
 dev-mode-dirs = [
     "core/src",
     "modules/alpaca/src",
-    "modules/ascom/src",
     "modules/nina/src",
     "modules/node_platform/src",
     "modules/otto/src",
@@ -155,7 +146,6 @@ dev-mode-dirs = [
 path = "hatch_build.py"
 modules = [
     "alpaca",
-    "ascom",
     "nina",
     "node_platform",
     "otto",
