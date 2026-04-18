@@ -21,22 +21,20 @@ class TestNinaDeviceConfig:
         config = NinaDeviceConfig(host="localhost")
         assert config.host == "localhost"
         assert config.port == 1888
-        assert config.username is None
-        assert config.password is None
         assert config.timeout == 30.0
         assert config.status_frequency == 1.0
+        assert config.env_file == ".env"
 
     def test_custom_values(self):
         config = NinaDeviceConfig(
             host="192.168.1.100",
             port=9999,
-            username="admin",
-            password="secret",
             timeout=120.0,
+            env_file="/opt/sk/.env.nina",
         )
         assert config.host == "192.168.1.100"
         assert config.port == 9999
-        assert config.username == "admin"
+        assert config.env_file == "/opt/sk/.env.nina"
 
     def test_create_device(self):
         config = NinaDeviceConfig(host="localhost")

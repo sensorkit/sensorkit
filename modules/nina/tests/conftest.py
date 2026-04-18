@@ -8,6 +8,8 @@ class MockNinaClient:
 
     def __init__(self, info_response: dict | None = None):
         self._requests: list[tuple[str, dict]] = []
+        self._username = None
+        self._password = None
         self._info_response = info_response or {
             "Connected": True,
             "Slewing": False,

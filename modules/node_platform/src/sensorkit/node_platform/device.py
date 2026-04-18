@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
-from pydantic import BaseModel
 from typing import Any, ClassVar, Literal
 
 import ourskyai_node_platform_api as osapi
+from dotenv import dotenv_values
+from loguru import logger
+from pydantic import BaseModel
 
 
 @dataclass
@@ -22,10 +25,19 @@ class NodePlatformDevice:
     def api(self) -> NodePlatformAPI:
         """Lazily create and return the SDK API wrapper."""
         if self._api is None:
+            env = dotenv_values(self.config.env_file)
+            api_key = env.get("NODE_PLATFORM_API_KEY") or os.environ.get("NODE_PLATFORM_API_KEY")
+
+            if not api_key:
+                raise RuntimeError(
+                    f"NODE_PLATFORM_API_KEY must be set in "
+                    f"{self.config.env_file} or as an environment variable"
+                )
+
             self._api = NodePlatformAPI(
                 host=self.config.host,
                 port=self.config.port,
-                api_key=self.config.api_key,
+                api_key=api_key,
                 lineage_id=self.config.lineage_id,
             )
         return self._api
@@ -104,9 +116,9 @@ class NodePlatformDeviceConfig[T: NodePlatformDevice = NodePlatformDevice](BaseM
     device_type: Literal[None] = None
     host: str
     port: int = 9080
-    api_key: str | None = None
     lineage_id: str | None = None
     request_timeout: float = 30.0
+    env_file: str = ".env"
 
     def create_device(self) -> T:
         return NodePlatformDevice(self)

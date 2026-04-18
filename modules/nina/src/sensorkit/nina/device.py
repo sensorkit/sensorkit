@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import os
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import httpx
+from dotenv import dotenv_values
 from loguru import logger
 from pydantic import BaseModel
 
@@ -24,11 +26,19 @@ class NinaDevice:
     @property
     def client(self) -> NinaClient:
         if self._client is None:
+            # Load credentials from .env file or environment (optional for NINA)
+            username = None
+            password = None
+            if self.config.env_file:
+                env = dotenv_values(self.config.env_file)
+                username = env.get("NINA_USERNAME") or os.environ.get("NINA_USERNAME")
+                password = env.get("NINA_PASSWORD") or os.environ.get("NINA_PASSWORD")
+
             self._client = NinaClient(
                 host=self.config.host,
                 port=self.config.port,
-                username=self.config.username,
-                password=self.config.password,
+                username=username,
+                password=password,
                 timeout=self.config.timeout,
             )
         return self._client
@@ -41,7 +51,7 @@ class NinaDevice:
         """Connect to a NINA equipment device."""
 
         logger.debug(f"connecting to {self.device_name}")
-        if self.config.username:
+        if self.client._username:
             await self.client.login()
         await self.client.get(f"/equipment/{equipment_type}/connect")
         self.device_connected = True
@@ -159,10 +169,9 @@ class NinaDeviceConfig[T: NinaDevice = NinaDevice](BaseModel):
     device_type: Literal[None] = None
     host: str = "localhost"
     port: int = 1888
-    username: str | None = None
-    password: str | None = None
     timeout: float = 30.0
     status_frequency: float = 1.0
+    env_file: str | None = ".env"
 
     def create_device(self) -> T:
         return NinaDevice(self)

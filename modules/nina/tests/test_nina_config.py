@@ -26,8 +26,6 @@ class TestNinaServerConfig:
         data = {
             "host": "192.168.1.50",
             "port": 9999,
-            "username": "admin",
-            "password": "secret",
             "devices": {
                 "camera1": {"device_type": "camera"},
                 "mount1": {"device_type": "mount"},
@@ -39,7 +37,6 @@ class TestNinaServerConfig:
         assert isinstance(cam, NinaCameraConfig)
         assert cam.host == "192.168.1.50"
         assert cam.port == 9999
-        assert cam.username == "admin"
 
         tel = config.devices["mount1"]
         assert isinstance(tel, NinaMountConfig)

@@ -32,8 +32,6 @@ type NinaDeviceConfigs = Annotated[
 class NinaServerConfig(BaseModel):
     host: str = "localhost"
     port: int = 1888
-    username: str | None = None
-    password: str | None = None
     devices: dict[str, NinaDeviceConfigs] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -44,8 +42,6 @@ class NinaServerConfig(BaseModel):
                 for device in devices.values():
                     device.setdefault("host", data.get("host", "localhost"))
                     device.setdefault("port", data.get("port", 1888))
-                    device.setdefault("username", data.get("username"))
-                    device.setdefault("password", data.get("password"))
         return data
 
 

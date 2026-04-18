@@ -28,9 +28,9 @@ type NodePlatformDeviceConfigs = Annotated[
 class NodePlatformServerConfig(BaseModel):
     host: str
     port: int = 9080
-    api_key: str | None = None
     lineage_id: str | None = None
     request_timeout: float = 30.0
+    env_file: str = ".env"
     devices: dict[str, NodePlatformDeviceConfigs] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -40,13 +40,13 @@ class NodePlatformServerConfig(BaseModel):
             if devices := data.get("devices"):
                 for device in devices.values():
                     assert "host" not in device and "port" not in device
-                    assert "api_key" not in device and "lineage_id" not in device
+                    assert "lineage_id" not in device
                     assert "request_timeout" not in device
                     device["host"] = data.get("host")
                     device["port"] = data.get("port", 9080)
-                    device["api_key"] = data.get("api_key")
                     device["lineage_id"] = data.get("lineage_id")
                     device["request_timeout"] = data.get("request_timeout", 30.0)
+                    device["env_file"] = data.get("env_file", ".env")
         return data
 
 
