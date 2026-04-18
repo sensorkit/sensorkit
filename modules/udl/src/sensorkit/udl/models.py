@@ -50,9 +50,9 @@ class UDLAPIConfig(BaseModel):
     # Base URL (optional - SDK defaults to UDL production)
     base_url: str | None = None
 
-    # Sensor identification
-    sensor_id: str = Field(description="Sensor ID used to filter CollectRequests (origSensorId)")
-    id_sensor: str = Field(description="Sensor ID for SkyImagery metadata (idSensor)")
+    # Sensor identification — used as both idSensor (SkyImagery, CollectResponse)
+    # and origSensorId (CollectRequest polling filter)
+    id_sensor: str = Field(description="Sensor ID (maps to idSensor and origSensorId)")
     source: str = Field(description="Data source identifier (e.g. 'DAO', 'MACHINA')")
 
     # Timeouts

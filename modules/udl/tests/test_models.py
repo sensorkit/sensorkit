@@ -33,20 +33,17 @@ class TestUDLReferenceFrame:
 class TestUDLAPIConfig:
     def test_required_fields(self):
         config = UDLAPIConfig(
-            sensor_id="SENSOR-01",
-            id_sensor="DAO-01",
-            source="DAO",
+            id_sensor="SENSOR-01",
+            source="TEST_SOURCE",
         )
-        assert config.sensor_id == "SENSOR-01"
-        assert config.id_sensor == "DAO-01"
-        assert config.source == "DAO"
+        assert config.id_sensor == "SENSOR-01"
+        assert config.source == "TEST_SOURCE"
         assert config.use_certs is False
         assert config.timeout == 60.0
 
     def test_cert_auth_config(self):
         config = UDLAPIConfig(
-            sensor_id="SENSOR-01",
-            id_sensor="DAO-01",
+            id_sensor="SENSOR-01",
             source="MACHINA",
             use_certs=True,
             client_cert="/path/to/cert.pem",
@@ -60,18 +57,16 @@ class TestUDLAPIConfig:
 
     def test_env_file_config(self):
         config = UDLAPIConfig(
-            sensor_id="SENSOR-01",
-            id_sensor="DAO-01",
-            source="DAO",
+            id_sensor="SENSOR-01",
+            source="TEST_SOURCE",
             env_file="/path/to/.env",
         )
         assert config.env_file == "/path/to/.env"
 
     def test_env_file_default(self):
         config = UDLAPIConfig(
-            sensor_id="SENSOR-01",
-            id_sensor="DAO-01",
-            source="DAO",
+            id_sensor="SENSOR-01",
+            source="TEST_SOURCE",
         )
         assert config.env_file == ".env"
 
@@ -82,9 +77,8 @@ class TestUDLConfig:
             entity="udl_program",
             controller="controller1",
             api=UDLAPIConfig(
-                sensor_id="SENSOR-01",
-                id_sensor="DAO-01",
-                source="DAO",
+                id_sensor="SENSOR-01",
+                source="TEST_SOURCE",
             ),
         )
         assert config.poll_frequency == 10.0

@@ -17,9 +17,8 @@ def program():
         entity="udl_program",
         controller="controller1",
         api=UDLAPIConfig(
-            sensor_id="DAO-01",
-            id_sensor="DAO-01",
-            source="DAO",
+            id_sensor="SENSOR-01",
+            source="TEST_SOURCE",
         ),
     )
     p = UDLProgram(config)
@@ -40,7 +39,7 @@ class TestSkyImageryMetadata:
         request = MockCollectRequest.with_tle(
             classification_marking="U",
             data_mode="REAL",
-            source="DAO",
+            source="TEST_SOURCE",
         )
         program.tasks["test-request-001"] = request
 
@@ -107,7 +106,7 @@ class TestSkyImageryMetadata:
             metadata_files = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
             metadata = json.loads(zf.read(metadata_files[0]))
 
-        assert metadata["source"] == "DAO"
+        assert metadata["source"] == "TEST_SOURCE"
 
     @pytest.mark.asyncio
     async def test_metadata_uses_config_id_sensor(self, program):
@@ -136,7 +135,7 @@ class TestSkyImageryMetadata:
             metadata_files = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
             metadata = json.loads(zf.read(metadata_files[0]))
 
-        assert metadata["idSensor"] == "DAO-01"
+        assert metadata["idSensor"] == "SENSOR-01"
 
     @pytest.mark.asyncio
     async def test_metadata_no_orig_sensor_id(self, program):
@@ -265,8 +264,8 @@ class TestSkyImageryMetadata:
             data_mode="REAL",
         )
         program.tasks["test-request-001"] = request
-        program.config.api.id_sensor = "DAO-01"
-        program.config.api.source = "DAO"
+        program.config.api.id_sensor = "SENSOR-01"
+        program.config.api.source = "TEST_SOURCE"
 
         program.client = MagicMock()
         program.client.sky_imagery = MagicMock()
@@ -295,7 +294,7 @@ class TestSkyImageryMetadata:
 
         # Match the example JSON structure
         assert metadata["classificationMarking"] == "U"
-        assert metadata["idSensor"] == "DAO-01"
+        assert metadata["idSensor"] == "SENSOR-01"
         assert metadata["satNo"] == 39120
         assert metadata["senlat"] == 41.9168354
         assert metadata["senlon"] == -84.0290721
@@ -304,7 +303,7 @@ class TestSkyImageryMetadata:
         assert metadata["sequenceId"] == 1
         assert metadata["frameWidthPixels"] == 8120
         assert metadata["frameHeightPixels"] == 8120
-        assert metadata["source"] == "DAO"
+        assert metadata["source"] == "TEST_SOURCE"
         assert metadata["dataMode"] == "REAL"
         assert metadata["imageType"] == "FITS"
         assert "origSensorId" not in metadata

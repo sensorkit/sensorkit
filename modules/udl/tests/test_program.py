@@ -17,9 +17,8 @@ def config():
         entity="udl_program",
         controller="controller1",
         api=UDLAPIConfig(
-            sensor_id="DAO-01",
-            id_sensor="DAO-01",
-            source="DAO",
+            id_sensor="SENSOR-01",
+            source="TEST_SOURCE",
         ),
     )
 
@@ -85,7 +84,7 @@ class TestSendResponse:
         await program._send_response(request, ResponseStatus.ACCEPTED)
 
         call_kwargs = program.client.collect_responses.create.call_args.kwargs
-        assert call_kwargs["source"] == "DAO"
+        assert call_kwargs["source"] == "TEST_SOURCE"
 
     @pytest.mark.asyncio
     async def test_response_uses_config_id_sensor(self, program):
@@ -93,7 +92,7 @@ class TestSendResponse:
         await program._send_response(request, ResponseStatus.COLLECTED)
 
         call_kwargs = program.client.collect_responses.create.call_args.kwargs
-        assert call_kwargs["id_sensor"] == "DAO-01"
+        assert call_kwargs["id_sensor"] == "SENSOR-01"
 
     @pytest.mark.asyncio
     async def test_response_includes_notes(self, program):
@@ -113,9 +112,8 @@ class TestEnvVarFallback:
             entity="udl_program",
             controller="controller1",
             api=UDLAPIConfig(
-                sensor_id="SENSOR-01",
-                id_sensor="DAO-01",
-                source="DAO",
+                id_sensor="SENSOR-01",
+                source="TEST_SOURCE",
             ),
         )
         p = UDLProgram(config)
@@ -127,9 +125,8 @@ class TestEnvVarFallback:
             entity="udl_program",
             controller="controller1",
             api=UDLAPIConfig(
-                sensor_id="SENSOR-01",
-                id_sensor="DAO-01",
-                source="DAO",
+                id_sensor="SENSOR-01",
+                source="TEST_SOURCE",
                 env_file="/opt/sk/.env.udl",
             ),
         )

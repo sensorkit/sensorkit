@@ -14,9 +14,8 @@ def program():
         entity="udl_program",
         controller="controller1",
         api=UDLAPIConfig(
-            sensor_id="SENSOR-01",
-            id_sensor="DAO-01",
-            source="DAO",
+            id_sensor="SENSOR-01",
+            source="TEST_SOURCE",
         ),
     )
     return UDLProgram(config)

@@ -200,7 +200,7 @@ class UDLProgram:
             page = await self.client.collect_requests.list(
                 start_time=f"<{now.isoformat()}",
                 extra_query={
-                    "origSensorId": self.config.api.sensor_id,
+                    "origSensorId": self.config.api.id_sensor,
                     "endTime": f">{now.isoformat()}",
                 },
             )
@@ -253,7 +253,7 @@ class UDLProgram:
                 id_plan=request.id_plan,
                 external_id=request.external_id,
                 id_sensor=self.config.api.id_sensor,
-                orig_sensor_id=self.config.api.sensor_id,
+                orig_sensor_id=self.config.api.id_sensor,
                 actual_start_time=actual_start_time,
                 actual_end_time=actual_end_time,
                 notes=notes,
