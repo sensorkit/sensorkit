@@ -74,9 +74,6 @@ class TheSkyWeather(TheSkyDevice):
         logger.debug("stopping thesky weather status loop")
         await self.stop_status_loop()
 
-        # Disconnect from the hardware
-        await self.weather_disconnect(sk.Disconnect())
-
     @sk.command_handler
     async def weather_connect(self, cmd: sk.Connect):
         logger.debug("connecting to thesky weather")
