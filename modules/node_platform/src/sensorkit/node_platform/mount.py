@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from pydantic import Field
 from typing import Literal, override
 
+import astropy.units as u
+import ourskyai_node_platform_api as osapi
+import sensorkit.api as sk
 from astropy.coordinates import ICRS, AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
-import astropy.units as u
 from loguru import logger
-
-import ourskyai_node_platform_api as osapi
-
-import sensorkit.api as sk
+from pydantic import Field
 from sensorkit.astro.target import (
     AltAzTarget,
     FrameTarget,
@@ -107,7 +105,7 @@ class NodePlatformMount(NodePlatformDevice):
                 await self.mount_home(sk.Home())
 
         # Setup the OTA
-        # await self.setup_ota()
+        await self.setup_ota()
 
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
@@ -170,7 +168,9 @@ class NodePlatformMount(NodePlatformDevice):
 
     @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
-        self.require_connected()
+        if not self.device_connected:
+            await self.mount_init(sk.Init())
+
         match cmd.target:
             case ICRSTarget():
                 logger.debug("executing RADec follow")

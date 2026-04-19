@@ -163,7 +163,8 @@ class NinaMount(NinaDevice):
 
     @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
-        self.require_connected()
+        if not self.device_connected:
+            await self.mount_init(sk.Init())
         from sensorkit.astro.common import ReferenceFrame
 
         target = cmd.target

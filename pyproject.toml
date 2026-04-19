@@ -46,7 +46,7 @@ nina = [
     "python-dotenv",
 ]
 node-platform = [
-    "ourskyai-node-platform-api<=1.3.9953",
+    "ourskyai-node-platform-api",
     "python-dotenv",
 ]
 otto = [
@@ -60,6 +60,10 @@ pwi4 = [
     "httpx",
 ]
 thesky = []
+webapi = [
+    "fastapi>=0.115.12",
+    "uvicorn>=0.34.0",
+]
 udl = [
     "udl-sdk",
     "httpx",

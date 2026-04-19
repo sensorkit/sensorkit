@@ -299,7 +299,8 @@ class AlpacaTelescope(AlpacaDevice):
 
     @sk.command_handler
     async def telescope_follow_target(self, cmd: sk.FollowTarget):
-        self.require_connected()
+        if not self.device_connected:
+            await self.telescope_init(sk.Init())
         from sensorkit.astro.common import ReferenceFrame
 
         target = cmd.target

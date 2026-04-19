@@ -49,6 +49,9 @@ class OttoProgram:
         self._task_generator: asyncio.Task | None = None
         self._publisher: asyncio.Task | None = None
 
+        # Set when the tasking loop is active (controller operating)
+        self._active = asyncio.Event()
+
         self.state = OttoState()
         self.list_manager: ObjectListManager | None = None
 
@@ -154,6 +157,9 @@ class OttoProgram:
         """Cancel background tasks."""
         logger.debug("stopping Otto program")
 
+        # Stop task generation
+        self._active.clear()
+
         # Cancel background tasks
         for task in [
             self._fastapi_server,
@@ -231,6 +237,11 @@ class OttoProgram:
             StandardCollectTask: The next task to be executed.
             None: If no task is available.
         """
+        if not self._active.is_set():
+            logger.debug("task factory activated, flushing expired tasks")
+            await self.task_queue.flush_expired()
+            self._active.set()
+
         if task := await self.task_queue.pop_task():
             logger.info(
                 f"task ({task.task_id}): target -> {task.target}, "
@@ -270,6 +281,9 @@ class OttoProgram:
 
         while True:
             try:
+                # Wait until the controller is operating (tasking loop active)
+                await self._active.wait()
+
                 # Wait for a fresh batch of TLEs
                 if not self.tles or (datetime.now(UTC) - self.tles_dt).days > 1:
                     logger.debug("no TLEs available yet")

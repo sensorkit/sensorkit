@@ -4,10 +4,9 @@ import asyncio
 import contextlib
 from typing import Any, Literal
 
+import sensorkit.api as sk
 from loguru import logger
 from pydantic import BaseModel, Field
-
-import sensorkit.api as sk
 from sensorkit.astro.common import ReferenceFrame
 from sensorkit.astro.target import AltAzTarget, FrameTarget, ICRSTarget, TLETarget
 from sensorkit.core import task
@@ -22,10 +21,10 @@ from sensorkit.models.devices import (
     SitePosition,
     Stop,
 )
+from sensorkit.std.collect import StandardCollectTask
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.std.instrument import Binning, CameraCapture, ConfigureCameraSensor
 from sensorkit.std.optics import OpenMirrorCover, CloseMirrorCover, SetFilter
-from sensorkit.std.collect import StandardCollectTask
 
 
 class Sensor:
@@ -223,7 +222,7 @@ class SensorControl:
             case TLETarget():
                 adhoc["track_mode"] = "rate"
                 adhoc["target_name"] = task.target.tle.line0
-                adhoc["target_id"] = f"{int(task.target.tle.line1[2:7])}"
+                adhoc["target_id"] = f"{int(task.target.tle.line0.split()[1])}"
             case _:
                 adhoc["track_mode"] = "rate"
 

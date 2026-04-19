@@ -7,14 +7,12 @@ from pathlib import Path
 from typing import Literal, override
 
 import astropy.units as u
+import sensorkit.api as sk
 from astropy.coordinates import ICRS, AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
-
 # Prevent IERS-A (Earth orientation parameters) download, which can take long enough to cause a lease expiry
 from astropy.utils import iers
 from loguru import logger
-
-import sensorkit.api as sk
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import (
     AltAzTarget,
@@ -277,7 +275,8 @@ class TheSkyMount(TheSkyDevice):
 
     @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
-        self.require_connected()
+        if not self.device_connected:
+            await self.mount_init(sk.Init())
 
         # Wait for any in-progress homing to complete
         if self._home_task is not None and not self._home_task.done():
@@ -357,12 +356,13 @@ class TheSkyMount(TheSkyDevice):
                     );
                     """
                 )
+                await asyncio.sleep(0.5)
 
                 # Select the target and begin the follow
                 await self.execute(
                     f"""
                     sky6StarChart.Find(
-                        '{tle.line0.split()[1]}'
+                        '{tle.line1.split()[1]}'
                     );
                     Raven3.trackLEOBegin();
                     """
@@ -427,13 +427,17 @@ class TheSkyMount(TheSkyDevice):
             lines.append(target.line0)
         lines.extend([target.line1, target.line2])
 
+        # Use satellite designator (e.g. "NNNNNU") for a unique filename
+        designator = target.line1.split()[1]
+        filename = f"tle_{designator}.txt"
+
         host_data_path = os.environ.get("SENSORKIT_DATA_PATH")
 
         if host_data_path:
-            write_path = Path("/data") / "tle.txt"
-            thesky_path = f"{host_data_path.replace('\\', '/')}/tle.txt"
+            write_path = Path("/data") / filename
+            thesky_path = f"{host_data_path.replace('\\', '/')}/{filename}"
         else:
-            write_path = Path(tempfile.gettempdir()) / "tle.txt"
+            write_path = Path(tempfile.gettempdir()) / filename
             thesky_path = write_path.as_posix()
 
         write_path.write_text("\n".join(lines) + "\n")

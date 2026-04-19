@@ -3,17 +3,22 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-from loguru import logger
-
 import sensorkit.api as sk
+from loguru import logger
+from pydantic import BaseModel
 from sensorkit.models.devices import AltAzPointing, Connected, Opened
-from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
+from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.thesky.device import (
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
     DomeCommandInProgressError,
 )
+
+
+@sk.declare_keyword
+class IsTracking(BaseModel):
+    is_tracking: bool = False
 
 
 @sk.declare_device
@@ -136,11 +141,14 @@ class TheSkyDome(TheSkyDevice):
     async def dome_park(self, cmd: sk.MoveToPark):
         self.require_connected()
         logger.debug("parking thesky dome")
-        await self.execute(
-            """
-            sky6Dome.Park();
-            """
-        )
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                try:
+                    await self.execute("""sky6Dome.Park();""")
+                    break
+                except DomeCommandInProgressError:
+                    await asyncio.sleep(0.5)
 
         # Wait for the dome to finish parking
         async with asyncio.timeout(self.config.timeout):
@@ -174,11 +182,14 @@ class TheSkyDome(TheSkyDevice):
         self.require_connected()
         await self.dome_unpark()
         logger.debug("homing thesky dome")
-        await self.execute(
-            """
-            sky6Dome.FindHome();
-            """
-        )
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                try:
+                    await self.execute("""sky6Dome.FindHome();""")
+                    break
+                except DomeCommandInProgressError:
+                    await asyncio.sleep(0.5)
 
         # Wait for the dome to finish homing
         async with asyncio.timeout(self.config.timeout):
@@ -194,12 +205,7 @@ class TheSkyDome(TheSkyDevice):
         self.require_connected()
         await self.dome_unpark()
         logger.debug("stopping thesky dome")
-        await self.execute(
-            """
-            sky6Dome.Abort();
-            """
-        )
-        await asyncio.sleep(0.1)
+        await self.execute("""sky6Dome.Abort();""")
 
         # Wait for the dome to stop
         async with asyncio.timeout(self.config.timeout):
@@ -228,11 +234,13 @@ class TheSkyDome(TheSkyDevice):
         if self.state.slit_status in ["opening", "open"]:
             return
 
-        await self.execute(
-            """
-            sky6Dome.OpenSlit();
-            """
-        )
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                try:
+                    await self.execute("""sky6Dome.OpenSlit();""")
+                    break
+                except DomeCommandInProgressError:
+                    await asyncio.sleep(0.5)
 
         # Wait for the dome to open
         async with asyncio.timeout(self.config.timeout):
@@ -248,11 +256,13 @@ class TheSkyDome(TheSkyDevice):
         if self.state.slit_status in ["closing", "closed"]:
             return
 
-        await self.execute(
-            """
-            sky6Dome.CloseSlit();
-            """
-        )
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                try:
+                    await self.execute("""sky6Dome.CloseSlit();""")
+                    break
+                except DomeCommandInProgressError:
+                    await asyncio.sleep(0.5)
 
         # Wait for the dome to close
         async with asyncio.timeout(self.config.timeout):
@@ -269,7 +279,8 @@ class TheSkyDome(TheSkyDevice):
                     Out = [
                         sky6Dome.IsConnected,
                         sky6Dome.slitState(),
-                        sky6Dome.dAz
+                        sky6Dome.dAz,
+                        sky6Dome.IsGotoComplete
                     ];
                     """
                 )
@@ -280,7 +291,7 @@ class TheSkyDome(TheSkyDevice):
 
             try:
                 # 0=unknown, 1=open, 2=closed
-                connected, slit_num, az = [float(x) for x in resp.split(",")]
+                connected, slit_num, az, is_tracking = [float(x) for x in resp.split(",")]
                 slit_str = {0: "unknown", 1: "open", 2: "closed"}.get(int(slit_num), "unknown")
 
                 connected = bool(connected)
