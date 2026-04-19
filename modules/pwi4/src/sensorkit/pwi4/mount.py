@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import math
-from typing import Any, Literal, override
+from typing import Literal, override
 
+import sensorkit.api as sk
 from astropy import units as u
-from astropy.coordinates import ICRS, EarthLocation, SkyCoord
 from astropy.coordinates import AltAz as AstropyAltAz
+from astropy.coordinates import ICRS, EarthLocation, SkyCoord
 from astropy.time import Time
 from loguru import logger
 from pydantic import BaseModel
-
-import sensorkit.api as sk
 from sensorkit.astro.common import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
@@ -41,7 +39,6 @@ from sensorkit.models.devices import (
     RADecPointing,
     ReferenceFrame,
     SetAzimuthWrapRangeMin,
-    SetParkPosition,
 )
 from sensorkit.pwi4.device import (
     PWI4Client,
@@ -312,7 +309,7 @@ class PWI4Mount(PWI4Device):
                 await self.client.request(
                     "/mount/goto_ra_dec_j2000",
                     params={
-                        "ra_hours": target.coords.ra,
+                        "ra_hours": target.coords.ra / 15,
                         "dec_degs": target.coords.dec,
                     },
                 )
