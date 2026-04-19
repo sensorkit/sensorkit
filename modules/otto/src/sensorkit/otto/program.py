@@ -281,9 +281,6 @@ class OttoProgram:
 
         while True:
             try:
-                # Wait until the controller is operating (tasking loop active)
-                await self._active.wait()
-
                 # Wait for a fresh batch of TLEs
                 if not self.tles or (datetime.now(UTC) - self.tles_dt).days > 1:
                     logger.debug("no TLEs available yet")

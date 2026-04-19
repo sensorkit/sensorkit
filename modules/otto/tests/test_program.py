@@ -160,31 +160,32 @@ class TestGenerateTaskFactory:
         assert result.task_id == valid.task_id
 
 
-class TestGenerateTasksGating:
+class TestGenerateFlushOnActivation:
     @pytest.mark.asyncio
-    async def test_generate_tasks_waits_for_active(self, program):
-        """generate_tasks should block until _active is set."""
-        started = asyncio.Event()
-        proceeded = asyncio.Event()
+    async def test_generate_flushes_on_first_call_after_deactivation(self, program):
+        """After _active is cleared and generate() is called again, it should flush expired tasks."""
+        # Activate
+        gen = program.generate()
+        await gen.__anext__()
+        assert program._active.is_set()
 
-        async def wait_for_active():
-            started.set()
-            await program._active.wait()
-            proceeded.set()
+        # Deactivate
+        program._active.clear()
 
-        task = asyncio.create_task(wait_for_active())
+        # Add an expired task
+        expired = make_task(
+            task_id=uuid.uuid1(),
+            end_time=datetime.now(UTC) - timedelta(hours=1),
+        )
+        await program.task_queue.push_task(expired)
+        assert len(program.task_queue) == 1
 
-        # Should start but not proceed past _active.wait()
-        await asyncio.sleep(0.05)
-        assert started.is_set()
-        assert not proceeded.is_set()
-
-        # Set active — should proceed
-        program._active.set()
-        await asyncio.sleep(0.05)
-        assert proceeded.is_set()
-
-        await task
+        # Next generate() should flush expired and re-set active
+        gen2 = program.generate()
+        result = await gen2.__anext__()
+        assert result is None
+        assert len(program.task_queue) == 0
+        assert program._active.is_set()
 
 
 class TestObjectListManagement:
