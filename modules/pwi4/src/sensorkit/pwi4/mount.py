@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-import sensorkit.api as sk
 from astropy import units as u
-from astropy.coordinates import AltAz as AstropyAltAz
 from astropy.coordinates import ICRS, EarthLocation, SkyCoord
+from astropy.coordinates import AltAz as AstropyAltAz
 from astropy.time import Time
 from loguru import logger
 from pydantic import BaseModel
+
+import sensorkit.api as sk
 from sensorkit.astro.common import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
@@ -246,36 +247,42 @@ class PWI4Mount(PWI4Device):
 
         logger.debug("homing mount")
         await self.client.request("/mount/find_home")
-        await self.client.poll(
-            lambda s: (
-                self.client.get_bool(s, "mount.axis0.is_position_initialized")
-                and self.client.get_bool(s, "mount.axis1.is_position_initialized")
-            ),
-        )
+
+        async with asyncio.timeout(self.config.timeout):
+            await self.client.poll(
+                lambda s: (
+                    self.client.get_bool(s, "mount.axis0.is_position_initialized")
+                    and self.client.get_bool(s, "mount.axis1.is_position_initialized")
+                ),
+            )
         logger.debug("homed mount")
 
     @sk.command_handler
     async def mount_stop(self, cmd: sk.Stop):
         logger.debug("stopping mount")
         await self.client.request("/mount/stop")
-        await self.client.poll(
-            lambda s: (
-                not self.client.get_bool(s, "mount.is_slewing")
-                and not self.client.get_bool(s, "mount.is_tracking")
-            ),
-        )
+
+        async with asyncio.timeout(self.config.timeout):
+            await self.client.poll(
+                lambda s: (
+                    not self.client.get_bool(s, "mount.is_slewing")
+                    and not self.client.get_bool(s, "mount.is_tracking")
+                ),
+            )
         logger.debug("stopped mount")
 
     @sk.command_handler
     async def mount_park(self, cmd: sk.MoveToPark):
         logger.debug("parking mount")
         await self.client.request("/mount/park")
-        await self.client.poll(
-            lambda s: (
-                not self.client.get_bool(s, "mount.is_slewing")
-                and not self.client.get_bool(s, "mount.is_tracking")
-            ),
-        )
+
+        async with asyncio.timeout(self.config.timeout):
+            await self.client.poll(
+                lambda s: (
+                    not self.client.get_bool(s, "mount.is_slewing")
+                    and not self.client.get_bool(s, "mount.is_tracking")
+                ),
+            )
         logger.debug("parked mount")
 
     @sk.command_handler

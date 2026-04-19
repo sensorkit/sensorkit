@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import Literal, override
 
 import astropy.units as u
-import sensorkit.api as sk
 from astropy.coordinates import ICRS, AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
+
 # Prevent IERS-A (Earth orientation parameters) download, which can take long enough to cause a lease expiry
 from astropy.utils import iers
 from loguru import logger
+
+import sensorkit.api as sk
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import (
     AltAzTarget,
@@ -32,15 +34,15 @@ from sensorkit.models.devices import (
     ReferenceFrame,
 )
 from sensorkit.thesky.device import (
+    MountCommandInProgressError,
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
-    MountCommandInProgressError,
 )
 
 iers.conf.auto_download = False
 # Suppress the warning that results from the above decision
-from astropy.utils.iers import conf
+from astropy.utils.iers import conf  # noqa: E402
 
 conf.auto_max_age = None
 
