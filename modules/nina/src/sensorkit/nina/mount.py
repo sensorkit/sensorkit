@@ -39,6 +39,7 @@ class NinaMount(NinaDevice):
     """NINA mount implementation."""
 
     config: NinaMountConfig
+    _home_task: asyncio.Task | None = None
 
     @sk.on_attach
     async def entity_init(self):
@@ -80,12 +81,18 @@ class NinaMount(NinaDevice):
 
         self.start_status_loop(self.status_publish())
 
-        if self.config.needs_homed and not self.state.has_been_homed:
-            await self.mount_home(sk.Home())
+        # Home as needed
+        if not self.state.has_been_homed:
+            self._home_task = asyncio.create_task(self.mount_home(sk.Home()))
 
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
+        if self._home_task is not None:
+            self._home_task.cancel()
+            try:
+                await self._home_task
+            except asyncio.CancelledError:
+                pass
 
         if not self.device_connected:
             return
@@ -98,6 +105,8 @@ class NinaMount(NinaDevice):
                 await self.client.get("/equipment/mount/park")
         except Exception as e:
             logger.warning(f"Error during mount deinit: {e}")
+
+        await self.stop_status_loop()
 
         try:
             await self.disconnect("mount")
@@ -373,7 +382,6 @@ class NinaMount(NinaDevice):
 
 class NinaMountConfig(NinaDeviceConfig[NinaMount]):
     device_type: Literal["mount"] = "mount"
-    needs_homed: bool = False
     timeout: float = 300.0
     status_frequency: float = 1.0
 

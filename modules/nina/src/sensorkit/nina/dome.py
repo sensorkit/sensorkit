@@ -27,6 +27,7 @@ class NinaDome(NinaDevice):
     """NINA Dome implementation."""
 
     config: NinaDomeConfig
+    _home_task: asyncio.Task | None = None
 
     @sk.on_attach
     async def entity_init(self):
@@ -50,20 +51,35 @@ class NinaDome(NinaDevice):
         await sk.device().publish(Connected(is_connected=True))
         self.start_status_loop(self.status_publish())
 
-        if self.config.needs_homed and not self.state.has_been_homed:
-            await self.dome_home(sk.Home())
+        # Home as needed
+        if not self.state.has_been_homed:
+            self._home_task = asyncio.create_task(self.dome_home(sk.Home()))
 
     @sk.command_handler
     async def dome_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
         if not self.device_connected:
             return
+
+        if self._home_task is not None:
+            self._home_task.cancel()
+            try:
+                await self._home_task
+            except asyncio.CancelledError:
+                pass
+
+        # Send the dome to its park position
         try:
             await self.client.get("/equipment/dome/park")
             await self.disconnect("dome")
             await sk.device().publish(Connected(is_connected=False))
         except Exception as e:
             logger.warning(f"Error during dome deinit: {e}")
+
+        # Stop dome status publishing
+        await self.stop_status_loop()
+
+        # Disconnect from the hardware
+        await self.dome_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def dome_connect(self, cmd: sk.Connect):
@@ -114,8 +130,6 @@ class NinaDome(NinaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        self.state.shutter_state = "open"
-        await sk.device().kv_put_model(self.state)
         logger.debug("opened dome")
 
     @sk.command_handler
@@ -132,8 +146,6 @@ class NinaDome(NinaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        self.state.shutter_state = "closed"
-        await sk.device().kv_put_model(self.state)
         logger.debug("closed dome")
 
     @sk.command_handler
@@ -160,11 +172,6 @@ class NinaDome(NinaDevice):
                 if connected:
                     shutter_status = info.get("ShutterStatus", "unknown")
                     is_open = shutter_status in ("Open", "Opening")
-
-                    if shutter_status == "Open":
-                        self.state.shutter_state = "open"
-                    elif shutter_status == "Closed":
-                        self.state.shutter_state = "closed"
 
                     await device.publish(Opened(is_open=is_open))
 
@@ -195,7 +202,6 @@ class NinaDome(NinaDevice):
 
 class NinaDomeConfig(NinaDeviceConfig[NinaDome]):
     device_type: Literal["dome"] = "dome"
-    needs_homed: bool = False
     timeout: float = 300.0
     status_frequency: float = 1.0
 
@@ -207,4 +213,3 @@ class NinaDomeConfig(NinaDeviceConfig[NinaDome]):
 class NinaDomeState(NinaDeviceState):
     device_type: Literal["dome"] = "dome"
     has_been_homed: bool = False
-    shutter_state: str = "unknown"

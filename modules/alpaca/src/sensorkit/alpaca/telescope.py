@@ -73,6 +73,7 @@ class AlpacaTelescope(AlpacaDevice):
     """Alpaca Telescope implementation."""
 
     config: AlpacaTelescopeConfig
+    _home_task: asyncio.Task | None = None
 
     @sk.on_attach
     async def entity_init(self):
@@ -150,8 +151,9 @@ class AlpacaTelescope(AlpacaDevice):
 
         self.start_status_loop(self.status_publish())
 
-        if self.config.needs_homed and not self.state.has_been_homed:
-            await self.telescope_home(sk.Home())
+        # Home as needed
+        if not self.state.has_been_homed:
+            self._home_task = asyncio.create_task(self.telescope_home(sk.Home()))
 
     async def _check_can_move_axis(self, axis: int) -> bool:
         try:
@@ -168,7 +170,13 @@ class AlpacaTelescope(AlpacaDevice):
 
     @sk.command_handler
     async def telescope_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
+        if self._home_task is not None:
+            self._home_task.cancel()
+            try:
+                await self._home_task
+            except asyncio.CancelledError:
+                pass
+
         try:
             if self._can_set_tracking:
                 await self.put(self.telescope, "Tracking", False)
@@ -178,6 +186,12 @@ class AlpacaTelescope(AlpacaDevice):
             await self.telescope_disconnect(sk.Disconnect())
         except Exception as e:
             logger.warning(f"Error during telescope deinit: {e}")
+
+        # Stop telescope status publishing
+        await self.stop_status_loop()
+
+        # Disconnect from the hardware
+        await self.telescope_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def telescope_connect(self, cmd: sk.Connect):
@@ -644,7 +658,6 @@ class AlpacaTelescope(AlpacaDevice):
 
 class AlpacaTelescopeConfig(AlpacaDeviceConfig[AlpacaTelescope]):
     device_type: Literal["telescope"] = "telescope"
-    needs_homed: bool = False
     timeout: float = 300.0
     status_frequency: float = 1.0
 

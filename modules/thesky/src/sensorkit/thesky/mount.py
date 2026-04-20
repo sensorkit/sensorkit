@@ -120,9 +120,8 @@ class TheSkyMount(TheSkyDevice):
         self.start_status_loop(self.status_publish())
 
         # Home as needed
-        if self.config.needs_homed:
-            if not self.state.has_been_homed:
-                self._home_task = asyncio.create_task(self.mount_home(sk.Home()))
+        if not self.state.has_been_homed:
+            self._home_task = asyncio.create_task(self.mount_home(sk.Home()))
 
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
@@ -587,7 +586,6 @@ class TheSkyMountConfig(TheSkyDeviceConfig[TheSkyMount]):
     """TheSky Mount configuration."""
 
     device_type: Literal["mount"] = "mount"
-    needs_homed: bool
     timeout: float = 300.0
     status_frequency: float = 1.0
 

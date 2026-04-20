@@ -5,11 +5,12 @@ from typing import Literal, override
 
 import astropy.units as u
 import ourskyai_node_platform_api as osapi
-import sensorkit.api as sk
 from astropy.coordinates import ICRS, AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
 from loguru import logger
 from pydantic import Field
+
+import sensorkit.api as sk
 from sensorkit.astro.target import (
     AltAzTarget,
     FrameTarget,
@@ -35,6 +36,7 @@ from sensorkit.node_platform.device import (
 @sk.declare_device
 class NodePlatformMount(NodePlatformDevice):
     """Node Platform Mount implementation."""
+
     config: NodePlatformMountConfig
     device_name = "Mount"
 
@@ -79,7 +81,7 @@ class NodePlatformMount(NodePlatformDevice):
         self._location = EarthLocation(
             lat=self._site_info["latitude_degrees"] * u.deg,
             lon=self._site_info["longitude_degrees"] * u.deg,
-            height=self._site_info["height_meters"] * u.m
+            height=self._site_info["height_meters"] * u.m,
         )
 
         # System time
@@ -100,9 +102,8 @@ class NodePlatformMount(NodePlatformDevice):
     async def mount_init(self, cmd: sk.Init):
         """Home as needed, setup optical tube assembly."""
         self.require_connected()
-        if self.config.needs_homed:
-            if not self.state.has_been_homed:
-                await self.mount_home(sk.Home())
+        if not self.state.has_been_homed:
+            await self.mount_home(sk.Home())
 
         # Setup the OTA
         await self.setup_ota()
@@ -227,8 +228,12 @@ class NodePlatformMount(NodePlatformDevice):
                         await self.api.call("v1_disable_mount_tracking")
 
                         async with asyncio.timeout(self.config.timeout):
-                            while (self.mount_slewing is None or self.mount_slewing or
-                                   self.mount_tracking is None or self.mount_tracking):
+                            while (
+                                self.mount_slewing is None
+                                or self.mount_slewing
+                                or self.mount_tracking is None
+                                or self.mount_tracking
+                            ):
                                 await asyncio.sleep(self.config.status_frequency)
 
                     case ReferenceFrame.ICRF:
@@ -245,7 +250,9 @@ class NodePlatformMount(NodePlatformDevice):
 
             case _:
                 track_type = type(cmd.target).__name__
-                raise NotImplementedError(f"{track_type} tracking via Node Platform is not supported")
+                raise NotImplementedError(
+                    f"{track_type} tracking via Node Platform is not supported"
+                )
 
     async def status_publish(self):
         while True:
@@ -297,19 +304,16 @@ class NodePlatformMount(NodePlatformDevice):
 
                 if self._location is not None:
                     ra_rate, dec_rate = self.altaz_rates_to_radec_rates(
-                        alt_deg,
-                        az_deg,
-                        rate_b,
-                        rate_a,
-                        location=self._location,
-                        time=Time.now()
+                        alt_deg, az_deg, rate_b, rate_a, location=self._location, time=Time.now()
                     )
 
                     await device.publish(
                         AxisRates(
                             azimuth=AxisRate(velocity=rate_a, axis=MountAxis.AZIMUTH),
                             altitude=AxisRate(velocity=rate_b, axis=MountAxis.ALTITUDE),
-                            right_ascension=AxisRate(velocity=ra_rate, axis=MountAxis.RIGHT_ASCENSION),
+                            right_ascension=AxisRate(
+                                velocity=ra_rate, axis=MountAxis.RIGHT_ASCENSION
+                            ),
                             declination=AxisRate(velocity=dec_rate, axis=MountAxis.DECLINATION),
                         )
                     )
@@ -321,13 +325,13 @@ class NodePlatformMount(NodePlatformDevice):
             await asyncio.sleep(self.config.status_frequency)
 
     def altaz_rates_to_radec_rates(
-            self,
-            alt_deg: float,
-            az_deg: float,
-            alt_rate_deg_per_sec: float,
-            az_rate_deg_per_sec: float,
-            location: EarthLocation,
-            time: Time,
+        self,
+        alt_deg: float,
+        az_deg: float,
+        alt_rate_deg_per_sec: float,
+        az_rate_deg_per_sec: float,
+        location: EarthLocation,
+        time: Time,
     ) -> tuple[float, float]:
         """
         Convert Alt/Az position and angular rates (deg/sec) into RA/Dec rates.
@@ -397,8 +401,8 @@ class NodePlatformMount(NodePlatformDevice):
 
 class NodePlatformMountConfig(NodePlatformDeviceConfig[NodePlatformMount]):
     """Node Platform Mount configuration."""
+
     device_type: Literal["mount"] = "mount"
-    needs_homed: bool = False
     heater_power: dict[str, float] = Field(default_factory=dict)
     timeout: float = 300.0
     status_frequency: float = 1.0
@@ -410,5 +414,6 @@ class NodePlatformMountConfig(NodePlatformDeviceConfig[NodePlatformMount]):
 
 class NodePlatformMountState(NodePlatformDeviceState):
     """Node Platform Mount state."""
+
     device_type: Literal["mount"] = "mount"
     has_been_homed: bool = False

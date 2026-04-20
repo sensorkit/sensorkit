@@ -62,6 +62,7 @@ class AlpacaDome(AlpacaDevice):
     """Alpaca Dome implementation."""
 
     config: AlpacaDomeConfig
+    _home_task: asyncio.Task | None = None
 
     @sk.on_attach
     async def entity_init(self):
@@ -99,13 +100,26 @@ class AlpacaDome(AlpacaDevice):
 
         self.start_status_loop(self.status_publish())
 
-        if self.config.needs_homed and not self.state.has_been_homed:
-            await self.dome_home(sk.Home())
+        # Home as needed
+        if not self.state.has_been_homed:
+            self._home_task = asyncio.create_task(self.dome_home(sk.Home()))
 
     @sk.command_handler
     async def dome_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
+        if self._home_task is not None:
+            self._home_task.cancel()
+            try:
+                await self._home_task
+            except asyncio.CancelledError:
+                pass
+
+        # Send the dome to its park position
         await self.dome_park(sk.MoveToPark())
+
+        # Stop dome status publishing
+        await self.stop_status_loop()
+
+        # Disconnect from the hardware
         await self.dome_disconnect(sk.Disconnect())
 
     @sk.command_handler
@@ -176,9 +190,6 @@ class AlpacaDome(AlpacaDevice):
             logger.warning("Cannot set shutter")
             return
 
-        if self.state.shutter_state == "open":
-            return
-
         logger.debug("opening shutter")
 
         await self.call(self.dome, "OpenShutter")
@@ -190,9 +201,6 @@ class AlpacaDome(AlpacaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        self.state.shutter_state = "open"
-        await sk.device().kv_put_model(self.state)
-
         logger.debug("opened shutter")
 
     @sk.command_handler
@@ -200,9 +208,6 @@ class AlpacaDome(AlpacaDevice):
         self.require_connected()
         if not self._can_set_shutter:
             logger.warning("Cannot set shutter")
-            return
-
-        if self.state.shutter_state == "closed":
             return
 
         logger.debug("closing shutter")
@@ -215,9 +220,6 @@ class AlpacaDome(AlpacaDevice):
                 if status == _SHUTTER_CLOSED:
                     break
                 await asyncio.sleep(self.config.status_frequency)
-
-        self.state.shutter_state = "closed"
-        await sk.device().kv_put_model(self.state)
 
         logger.debug("closed shutter")
 
@@ -281,11 +283,6 @@ class AlpacaDome(AlpacaDevice):
                         else False
                     )
 
-                    if shutter_status == _SHUTTER_OPEN:
-                        self.state.shutter_state = "open"
-                    elif shutter_status == _SHUTTER_CLOSED:
-                        self.state.shutter_state = "closed"
-
                     await device.publish(Opened(is_open=is_open))
 
                     # Full IDomeV3 status — only include properties the dome supports
@@ -338,7 +335,6 @@ class AlpacaDome(AlpacaDevice):
 
 class AlpacaDomeConfig(AlpacaDeviceConfig[AlpacaDome]):
     device_type: Literal["dome"] = "dome"
-    needs_homed: bool = False
     timeout: float = 300.0
     status_frequency: float = 1.0
 
@@ -350,4 +346,3 @@ class AlpacaDomeConfig(AlpacaDeviceConfig[AlpacaDome]):
 class AlpacaDomeState(AlpacaDeviceState):
     device_type: Literal["dome"] = "dome"
     has_been_homed: bool = False
-    shutter_state: str = "unknown"

@@ -178,6 +178,10 @@ class FocuserCommandInProgressError(TheSkyError):
     code = 117
 
 
+class OTACommandInProgressError(TheSkyError):
+    code = 118
+
+
 class CameraCommandInProgressError(TheSkyError):
     code = 120
 

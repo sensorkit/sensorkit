@@ -3,16 +3,18 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-import sensorkit.api as sk
 from loguru import logger
 from pydantic import BaseModel
+
+import sensorkit.api as sk
 from sensorkit.models.devices import AltAzPointing, Connected, Opened
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.thesky.device import (
+    CommandFailedError,
+    DomeCommandInProgressError,
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
-    DomeCommandInProgressError,
 )
 
 
@@ -69,9 +71,8 @@ class TheSkyDome(TheSkyDevice):
         self.start_status_loop(self.status_publish())
 
         # Home as needed
-        if self.config.needs_homed:
-            if not self.state.has_been_homed:
-                self._home_task = asyncio.create_task(self.dome_home(sk.Home()))
+        if not self.state.has_been_homed:
+            self._home_task = asyncio.create_task(self.dome_home(sk.Home()))
 
     @sk.command_handler
     async def dome_deinit(self, cmd: sk.Deinit):
@@ -190,6 +191,9 @@ class TheSkyDome(TheSkyDevice):
                     break
                 except DomeCommandInProgressError:
                     await asyncio.sleep(0.5)
+                except CommandFailedError:
+                    logger.warning("Unable to home dome")
+                    return
 
         # Wait for the dome to finish homing
         async with asyncio.timeout(self.config.timeout):
@@ -224,15 +228,7 @@ class TheSkyDome(TheSkyDevice):
         self.require_connected()
         await self.dome_unpark()
 
-        # Wait for homing to complete, e.g. on initial startup
-        if self.config.needs_homed:
-            async with asyncio.timeout(self.config.timeout):
-                while not self.state.has_been_homed:
-                    await asyncio.sleep(self.config.status_frequency)
-
         logger.debug("opening thesky dome")
-        if self.state.slit_status in ["opening", "open"]:
-            return
 
         async with asyncio.timeout(self.config.timeout):
             while True:
@@ -253,8 +249,6 @@ class TheSkyDome(TheSkyDevice):
         self.require_connected()
         await self.dome_unpark()
         logger.debug("closing thesky dome")
-        if self.state.slit_status in ["closing", "closed"]:
-            return
 
         async with asyncio.timeout(self.config.timeout):
             while True:
@@ -297,14 +291,8 @@ class TheSkyDome(TheSkyDevice):
                 connected = bool(connected)
                 self.device_connected = connected
 
-                if self.state.slit_status is None:
-                    self.state.slit_status = "unknown"
-                elif slit_str in ("open", "closed"):
-                    self.state.slit_status = slit_str
-                await sk.device().kv_put_model(self.state)
-
                 # logger.debug(
-                #     f"TheSky dome status: connected={connected}, slit={self.state.slit_status}, az={az}"
+                #     f"TheSky dome status: connected={connected}, slit={slit_str}, az={az}"
                 # )
 
                 device = sk.device()
@@ -324,7 +312,6 @@ class TheSkyDomeConfig(TheSkyDeviceConfig[TheSkyDome]):
     """TheSky Dome configuration."""
 
     device_type: Literal["dome"] = "dome"
-    needs_homed: bool
     timeout: float = 300.0
     status_frequency: float = 1.0
 
@@ -338,4 +325,3 @@ class TheSkyDomeState(TheSkyDeviceState):
 
     device_type: Literal["dome"] = "dome"
     has_been_homed: bool = False
-    slit_status: str = "unknown"

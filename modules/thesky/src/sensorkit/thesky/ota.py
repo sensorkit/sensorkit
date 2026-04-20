@@ -9,6 +9,7 @@ import sensorkit.api as sk
 from sensorkit.models.devices import Connected, Opened
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 from sensorkit.thesky.device import (
+    OTACommandInProgressError,
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
@@ -111,14 +112,14 @@ class TheSkyOTA(TheSkyDevice):
     async def ota_open(self, cmd: OpenMirrorCover):
         self.require_connected()
         logger.debug("opening thesky ota mirror cover")
-        if self.state.mirror_cover_status in ["opening", "open"]:
-            return
 
-        await self.execute(
-            """
-            OpticalTubeAssembly.startOpenMirrorCover();
-            """
-        )
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                try:
+                    await self.execute("""OpticalTubeAssembly.startOpenMirrorCover();""")
+                    break
+                except OTACommandInProgressError:
+                    await asyncio.sleep(0.5)
 
         # Wait for the mirror cover to open
         async with asyncio.timeout(self.config.timeout):
@@ -129,14 +130,14 @@ class TheSkyOTA(TheSkyDevice):
     async def ota_close(self, cmd: CloseMirrorCover):
         self.require_connected()
         logger.debug("closing thesky ota mirror cover")
-        if self.state.mirror_cover_status in ["closing", "closed"]:
-            return
 
-        await self.execute(
-            """
-            OpticalTubeAssembly.startCloseMirrorCover();
-            """
-        )
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                try:
+                    await self.execute("""OpticalTubeAssembly.startCloseMirrorCover();""")
+                    break
+                except OTACommandInProgressError:
+                    await asyncio.sleep(0.5)
 
         # Wait for the mirror cover to close
         async with asyncio.timeout(self.config.timeout):
@@ -167,14 +168,8 @@ class TheSkyOTA(TheSkyDevice):
                 connected = bool(connected)
                 self.device_connected = connected
 
-                if self.state.mirror_cover_status is None:
-                    self.state.mirror_cover_status = "unknown"
-                elif cover_str in ("open", "closed"):
-                    self.state.mirror_cover_status = cover_str
-                await sk.device().kv_put_model(self.state)
-
                 # logger.debug(
-                #     f"TheSky OTA status: connected={connected}, cover={self.state.mirror_cover_status}"
+                #     f"TheSky OTA status: connected={connected}, cover={cover_str}"
                 # )
 
                 device = sk.device()
@@ -205,4 +200,3 @@ class TheSkyOTAState(TheSkyDeviceState):
     """TheSky OTA state."""
 
     device_type: Literal["ota"] = "ota"
-    mirror_cover_status: str = "unknown"
