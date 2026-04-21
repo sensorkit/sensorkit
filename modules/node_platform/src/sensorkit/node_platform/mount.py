@@ -336,10 +336,10 @@ class NodePlatformMount(NodePlatformDevice):
             resp = await asyncio.to_thread(
                 self.api._client.rest_client.request,
                 "GET",
-                f"{self.api._configuration.host}/api/v1/optical-tube/status",
+                f"{self.api._configuration.host}/node-platform/v1/optical-tube/status",
                 headers={"Authorization": f"Bearer {self.api._configuration.access_token}"},
             )
-            raw = json.loads(resp.data)
+            raw = json.loads(resp.read())
             return raw.get("temperatureSensors", {}).get("statuses", [])
         except Exception as e:
             logger.warning(f"Failed to get OT temperatures ({e})")
