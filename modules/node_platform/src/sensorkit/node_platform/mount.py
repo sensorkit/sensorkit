@@ -334,7 +334,8 @@ class NodePlatformMount(NodePlatformDevice):
 
         try:
             resp = await asyncio.to_thread(
-                self.api._client.rest_client.GET,
+                self.api._client.rest_client.request,
+                "GET",
                 f"{self.api._configuration.host}/api/v1/optical-tube/status",
                 headers={"Authorization": f"Bearer {self.api._configuration.access_token}"},
             )
