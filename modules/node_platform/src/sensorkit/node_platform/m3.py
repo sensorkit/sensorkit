@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-from loguru import logger
-
 import ourskyai_node_platform_api as osapi
+from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected
@@ -19,12 +18,12 @@ from sensorkit.node_platform.device import (
 @sk.declare_device
 class NodePlatformM3(NodePlatformDevice):
     """Node Platform M3 (tertiary mirror) implementation."""
+
     config: NodePlatformM3Config
     device_name = "M3"
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state and start status publishing."""
         device = sk.device()
 
         # Restore last known state
@@ -43,17 +42,14 @@ class NodePlatformM3(NodePlatformDevice):
 
     @sk.command_handler
     async def m3_init(self, cmd: sk.Init):
-        """Nothing to do."""
         pass
 
     @sk.command_handler
     async def m3_deinit(self, cmd: sk.Deinit):
-        """Nothing to do."""
         pass
 
     @sk.on_detach
     async def entity_deinit(self):
-        """Save current state and stop status publishing."""
         logger.debug("stopping node_platform m3 status loop")
         await self.stop_status_loop()
 
@@ -114,6 +110,7 @@ class NodePlatformM3(NodePlatformDevice):
 
 class NodePlatformM3Config(NodePlatformDeviceConfig[NodePlatformM3]):
     """Node Platform M3 configuration."""
+
     device_type: Literal["m3"] = "m3"
     timeout: float = 30.0
     status_frequency: float = 1.0
@@ -125,4 +122,5 @@ class NodePlatformM3Config(NodePlatformDeviceConfig[NodePlatformM3]):
 
 class NodePlatformM3State(NodePlatformDeviceState):
     """Node Platform M3 state."""
+
     device_type: Literal["m3"] = "m3"

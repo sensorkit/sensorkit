@@ -7,7 +7,7 @@ from sensorkit.node_platform._version import VERSION
 from sensorkit.node_platform.enclosure import NodePlatformEnclosureConfig
 from sensorkit.node_platform.focuser import NodePlatformFocuserConfig
 from sensorkit.node_platform.m3 import NodePlatformM3Config
-from sensorkit.node_platform.mirror_cover import NodePlatformMirrorCoverConfig
+from sensorkit.node_platform.cover import NodePlatformCoverConfig
 from sensorkit.node_platform.mount import NodePlatformMountConfig
 from sensorkit.node_platform.rotator import NodePlatformRotatorConfig
 from sensorkit.node_platform.weather import NodePlatformWeatherConfig
@@ -17,7 +17,7 @@ type NodePlatformDeviceConfigs = Annotated[
     NodePlatformEnclosureConfig
     | NodePlatformFocuserConfig
     | NodePlatformM3Config
-    | NodePlatformMirrorCoverConfig
+    | NodePlatformCoverConfig
     | NodePlatformMountConfig
     | NodePlatformRotatorConfig
     | NodePlatformWeatherConfig,

@@ -34,7 +34,6 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state and start status publishing."""
         device = sk.device()
 
         # Restore last known state
@@ -56,7 +55,6 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
     @sk.command_handler
     async def enclosure_init(self, cmd: sk.Init):
-        """Home as needed."""
         self.require_connected()
         if self.config.needs_homed:
             if not self.state.has_been_homed:
@@ -69,12 +67,10 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
     @sk.command_handler
     async def enclosure_deinit(self, cmd: sk.Deinit):
-        """Stop all motion."""
         await self.enclosure_stop(sk.Stop())
 
     @sk.on_detach
     async def entity_deinit(self):
-        """Save current state and stop status publishing."""
         logger.debug("stopping node_platform enclosure status loop")
         await self.stop_status_loop()
 

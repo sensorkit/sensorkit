@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-from loguru import logger
-
 import ourskyai_node_platform_api as osapi
+from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected, RotatorPosition
@@ -19,12 +18,12 @@ from sensorkit.node_platform.device import (
 @sk.declare_device
 class NodePlatformRotator(NodePlatformDevice):
     """Node Platform Rotator implementation."""
+
     config: NodePlatformRotatorConfig
     device_name = "Rotator"
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state and start status publishing."""
         device = sk.device()
 
         # Restore last known state
@@ -49,7 +48,6 @@ class NodePlatformRotator(NodePlatformDevice):
 
     @sk.command_handler
     async def rotator_init(self, cmd: sk.Init):
-        """Enable or disable rotation compensation."""
         self.require_connected()
         if self.config.derotate:
             await self.api.call("v1_enable_derotation_compensation")
@@ -58,14 +56,12 @@ class NodePlatformRotator(NodePlatformDevice):
 
     @sk.command_handler
     async def rotator_deinit(self, cmd: sk.Deinit):
-        """Disable rotation compensation and stop motion."""
         self.require_connected()
         await self.api.call("v1_disable_derotation_compensation")
         await self.rotator_stop(sk.Stop())
 
     @sk.on_detach
     async def entity_deinit(self):
-        """Save current state and stop status publishing."""
         logger.debug("stopping node_platform rotator status loop")
         await self.stop_status_loop()
 
@@ -134,6 +130,7 @@ class NodePlatformRotator(NodePlatformDevice):
 
 class NodePlatformRotatorConfig(NodePlatformDeviceConfig[NodePlatformRotator]):
     """Node Platform Rotator configuration."""
+
     device_type: Literal["rotator"] = "rotator"
     derotate: bool = False
     timeout: float = 60.0
@@ -146,4 +143,5 @@ class NodePlatformRotatorConfig(NodePlatformDeviceConfig[NodePlatformRotator]):
 
 class NodePlatformRotatorState(NodePlatformDeviceState):
     """Node Platform Rotator state."""
+
     device_type: Literal["rotator"] = "rotator"

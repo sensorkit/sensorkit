@@ -8,11 +8,11 @@ from datetime import UTC, datetime
 from typing import Literal, override
 
 import numpy as np
-from alpaca.camera import Camera
 from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from alpaca.camera import Camera
 from sensorkit.alpaca.device import (
     AlpacaDevice,
     AlpacaDeviceConfig,
@@ -176,9 +176,7 @@ class AlpacaCamera(AlpacaDevice):
     @sk.command_handler
     async def camera_init(self, cmd: sk.Init):
         self.device_name = "Camera"
-        self.camera = Camera(
-            self.address, self.config.device_number, self.config.protocol
-        )
+        self.camera = Camera(self.address, self.config.device_number, self.config.protocol)
         self._data_tasks: set[asyncio.Task] = set()
         self._camera_x_size: int = 0
         self._camera_y_size: int = 0
@@ -202,9 +200,7 @@ class AlpacaCamera(AlpacaDevice):
         self._max_bin_x = await self.get(c, "MaxBinX", 1)
         self._max_bin_y = await self.get(c, "MaxBinY", 1)
         self._sensor_name = await self.get(c, "SensorName", None)
-        self._sensor_type = _SENSOR_TYPES.get(
-            await self.get(c, "SensorType", 0), "Unknown"
-        )
+        self._sensor_type = _SENSOR_TYPES.get(await self.get(c, "SensorType", 0), "Unknown")
         self._pixel_size_x = await self.get(c, "PixelSizeX", None)
         self._pixel_size_y = await self.get(c, "PixelSizeY", None)
         self._max_adu = await self.get(c, "MaxADU", None)
@@ -320,10 +316,8 @@ class AlpacaCamera(AlpacaDevice):
 
         try:
             date_obs_fallback = datetime.now(UTC)
-            data: list[array.array] = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._do_capture, exposure_seconds, True, timeout_seconds
-                ),
+            data: array.array = await asyncio.wait_for(
+                asyncio.to_thread(self._do_capture, exposure_seconds, True, timeout_seconds),
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError:
@@ -335,35 +329,32 @@ class AlpacaCamera(AlpacaDevice):
             await self._try_abort()
             return
 
-        if not data or not data[0]:
+        if not data:
             logger.error("No data returned from camera")
             return
 
         # Build data context
+        # ImageArrayRaw returns a flat array; dimensions come from ImageArrayInfo.
+        # Alpaca dimension convention: Dimension1 = columns (X), Dimension2 = rows (Y).
+        info = self.camera.ImageArrayInfo
         context = cmd.context
-        dtype = _array_typecode_to_dtype.get(data[0].typecode, "uint16")
-        width = len(data)
-        height = len(data[0])
+        dtype = _array_typecode_to_dtype.get(data.typecode, "uint16")
+        width = info.Dimension1
+        height = info.Dimension2
 
         context.set(ArrayInfo(shape=(height, width), dtype=dtype))
         context["bitpix"] = _dtype_to_bitpix.get(dtype, 16)
         context["bzero"] = _dtype_to_bzero.get(dtype, 0)
 
-        last_exposure_start_time = await self.get(
-            self.camera, "LastExposureStartTime", None
-        )
+        last_exposure_start_time = await self.get(self.camera, "LastExposureStartTime", None)
         if last_exposure_start_time:
             context["date_obs"] = last_exposure_start_time
         else:
             context["date_obs"] = str(date_obs_fallback)
 
-        last_exposure_duration = await self.get(
-            self.camera, "LastExposureDuration", None
-        )
+        last_exposure_duration = await self.get(self.camera, "LastExposureDuration", None)
         context["exptime"] = (
-            last_exposure_duration
-            if last_exposure_duration is not None
-            else exposure_seconds
+            last_exposure_duration if last_exposure_duration is not None else exposure_seconds
         )
 
         context["instrume"] = await self.get(self.camera, "SensorName", "")
@@ -373,7 +364,7 @@ class AlpacaCamera(AlpacaDevice):
         if not context.get("file_name", None):
             context["file_name"] = f"{uuid.uuid1()}.fits"
 
-        task = asyncio.create_task(self._process_image(data, dtype, context))
+        task = asyncio.create_task(self._process_image(data, dtype, width, height, context))
         self._data_tasks.add(task)
         task.add_done_callback(self._data_tasks.discard)
 
@@ -401,9 +392,7 @@ class AlpacaCamera(AlpacaDevice):
         except Exception as e:
             logger.warning(f"Abort/stop exposure failed: {e}")
 
-    def _do_capture(
-        self, exposure_seconds: float, light: bool, timeout: float
-    ) -> list[array.array]:
+    def _do_capture(self, exposure_seconds: float, light: bool, timeout: float) -> array.array:
         """Execute a capture synchronously (runs in thread)."""
 
         self.camera.StartExposure(exposure_seconds, light)
@@ -413,22 +402,27 @@ class AlpacaCamera(AlpacaDevice):
 
         while time.monotonic() < slow_until:
             if self.camera.ImageReady:
-                return self.camera.ImageArray
+                return self.camera.ImageArrayRaw
             time.sleep(1.0)
 
         while time.monotonic() < deadline:
             if self.camera.ImageReady:
-                return self.camera.ImageArray
+                return self.camera.ImageArrayRaw
             time.sleep(0.1)
 
         raise RuntimeError("Exposure timed out waiting for ImageReady")
 
     async def _process_image(
-        self, data: list[array.array], dtype: str, context: sk.Context
+        self, data: array.array, dtype: str, width: int, height: int, context: sk.Context
     ):
         try:
+            # The flat buffer from ImageArrayRaw is in row-major order with
+            # shape (width, height) per Alpaca convention (Dim1=X, Dim2=Y).
+            # Reshape and transpose to (height, width) for FITS row-major.
             image_bytes = await asyncio.to_thread(
-                lambda: np.column_stack(data).astype(dtype, copy=False).tobytes()
+                lambda: np.ascontiguousarray(
+                    np.frombuffer(data, dtype=dtype).reshape(width, height).T
+                ).tobytes()
             )
 
             if graph := await sk.device().data_graph():
@@ -463,9 +457,7 @@ class AlpacaCamera(AlpacaDevice):
                     await device.publish(Binning(x=bin_x, y=bin_y))
                     if self._camera_x_size and self._camera_y_size:
                         await device.publish(
-                            CameraSensorSize(
-                                x=self._camera_x_size, y=self._camera_y_size
-                            )
+                            CameraSensorSize(x=self._camera_x_size, y=self._camera_y_size)
                         )
                     if ccd_temperature is not None:
                         await device.publish(
@@ -534,19 +526,13 @@ class AlpacaCamera(AlpacaDevice):
                         properties["exposure_resolution"] = self._exposure_resolution
 
                     # Dynamic exposure info
-                    last_exposure_duration = await self.get(
-                        c, "LastExposureDuration", None
-                    )
-                    last_exposure_start_time = await self.get(
-                        c, "LastExposureStartTime", None
-                    )
+                    last_exposure_duration = await self.get(c, "LastExposureDuration", None)
+                    last_exposure_start_time = await self.get(c, "LastExposureStartTime", None)
                     pct = await self.get(c, "PercentCompleted", None)
                     if last_exposure_duration is not None:
                         properties["last_exposure_duration"] = last_exposure_duration
                     if last_exposure_start_time is not None:
-                        properties["last_exposure_start_time"] = (
-                            last_exposure_start_time
-                        )
+                        properties["last_exposure_start_time"] = last_exposure_start_time
                     if pct is not None:
                         properties["percent_completed"] = pct
 
@@ -555,14 +541,10 @@ class AlpacaCamera(AlpacaDevice):
                         properties["ccd_temperature"] = ccd_temperature
                     if self._can_set_ccd_temperature:
                         properties["can_set_ccd_temperature"] = True
-                        set_ccd_temperature = await self.get(
-                            c, "SetCCDTemperature", None
-                        )
+                        set_ccd_temperature = await self.get(c, "SetCCDTemperature", None)
                         if set_ccd_temperature is not None:
                             properties["set_ccd_temperature"] = set_ccd_temperature
-                    heat_sink_temperature = await self.get(
-                        c, "HeatSinkTemperature", None
-                    )
+                    heat_sink_temperature = await self.get(c, "HeatSinkTemperature", None)
                     if heat_sink_temperature is not None:
                         properties["heat_sink_temperature"] = heat_sink_temperature
                     if self._can_get_cooler_power:
@@ -609,13 +591,9 @@ class AlpacaCamera(AlpacaDevice):
                         properties["can_stop_exposure"] = True
                     if self._can_pulse_guide:
                         properties["can_pulse_guide"] = True
-                        properties["is_pulse_guiding"] = await self.get(
-                            c, "IsPulseGuiding", False
-                        )
+                        properties["is_pulse_guiding"] = await self.get(c, "IsPulseGuiding", False)
 
-                    properties_str = ", ".join(
-                        f"{k}={v}" for k, v in properties.items()
-                    )
+                    properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
                     # logger.debug(
                     #     f"Alpaca camera status: connected={connected}, ccd_temperature={ccd_temperature}, "
                     #     f"bin_x={bin_x}, bin_y={bin_y}, {properties_str}"

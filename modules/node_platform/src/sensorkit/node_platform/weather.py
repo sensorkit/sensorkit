@@ -4,10 +4,9 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Literal, override
 
+import ourskyai_node_platform_api as osapi
 from loguru import logger
 from pydantic import BaseModel
-
-import ourskyai_node_platform_api as osapi
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected
@@ -17,15 +16,14 @@ from sensorkit.node_platform.device import (
     NodePlatformDeviceState,
 )
 
-
 # Map Node Platform system metric names to sk.BasicWeather() field names.
 _METRIC_FIELD_MAP: dict[str, str] = {
-    "node_controller.weather_monitor.air_temperature":          "temperature",
-    "node_controller.weather_monitor.air_humidity":             "humidity",
-    "node_controller.weather_monitor.wind_speed_average":       "wind_speed",
-    "node_controller.weather_monitor.wind_direction_average":   "wind_direction",
-    "node_controller.weather_monitor.air_pressure":             "pressure",
-    "node_controller.weather_monitor.rainfall_intensity":       "rain_rate",
+    "node_controller.weather_monitor.air_temperature": "temperature",
+    "node_controller.weather_monitor.air_humidity": "humidity",
+    "node_controller.weather_monitor.wind_speed_average": "wind_speed",
+    "node_controller.weather_monitor.wind_direction_average": "wind_direction",
+    "node_controller.weather_monitor.air_pressure": "pressure",
+    "node_controller.weather_monitor.rainfall_intensity": "rain_rate",
 }
 
 
@@ -45,12 +43,12 @@ class NodePlatformWeather(NodePlatformDevice):
     Combines live sensor metrics with the Node Platform safety status to
     provide a unified weather picture for observatory automation.
     """
+
     config: NodePlatformWeatherConfig
     device_name = "Weather"
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore state, discover available metrics, start publishing, put the mount into ASSISTED mode."""
         device = sk.device()
 
         # Restore last known state
@@ -66,9 +64,7 @@ class NodePlatformWeather(NodePlatformDevice):
         try:
             names_resp = await self.api.call("v1_get_system_metric_names")
             all_names = names_resp.metric_names if names_resp.metric_names else []
-            self._weather_metric_names = [
-                n for n in all_names if n in _METRIC_FIELD_MAP
-            ]
+            self._weather_metric_names = [n for n in all_names if n in _METRIC_FIELD_MAP]
             logger.debug(f"discovered weather metrics: {self._weather_metric_names}")
         except Exception as e:
             logger.warning(f"Could not discover metric names: {e}")
@@ -95,17 +91,14 @@ class NodePlatformWeather(NodePlatformDevice):
 
     @sk.command_handler
     async def weather_init(self, cmd: sk.Init):
-        """Nothing to do."""
         pass
 
     @sk.command_handler
     async def weather_deinit(self, cmd: sk.Deinit):
-        """Nothing to do."""
         pass
 
     @sk.on_detach
     async def entity_deinit(self):
-        """Stop status publishing, save state, put the mount back into MANUAL mode."""
         logger.debug("stopping node_platform weather status loop")
         await self.stop_status_loop()
 
@@ -121,15 +114,13 @@ class NodePlatformWeather(NodePlatformDevice):
 
                     # Safety status (independent of BasicWeather)
                     try:
-                        safety: osapi.V1SafetyStatus = await self.api.call(
-                            "v1_get_safety_status"
-                        )
+                        safety: osapi.V1SafetyStatus = await self.api.call("v1_get_safety_status")
                         await device.publish(
                             Safety(
                                 is_safe=safety.is_safe,
                                 is_weather_safe=safety.is_weather_safe,
                                 is_all_sky_safe=safety.is_all_sky_safe,
-                                is_night=safety.is_night
+                                is_night=safety.is_night,
                             )
                         )
                     except Exception as e:
@@ -144,7 +135,6 @@ class NodePlatformWeather(NodePlatformDevice):
             await asyncio.sleep(self.config.status_frequency)
 
     async def _build_weather_keywords(self):
-        """Collect weather data from the Node Platform and build a keyword model."""
         fields: dict[str, float | bool | None] = {}
 
         # 1. Weather station connected check
@@ -215,6 +205,7 @@ class NodePlatformWeather(NodePlatformDevice):
 
 class NodePlatformWeatherConfig(NodePlatformDeviceConfig[NodePlatformWeather]):
     """Node Platform Weather configuration."""
+
     device_type: Literal["weather"] = "weather"
     metric_lookback_seconds: float = 300.0
     timeout: float = 30.0
@@ -227,4 +218,5 @@ class NodePlatformWeatherConfig(NodePlatformDeviceConfig[NodePlatformWeather]):
 
 class NodePlatformWeatherState(NodePlatformDeviceState):
     """Node Platform Weather state."""
+
     device_type: Literal["weather"] = "weather"

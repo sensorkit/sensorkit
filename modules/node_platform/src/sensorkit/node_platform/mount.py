@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Literal, override
 
 import astropy.units as u
@@ -8,7 +9,7 @@ import ourskyai_node_platform_api as osapi
 from astropy.coordinates import ICRS, AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
 from loguru import logger
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
 from sensorkit.astro.target import (
@@ -33,6 +34,13 @@ from sensorkit.node_platform.device import (
 )
 
 
+@sk.declare_keyword
+class OTStatus(BaseModel):
+    """Optical tube status (fans, heaters, temperature sensors, cover, M3)."""
+
+    model_config = {"extra": "allow"}
+
+
 @sk.declare_device
 class NodePlatformMount(NodePlatformDevice):
     """Node Platform Mount implementation."""
@@ -42,7 +50,6 @@ class NodePlatformMount(NodePlatformDevice):
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state, start status publishing, define site location."""
         device = sk.device()
 
         # Restore last known state
@@ -60,14 +67,17 @@ class NodePlatformMount(NodePlatformDevice):
         self._site_info: dict[str, object] = {}
         self._location: EarthLocation | None = None
 
-        # Start mount status publishing
+        # Fast status task (started/stopped by command handlers)
+        self._fast_status_task: asyncio.Task | None = None
+
+        # Start slow status publishing
         logger.debug("starting node_platform mount status loop")
-        self.start_status_loop(self.status_publish())
+        self.start_status_loop(self.status_publish_slow())
 
         # Wait for initial status
         async with asyncio.timeout(self.config.timeout):
             while self.device_connected is None:
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(self.config.status_frequency_slow)
 
         # Site location
         location: osapi.V1SystemLocation = await self.api.call("v1_get_system_location")
@@ -100,24 +110,22 @@ class NodePlatformMount(NodePlatformDevice):
 
     @sk.command_handler
     async def mount_init(self, cmd: sk.Init):
-        """Home as needed, setup optical tube assembly."""
         self.require_connected()
         if not self.state.has_been_homed:
             await self.mount_home(sk.Home())
 
-        # Setup the OTA
-        await self.setup_ota()
+        # Setup the OT
+        await self.setup_ot()
 
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
-        """Stop all motion, send mount to park position."""
         await self.mount_stop(sk.Stop())
         await self.mount_park(sk.MoveToPark())
 
     @sk.on_detach
     async def entity_deinit(self):
-        """Save current state and stop status publishing."""
         logger.debug("stopping node_platform mount status loop")
+        self._stop_fast_status()
         await self.stop_status_loop()
 
         await sk.device().kv_put_model(self.state)
@@ -133,7 +141,7 @@ class NodePlatformMount(NodePlatformDevice):
 
         async with asyncio.timeout(self.config.timeout):
             while self.mount_slewing is None or self.mount_slewing:
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(self.config.status_frequency_slow)
 
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
@@ -144,12 +152,13 @@ class NodePlatformMount(NodePlatformDevice):
         self.require_connected()
         logger.debug("parking node_platform mount")
 
+        self._stop_fast_status()
         await self.api.call("v1_park_mount")
         await asyncio.sleep(0.1)
 
         async with asyncio.timeout(self.config.timeout):
             while self.mount_slewing is None or self.mount_slewing:
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(self.config.status_frequency_slow)
 
         logger.debug("parked node_platform mount")
 
@@ -158,12 +167,13 @@ class NodePlatformMount(NodePlatformDevice):
         self.require_connected()
         logger.debug("stopping node_platform mount")
 
+        self._stop_fast_status()
         await self.api.call("v1_halt_mount")
         await asyncio.sleep(0.1)
 
         async with asyncio.timeout(self.config.timeout):
             while self.mount_slewing is None or self.mount_slewing:
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(self.config.status_frequency_slow)
 
         logger.debug("stopped node_platform mount")
 
@@ -181,11 +191,12 @@ class NodePlatformMount(NodePlatformDevice):
                     dec=cmd.target.declination,
                 )
                 await self.api.call("v1_go_to_mount_coordinates", req)
+                self._start_fast_status()
                 await asyncio.sleep(0.1)
 
                 async with asyncio.timeout(self.config.timeout):
                     while self.mount_tracking is None or not self.mount_tracking:
-                        await asyncio.sleep(self.config.status_frequency)
+                        await asyncio.sleep(self.config.status_frequency_fast)
 
                 logger.debug("following RA/Dec target")
 
@@ -197,11 +208,12 @@ class NodePlatformMount(NodePlatformDevice):
                     azimuth=cmd.target.azimuth_degrees,
                 )
                 await self.api.call("v1_go_to_mount_coordinates", req)
+                self._start_fast_status()
                 await asyncio.sleep(0.1)
 
                 async with asyncio.timeout(self.config.timeout):
                     while self.mount_slewing is None or self.mount_slewing:
-                        await asyncio.sleep(self.config.status_frequency)
+                        await asyncio.sleep(self.config.status_frequency_fast)
 
                 logger.debug("following Alt/Az target")
 
@@ -213,11 +225,12 @@ class NodePlatformMount(NodePlatformDevice):
                     tle_line2=cmd.target.tle.line2,
                 )
                 await self.api.call("v1_mount_follow_tle", req)
-                await asyncio.sleep(1)
+                self._start_fast_status()
+                await asyncio.sleep(0.1)
 
                 async with asyncio.timeout(self.config.timeout):
                     while self.mount_tracking is None or not self.mount_tracking:
-                        await asyncio.sleep(self.config.status_frequency)
+                        await asyncio.sleep(self.config.status_frequency_fast)
 
                 logger.debug("following TLE target")
 
@@ -225,6 +238,7 @@ class NodePlatformMount(NodePlatformDevice):
                 match cmd.target.frame:
                     case ReferenceFrame.ALTAZ:
                         logger.debug("stopping tracking")
+                        self._stop_fast_status()
                         await self.api.call("v1_disable_mount_tracking")
 
                         async with asyncio.timeout(self.config.timeout):
@@ -234,16 +248,17 @@ class NodePlatformMount(NodePlatformDevice):
                                 or self.mount_tracking is None
                                 or self.mount_tracking
                             ):
-                                await asyncio.sleep(self.config.status_frequency)
+                                await asyncio.sleep(self.config.status_frequency_slow)
 
                     case ReferenceFrame.ICRF:
                         logger.debug("executing sidereal track")
                         await self.api.call("v1_enable_mount_tracking")
-                        await asyncio.sleep(1)
+                        self._start_fast_status()
+                        await asyncio.sleep(0.1)
 
                         async with asyncio.timeout(self.config.timeout):
                             while self.mount_tracking is None or not self.mount_tracking:
-                                await asyncio.sleep(self.config.status_frequency)
+                                await asyncio.sleep(self.config.status_frequency_fast)
 
                     case _:
                         raise RuntimeError(f"Need specific target to track {cmd.target.frame}")
@@ -254,75 +269,152 @@ class NodePlatformMount(NodePlatformDevice):
                     f"{track_type} tracking via Node Platform is not supported"
                 )
 
-    async def status_publish(self):
-        while True:
-            try:
-                status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
-            except Exception as e:
-                logger.exception(f"Error in status_publish get: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
+    def _start_fast_status(self):
+        if self._fast_status_task is None or self._fast_status_task.done():
+            logger.debug("starting fast mount status loop")
+            self._fast_status_task = asyncio.create_task(self.status_publish_fast())
 
+    def _stop_fast_status(self):
+        if self._fast_status_task is not None and not self._fast_status_task.done():
+            logger.debug("stopping fast mount status loop")
+            self._fast_status_task.cancel()
+            self._fast_status_task = None
+
+    @property
+    def _fast_status_active(self) -> bool:
+        return self._fast_status_task is not None and not self._fast_status_task.done()
+
+    async def _publish_mount_status(self, status: osapi.V2MountStatus):
+        self.mount_slewing = status.is_slewing
+        self.mount_tracking = status.is_tracking
+
+        device = sk.device()
+        await device.publish(
+            RADecPointing(
+                right_ascension_hours=status.ra_j2000_degrees / 15.0,
+                declination_degrees=status.dec_j2000_degrees,
+                reference_frame=ReferenceFrame.ICRF,
+            )
+        )
+        await device.publish(
+            AltAzPointing(
+                altitude_degrees=status.altitude_degrees,
+                azimuth_degrees=status.azimuth_degrees,
+            )
+        )
+
+        if self._location is not None:
+            rate_a = status.motor_a.measured_velocity_degrees_per_second
+            rate_b = status.motor_b.measured_velocity_degrees_per_second
+            ra_rate, dec_rate = self.altaz_rates_to_radec_rates(
+                status.altitude_degrees,
+                status.azimuth_degrees,
+                rate_b,
+                rate_a,
+                location=self._location,
+                time=Time.now(),
+            )
+            await device.publish(
+                AxisRates(
+                    azimuth=AxisRate(velocity=rate_a, axis=MountAxis.AZIMUTH),
+                    altitude=AxisRate(velocity=rate_b, axis=MountAxis.ALTITUDE),
+                    right_ascension=AxisRate(
+                        velocity=ra_rate,
+                        axis=MountAxis.RIGHT_ASCENSION,
+                    ),
+                    declination=AxisRate(
+                        velocity=dec_rate,
+                        axis=MountAxis.DECLINATION,
+                    ),
+                )
+            )
+
+    async def _get_ot_temperatures(self) -> list[dict]:
+        """Get OT temperature sensors via raw HTTP (not yet in SDK model)."""
+
+        try:
+            resp = await asyncio.to_thread(
+                self.api._client.rest_client.GET,
+                f"{self.api._configuration.host}/api/v1/optical-tube/status",
+                headers={"Authorization": f"Bearer {self.api._configuration.access_token}"},
+            )
+            raw = json.loads(resp.data)
+            return raw.get("temperatureSensors", {}).get("statuses", [])
+        except Exception as e:
+            logger.warning(f"Failed to get OT temperatures ({e})")
+            return []
+
+    async def _publish_ot_status(
+        self, ot: osapi.V1OpticalTubeStatus, temps: list[dict] | None = None
+    ):
+        props: dict = {}
+
+        if ot.fans:
+            for fan in ot.fans.statuses:
+                role = fan.role.value if hasattr(fan.role, "value") else str(fan.role)
+                props[f"fan_{role}_connected"] = fan.connected
+                props[f"fan_{role}_on"] = fan.is_on
+
+        if ot.heaters:
+            for heater in ot.heaters.statuses:
+                role = heater.role.value if hasattr(heater.role, "value") else str(heater.role)
+                props[f"heater_{role}_connected"] = heater.connected
+                props[f"heater_{role}_power"] = heater.power
+
+        for sensor in temps or []:
+            role = sensor["role"]
+            props[f"temp_{role}_celsius"] = sensor["temperatureCelsius"]
+
+        if ot.cover:
+            props["cover_state"] = str(ot.cover.state) if hasattr(ot.cover, "state") else None
+
+        if ot.m3:
+            if hasattr(ot.m3, "port"):
+                props["m3_port"] = ot.m3.port
+
+        if props:
+            await sk.device().publish(OTStatus(**props))
+
+    async def status_publish_slow(self):
+        while True:
+            # Mount
             try:
+                # Always get mount status for connection/slewing/tracking state
+                status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
                 self.device_connected = status.connected
                 self.mount_slewing = status.is_slewing
                 self.mount_tracking = status.is_tracking
 
-                ra_deg = status.ra_j2000_degrees
-                dec_deg = status.dec_j2000_degrees
-                alt_deg = status.altitude_degrees
-                az_deg = status.azimuth_degrees
-                ra_hours = ra_deg / 15.0
+                await sk.device().publish(Connected(is_connected=status.connected))
 
-                # Motor A = azimuth/RA axis, Motor B = altitude/Dec axis
-                rate_a = status.motor_a.measured_velocity_degrees_per_second
-                rate_b = status.motor_b.measured_velocity_degrees_per_second
-
-                # logger.debug(
-                #     f"NodePlatform mount status: connected={status.connected}, "
-                #     f"slewing={status.is_slewing}, tracking={status.is_tracking}, "
-                #     f"RA={ra_deg}°, Dec={dec_deg}°, Alt={alt_deg}°, Az={az_deg}°, "
-                #     f"rate_a={rate_a}°/s, "
-                #     f"rate_b={rate_b}°/s"
-                # )
-
-                device = sk.device()
-                await device.publish(Connected(is_connected=status.connected))
-                await device.publish(
-                    RADecPointing(
-                        right_ascension_hours=ra_hours,
-                        declination_degrees=dec_deg,
-                        reference_frame=ReferenceFrame.ICRF,
-                    )
-                )
-                await device.publish(
-                    AltAzPointing(
-                        altitude_degrees=alt_deg,
-                        azimuth_degrees=az_deg,
-                    )
-                )
-
-                if self._location is not None:
-                    ra_rate, dec_rate = self.altaz_rates_to_radec_rates(
-                        alt_deg, az_deg, rate_b, rate_a, location=self._location, time=Time.now()
-                    )
-
-                    await device.publish(
-                        AxisRates(
-                            azimuth=AxisRate(velocity=rate_a, axis=MountAxis.AZIMUTH),
-                            altitude=AxisRate(velocity=rate_b, axis=MountAxis.ALTITUDE),
-                            right_ascension=AxisRate(
-                                velocity=ra_rate, axis=MountAxis.RIGHT_ASCENSION
-                            ),
-                            declination=AxisRate(velocity=dec_rate, axis=MountAxis.DECLINATION),
-                        )
-                    )
+                # Only publish pointing/rates if the fast loop isn't handling it
+                if not self._fast_status_active:
+                    await self._publish_mount_status(status)
             except Exception as e:
-                logger.warning(f"Failed to update Node Platform mount status ({e})")
-                await asyncio.sleep(self.config.status_frequency)
+                logger.exception(f"Error in slow status_publish: {e}")
+                await asyncio.sleep(self.config.status_frequency_slow)
                 continue
 
-            await asyncio.sleep(self.config.status_frequency)
+            # Optical tube
+            try:
+                ot: osapi.V1OpticalTubeStatus = await self.api.call("v1_get_optical_tube_status")
+                temps = await self._get_ot_temperatures()
+                await self._publish_ot_status(ot, temps)
+            except Exception as e:
+                logger.warning(f"Failed to update OT status ({e})")
+
+            await asyncio.sleep(self.config.status_frequency_slow)
+
+    async def status_publish_fast(self):
+        while True:
+            # Mount
+            try:
+                status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
+                await self._publish_mount_status(status)
+            except Exception as e:
+                logger.warning(f"Error in fast status_publish ({e})")
+
+            await asyncio.sleep(self.config.status_frequency_fast)
 
     def altaz_rates_to_radec_rates(
         self,
@@ -372,7 +464,7 @@ class NodePlatformMount(NodePlatformDevice):
 
         return ra_rate_deg_per_sec, dec_rate_deg_per_sec
 
-    async def setup_ota(self):
+    async def setup_ot(self):
         # Set heater power levels from config
         heater_role_map = {
             "M1": osapi.V1OpticalTubeHeaterRole.M1,
@@ -405,7 +497,8 @@ class NodePlatformMountConfig(NodePlatformDeviceConfig[NodePlatformMount]):
     device_type: Literal["mount"] = "mount"
     heater_power: dict[str, float] = Field(default_factory=dict)
     timeout: float = 300.0
-    status_frequency: float = 1.0
+    status_frequency_slow: float = 1.0
+    status_frequency_fast: float = 0.1
 
     @override
     def create_device(self):

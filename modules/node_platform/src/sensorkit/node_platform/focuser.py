@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-from loguru import logger
-
 import ourskyai_node_platform_api as osapi
+from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected, FocusPosition
@@ -19,12 +18,12 @@ from sensorkit.node_platform.device import (
 @sk.declare_device
 class NodePlatformFocuser(NodePlatformDevice):
     """Node Platform Focuser implementation."""
+
     config: NodePlatformFocuserConfig
     device_name = "Focuser"
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state and start status publishing."""
         device = sk.device()
 
         # Restore last known state
@@ -49,17 +48,14 @@ class NodePlatformFocuser(NodePlatformDevice):
 
     @sk.command_handler
     async def focuser_init(self, cmd: sk.Init):
-        """Nothing to do."""
         pass
 
     @sk.command_handler
     async def focuser_deinit(self, cmd: sk.Deinit):
-        """Nothing to do."""
         pass
 
     @sk.on_detach
     async def entity_deinit(self):
-        """Save current state and stop status publishing."""
         logger.debug("stopping node_platform focuser status loop")
         await self.stop_status_loop()
 
@@ -128,6 +124,7 @@ class NodePlatformFocuser(NodePlatformDevice):
 
 class NodePlatformFocuserConfig(NodePlatformDeviceConfig[NodePlatformFocuser]):
     """Node Platform Focuser configuration."""
+
     device_type: Literal["focuser"] = "focuser"
     timeout: float = 60.0
     status_frequency: float = 1.0
@@ -139,4 +136,5 @@ class NodePlatformFocuserConfig(NodePlatformDeviceConfig[NodePlatformFocuser]):
 
 class NodePlatformFocuserState(NodePlatformDeviceState):
     """Node Platform Focuser state."""
+
     device_type: Literal["focuser"] = "focuser"
