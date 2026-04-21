@@ -3,7 +3,6 @@ from typing import Annotated
 from pydantic import BaseModel, Discriminator, Field, model_validator
 
 import sensorkit.api as sk
-from sensorkit.node_platform._version import VERSION
 from sensorkit.node_platform.enclosure import NodePlatformEnclosureConfig
 from sensorkit.node_platform.focuser import NodePlatformFocuserConfig
 from sensorkit.node_platform.m3 import NodePlatformM3Config
@@ -54,7 +53,7 @@ class NodePlatformConfig(BaseModel):
     endpoints: list[NodePlatformServerConfig] = []
 
 
-@sk.service_entrypoint(version=VERSION)
+@sk.service_entrypoint(version=sk.VERSION)
 async def node_platform_service(service: sk.Service):
     await service.register()
 

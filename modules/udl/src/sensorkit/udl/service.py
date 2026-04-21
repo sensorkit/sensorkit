@@ -1,10 +1,9 @@
 import sensorkit.api as sk
-from sensorkit.udl._version import VERSION
 from sensorkit.udl.models import UDLConfig
 from sensorkit.udl.program import UDLProgram
 
 
-@sk.service_entrypoint(version=VERSION)
+@sk.service_entrypoint(version=sk.VERSION)
 async def udl_service(service: sk.Service):
     await service.register()
 
