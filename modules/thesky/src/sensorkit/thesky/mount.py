@@ -53,7 +53,6 @@ class TheSkyMount(TheSkyDevice):
 
     config: TheSkyMountConfig
     device_name = "Mount"
-    _home_task: asyncio.Task | None = None
 
     # NOTE: For a TheSky mount, you have to home the mount before any commands at all, and you have to "Unpark" the
     # mount (if in the "Park" position) before any motion. If you "Park" the mount and "Disconnect" it, note that it
@@ -121,19 +120,12 @@ class TheSkyMount(TheSkyDevice):
 
         # Home as needed
         if not self.state.has_been_homed:
-            self._home_task = asyncio.create_task(self.mount_home(sk.Home()))
+            await self.mount_home(sk.Home())
 
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
         # Connect to the hardware
         await self.mount_connect(sk.Connect())
-
-        if self._home_task is not None:
-            self._home_task.cancel()
-            try:
-                await self._home_task
-            except asyncio.CancelledError:
-                pass
 
         # Stop all current mount motion
         await self.mount_stop(sk.Stop())
@@ -278,10 +270,6 @@ class TheSkyMount(TheSkyDevice):
     async def mount_follow_target(self, cmd: sk.FollowTarget):
         if not self.device_connected:
             await self.mount_init(sk.Init())
-
-        # Wait for any in-progress homing to complete
-        if self._home_task is not None and not self._home_task.done():
-            await self._home_task
 
         await self.mount_unpark()
 

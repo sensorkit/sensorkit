@@ -299,6 +299,7 @@ class TheSkyDome(TheSkyDevice):
                 await device.publish(Connected(is_connected=connected))
                 await device.publish(Opened(is_open=int(slit_num) in (0, 1)))
                 await device.publish(AltAzPointing(altitude_degrees=0, azimuth_degrees=az))
+                await device.publish(IsTracking(is_tracking=bool(is_tracking)))
 
             except Exception as e:
                 logger.warning(f"Failed to update TheSky dome status ({e})")
