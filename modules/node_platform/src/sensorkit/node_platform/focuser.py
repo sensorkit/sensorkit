@@ -8,6 +8,7 @@ from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected, FocusPosition
+from sensorkit.std.optics import ChangeFocusPosition
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
@@ -70,7 +71,7 @@ class NodePlatformFocuser(NodePlatformDevice):
         logger.debug("stopped node_platform focuser")
 
     @sk.command_handler
-    async def focuser_move(self, cmd: sk.ChangeFocusPosition):
+    async def focuser_move(self, cmd: ChangeFocusPosition):
         self.require_connected()
         logger.debug(f"moving node_platform focuser position to {cmd.position}")
 

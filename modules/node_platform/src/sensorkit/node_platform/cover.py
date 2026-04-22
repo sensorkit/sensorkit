@@ -8,6 +8,7 @@ from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected, Opened
+from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
@@ -62,7 +63,7 @@ class NodePlatformCover(NodePlatformDevice):
         await self.api.close()
 
     @sk.command_handler
-    async def cover_open(self, cmd: sk.Open):
+    async def cover_open(self, cmd: OpenMirrorCover):
         self.require_connected()
         logger.debug("opening node_platform cover")
 
@@ -76,7 +77,7 @@ class NodePlatformCover(NodePlatformDevice):
         logger.debug("opened node_platform cover")
 
     @sk.command_handler
-    async def cover_close(self, cmd: sk.Close):
+    async def cover_close(self, cmd: CloseMirrorCover):
         self.require_connected()
         logger.debug("closing node_platform cover")
 

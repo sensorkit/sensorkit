@@ -5,7 +5,6 @@ from typing import Literal, override
 
 import ourskyai_node_platform_api as osapi
 from loguru import logger
-from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected, Opened
@@ -14,14 +13,10 @@ from sensorkit.node_platform.device import (
     NodePlatformDeviceConfig,
     NodePlatformDeviceState,
 )
+from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 
 # Re-export SDK enums for convenience in config / external use
 EnclosureShutterState = osapi.EnclosureShutterState
-
-
-@sk.declare_keyword
-class OperationMode(BaseModel):
-    mode: str
 
 
 @sk.declare_device
@@ -56,9 +51,8 @@ class NodePlatformEnclosure(NodePlatformDevice):
     @sk.command_handler
     async def enclosure_init(self, cmd: sk.Init):
         self.require_connected()
-        if self.config.needs_homed:
-            if not self.state.has_been_homed:
-                await self.enclosure_home(sk.Home())
+        if not self.state.has_been_homed:
+            await self.enclosure_home(sk.Home())
 
         # Sync to the mount
         # FIXME: this likely replaces homing for Node Platform enclosures
@@ -110,7 +104,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
         logger.debug("stopped node_platform enclosure")
 
     @sk.command_handler
-    async def enclosure_open(self, cmd: sk.Open):
+    async def enclosure_open(self, cmd: OpenEnclosure):
         # Wait for entity_init to complete
         async with asyncio.timeout(self.config.timeout):
             while self.device_connected is None:
@@ -118,25 +112,25 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
         self.require_connected()
 
-        # Ensure in MANUAL mode
-        status: osapi.V1SystemOperationStatus = await self.api.call(
-            "v1_get_system_operation_status"
-        )
-        mode = status.system_operation_mode.value == "MANUAL"
-        if mode:
-            logger.debug("opening node_platform enclosure")
-            req = osapi.V1OpenEnclosureShuttersRequest(ignore_safety=False)
-            await self.api.call("v1_open_enclosure_shutters", req)
-            await asyncio.sleep(0.1)
+        if self.config.operation_mode == "assisted":
+            logger.debug(
+                "skipping enclosure open (Node Platform controls shutter in assisted mode)"
+            )
+            return
 
-            async with asyncio.timeout(self.config.timeout):
-                while self.shutter_state is not EnclosureShutterState.OPENED:
-                    await asyncio.sleep(self.config.status_frequency)
+        logger.debug("opening node_platform enclosure")
+        req = osapi.V1OpenEnclosureShuttersRequest(ignore_safety=False)
+        await self.api.call("v1_open_enclosure_shutters", req)
+        await asyncio.sleep(0.1)
 
-            logger.debug("opened node_platform enclosure")
+        async with asyncio.timeout(self.config.timeout):
+            while self.shutter_state is not EnclosureShutterState.OPENED:
+                await asyncio.sleep(self.config.status_frequency)
+
+        logger.debug("opened node_platform enclosure")
 
     @sk.command_handler
-    async def enclosure_close(self, cmd: sk.Close):
+    async def enclosure_close(self, cmd: CloseEnclosure):
         # Wait for entity_init to complete
         async with asyncio.timeout(self.config.timeout):
             while self.device_connected is None:
@@ -144,30 +138,27 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
         self.require_connected()
 
-        # Ensure in MANUAL mode
-        status: osapi.V1SystemOperationStatus = await self.api.call(
-            "v1_get_system_operation_status"
-        )
-        mode = status.system_operation_mode.value == "MANUAL"
-        if mode:
-            logger.debug("closing node_platform enclosure")
-            await self.api.call("v1_close_enclosure_shutters")
-            await asyncio.sleep(0.1)
+        if self.config.operation_mode == "assisted":
+            logger.debug(
+                "skipping enclosure close (Node Platform controls shutter in assisted mode)"
+            )
+            return
 
-            async with asyncio.timeout(self.config.timeout):
-                while self.shutter_state is not EnclosureShutterState.CLOSED:
-                    await asyncio.sleep(self.config.status_frequency)
+        logger.debug("closing node_platform enclosure")
+        await self.api.call("v1_close_enclosure_shutters")
+        await asyncio.sleep(0.1)
 
-            logger.debug("closed node_platform enclosure")
+        async with asyncio.timeout(self.config.timeout):
+            while self.shutter_state is not EnclosureShutterState.CLOSED:
+                await asyncio.sleep(self.config.status_frequency)
+
+        logger.debug("closed node_platform enclosure")
 
     async def status_publish(self):
         while True:
             try:
                 enclosure_status: osapi.V2EnclosureStatus = await self.api.call(
                     "v2_get_enclosure_status"
-                )
-                operation_status: osapi.V1SystemOperationStatus = await self.api.call(
-                    "v1_get_system_operation_status"
                 )
             except Exception as e:
                 logger.exception(f"Error in status_publish get: {e}")
@@ -203,9 +194,6 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
                 await device.publish(Connected(is_connected=connected))
                 await device.publish(Opened(is_open=is_open))
-                await device.publish(
-                    OperationMode(mode=operation_status.system_operation_mode.value)
-                )
 
             except Exception as e:
                 logger.warning(f"Failed to update Node Platform enclosure status ({e})")
@@ -218,7 +206,6 @@ class NodePlatformEnclosureConfig(NodePlatformDeviceConfig[NodePlatformEnclosure
     """Node Platform Enclosure configuration."""
 
     device_type: Literal["dome"] = "dome"
-    needs_homed: bool = False
     timeout: float = 120.0
     status_frequency: float = 1.0
 

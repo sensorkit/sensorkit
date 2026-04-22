@@ -8,6 +8,7 @@ from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected, RotatorPosition
+from sensorkit.std.instrument import ChangeRotatorPosition
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
@@ -76,7 +77,7 @@ class NodePlatformRotator(NodePlatformDevice):
         logger.debug("stopped node_platform rotator")
 
     @sk.command_handler
-    async def rotator_move(self, cmd: sk.ChangeRotatorPosition):
+    async def rotator_move(self, cmd: ChangeRotatorPosition):
         self.require_connected()
         logger.debug(f"moving node_platform rotator to position {cmd.position}°")
 

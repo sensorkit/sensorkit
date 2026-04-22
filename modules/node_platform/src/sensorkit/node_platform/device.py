@@ -119,6 +119,7 @@ class NodePlatformDeviceConfig[T: NodePlatformDevice = NodePlatformDevice](BaseM
     lineage_id: str | None = None
     request_timeout: float = 30.0
     env_file: str = ".env"
+    operation_mode: Literal["manual", "assisted"] = "assisted"
 
     def create_device(self) -> T:
         return NodePlatformDevice(self)

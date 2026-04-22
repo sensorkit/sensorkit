@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Discriminator, Field, model_validator
 
@@ -30,6 +30,7 @@ class NodePlatformServerConfig(BaseModel):
     lineage_id: str | None = None
     request_timeout: float = 30.0
     env_file: str = ".env"
+    operation_mode: Literal["manual", "assisted"] = "assisted"
     devices: dict[str, NodePlatformDeviceConfigs] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -46,6 +47,7 @@ class NodePlatformServerConfig(BaseModel):
                     device["lineage_id"] = data.get("lineage_id")
                     device["request_timeout"] = data.get("request_timeout", 30.0)
                     device["env_file"] = data.get("env_file", ".env")
+                    device["operation_mode"] = data.get("operation_mode", "assisted")
         return data
 
 

@@ -28,6 +28,11 @@ _METRIC_FIELD_MAP: dict[str, str] = {
 
 
 @sk.declare_keyword
+class OperationMode(BaseModel):
+    mode: str
+
+
+@sk.declare_keyword
 class Safety(BaseModel):
     is_safe: bool
     is_weather_safe: bool
@@ -69,16 +74,20 @@ class NodePlatformWeather(NodePlatformDevice):
         except Exception as e:
             logger.warning(f"Could not discover metric names: {e}")
 
-        # Ensure we are in ASSISTED mode. Per the API:
-        """
-        Switches the telescope system to assisted operation mode. In this mode, the system provides automation
-        support while keeping the operator in the control loop for key decisions. Use this endpoint when supervised
-        remote operation is needed with operator oversight for safety-critical actions and observation approval.
-        """
-        # In practice, it means that the NodePlatform controls the opening/closing of shutters based on its internal
-        # safety status, which is published here to SensorKit along with the operation mode, and where both are used as
-        # agent constraints.
-        await self.api.call("v1_enable_assisted_operation")
+        # Set the configured operation mode on the Node Platform.
+        #
+        # ASSISTED mode: the Node Platform controls opening/closing of the enclosure shutter based on
+        # its internal safety status. SensorKit publishes the safety status and operation mode as
+        # keywords, which can be used as agent constraints to shutdown the controller if needed.
+        #
+        # MANUAL mode: SensorKit is responsible for opening/closing the enclosure shutter based on
+        # its own constraint monitoring (e.g. weather constraints in the agent config).
+        if self.config.operation_mode == "assisted":
+            await self.api.call("v1_enable_assisted_operation")
+            logger.debug("set Node Platform to ASSISTED mode")
+        else:
+            await self.api.call("v1_enable_manual_operation")
+            logger.debug("set Node Platform to MANUAL mode")
 
         # Start weather status publishing
         logger.debug("starting node_platform weather status loop")
@@ -125,6 +134,17 @@ class NodePlatformWeather(NodePlatformDevice):
                         )
                     except Exception as e:
                         logger.warning(f"Safety status unavailable: {e}")
+
+                    # Operation mode (allows agent to constrain on mode changes)
+                    try:
+                        op_status: osapi.V1SystemOperationStatus = await self.api.call(
+                            "v1_get_system_operation_status"
+                        )
+                        await device.publish(
+                            OperationMode(mode=op_status.system_operation_mode.value)
+                        )
+                    except Exception as e:
+                        logger.warning(f"Operation mode unavailable: {e}")
 
                     await device.publish(weather_kw)
                 else:
