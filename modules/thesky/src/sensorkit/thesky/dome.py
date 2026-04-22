@@ -184,20 +184,22 @@ class TheSkyDome(TheSkyDevice):
         await self.dome_unpark()
         logger.debug("homing thesky dome")
 
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                try:
-                    await self.execute("""sky6Dome.FindHome();""")
-                    break
-                except DomeCommandInProgressError:
-                    await asyncio.sleep(0.5)
-                except CommandFailedError:
-                    logger.warning("Unable to home dome")
-                    return
+        try:
+            async with asyncio.timeout(self.config.timeout):
+                while True:
+                    try:
+                        await self.execute("""sky6Dome.FindHome();""")
+                        break
+                    except DomeCommandInProgressError:
+                        await asyncio.sleep(0.5)
 
-        # Wait for the dome to finish homing
-        async with asyncio.timeout(self.config.timeout):
-            await self.poll("sky6Dome.IsFindHomeComplete;", "1")
+            # Wait for the dome to finish homing
+            async with asyncio.timeout(self.config.timeout):
+                await self.poll("sky6Dome.IsFindHomeComplete;", "1")
+        except CommandFailedError:
+            logger.warning("Unable to home dome")
+            return
+
         logger.debug("homed thesky dome")
 
         # Persist to state
