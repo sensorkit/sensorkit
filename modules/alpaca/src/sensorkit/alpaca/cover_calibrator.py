@@ -77,10 +77,11 @@ class AlpacaCoverCalibrator(AlpacaDevice):
         except Exception:
             self.state = AlpacaCoverCalibratorState()
 
-        await self.cover_calibrator_init(sk.Init())
+        self._start_init(self.cover_calibrator_init(sk.Init()))
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self._cancel_init()
         await self.cover_calibrator_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
@@ -117,7 +118,7 @@ class AlpacaCoverCalibrator(AlpacaDevice):
 
     @sk.command_handler
     async def cover_calibrator_open(self, cmd: OpenMirrorCover):
-        self.require_connected()
+        await self.require_connected()
         if self.state.cover_state == "open":
             return
 
@@ -142,7 +143,7 @@ class AlpacaCoverCalibrator(AlpacaDevice):
 
     @sk.command_handler
     async def cover_calibrator_close(self, cmd: CloseMirrorCover):
-        self.require_connected()
+        await self.require_connected()
         if self.state.cover_state == "closed":
             return
 
@@ -167,7 +168,7 @@ class AlpacaCoverCalibrator(AlpacaDevice):
 
     @sk.command_handler
     async def cover_calibrator_stop(self, cmd: sk.Stop):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("stopping cover calibrator")
         await self.call(self.cover_calibrator, "HaltCover")
         logger.debug("stopped cover calibrator")

@@ -44,10 +44,11 @@ class AlpacaRotator(AlpacaDevice):
         except Exception:
             self.state = AlpacaRotatorState()
 
-        await self.rotator_init(sk.Init())
+        self._start_init(self.rotator_init(sk.Init()))
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self._cancel_init()
         await self.rotator_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
@@ -89,7 +90,7 @@ class AlpacaRotator(AlpacaDevice):
 
     @sk.command_handler
     async def rotator_change(self, cmd: ChangeRotatorPosition):
-        self.require_connected()
+        await self.require_connected()
         target = cmd.position
 
         logger.debug(f"changing position to {target:.2f}°")
@@ -107,7 +108,7 @@ class AlpacaRotator(AlpacaDevice):
 
     @sk.command_handler
     async def rotator_stop(self, cmd: sk.Stop):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("stopping rotator")
         await self.call(self.rotator, "Halt")
         logger.debug("stopped rotator")

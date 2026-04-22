@@ -46,10 +46,11 @@ class AlpacaObservingConditions(AlpacaDevice):
         except Exception:
             self.state = AlpacaObservingConditionsState()
 
-        await self.observing_conditions_init(sk.Init())
+        self._start_init(self.observing_conditions_init(sk.Init()))
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self._cancel_init()
         await self.observing_conditions_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 

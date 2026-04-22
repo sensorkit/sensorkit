@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from typing import Literal, override
 
 from alpaca.filterwheel import FilterWheel
@@ -23,10 +22,6 @@ class AlpacaFilterWheel(AlpacaDevice):
 
     config: AlpacaFilterWheelConfig
 
-    def __init__(self, config: AlpacaFilterWheelConfig):
-        super().__init__(config=config)
-        self._init_task: asyncio.Task | None = None
-
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
@@ -35,25 +30,11 @@ class AlpacaFilterWheel(AlpacaDevice):
         except Exception:
             self.state = AlpacaFilterWheelState()
 
-        self._init_task = asyncio.create_task(self.filter_wheel_init(sk.Init()))
-        self._init_task.add_done_callback(self._on_init_done)
-
-    def _on_init_done(self, task: asyncio.Task):
-        if task.cancelled():
-            return
-        if exc := task.exception():
-            logger.opt(exception=exc).error("filter_wheel init failed")
-
-    async def _wait_init(self):
-        if self._init_task is not None and not self._init_task.done():
-            await self._init_task
+        self._start_init(self.filter_wheel_init(sk.Init()))
 
     @sk.on_detach
     async def entity_deinit(self):
-        if self._init_task is not None and not self._init_task.done():
-            self._init_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._init_task
+        await self._cancel_init()
         await self.filter_wheel_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
@@ -98,8 +79,7 @@ class AlpacaFilterWheel(AlpacaDevice):
 
     @sk.command_handler
     async def filter_wheel_set(self, cmd: SetFilter):
-        await self._wait_init()
-        self.require_connected()
+        await self.require_connected()
 
         if isinstance(cmd.filter, int):
             position = cmd.filter

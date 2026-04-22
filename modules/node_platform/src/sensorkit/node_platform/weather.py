@@ -194,7 +194,7 @@ class NodePlatformWeather(NodePlatformDevice):
 
         status_parts = [f"connected={self.device_connected}"]
         status_parts.extend(f"{k}={v:.3f}" for k, v in fields.items())
-        logger.debug(f"NodePlatform weather status: {', '.join(status_parts)}")
+        # logger.debug(f"NodePlatform weather status: {', '.join(status_parts)}")
 
         try:
             return sk.BasicWeather(**fields)

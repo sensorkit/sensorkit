@@ -83,10 +83,11 @@ class AlpacaTelescope(AlpacaDevice):
         except Exception:
             self.state = AlpacaTelescopeState()
 
-        await self.telescope_init(sk.Init())
+        self._start_init(self.telescope_init(sk.Init()))
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self._cancel_init()
         await self.telescope_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
@@ -205,7 +206,7 @@ class AlpacaTelescope(AlpacaDevice):
 
     @sk.command_handler
     async def telescope_home(self, cmd: sk.Home):
-        self.require_connected()
+        await self.require_connected()
         if not self._can_find_home:
             logger.warning("Cannot find home")
             return
@@ -226,7 +227,7 @@ class AlpacaTelescope(AlpacaDevice):
 
     @sk.command_handler
     async def telescope_stop(self, cmd: sk.Stop):
-        self.require_connected()
+        await self.require_connected()
 
         logger.debug("stopping telescope")
 
@@ -239,7 +240,7 @@ class AlpacaTelescope(AlpacaDevice):
 
     @sk.command_handler
     async def telescope_park(self, cmd: sk.MoveToPark):
-        self.require_connected()
+        await self.require_connected()
         if not self._can_park:
             logger.warning("Cannot park")
             return
@@ -259,7 +260,7 @@ class AlpacaTelescope(AlpacaDevice):
 
     @sk.command_handler
     async def telescope_set_park(self, cmd: sk.SetParkPosition):
-        self.require_connected()
+        await self.require_connected()
         if not self._can_set_park:
             logger.warning("Cannot set park")
             return
