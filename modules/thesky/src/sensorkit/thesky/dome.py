@@ -209,17 +209,15 @@ class TheSkyDome(TheSkyDevice):
     @sk.command_handler
     async def dome_stop(self, cmd: sk.Stop):
         self.require_connected()
-        await self.dome_unpark()
         logger.debug("stopping thesky dome")
 
-        async def _do_stop():
-            await self.execute("""sky6Dome.Abort();""")
+        # Send Abort on a separate TCP connection, bypassing the script lock.
+        # This ensures we can stop the dome even while another command (e.g.
+        # OpenSlit/CloseSlit) is in flight and holding the lock.
+        await send_thesky_script(
+            self.config.host, self.config.port, b"sky6Dome.Abort();"
+        )
 
-            # Wait for the dome to stop
-            async with asyncio.timeout(self.config.timeout):
-                await self.poll("sky6Dome.lastError();", "0")
-
-        await self._retry_with_reconnect(_do_stop)
         logger.debug("stopped thesky dome")
 
     async def _retry_with_reconnect(self, action, max_retries=2):
