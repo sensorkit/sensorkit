@@ -15,6 +15,7 @@ from sensorkit.thesky.device import (
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
+    send_thesky_script,
 )
 
 
