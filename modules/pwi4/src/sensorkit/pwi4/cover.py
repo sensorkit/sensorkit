@@ -82,7 +82,7 @@ class PWI4Cover(PWI4Device):
 
     @sk.command_handler
     async def cover_open(self, cmd: OpenMirrorCover):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("opening mirror cover")
         await self.client.request("/mirrorcover/open")
 
@@ -98,7 +98,7 @@ class PWI4Cover(PWI4Device):
 
     @sk.command_handler
     async def cover_close(self, cmd: CloseMirrorCover):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("closing mirror cover")
         await self.client.request("/mirrorcover/close")
 

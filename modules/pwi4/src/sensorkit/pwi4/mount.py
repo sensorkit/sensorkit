@@ -156,6 +156,7 @@ class PWI4Mount(PWI4Device):
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self._cancel_init()
         await self.mount_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
@@ -236,7 +237,7 @@ class PWI4Mount(PWI4Device):
 
     @sk.command_handler
     async def mount_home(self, cmd: sk.Home):
-        self.require_connected()
+        await self.require_connected()
 
         # Check if mount has already homed
         st = await self.client.status()
@@ -297,8 +298,7 @@ class PWI4Mount(PWI4Device):
 
     @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
-        if not self.device_connected:
-            await self.mount_init(sk.Init())
+        await self.require_connected()
 
         target = await cmd.target.adapt(
             ICRSTarget,
@@ -399,7 +399,7 @@ class PWI4Mount(PWI4Device):
 
     @sk.command_handler
     async def mount_offset(self, cmd: ApplyOffset):
-        self.require_connected()
+        await self.require_connected()
         if isinstance(cmd.offset, RADecArcseconds):
             await self.client.request(
                 "/mount/offset",

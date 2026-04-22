@@ -211,12 +211,35 @@ class TheSkyDome(TheSkyDevice):
         self.require_connected()
         await self.dome_unpark()
         logger.debug("stopping thesky dome")
-        await self.execute("""sky6Dome.Abort();""")
 
-        # Wait for the dome to stop
-        async with asyncio.timeout(self.config.timeout):
-            await self.poll("sky6Dome.lastError();", "0")
+        async def _do_stop():
+            await self.execute("""sky6Dome.Abort();""")
+
+            # Wait for the dome to stop
+            async with asyncio.timeout(self.config.timeout):
+                await self.poll("sky6Dome.lastError();", "0")
+
+        await self._retry_with_reconnect(_do_stop)
         logger.debug("stopped thesky dome")
+
+    async def _retry_with_reconnect(self, action, max_retries=2):
+        """Try action; on CommandFailedError, reconnect to TheSky and retry."""
+        for attempt in range(max_retries + 1):
+            try:
+                await action()
+                return
+            except CommandFailedError:
+                if attempt == max_retries:
+                    raise
+                logger.warning(
+                    f"dome command failed (attempt {attempt + 1}/{max_retries + 1}), "
+                    f"reconnecting and retrying"
+                )
+                try:
+                    await self.dome_disconnect(sk.Disconnect())
+                except Exception:
+                    pass
+                await self.dome_connect(sk.Connect())
 
     @sk.command_handler
     async def dome_open(self, cmd: OpenEnclosure):
@@ -232,17 +255,20 @@ class TheSkyDome(TheSkyDevice):
 
         logger.debug("opening thesky dome")
 
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                try:
-                    await self.execute("""sky6Dome.OpenSlit();""")
-                    break
-                except DomeCommandInProgressError:
-                    await asyncio.sleep(0.5)
+        async def _do_open():
+            async with asyncio.timeout(self.config.timeout):
+                while True:
+                    try:
+                        await self.execute("""sky6Dome.OpenSlit();""")
+                        break
+                    except DomeCommandInProgressError:
+                        await asyncio.sleep(0.5)
 
-        # Wait for the dome to open
-        async with asyncio.timeout(self.config.timeout):
-            await self.poll("""sky6Dome.IsOpenComplete;""", "1")
+            # Wait for the dome to open
+            async with asyncio.timeout(self.config.timeout):
+                await self.poll("""sky6Dome.IsOpenComplete;""", "1")
+
+        await self._retry_with_reconnect(_do_open)
         logger.debug("opened thesky dome")
 
     @sk.command_handler
@@ -252,17 +278,20 @@ class TheSkyDome(TheSkyDevice):
         await self.dome_unpark()
         logger.debug("closing thesky dome")
 
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                try:
-                    await self.execute("""sky6Dome.CloseSlit();""")
-                    break
-                except DomeCommandInProgressError:
-                    await asyncio.sleep(0.5)
+        async def _do_close():
+            async with asyncio.timeout(self.config.timeout):
+                while True:
+                    try:
+                        await self.execute("""sky6Dome.CloseSlit();""")
+                        break
+                    except DomeCommandInProgressError:
+                        await asyncio.sleep(0.5)
 
-        # Wait for the dome to close
-        async with asyncio.timeout(self.config.timeout):
-            await self.poll("""sky6Dome.IsCloseComplete;""", "1")
+            # Wait for the dome to close
+            async with asyncio.timeout(self.config.timeout):
+                await self.poll("""sky6Dome.IsCloseComplete;""", "1")
+
+        await self._retry_with_reconnect(_do_close)
         logger.debug("closed thesky dome")
 
     async def status_publish(self):

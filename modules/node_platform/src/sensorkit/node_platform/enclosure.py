@@ -114,7 +114,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
         if self.config.operation_mode == "assisted":
             logger.warning(
-                "Skipping enclosure open (Node Platform controls shutter in ASSISTED mode)"
+                "Rejecting enclosure open (Node Platform controls shutter in ASSISTED mode)"
             )
             return
 
@@ -139,8 +139,8 @@ class NodePlatformEnclosure(NodePlatformDevice):
         self.require_connected()
 
         if self.config.operation_mode == "assisted":
-            logger.debug(
-                "skipping enclosure close (Node Platform controls shutter in assisted mode)"
+            logger.warning(
+                "Rejecting enclosure close (Node Platform controls shutter in ASSISTED mode)"
             )
             return
 
