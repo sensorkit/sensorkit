@@ -47,11 +47,10 @@ class AlpacaFocuser(AlpacaDevice):
         except Exception:
             self.state = AlpacaFocuserState()
 
-        self._start_init(self.focuser_init(sk.Init()))
+        await self.focuser_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self._cancel_init()
         await self.focuser_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
@@ -98,7 +97,7 @@ class AlpacaFocuser(AlpacaDevice):
 
     @sk.command_handler
     async def focuser_change(self, cmd: ChangeFocusPosition):
-        await self.require_connected()
+        self.require_connected()
         target = int(cmd.position)
         target = max(0, min(target, self._max_step))
 
@@ -126,7 +125,7 @@ class AlpacaFocuser(AlpacaDevice):
 
     @sk.command_handler
     async def focuser_stop(self, cmd: sk.Stop):
-        await self.require_connected()
+        self.require_connected()
         logger.debug("stopping focuser")
         await self.call(self.focuser, "Halt")
         logger.debug("stopped focuser")

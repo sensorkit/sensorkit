@@ -166,11 +166,10 @@ class AlpacaCamera(AlpacaDevice):
         except Exception:
             self.state = AlpacaCameraState()
 
-        self._start_init(self.camera_init(sk.Init()))
+        await self.camera_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self._cancel_init()
         await self.camera_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
@@ -247,7 +246,7 @@ class AlpacaCamera(AlpacaDevice):
 
     @sk.command_handler
     async def camera_set_temperature(self, cmd: ConfigureCameraCooler):
-        await self.require_connected()
+        self.require_connected()
         if not self._can_set_ccd_temperature:
             logger.warning("Cannot set CCD temperature")
             return
@@ -262,7 +261,7 @@ class AlpacaCamera(AlpacaDevice):
 
     @sk.command_handler
     async def camera_set_binning(self, cmd: ConfigureCameraSensor):
-        await self.require_connected()
+        self.require_connected()
         if cmd.binning is None:
             return
         bin_x, bin_y = int(cmd.binning.x), int(cmd.binning.y)
@@ -289,7 +288,7 @@ class AlpacaCamera(AlpacaDevice):
 
     @sk.command_handler
     async def camera_capture(self, cmd: sk.CameraCapture):
-        await self.require_connected()
+        self.require_connected()
         exposure_seconds = float(cmd.integration_time)
 
         # Enforce exposure constraints
@@ -375,7 +374,7 @@ class AlpacaCamera(AlpacaDevice):
 
     @sk.command_handler
     async def camera_abort(self, cmd: sk.Abort):
-        await self.require_connected()
+        self.require_connected()
         logger.debug("aborting exposure")
         await self._try_abort()
         logger.debug("aborted exposure")

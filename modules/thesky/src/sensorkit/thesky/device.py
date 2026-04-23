@@ -16,6 +16,7 @@ _script_locks: dict[tuple[str, int], asyncio.Lock] = {}
 
 def _get_script_lock(host: str, port: int) -> asyncio.Lock:
     """Get or create a shared lock for a TheSky server connection."""
+
     key = (host, port)
     if key not in _script_locks:
         _script_locks[key] = asyncio.Lock()
@@ -78,13 +79,6 @@ class TheSkyDevice:
             raise DeviceConnectionError(message=f"{self.device_name} not connected", code=-1)
 
     async def execute(self, script: str):
-        """Execute a TheSky script.
-
-        Parameters
-        ----------
-        script : str
-            The JavaScript to execute.
-        """
         lock = _get_script_lock(self.config.host, self.config.port)
 
         async with lock:
@@ -95,12 +89,14 @@ class TheSkyDevice:
 
     def start_status_loop(self, coro):
         """Start a background status publishing task, cancelling any existing one."""
+
         if self._status_task is not None and not self._status_task.done():
             self._status_task.cancel()
         self._status_task = asyncio.create_task(coro)
 
     async def stop_status_loop(self):
         """Cancel the background status publishing task."""
+
         if self._status_task is not None:
             self._status_task.cancel()
             try:
@@ -123,6 +119,7 @@ class TheSkyDevice:
         interval : float
             How often to poll [sec].
         """
+
         await asyncio.sleep(delay)
         while True:
             resp = await self.execute(script)

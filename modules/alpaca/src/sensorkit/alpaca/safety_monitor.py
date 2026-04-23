@@ -35,11 +35,10 @@ class AlpacaSafetyMonitor(AlpacaDevice):
         except Exception:
             self.state = AlpacaSafetyMonitorState()
 
-        self._start_init(self.safety_init(sk.Init()))
+        await self.safety_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self._cancel_init()
         await self.safety_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 

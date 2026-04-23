@@ -69,11 +69,15 @@ class NinaDevice:
         return await self.client.get(f"/equipment/{equipment_type}/info")
 
     def start_status_loop(self, coro):
+        """Start a background status publishing task, cancelling any existing one."""
+
         if self._status_task is not None and not self._status_task.done():
             self._status_task.cancel()
         self._status_task = asyncio.create_task(coro)
 
     async def stop_status_loop(self):
+        """Cancel the background status publishing task."""
+
         if self._status_task is not None:
             self._status_task.cancel()
             try:
@@ -151,7 +155,6 @@ class NinaClient:
         return data.get("Response")
 
     async def get_raw(self, path: str, **params) -> httpx.Response:
-        """Make a GET request and return the raw httpx.Response (for streaming)."""
         await self._ensure_client()
         url = f"{self.base_url}{path}"
         headers = self._sign_request(url)

@@ -88,7 +88,7 @@ class PWI4Rotator(PWI4Device):
 
     @sk.command_handler
     async def rotator_move(self, cmd: sk.ChangeRotatorPosition):
-        await self.require_connected()
+        self.require_connected()
         logger.debug(f"moving rotator to {cmd.position}°")
         await self.client.request("/rotator/goto_mech", params={"degs": cmd.position})
         await self.client.poll(

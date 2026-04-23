@@ -17,6 +17,7 @@ from sensorkit.astro.target import (
     EphemerisTarget,
     FrameTarget,
     ICRSTarget,
+    RateTarget,
     TLETarget,
 )
 from sensorkit.models.devices import (
@@ -156,7 +157,6 @@ class PWI4Mount(PWI4Device):
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self._cancel_init()
         await self.mount_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
@@ -237,7 +237,7 @@ class PWI4Mount(PWI4Device):
 
     @sk.command_handler
     async def mount_home(self, cmd: sk.Home):
-        await self.require_connected()
+        self.require_connected()
 
         # Check if mount has already homed
         st = await self.client.status()
@@ -298,7 +298,8 @@ class PWI4Mount(PWI4Device):
 
     @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
-        await self.require_connected()
+        if not self.device_connected:
+            await self.mount_init(sk.Init())
 
         target = await cmd.target.adapt(
             ICRSTarget,
@@ -306,6 +307,7 @@ class PWI4Mount(PWI4Device):
             (FrameTarget, ReferenceFrame.ICRF),
             (FrameTarget, ReferenceFrame.ALTAZ),
             TLETarget,
+            (RateTarget, ReferenceFrame.ICRF),
             (EphemerisTarget, ReferenceFrame.ICRF),
             observer=self._geodetic,
         )
@@ -363,6 +365,36 @@ class PWI4Mount(PWI4Device):
                     delay=1,
                 )
 
+            case RateTarget():
+                logger.debug("executing rate follow")
+
+                # Slew to initial position
+                await self.client.request(
+                    "/mount/goto_ra_dec_j2000",
+                    params={
+                        "ra_hours": target.initial_coords.ra / 15,
+                        "dec_degs": target.initial_coords.dec,
+                    },
+                )
+                await self.client.poll(
+                    lambda s: (
+                        not self.client.get_bool(s, "mount.is_slewing")
+                        and self.client.get_bool(s, "mount.is_tracking")
+                    ),
+                    delay=1,
+                )
+
+                # Apply offset rates (degrees/sec -> arcsec/sec)
+                await self.client.request(
+                    "/mount/offset",
+                    params={
+                        "ra_set_rate_arcsec_per_sec": target.rates.ra * 3600,
+                        "dec_set_rate_arcsec_per_sec": target.rates.dec * 3600,
+                    },
+                )
+
+                logger.debug("following rate target")
+
             case EphemerisTarget():
                 await self.client.request("/mount/radecpath/new")
                 for i in range(len(target.jds)):
@@ -399,7 +431,7 @@ class PWI4Mount(PWI4Device):
 
     @sk.command_handler
     async def mount_offset(self, cmd: ApplyOffset):
-        await self.require_connected()
+        self.require_connected()
         if isinstance(cmd.offset, RADecArcseconds):
             await self.client.request(
                 "/mount/offset",

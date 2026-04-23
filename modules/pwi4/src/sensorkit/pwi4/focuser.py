@@ -88,7 +88,7 @@ class PWI4Focuser(PWI4Device):
 
     @sk.command_handler
     async def focuser_move(self, cmd: sk.ChangeFocusPosition):
-        await self.require_connected()
+        self.require_connected()
         logger.debug(f"moving focuser to {cmd.position}")
         await self.client.request("/focuser/goto", params={"target": cmd.position})
         await self.client.poll(

@@ -52,11 +52,10 @@ class AlpacaSwitch(AlpacaDevice):
         except Exception:
             self.state = AlpacaSwitchDeviceState()
 
-        self._start_init(self.switch_init(sk.Init()))
+        await self.switch_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self._cancel_init()
         await self.switch_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 

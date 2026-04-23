@@ -72,11 +72,10 @@ class AlpacaDome(AlpacaDevice):
         except Exception:
             self.state = AlpacaDomeState()
 
-        self._start_init(self.dome_init(sk.Init()))
+        await self.dome_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self._cancel_init()
         await self.dome_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
@@ -135,7 +134,7 @@ class AlpacaDome(AlpacaDevice):
 
     @sk.command_handler
     async def dome_home(self, cmd: sk.Home):
-        await self.require_connected()
+        self.require_connected()
         if not self._can_find_home:
             logger.warning("Cannot find home")
             return
@@ -160,7 +159,7 @@ class AlpacaDome(AlpacaDevice):
 
     @sk.command_handler
     async def dome_park(self, cmd: sk.MoveToPark):
-        await self.require_connected()
+        self.require_connected()
         if not self._can_park:
             logger.warning("Cannot park")
             return
@@ -179,14 +178,14 @@ class AlpacaDome(AlpacaDevice):
 
     @sk.command_handler
     async def dome_stop(self, cmd: sk.Stop):
-        await self.require_connected()
+        self.require_connected()
         logger.debug("aborting slew")
         await self.call(self.dome, "AbortSlew")
         logger.debug("aborted slew")
 
     @sk.command_handler
     async def dome_open(self, cmd: OpenEnclosure):
-        await self.require_connected()
+        self.require_connected()
         if not self._can_set_shutter:
             logger.warning("Cannot set shutter")
             return
@@ -206,7 +205,7 @@ class AlpacaDome(AlpacaDevice):
 
     @sk.command_handler
     async def dome_close(self, cmd: CloseEnclosure):
-        await self.require_connected()
+        self.require_connected()
         if not self._can_set_shutter:
             logger.warning("Cannot set shutter")
             return
@@ -226,7 +225,7 @@ class AlpacaDome(AlpacaDevice):
 
     @sk.command_handler
     async def dome_move(self, cmd: MoveEnclosure):
-        await self.require_connected()
+        self.require_connected()
         if not self._can_set_azimuth:
             logger.warning("Cannot set azimuth")
             return

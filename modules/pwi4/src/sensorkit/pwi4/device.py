@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import httpx
-from loguru import logger
 from pydantic import BaseModel
 
 
@@ -40,45 +38,21 @@ class PWI4Device:
     device_connected: bool | None = field(default=None, init=False)
     device_name: str = "Device"
     _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
-    _init_task: asyncio.Task | None = field(default=None, init=False, repr=False)
-    _init_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
 
-    async def require_connected(self, timeout: float | None = None):
-        """Wait for device init to complete and verify still connected."""
+    def require_connected(self):
         if not self.device_connected:
-            if not self._init_event.is_set():
-                t = timeout if timeout is not None else self.config.timeout
-                async with asyncio.timeout(t):
-                    await self._init_event.wait()
-            if not self.device_connected:
-                raise DeviceConnectionError(f"{self.device_name} not connected")
-
-    def _start_init(self, coro):
-        """Run device init as a background task."""
-        self._init_task = asyncio.create_task(coro)
-        self._init_task.add_done_callback(self._on_init_done)
-
-    def _on_init_done(self, task: asyncio.Task):
-        if task.cancelled():
-            return
-        if exc := task.exception():
-            logger.opt(exception=exc).error(f"{self.device_name} init failed")
-        else:
-            self._init_event.set()
-
-    async def _cancel_init(self):
-        """Cancel a running init task, if any."""
-        if self._init_task is not None and not self._init_task.done():
-            self._init_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._init_task
+            raise DeviceConnectionError(f"{self.device_name} not connected")
 
     def start_status_loop(self, coro):
+        """Start a background status publishing task, cancelling any existing one."""
+
         if self._status_task is not None and not self._status_task.done():
             self._status_task.cancel()
         self._status_task = asyncio.create_task(coro)
 
     async def stop_status_loop(self):
+        """Cancel the background status publishing task."""
+
         if self._status_task is not None:
             self._status_task.cancel()
             try:
@@ -116,7 +90,6 @@ class PWI4Client:
         params: dict[str, Any] | None = None,
         postdata: Any = None,
     ) -> dict[str, str]:
-        """Issue a request and return the parsed flat status dict."""
         url = f"{self.base_url}{endpoint}"
         if postdata is not None:
             resp = await self._client.post(url, params=params, data=postdata)
@@ -131,7 +104,6 @@ class PWI4Client:
         params: dict[str, Any] | None = None,
         postdata: Any = None,
     ) -> bytes:
-        """Issue a request and return raw response bytes."""
         url = f"{self.base_url}{endpoint}"
         if postdata is not None:
             resp = await self._client.post(url, params=params, data=postdata)
@@ -149,7 +121,6 @@ class PWI4Client:
         interval: float = 1.0,
         delay: float = 0.1,
     ) -> dict[str, str]:
-        """Poll status until condition(status_dict) returns True."""
         await asyncio.sleep(delay)
         while True:
             st = await self.status()
@@ -167,8 +138,6 @@ class PWI4Client:
             if sep:
                 result[name.strip()] = value.strip()
         return result
-
-    # ── Convenience typed accessors for status dicts ──
 
     @staticmethod
     def get_bool(st: dict, key: str, default: bool = False) -> bool:

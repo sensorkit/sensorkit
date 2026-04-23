@@ -30,11 +30,10 @@ class AlpacaFilterWheel(AlpacaDevice):
         except Exception:
             self.state = AlpacaFilterWheelState()
 
-        self._start_init(self.filter_wheel_init(sk.Init()))
+        await self.filter_wheel_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self._cancel_init()
         await self.filter_wheel_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
@@ -79,7 +78,7 @@ class AlpacaFilterWheel(AlpacaDevice):
 
     @sk.command_handler
     async def filter_wheel_set(self, cmd: SetFilter):
-        await self.require_connected()
+        self.require_connected()
 
         if isinstance(cmd.filter, int):
             position = cmd.filter

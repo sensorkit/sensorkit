@@ -134,7 +134,7 @@ def _service_loop(
     restart_backoff_max: float = 300.0,
     restart_backoff_random: float = 5.0,
     restart_backoff_factor: float = 1.8,
-    startup_timeout: float = 30.0,
+    startup_timeout: float = 300.0,
     shutdown_timeout: float = 5.0,
 ):
     restarts = 0

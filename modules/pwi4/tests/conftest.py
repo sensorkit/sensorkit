@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
 
 from sensorkit.pwi4.device import PWI4Client
+
+
+@pytest.fixture(autouse=True)
+def _mock_sk_device():
+    """Mock sk.device() so device commands can publish/kv_put without a real service."""
+    mock_device = MagicMock()
+    mock_device.publish = AsyncMock()
+    mock_device.kv_put_model = AsyncMock()
+    mock_device.kv_get_model = AsyncMock(side_effect=Exception("no saved state"))
+    mock_device.entity = "test_entity"
+    mock_device.data_graph = AsyncMock(return_value=None)
+
+    with patch("sensorkit.api.device", return_value=mock_device):
+        yield mock_device
 
 
 def make_status(**overrides) -> dict[str, str]:

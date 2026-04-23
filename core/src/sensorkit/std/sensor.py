@@ -4,11 +4,21 @@ import asyncio
 import contextlib
 from typing import Any, Literal
 
-import sensorkit.api as sk
 from loguru import logger
 from pydantic import BaseModel, Field
+
+import sensorkit.api as sk
 from sensorkit.astro.common import ReferenceFrame
-from sensorkit.astro.target import AltAzTarget, FrameTarget, ICRSTarget, TLETarget
+from sensorkit.astro.target import (
+    AltAzTarget,
+    CatalogTarget,
+    EphemerisTarget,
+    FrameTarget,
+    ICRSTarget,
+    RateTarget,
+    StateVectorTarget,
+    TLETarget,
+)
 from sensorkit.core import task
 from sensorkit.models.devices import (
     AltAzPointing,
@@ -24,7 +34,7 @@ from sensorkit.models.devices import (
 from sensorkit.std.collect import StandardCollectTask
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.std.instrument import Binning, CameraCapture, ConfigureCameraSensor
-from sensorkit.std.optics import OpenMirrorCover, CloseMirrorCover, SetFilter
+from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover, SetFilter
 
 
 class Sensor:
@@ -217,14 +227,32 @@ class SensorControl:
         match task.target:
             case ICRSTarget():
                 adhoc["track_mode"] = "sidereal"
+                adhoc["target_id"] = "ICRSTarget"
             case AltAzTarget():
                 adhoc["track_mode"] = "fixed"
+                adhoc["target_id"] = "AltAzTarget"
             case TLETarget():
                 adhoc["track_mode"] = "rate"
                 adhoc["target_name"] = task.target.tle.line0
-                adhoc["target_id"] = f"{int(task.target.tle.line0.split()[1])}"
-            case _:
+                adhoc["target_id"] = task.target.tle.line0.split()[1]
+            case RateTarget():
                 adhoc["track_mode"] = "rate"
+                adhoc["target_id"] = "RateTarget"
+            case EphemerisTarget():
+                adhoc["track_mode"] = "rate"
+                adhoc["target_id"] = "EphemerisTarget"
+            case StateVectorTarget():
+                adhoc["track_mode"] = "rate"
+                adhoc["target_id"] = "StateVectorTarget"
+            case CatalogTarget():
+                adhoc["track_mode"] = "sidereal"
+                adhoc["target_id"] = task.target.object
+            case FrameTarget():
+                adhoc["track_mode"] = str(task.target.frame.value)
+                adhoc["target_id"] = str(task.target.frame.value)
+            case _:
+                adhoc["track_mode"] = "unknown"
+                adhoc["target_id"] = "unknown"
 
         # Capture the requested frames.
         for frame_num in range(0, task.camera_params.frame_count):
