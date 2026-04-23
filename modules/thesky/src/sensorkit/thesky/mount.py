@@ -21,6 +21,7 @@ from sensorkit.astro.target import (
     EphemerisTarget,
     FrameTarget,
     ICRSTarget,
+    RateTarget,
     StateVectorTarget,
     TLETarget,
 )
@@ -368,6 +369,36 @@ class TheSkyMount(TheSkyDevice):
                 self._start_fast_status()
                 logger.debug("tracking TLE follow")
 
+            case RateTarget():
+                logger.debug("executing rate follow")
+
+                # Slew to initial position
+                await self.execute(
+                    f"""
+                    sky6RASCOMTele.SlewToRaDec(
+                        {cmd.target.initial_coords.ra:0.6f},
+                        {cmd.target.initial_coords.dec:0.6f},
+                        "object"
+                    );
+                    """
+                )
+
+                # Wait for the mount to start tracking
+                async with asyncio.timeout(self.config.timeout):
+                    await self.poll("""sky6RASCOMTele.IsTracking;""", "1")
+
+                # Apply custom offset rates (degrees/sec -> arcsec/sec)
+                ra_rate_arcsec = cmd.target.rates.ra * 3600
+                dec_rate_arcsec = cmd.target.rates.dec * 3600
+                await self.execute(
+                    f"""
+                    sky6RASCOMTele.SetTracking(1, 0, {ra_rate_arcsec}, {dec_rate_arcsec});
+                    """
+                )
+
+                self._start_fast_status()
+                logger.debug("following rate target")
+
             case StateVectorTarget():
                 logger.debug("executing StateVector follow")
                 # TODO: this will require PID control
@@ -439,16 +470,12 @@ class TheSkyMount(TheSkyDevice):
         write_path.write_text("\n".join(lines) + "\n")
         return thesky_path
 
-    # ── Fast/slow status lifecycle ───────────────────────────────────
-
     def _start_fast_status(self):
-        """Start fast mount status publishing for active tracking."""
         if self._fast_status_task is None or self._fast_status_task.done():
             logger.debug("starting fast mount status loop")
             self._fast_status_task = asyncio.create_task(self.status_publish_fast())
 
     def _stop_fast_status(self):
-        """Stop fast mount status publishing."""
         if self._fast_status_task is not None and not self._fast_status_task.done():
             logger.debug("stopping fast mount status loop")
             self._fast_status_task.cancel()
@@ -456,14 +483,10 @@ class TheSkyMount(TheSkyDevice):
 
     @property
     def _fast_status_active(self) -> bool:
-        """True when the fast status loop is running."""
         return self._fast_status_task is not None and not self._fast_status_task.done()
 
-    # ── Status publishing ────────────────────────────────────────────
-
     async def _publish_mount_status(self):
-        """Query TheSky and publish mount pointing, rates, and connection state."""
-        resp = await self.execute_unlocked(
+        resp = await self.get_status(
             """
             var Out;
             sky6RASCOMTele.GetRaDec();
@@ -480,18 +503,14 @@ class TheSkyMount(TheSkyDevice):
             """
         )
 
-        connected, ra, ra_rate, dec, dec_rate, alt, az = [
-            float(x) for x in resp.split(",")
-        ]
+        connected, ra, ra_rate, dec, dec_rate, alt, az = [float(x) for x in resp.split(",")]
 
         connected = bool(connected)
         self.device_connected = connected
 
         device = sk.device()
         await device.publish(Connected(is_connected=connected))
-        await device.publish(
-            RADecPointing(right_ascension_hours=ra, declination_degrees=dec)
-        )
+        await device.publish(RADecPointing(right_ascension_hours=ra, declination_degrees=dec))
         await device.publish(AltAzPointing(altitude_degrees=alt, azimuth_degrees=az))
 
         # Convert RA/Dec rates from arcsec/sec to deg/sec
@@ -513,16 +532,17 @@ class TheSkyMount(TheSkyDevice):
                     azimuth=AxisRate(velocity=az_rate, axis=MountAxis.AZIMUTH),
                     altitude=AxisRate(velocity=alt_rate, axis=MountAxis.ALTITUDE),
                     right_ascension=AxisRate(
-                        velocity=ra_rate, axis=MountAxis.RIGHT_ASCENSION,
+                        velocity=ra_rate,
+                        axis=MountAxis.RIGHT_ASCENSION,
                     ),
                     declination=AxisRate(
-                        velocity=dec_rate, axis=MountAxis.DECLINATION,
+                        velocity=dec_rate,
+                        axis=MountAxis.DECLINATION,
                     ),
                 )
             )
 
     async def status_publish_slow(self):
-        """Slow cadence: mount state. Skips pointing/rates when fast loop is active."""
         while True:
             try:
                 if not self._fast_status_active:
@@ -536,7 +556,6 @@ class TheSkyMount(TheSkyDevice):
             await asyncio.sleep(self.config.status_frequency_slow)
 
     async def status_publish_fast(self):
-        """Fast cadence: mount pointing and rates during active tracking."""
         while True:
             try:
                 await self._publish_mount_status()
@@ -614,9 +633,7 @@ class TheSkyMountConfig(TheSkyDeviceConfig[TheSkyMount]):
     device_type: Literal["mount"] = "mount"
     timeout: float = 300.0
     status_frequency_slow: float = 5.0
-    """Cadence for mount status when not tracking."""
     status_frequency_fast: float = 0.1
-    """Cadence for mount pointing and rates while tracking."""
 
     @override
     def create_device(self):

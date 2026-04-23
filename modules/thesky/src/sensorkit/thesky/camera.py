@@ -349,7 +349,7 @@ class TheSkyCamera(TheSkyDevice):
     async def status_publish(self):
         while True:
             try:
-                resp = await self.execute_unlocked(
+                resp = await self.get_status(
                     """
                     var Out;
                     Out = [

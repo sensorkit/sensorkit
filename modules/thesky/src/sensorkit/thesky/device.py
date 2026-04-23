@@ -78,11 +78,13 @@ class TheSkyDevice:
 
     def require_connected(self):
         """Raise DeviceConnectionError if device is not connected."""
+
         if not self.device_connected:
             raise DeviceConnectionError(message=f"{self.device_name} not connected", code=-1)
 
     async def execute(self, script: str):
         """Execute a TheSky script, serialized behind the shared script lock."""
+
         lock = _get_script_lock(self.config.host, self.config.port)
 
         async with lock:
@@ -91,15 +93,14 @@ class TheSkyDevice:
             )
             return parse_thesky_response(response)
 
-    async def execute_unlocked(self, script: str):
-        """Execute a TheSky script on its own TCP connection, bypassing the script lock.
+    async def get_status(self, script: str):
+        """Execute a read-only TheSky status query on its own TCP connection.
 
-        Use this for read-only status queries that should not block behind
-        or be blocked by command handlers.
+        Bypasses the script lock so status polling does not block behind
+        or get blocked by command handlers.
         """
-        response = await send_thesky_script(
-            self.config.host, self.config.port, script.encode()
-        )
+
+        response = await send_thesky_script(self.config.host, self.config.port, script.encode())
         return parse_thesky_response(response)
 
     def start_status_loop(self, coro):
