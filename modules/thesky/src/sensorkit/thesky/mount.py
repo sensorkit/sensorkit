@@ -53,6 +53,7 @@ class TheSkyMount(TheSkyDevice):
 
     config: TheSkyMountConfig
     device_name = "Mount"
+    _fast_status_task: asyncio.Task | None = None
 
     # NOTE: For a TheSky mount, you have to home the mount before any commands at all, and you have to "Unpark" the
     # mount (if in the "Park" position) before any motion. If you "Park" the mount and "Disconnect" it, note that it
@@ -114,9 +115,9 @@ class TheSkyMount(TheSkyDevice):
         # Connect to the hardware
         await self.mount_connect(sk.Connect())
 
-        # Start mount status publishing
+        # Start mount status publishing (slow cadence; fast loop started during tracking)
         logger.debug("starting thesky mount status loop")
-        self.start_status_loop(self.status_publish())
+        self.start_status_loop(self.status_publish_slow())
 
         # Home as needed
         if not self.state.has_been_homed:
@@ -135,6 +136,7 @@ class TheSkyMount(TheSkyDevice):
 
         # Stop mount status publishing
         logger.debug("stopping thesky mount status loop")
+        self._stop_fast_status()
         await self.stop_status_loop()
 
         # Disconnect from the hardware
@@ -252,6 +254,7 @@ class TheSkyMount(TheSkyDevice):
     @sk.command_handler
     async def mount_stop(self, cmd: sk.Stop):
         self.require_connected()
+        self._stop_fast_status()
         logger.debug("stopping thesky mount")
         await self.mount_unpark()
         await self.execute(
@@ -298,6 +301,7 @@ class TheSkyMount(TheSkyDevice):
                 async with asyncio.timeout(self.config.timeout):
                     await self.poll("""sky6RASCOMTele.IsTracking;""", "1")
 
+                self._start_fast_status()
                 logger.debug("following RADec target")
 
             case AltAzTarget():
@@ -361,6 +365,7 @@ class TheSkyMount(TheSkyDevice):
                 async with asyncio.timeout(self.config.timeout):
                     await self.poll("""Raven3.trackLEOStatus;""", "6")
 
+                self._start_fast_status()
                 logger.debug("tracking TLE follow")
 
             case StateVectorTarget():
@@ -377,6 +382,7 @@ class TheSkyMount(TheSkyDevice):
                 match cmd.target.frame:
                     case ReferenceFrame.ALTAZ:
                         # Turn sidereal tracking off
+                        self._stop_fast_status()
                         logger.debug("stopping tracking")
                         await self.execute(
                             """
@@ -399,6 +405,7 @@ class TheSkyMount(TheSkyDevice):
                         # Wait for the mount to start tracking
                         async with asyncio.timeout(self.config.timeout):
                             await self.poll("""sky6RASCOMTele.IsTracking;""", "1")
+                        self._start_fast_status()
                         logger.debug("sidereally tracking thesky mount")
 
                     case _:
@@ -432,80 +439,111 @@ class TheSkyMount(TheSkyDevice):
         write_path.write_text("\n".join(lines) + "\n")
         return thesky_path
 
-    async def status_publish(self):
+    # ── Fast/slow status lifecycle ───────────────────────────────────
+
+    def _start_fast_status(self):
+        """Start fast mount status publishing for active tracking."""
+        if self._fast_status_task is None or self._fast_status_task.done():
+            logger.debug("starting fast mount status loop")
+            self._fast_status_task = asyncio.create_task(self.status_publish_fast())
+
+    def _stop_fast_status(self):
+        """Stop fast mount status publishing."""
+        if self._fast_status_task is not None and not self._fast_status_task.done():
+            logger.debug("stopping fast mount status loop")
+            self._fast_status_task.cancel()
+            self._fast_status_task = None
+
+    @property
+    def _fast_status_active(self) -> bool:
+        """True when the fast status loop is running."""
+        return self._fast_status_task is not None and not self._fast_status_task.done()
+
+    # ── Status publishing ────────────────────────────────────────────
+
+    async def _publish_mount_status(self):
+        """Query TheSky and publish mount pointing, rates, and connection state."""
+        resp = await self.execute_unlocked(
+            """
+            var Out;
+            sky6RASCOMTele.GetRaDec();
+            sky6RASCOMTele.GetAzAlt();
+            Out = [
+                sky6RASCOMTele.IsConnected,
+                sky6RASCOMTele.dRa,
+                sky6RASCOMTele.dRaTrackingRate,
+                sky6RASCOMTele.dDec,
+                sky6RASCOMTele.dDecTrackingRate,
+                sky6RASCOMTele.dAlt,
+                sky6RASCOMTele.dAz
+            ];
+            """
+        )
+
+        connected, ra, ra_rate, dec, dec_rate, alt, az = [
+            float(x) for x in resp.split(",")
+        ]
+
+        connected = bool(connected)
+        self.device_connected = connected
+
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
+        await device.publish(
+            RADecPointing(right_ascension_hours=ra, declination_degrees=dec)
+        )
+        await device.publish(AltAzPointing(altitude_degrees=alt, azimuth_degrees=az))
+
+        # Convert RA/Dec rates from arcsec/sec to deg/sec
+        ra_rate /= 3600
+        dec_rate /= 3600
+
+        if self._location is not None:
+            alt_rate, az_rate = self.radec_rates_to_altaz_rates(
+                ra_hr=ra,
+                dec_deg=dec,
+                ra_rate_deg_per_sec=ra_rate,
+                dec_rate_deg_per_sec=dec_rate,
+                location=self._location,
+                time=Time.now(),
+            )
+
+            await device.publish(
+                AxisRates(
+                    azimuth=AxisRate(velocity=az_rate, axis=MountAxis.AZIMUTH),
+                    altitude=AxisRate(velocity=alt_rate, axis=MountAxis.ALTITUDE),
+                    right_ascension=AxisRate(
+                        velocity=ra_rate, axis=MountAxis.RIGHT_ASCENSION,
+                    ),
+                    declination=AxisRate(
+                        velocity=dec_rate, axis=MountAxis.DECLINATION,
+                    ),
+                )
+            )
+
+    async def status_publish_slow(self):
+        """Slow cadence: mount state. Skips pointing/rates when fast loop is active."""
         while True:
             try:
-                resp = await self.execute(
-                    """
-                    var Out;
-                    sky6RASCOMTele.GetRaDec();
-                    sky6RASCOMTele.GetAzAlt();
-                    Out = [
-                        sky6RASCOMTele.IsConnected,
-                        sky6RASCOMTele.dRa,
-                        sky6RASCOMTele.dRaTrackingRate,
-                        sky6RASCOMTele.dDec,
-                        sky6RASCOMTele.dDecTrackingRate,
-                        sky6RASCOMTele.dAlt,
-                        sky6RASCOMTele.dAz
-                    ];
-                    """
-                )
+                if not self._fast_status_active:
+                    await self._publish_mount_status()
+                else:
+                    # Still update connection state
+                    await sk.device().publish(Connected(is_connected=self.device_connected))
             except Exception as e:
-                logger.exception(f"Error in status_publish execute: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
+                logger.warning(f"Error in slow mount status_publish ({e})")
 
+            await asyncio.sleep(self.config.status_frequency_slow)
+
+    async def status_publish_fast(self):
+        """Fast cadence: mount pointing and rates during active tracking."""
+        while True:
             try:
-                connected, ra, ra_rate, dec, dec_rate, alt, az = [
-                    float(x) for x in resp.split(",")
-                ]
-
-                connected = bool(connected)
-                self.device_connected = connected
-
-                # logger.debug(
-                #     f"TheSky mount status: connected={connected}, RA={ra}, RA_rate={ra_rate}, Dec={dec}, Dec_rate={dec_rate}, "
-                #     f"Alt={alt}, Az={az}"
-                # )
-
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
-                await device.publish(
-                    RADecPointing(right_ascension_hours=ra, declination_degrees=dec)
-                )
-                await device.publish(AltAzPointing(altitude_degrees=alt, azimuth_degrees=az))
-
-                # Convert RA/Dec rates from arcsec/sec to deg/sec
-                ra_rate /= 3600
-                dec_rate /= 3600
-
-                if self._location is not None:
-                    alt_rate, az_rate = self.radec_rates_to_altaz_rates(
-                        ra_hr=ra,
-                        dec_deg=dec,
-                        ra_rate_deg_per_sec=ra_rate,
-                        dec_rate_deg_per_sec=dec_rate,
-                        location=self._location,
-                        time=Time.now(),
-                    )
-
-                    await device.publish(
-                        AxisRates(
-                            azimuth=AxisRate(velocity=az_rate, axis=MountAxis.AZIMUTH),
-                            altitude=AxisRate(velocity=alt_rate, axis=MountAxis.ALTITUDE),
-                            right_ascension=AxisRate(
-                                velocity=ra_rate, axis=MountAxis.RIGHT_ASCENSION
-                            ),
-                            declination=AxisRate(velocity=dec_rate, axis=MountAxis.DECLINATION),
-                        )
-                    )
+                await self._publish_mount_status()
             except Exception as e:
-                logger.warning(f"Failed to update TheSky mount status ({e})")
-                continue
+                logger.warning(f"Error in fast mount status_publish ({e})")
 
-            # FIXME: Account for query time
-            await asyncio.sleep(self.config.status_frequency)
+            await asyncio.sleep(self.config.status_frequency_fast)
 
     def radec_rates_to_altaz_rates(
         self,
@@ -575,7 +613,10 @@ class TheSkyMountConfig(TheSkyDeviceConfig[TheSkyMount]):
 
     device_type: Literal["mount"] = "mount"
     timeout: float = 300.0
-    status_frequency: float = 1.0
+    status_frequency_slow: float = 5.0
+    """Cadence for mount status when not tracking."""
+    status_frequency_fast: float = 0.1
+    """Cadence for mount pointing and rates while tracking."""
 
     @override
     def create_device(self):

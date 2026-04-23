@@ -147,7 +147,7 @@ class TheSkyFocuser(TheSkyDevice):
     async def status_publish(self):
         while True:
             try:
-                resp = await self.execute(
+                resp = await self.execute_unlocked(
                     """
                     var Out;
                     Out = [

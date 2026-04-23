@@ -18,7 +18,10 @@ def _get_script_lock(host: str, port: int) -> asyncio.Lock:
     """Get or create a shared lock for a TheSky server connection."""
 
     key = (host, port)
-    if key not in _script_locks:
+    try:
+        lock = _script_locks[key]
+        lock._get_loop()  # Raises RuntimeError if bound to a different loop
+    except (KeyError, RuntimeError):
         _script_locks[key] = asyncio.Lock()
     return _script_locks[key]
 
@@ -79,6 +82,7 @@ class TheSkyDevice:
             raise DeviceConnectionError(message=f"{self.device_name} not connected", code=-1)
 
     async def execute(self, script: str):
+        """Execute a TheSky script, serialized behind the shared script lock."""
         lock = _get_script_lock(self.config.host, self.config.port)
 
         async with lock:
@@ -86,6 +90,17 @@ class TheSkyDevice:
                 self.config.host, self.config.port, script.encode()
             )
             return parse_thesky_response(response)
+
+    async def execute_unlocked(self, script: str):
+        """Execute a TheSky script on its own TCP connection, bypassing the script lock.
+
+        Use this for read-only status queries that should not block behind
+        or be blocked by command handlers.
+        """
+        response = await send_thesky_script(
+            self.config.host, self.config.port, script.encode()
+        )
+        return parse_thesky_response(response)
 
     def start_status_loop(self, coro):
         """Start a background status publishing task, cancelling any existing one."""
