@@ -147,6 +147,7 @@ class SensorKit:
 
 class ServiceRecord(BaseModel):
     """Information about a service entity."""
+
     info: ServiceInfo
     last_registered: datetime
 
@@ -154,6 +155,7 @@ class ServiceRecord(BaseModel):
 @dataclass
 class ServiceStatus:
     """Status of a service."""
+
     service: ServiceRecord
     online: bool
 
@@ -162,7 +164,7 @@ class ServiceContext(EntityImpl):
     """An object that exposes SensorKit service API."""
 
     ENTITY_LEASE_TTL = 60.0
-    SERVICE_LEASE_TTL = 10.0
+    SERVICE_LEASE_TTL = 60.0
 
     @classmethod
     async def register(cls, kit: SensorKit, info: ServiceInfo) -> Self:
@@ -202,9 +204,7 @@ class ServiceContext(EntityImpl):
     async def init_impl(self):
         """Start the main service task."""
         # Publish information about this service.
-        await self.kv_put_model(
-            ServiceRecord(info=self.info, last_registered=datetime.now())
-        )
+        await self.kv_put_model(ServiceRecord(info=self.info, last_registered=datetime.now()))
 
         # Notify the backend implementation that we are a service.
         with contextlib.suppress(Exception):
