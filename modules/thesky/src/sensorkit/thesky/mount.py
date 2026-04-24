@@ -631,9 +631,9 @@ class TheSkyMountConfig(TheSkyDeviceConfig[TheSkyMount]):
     """TheSky Mount configuration."""
 
     device_type: Literal["mount"] = "mount"
-    timeout: float = 300.0
-    status_frequency_slow: float = 5.0
+    status_frequency_slow: float = 1.0
     status_frequency_fast: float = 0.1
+    timeout: float = 300.0
 
     @override
     def create_device(self):

@@ -138,6 +138,7 @@ class PWI4Mount(PWI4Device):
         self._geodetic: Geodetic | None = None
         self._location: EarthLocation | None = None
         self._wrap_task: asyncio.Task | None = None
+        self._fast_status_task: asyncio.Task | None = None
 
     @sk.on_attach
     async def entity_init(self):
@@ -165,7 +166,7 @@ class PWI4Mount(PWI4Device):
         self.device_name = "Mount"
 
         await self.mount_connect(sk.Connect())
-        self.start_status_loop(self.status_publish())
+        self.start_status_loop(self.status_publish_slow())
 
         await asyncio.gather(
             self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.AZIMUTH)),
@@ -187,7 +188,7 @@ class PWI4Mount(PWI4Device):
 
         async with asyncio.timeout(self.config.timeout):
             while self.device_connected is None:
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(self.config.status_frequency_slow)
 
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
@@ -207,6 +208,7 @@ class PWI4Mount(PWI4Device):
 
         await self.deinit_ot()
 
+        self._stop_fast_status()
         await self.stop_status_loop()
 
     @sk.command_handler
@@ -262,6 +264,7 @@ class PWI4Mount(PWI4Device):
 
     @sk.command_handler
     async def mount_stop(self, cmd: sk.Stop):
+        self._stop_fast_status()
         logger.debug("stopping mount")
         await self.client.request("/mount/stop")
 
@@ -333,9 +336,11 @@ class PWI4Mount(PWI4Device):
                     delay=1,
                 )
 
+                self._start_fast_status()
                 logger.debug("following RADec target")
 
             case AltAzTarget():
+                logger.debug("executing AltAz follow")
                 await self.client.request(
                     "/mount/goto_alt_az",
                     params={
@@ -349,7 +354,10 @@ class PWI4Mount(PWI4Device):
                     delay=1,
                 )
 
+                logger.debug("following AltAz target")
+
             case TLETarget():
+                logger.debug("executing TLE follow")
                 await self.client.request(
                     "/mount/follow_tle",
                     params={
@@ -367,8 +375,11 @@ class PWI4Mount(PWI4Device):
                     delay=1,
                 )
 
+                self._start_fast_status()
+                logger.debug("following TLE target")
+
             case RateTarget():
-                logger.debug("executing rate follow")
+                logger.debug("executing Rate follow")
 
                 # Slew to initial position
                 await self.client.request(
@@ -395,9 +406,12 @@ class PWI4Mount(PWI4Device):
                     },
                 )
 
-                logger.debug("following rate target")
+                self._start_fast_status()
+                logger.debug("following Rate target")
 
             case EphemerisTarget():
+                logger.debug("executing Ephemeris follow")
+
                 await self.client.request("/mount/radecpath/new")
                 for i in range(len(target.jds)):
                     await self.client.request(
@@ -418,9 +432,13 @@ class PWI4Mount(PWI4Device):
                     delay=1,
                 )
 
+                self._start_fast_status()
+                logger.debug("following Ephemeris target")
+
             case FrameTarget():
                 match target.frame:
                     case ReferenceFrame.ALTAZ:
+                        self._stop_fast_status()
                         await self.client.request("/mount/tracking_off")
                         await self.client.poll(
                             lambda s: not self.client.get_bool(s, "mount.is_tracking"),
@@ -430,6 +448,7 @@ class PWI4Mount(PWI4Device):
                         await self.client.poll(
                             lambda s: self.client.get_bool(s, "mount.is_tracking"),
                         )
+                        self._start_fast_status()
 
     @sk.command_handler
     async def mount_offset(self, cmd: ApplyOffset):
@@ -501,159 +520,178 @@ class PWI4Mount(PWI4Device):
     async def model_load(self, cmd: ModelLoad):
         await self.client.request("/mount/model/load", params={"filename": cmd.filename})
 
-    async def status_publish(self):
-        backoff = 1.0
+    def _start_fast_status(self):
+        if self._fast_status_task is None or self._fast_status_task.done():
+            logger.debug("starting fast mount status loop")
+            self._fast_status_task = asyncio.create_task(self.status_publish_fast())
+
+    def _stop_fast_status(self):
+        if self._fast_status_task is not None and not self._fast_status_task.done():
+            logger.debug("stopping fast mount status loop")
+            self._fast_status_task.cancel()
+            self._fast_status_task = None
+
+    @property
+    def _fast_status_active(self) -> bool:
+        return self._fast_status_task is not None and not self._fast_status_task.done()
+
+    async def _publish_mount_status(self, st: dict[str, str]):
+        connected = self.client.get_bool(st, "mount.is_connected")
+        self.device_connected = connected
+
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
+
+        if not connected:
+            return
+
+        ra_hours = self.client.get_float(st, "mount.ra_j2000_hours")
+        dec_degs = self.client.get_float(st, "mount.dec_j2000_degs")
+        alt_degs = self.client.get_float(st, "mount.altitude_degs")
+        az_degs = self.client.get_float(st, "mount.azimuth_degs")
+
+        await device.publish(
+            RADecPointing(
+                right_ascension_hours=ra_hours,
+                declination_degrees=dec_degs,
+                reference_frame=ReferenceFrame.ICRF,
+            )
+        )
+        await device.publish(
+            AltAzPointing(
+                altitude_degrees=alt_degs,
+                azimuth_degrees=az_degs,
+            )
+        )
+
+        # Axis rates + RA/Dec rate conversion
+        az_rate = self.client.get_float(st, "mount.axis0.measured_velocity_degs_per_sec")
+        alt_rate = self.client.get_float(st, "mount.axis1.measured_velocity_degs_per_sec")
+
+        if self._location is not None:
+            _, _, ra_rate, dec_rate = altaz_rates_to_radec_rates(
+                alt_degs, az_degs, alt_rate, az_rate, self._location, Time.now()
+            )
+
+            await device.publish(
+                AxisRates(
+                    azimuth=AxisRate(
+                        velocity=az_rate,
+                        max_velocity=self.client.get_float(
+                            st, "mount.axis0.max_velocity_degs_per_sec"
+                        ),
+                        max_acceleration=self.client.get_float(
+                            st, "mount.axis0.acceleration_degs_per_sec_sqr"
+                        ),
+                        mechanical_position=self.client.get_float(st, "mount.axis0.position_degs"),
+                        min_mechanical_position=self.client.get_float(
+                            st, "mount.axis0.min_mech_position_degs"
+                        ),
+                        max_mechanical_position=self.client.get_float(
+                            st, "mount.axis0.max_mech_position_degs"
+                        ),
+                        axis=MountAxis.AZIMUTH,
+                    ),
+                    altitude=AxisRate(
+                        velocity=alt_rate,
+                        max_velocity=self.client.get_float(
+                            st, "mount.axis1.max_velocity_degs_per_sec"
+                        ),
+                        max_acceleration=self.client.get_float(
+                            st, "mount.axis1.acceleration_degs_per_sec_sqr"
+                        ),
+                        mechanical_position=self.client.get_float(st, "mount.axis1.position_degs"),
+                        min_mechanical_position=self.client.get_float(
+                            st, "mount.axis1.min_mech_position_degs"
+                        ),
+                        max_mechanical_position=self.client.get_float(
+                            st, "mount.axis1.max_mech_position_degs"
+                        ),
+                        axis=MountAxis.ALTITUDE,
+                    ),
+                    right_ascension=AxisRate(
+                        velocity=ra_rate,
+                        axis=MountAxis.RIGHT_ASCENSION,
+                    ),
+                    declination=AxisRate(
+                        velocity=dec_rate,
+                        axis=MountAxis.DECLINATION,
+                    ),
+                )
+            )
+
+        await device.publish(
+            MountTargetDistance(
+                axis=[
+                    sk.AxisTargetDistance(
+                        distance_arcseconds=self.client.get_float(
+                            st, "mount.axis0.dist_to_target_arcsec"
+                        ),
+                        rms_error_arcseconds=self.client.get_float(
+                            st, "mount.axis0.rms_error_arcsec"
+                        ),
+                        axis=MountAxis.AZIMUTH,
+                    ),
+                    sk.AxisTargetDistance(
+                        distance_arcseconds=self.client.get_float(
+                            st, "mount.axis1.dist_to_target_arcsec"
+                        ),
+                        rms_error_arcseconds=self.client.get_float(
+                            st, "mount.axis1.rms_error_arcsec"
+                        ),
+                        axis=MountAxis.ALTITUDE,
+                    ),
+                ]
+            )
+        )
+
+        await device.publish(
+            MountAxisEnabled(
+                axis=[
+                    AxisEnabled(
+                        axis=MountAxis.AZIMUTH,
+                        enabled=self.client.get_bool(st, "mount.axis0.is_enabled"),
+                    ),
+                    AxisEnabled(
+                        axis=MountAxis.ALTITUDE,
+                        enabled=self.client.get_bool(st, "mount.axis1.is_enabled"),
+                    ),
+                ]
+            )
+        )
+
+        if self._geodetic is not None:
+            await device.publish(
+                sk.SitePosition(
+                    latitude_degrees=self._geodetic.lat,
+                    longitude_degrees=self._geodetic.lon,
+                    altitude_km=self._geodetic.elev,
+                )
+            )
+
+    async def status_publish_slow(self):
         while True:
             try:
                 st = await self.client.status()
-                backoff = 1.0
+                if not self._fast_status_active:
+                    await self._publish_mount_status(st)
+                else:
+                    self.device_connected = self.client.get_bool(st, "mount.is_connected")
+                    await sk.device().publish(Connected(is_connected=self.device_connected))
             except Exception as e:
-                logger.warning(f"PWI4 mount status poll failed: {e}")
-                await asyncio.sleep(backoff)
-                backoff = min(10.0, backoff * 2)
-                continue
+                logger.warning(f"Error in slow mount status_publish ({e})")
 
+            await asyncio.sleep(self.config.status_frequency_slow)
+
+    async def status_publish_fast(self):
+        while True:
             try:
-                connected = self.client.get_bool(st, "mount.is_connected")
-                self.device_connected = connected
-
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
-
-                if connected:
-                    ra_hours = self.client.get_float(st, "mount.ra_j2000_hours")
-                    dec_degs = self.client.get_float(st, "mount.dec_j2000_degs")
-                    alt_degs = self.client.get_float(st, "mount.altitude_degs")
-                    az_degs = self.client.get_float(st, "mount.azimuth_degs")
-
-                    await device.publish(
-                        RADecPointing(
-                            right_ascension_hours=ra_hours,
-                            declination_degrees=dec_degs,
-                            reference_frame=ReferenceFrame.ICRF,
-                        )
-                    )
-                    await device.publish(
-                        AltAzPointing(
-                            altitude_degrees=alt_degs,
-                            azimuth_degrees=az_degs,
-                        )
-                    )
-                    if self._geodetic is not None:
-                        await device.publish(
-                            sk.SitePosition(
-                                latitude_degrees=self._geodetic.lat,
-                                longitude_degrees=self._geodetic.lon,
-                                altitude_km=self._geodetic.elev,
-                            )
-                        )
-
-                    # Axis rates + RA/Dec rate conversion
-                    az_rate = self.client.get_float(
-                        st, "mount.axis0.measured_velocity_degs_per_sec"
-                    )
-                    alt_rate = self.client.get_float(
-                        st, "mount.axis1.measured_velocity_degs_per_sec"
-                    )
-
-                    if self._location is not None:
-                        _, _, ra_rate, dec_rate = altaz_rates_to_radec_rates(
-                            alt_degs, az_degs, alt_rate, az_rate, self._location, Time.now()
-                        )
-
-                        await device.publish(
-                            AxisRates(
-                                azimuth=AxisRate(
-                                    velocity=az_rate,
-                                    max_velocity=self.client.get_float(
-                                        st, "mount.axis0.max_velocity_degs_per_sec"
-                                    ),
-                                    max_acceleration=self.client.get_float(
-                                        st, "mount.axis0.acceleration_degs_per_sec_sqr"
-                                    ),
-                                    mechanical_position=self.client.get_float(
-                                        st, "mount.axis0.position_degs"
-                                    ),
-                                    min_mechanical_position=self.client.get_float(
-                                        st, "mount.axis0.min_mech_position_degs"
-                                    ),
-                                    max_mechanical_position=self.client.get_float(
-                                        st, "mount.axis0.max_mech_position_degs"
-                                    ),
-                                    axis=MountAxis.AZIMUTH,
-                                ),
-                                altitude=AxisRate(
-                                    velocity=alt_rate,
-                                    max_velocity=self.client.get_float(
-                                        st, "mount.axis1.max_velocity_degs_per_sec"
-                                    ),
-                                    max_acceleration=self.client.get_float(
-                                        st, "mount.axis1.acceleration_degs_per_sec_sqr"
-                                    ),
-                                    mechanical_position=self.client.get_float(
-                                        st, "mount.axis1.position_degs"
-                                    ),
-                                    min_mechanical_position=self.client.get_float(
-                                        st, "mount.axis1.min_mech_position_degs"
-                                    ),
-                                    max_mechanical_position=self.client.get_float(
-                                        st, "mount.axis1.max_mech_position_degs"
-                                    ),
-                                    axis=MountAxis.ALTITUDE,
-                                ),
-                                right_ascension=AxisRate(
-                                    velocity=ra_rate, axis=MountAxis.RIGHT_ASCENSION
-                                ),
-                                declination=AxisRate(
-                                    velocity=dec_rate, axis=MountAxis.DECLINATION
-                                ),
-                            )
-                        )
-
-                    await device.publish(
-                        MountTargetDistance(
-                            axis=[
-                                sk.AxisTargetDistance(
-                                    distance_arcseconds=self.client.get_float(
-                                        st, "mount.axis0.dist_to_target_arcsec"
-                                    ),
-                                    rms_error_arcseconds=self.client.get_float(
-                                        st, "mount.axis0.rms_error_arcsec"
-                                    ),
-                                    axis=MountAxis.AZIMUTH,
-                                ),
-                                sk.AxisTargetDistance(
-                                    distance_arcseconds=self.client.get_float(
-                                        st, "mount.axis1.dist_to_target_arcsec"
-                                    ),
-                                    rms_error_arcseconds=self.client.get_float(
-                                        st, "mount.axis1.rms_error_arcsec"
-                                    ),
-                                    axis=MountAxis.ALTITUDE,
-                                ),
-                            ]
-                        )
-                    )
-
-                    await device.publish(
-                        MountAxisEnabled(
-                            axis=[
-                                AxisEnabled(
-                                    axis=MountAxis.AZIMUTH,
-                                    enabled=self.client.get_bool(st, "mount.axis0.is_enabled"),
-                                ),
-                                AxisEnabled(
-                                    axis=MountAxis.ALTITUDE,
-                                    enabled=self.client.get_bool(st, "mount.axis1.is_enabled"),
-                                ),
-                            ]
-                        )
-                    )
-
+                st = await self.client.status()
+                await self._publish_mount_status(st)
             except Exception as e:
-                logger.warning(f"PWI4 mount status publish failed: {e}")
+                logger.warning(f"Error in fast mount status_publish ({e})")
 
-            await asyncio.sleep(self.config.status_frequency)
+            await asyncio.sleep(self.config.status_frequency_fast)
 
     async def init_ot(self):
         """Set heater power levels and turn on fans."""
@@ -681,13 +719,16 @@ class PWI4Mount(PWI4Device):
 
 
 class PWI4MountConfig(PWI4DeviceConfig[PWI4Mount]):
+    """PWI4 Mount configuration."""
+
     device_type: Literal["mount"] = "mount"
-    status_frequency: float = 1.0
     wrap_autocenter: bool = False
     wrap_interval: float = 60.0
     wrap_deadband_deg: float = 10.0
     fans: list[str] = []
     heaters: dict[str, float] = {}
+    status_frequency_slow: float = 1.0
+    status_frequency_fast: float = 0.1
 
     @override
     def create_device(self, client: PWI4Client):
@@ -695,4 +736,6 @@ class PWI4MountConfig(PWI4DeviceConfig[PWI4Mount]):
 
 
 class PWI4MountState(PWI4DeviceState):
+    """PWI4 Mount state."""
+
     device_type: Literal["mount"] = "mount"
