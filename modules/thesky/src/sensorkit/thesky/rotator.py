@@ -135,8 +135,9 @@ class TheSkyRotator(TheSkyDevice):
 
     async def status_publish(self):
         while True:
+            await self._is_mount_home_complete().wait()
             try:
-                resp = await self.get_status(
+                resp = await self.execute(
                     """
                     var Out;
                     Out = [
@@ -168,6 +169,7 @@ class TheSkyRotator(TheSkyDevice):
 
             except Exception as e:
                 logger.warning(f"Failed to update TheSky rotator status ({e})")
+                await asyncio.sleep(self.config.status_frequency)
                 continue
 
             # FIXME: Account for query time

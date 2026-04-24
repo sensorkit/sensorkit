@@ -115,8 +115,9 @@ class TheSkyWeather(TheSkyDevice):
 
     async def status_publish(self):
         while True:
+            await self._is_mount_home_complete().wait()
             try:
-                resp = await self.get_status(
+                resp = await self.execute(
                     """
                     var Out;
                     Out = [
@@ -147,6 +148,7 @@ class TheSkyWeather(TheSkyDevice):
 
             except Exception as e:
                 logger.warning(f"Failed to update TheSky weather status ({e})")
+                await asyncio.sleep(self.config.status_frequency)
                 continue
 
             await asyncio.sleep(self.config.status_frequency)

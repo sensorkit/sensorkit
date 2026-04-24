@@ -218,22 +218,30 @@ class TheSkyMount(TheSkyDevice):
     @sk.command_handler
     async def mount_home(self, cmd: sk.Home):
         self.require_connected()
-        logger.debug("homing thesky mount")
         await self.mount_unpark()
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                try:
-                    await self.execute(
-                        """
-                        sky6RASCOMTele.FindHome();
-                        """
-                    )
-                    break
-                except MountCommandInProgressError:
-                    await asyncio.sleep(0.5)
+        logger.debug("homing thesky mount")
 
-        # Ensure it actually homed
-        await self.poll("""sky6RASCOMTele.LastSlewError;""", "0")
+        # Pause all status_publish loops while the mount is homing, because
+        # TheSky blocks all script connections during FindHome.
+        event = self._is_mount_home_complete()
+        event.clear()
+        try:
+            async with asyncio.timeout(self.config.timeout):
+                while True:
+                    try:
+                        await self.execute(
+                            """
+                            sky6RASCOMTele.FindHome();
+                            """
+                        )
+                        break
+                    except MountCommandInProgressError:
+                        await asyncio.sleep(0.5)
+
+            # Ensure it actually homed
+            await self.poll("""sky6RASCOMTele.LastSlewError;""", "0")
+        finally:
+            event.set()
 
         # Persist to state
         self.state.has_been_homed = True
@@ -486,7 +494,7 @@ class TheSkyMount(TheSkyDevice):
         return self._fast_status_task is not None and not self._fast_status_task.done()
 
     async def _publish_mount_status(self):
-        resp = await self.get_status(
+        resp = await self.execute(
             """
             var Out;
             sky6RASCOMTele.GetRaDec();
@@ -544,11 +552,11 @@ class TheSkyMount(TheSkyDevice):
 
     async def status_publish_slow(self):
         while True:
+            await self._is_mount_home_complete().wait()
             try:
                 if not self._fast_status_active:
                     await self._publish_mount_status()
                 else:
-                    # Still update connection state
                     await sk.device().publish(Connected(is_connected=self.device_connected))
             except Exception as e:
                 logger.warning(f"Error in slow mount status_publish ({e})")
@@ -557,6 +565,7 @@ class TheSkyMount(TheSkyDevice):
 
     async def status_publish_fast(self):
         while True:
+            await self._is_mount_home_complete().wait()
             try:
                 await self._publish_mount_status()
             except Exception as e:

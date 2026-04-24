@@ -114,13 +114,16 @@ class NodePlatformMount(NodePlatformDevice):
         if not self.state.has_been_homed:
             await self.mount_home(sk.Home())
 
-        # Setup the OT
-        await self.setup_ot()
+        # Initialize the optical tube
+        await self.init_ot()
 
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
         await self.mount_stop(sk.Stop())
         await self.mount_park(sk.MoveToPark())
+        await self.api.call("v1_disable_mount_motors")
+        logger.debug("disabled mount motors")
+        await self.deinit_ot()
 
     @sk.on_detach
     async def entity_deinit(self):
@@ -465,8 +468,9 @@ class NodePlatformMount(NodePlatformDevice):
 
         return ra_rate_deg_per_sec, dec_rate_deg_per_sec
 
-    async def setup_ot(self):
-        # Set heater power levels from config
+    async def init_ot(self):
+        """Set heater power levels and turn on fans."""
+
         heater_role_map = {
             "M1": osapi.V1OpticalTubeHeaterRole.M1,
             "M2": osapi.V1OpticalTubeHeaterRole.M2,
@@ -490,6 +494,33 @@ class NodePlatformMount(NodePlatformDevice):
             osapi.V1TurnOnOpticalTubeFansRequest(roles=all_fan_roles),
         )
         logger.debug(f"turned on all fans: {[r.value for r in all_fan_roles]}")
+
+    async def deinit_ot(self):
+        """Turn off heaters and fans."""
+
+        heater_role_map = {
+            "M1": osapi.V1OpticalTubeHeaterRole.M1,
+            "M2": osapi.V1OpticalTubeHeaterRole.M2,
+            "M3": osapi.V1OpticalTubeHeaterRole.M3,
+        }
+        for mirror in self.config.heater_power:
+            role = heater_role_map.get(mirror.upper())
+            await self.api.call(
+                "v1_set_optical_tube_heater_power",
+                osapi.V1SetOpticalTubeHeaterPowerRequest(
+                    role=role,
+                    power=0,
+                ),
+            )
+            logger.debug(f"set {mirror} heater power to 0%")
+
+        # Turn off all fans
+        all_fan_roles = list(osapi.V1OpticalTubeFanRole)
+        await self.api.call(
+            "v1_turn_off_optical_tube_fans",
+            osapi.V1TurnOffOpticalTubeFansRequest(roles=all_fan_roles),
+        )
+        logger.debug(f"turned off all fans: {[r.value for r in all_fan_roles]}")
 
 
 class NodePlatformMountConfig(NodePlatformDeviceConfig[NodePlatformMount]):

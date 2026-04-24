@@ -133,9 +133,9 @@ class TestMountEnableDisableAxis:
         assert reqs[0][1] == {"axis": 0}
 
 
-class TestMountSetupOTA:
+class TestMountInitOT:
     @pytest.mark.asyncio
-    async def test_setup_ota_with_heaters(self, client):
+    async def test_init_ot_with_heaters(self, client):
         config = PWI4MountConfig(
             device_type="mount",
             heaters={"m1": 50, "m2": 30},
@@ -144,13 +144,13 @@ class TestMountSetupOTA:
         m.state = PWI4MountState()
         m.device_connected = True
 
-        await m.setup_ota()
+        await m.init_ot()
 
         reqs = client.find_requests("/heaters/set")
         assert len(reqs) == 2
 
     @pytest.mark.asyncio
-    async def test_setup_ota_with_fans(self, client):
+    async def test_init_ot_with_fans(self, client):
         config = PWI4MountConfig(
             device_type="mount",
             fans=["m1", "m2"],
@@ -159,17 +159,50 @@ class TestMountSetupOTA:
         m.state = PWI4MountState()
         m.device_connected = True
 
-        await m.setup_ota()
+        await m.init_ot()
 
         reqs = client.find_requests("/fans/on")
         assert len(reqs) == 1
         assert reqs[0][1] == {"roles": "m1,m2"}
 
     @pytest.mark.asyncio
-    async def test_setup_ota_empty(self, client, mount):
-        await mount.setup_ota()
+    async def test_init_ot_empty(self, client, mount):
+        await mount.init_ot()
 
         reqs_h = client.find_requests("/heaters/set")
         reqs_f = client.find_requests("/fans/on")
         assert len(reqs_h) == 0
         assert len(reqs_f) == 0
+
+    @pytest.mark.asyncio
+    async def test_deinit_ot_with_heaters(self, client):
+        config = PWI4MountConfig(
+            device_type="mount",
+            heaters={"m1": 50, "m2": 30},
+        )
+        m = PWI4Mount(config=config, client=client)
+        m.state = PWI4MountState()
+        m.device_connected = True
+
+        await m.deinit_ot()
+
+        reqs = client.find_requests("/heaters/set")
+        assert len(reqs) == 2
+        # All heaters set to 0
+        assert all(r[1]["power"] == 0 for r in reqs)
+
+    @pytest.mark.asyncio
+    async def test_deinit_ot_with_fans(self, client):
+        config = PWI4MountConfig(
+            device_type="mount",
+            fans=["m1", "m2"],
+        )
+        m = PWI4Mount(config=config, client=client)
+        m.state = PWI4MountState()
+        m.device_connected = True
+
+        await m.deinit_ot()
+
+        reqs = client.find_requests("/fans/off")
+        assert len(reqs) == 1
+        assert reqs[0][1] == {"roles": "m1,m2"}

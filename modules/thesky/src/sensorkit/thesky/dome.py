@@ -215,9 +215,7 @@ class TheSkyDome(TheSkyDevice):
         # Send Abort on a separate TCP connection, bypassing the script lock.
         # This ensures we can stop the dome even while another command (e.g.
         # OpenSlit/CloseSlit) is in flight and holding the lock.
-        await send_thesky_script(
-            self.config.host, self.config.port, b"sky6Dome.Abort();"
-        )
+        await send_thesky_script(self.config.host, self.config.port, b"sky6Dome.Abort();")
 
         logger.debug("stopped thesky dome")
 
@@ -295,8 +293,9 @@ class TheSkyDome(TheSkyDevice):
 
     async def status_publish(self):
         while True:
+            await self._is_mount_home_complete().wait()
             try:
-                resp = await self.get_status(
+                resp = await self.execute(
                     """
                     var Out;
                     sky6Dome.GetAzEl();
@@ -333,6 +332,7 @@ class TheSkyDome(TheSkyDevice):
 
             except Exception as e:
                 logger.warning(f"Failed to update TheSky dome status ({e})")
+                await asyncio.sleep(self.config.status_frequency)
                 continue
 
             # FIXME: Account for query time

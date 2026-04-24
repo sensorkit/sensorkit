@@ -84,10 +84,10 @@ class NodePlatformWeather(NodePlatformDevice):
         # its own constraint monitoring (e.g. weather constraints in the agent config).
         if self.config.operation_mode == "assisted":
             await self.api.call("v1_enable_assisted_operation")
-            logger.debug("set Node Platform to ASSISTED mode")
+            logger.debug("set node_platform to ASSISTED mode")
         else:
             await self.api.call("v1_enable_manual_operation")
-            logger.debug("set Node Platform to MANUAL mode")
+            logger.debug("set node_platform to MANUAL mode")
 
         # Start weather status publishing
         logger.debug("starting node_platform weather status loop")

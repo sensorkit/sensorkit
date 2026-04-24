@@ -174,7 +174,7 @@ class PWI4Mount(PWI4Device):
 
         await self.mount_home(sk.Home())
 
-        await self.setup_ota()
+        await self.init_ot()
 
         if self.config.wrap_autocenter:
             self._wrap_task = asyncio.create_task(
@@ -204,6 +204,8 @@ class PWI4Mount(PWI4Device):
             self.mount_disable_axis(sk.DisableAxis(axis=MountAxis.AZIMUTH)),
             self.mount_disable_axis(sk.DisableAxis(axis=MountAxis.ALTITUDE)),
         )
+
+        await self.deinit_ot()
 
         await self.stop_status_loop()
 
@@ -653,7 +655,7 @@ class PWI4Mount(PWI4Device):
 
             await asyncio.sleep(self.config.status_frequency)
 
-    async def setup_ota(self):
+    async def init_ot(self):
         """Set heater power levels and turn on fans."""
 
         for role, power in self.config.heaters.items():
@@ -663,7 +665,19 @@ class PWI4Mount(PWI4Device):
         if self.config.fans:
             roles = ",".join(self.config.fans)
             await self.client.request("/fans/on", params={"roles": roles})
-            logger.debug(f"set {roles} fans to on")
+            logger.debug(f"turned on fans: {roles}")
+
+    async def deinit_ot(self):
+        """Turn off heaters and fans."""
+
+        for role in self.config.heaters:
+            await self.client.request("/heaters/set", params={"role": role, "power": 0})
+            logger.debug(f"set {role} heater power to 0%")
+
+        if self.config.fans:
+            roles = ",".join(self.config.fans)
+            await self.client.request("/fans/off", params={"roles": roles})
+            logger.debug(f"turned off fans: {roles}")
 
 
 class PWI4MountConfig(PWI4DeviceConfig[PWI4Mount]):
