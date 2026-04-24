@@ -93,22 +93,6 @@ class TheSkyDevice:
             )
             return parse_thesky_response(response)
 
-    # Shared per-server Event that is cleared during mount homing (which blocks
-    # all TheSky scripts) and set when homing completes or is not in progress.
-    _mount_home_complete: ClassVar[dict[tuple[str, int], asyncio.Event]] = {}
-
-    def _is_mount_home_complete(self) -> asyncio.Event:
-        """Return the shared mount-home-complete Event for this TheSky server."""
-        key = (self.config.host, self.config.port)
-        try:
-            event = self._mount_home_complete[key]
-            event._get_loop()
-        except (KeyError, RuntimeError):
-            event = asyncio.Event()
-            event.set()
-            self._mount_home_complete[key] = event
-        return event
-
     def start_status_loop(self, coro):
         """Start a background status publishing task, cancelling any existing one."""
 

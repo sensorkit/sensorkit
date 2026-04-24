@@ -146,7 +146,6 @@ class TheSkyFocuser(TheSkyDevice):
 
     async def status_publish(self):
         while True:
-            await self._is_mount_home_complete().wait()
             try:
                 resp = await self.execute(
                     """

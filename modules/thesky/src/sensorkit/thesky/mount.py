@@ -221,27 +221,20 @@ class TheSkyMount(TheSkyDevice):
         await self.mount_unpark()
         logger.debug("homing thesky mount")
 
-        # Pause all status_publish loops while the mount is homing, because
-        # TheSky blocks all script connections during FindHome.
-        event = self._is_mount_home_complete()
-        event.clear()
-        try:
-            async with asyncio.timeout(self.config.timeout):
-                while True:
-                    try:
-                        await self.execute(
-                            """
-                            sky6RASCOMTele.FindHome();
-                            """
-                        )
-                        break
-                    except MountCommandInProgressError:
-                        await asyncio.sleep(0.5)
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                try:
+                    await self.execute(
+                        """
+                        sky6RASCOMTele.FindHome();
+                        """
+                    )
+                    break
+                except MountCommandInProgressError:
+                    await asyncio.sleep(0.5)
 
-            # Ensure it actually homed
-            await self.poll("""sky6RASCOMTele.LastSlewError;""", "0")
-        finally:
-            event.set()
+        # Ensure it actually homed
+        await self.poll("""sky6RASCOMTele.LastSlewError;""", "0")
 
         # Persist to state
         self.state.has_been_homed = True
@@ -552,7 +545,6 @@ class TheSkyMount(TheSkyDevice):
 
     async def status_publish_slow(self):
         while True:
-            await self._is_mount_home_complete().wait()
             try:
                 if not self._fast_status_active:
                     await self._publish_mount_status()
@@ -565,7 +557,6 @@ class TheSkyMount(TheSkyDevice):
 
     async def status_publish_fast(self):
         while True:
-            await self._is_mount_home_complete().wait()
             try:
                 await self._publish_mount_status()
             except Exception as e:
