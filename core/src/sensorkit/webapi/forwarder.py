@@ -10,10 +10,11 @@ from loguru import logger
 from pydantic_core import from_json
 
 from sensorkit import api as sk
+from sensorkit.webapi.serve import ServeHandler
 
 
 class SKRecord(NamedTuple):
-    kind: Literal["stream", "event", "state"]
+    kind: Literal["stream", "event", "state", "product"]
     time: datetime
     subject: sk.Subject
     payload: dict[str, Any] | None
@@ -25,10 +26,12 @@ class SKRecord(NamedTuple):
 SHUTDOWN = SKRecord(kind="state", time=datetime.min, subject=sk.Subject(), payload=None)
 
 
+type RecordQueueCollection = Collection[asyncio.Queue[SKRecord]]
+
+
 class Forwarder(ABC):
 
-    def __init__(self, kit: sk.SensorKit, *, targets: Collection[asyncio.Queue[SKRecord]]):
-        self.kit = kit
+    def __init__(self, *, targets: RecordQueueCollection):
         self.targets = targets
         self.cache: dict[str, dict[str, SKRecord]] = collections.defaultdict(dict)
 
@@ -79,6 +82,10 @@ class Forwarder(ABC):
 class KeyValueForwarder(Forwarder):
     """Forwarder specialization that monitors Key-Value changes."""
 
+    def __init__(self, kit: sk.SensorKit, *, targets: RecordQueueCollection):
+        super().__init__(targets=targets)
+        self.kit = kit
+
     @override
     async def _monitor(self) -> AsyncIterator[SKRecord]:
         monitor = await self.kit.entity()._kv.monitor_all(deep=True)
@@ -102,6 +109,10 @@ class KeyValueForwarder(Forwarder):
 class StreamForwarder(Forwarder):
     """Forwarder specialization that monitors stream updates (state/events)."""
 
+    def __init__(self, kit: sk.SensorKit, *, targets: RecordQueueCollection):
+        super().__init__(targets=targets)
+        self.kit = kit
+
     @override
     async def _monitor(self) -> AsyncIterator[SKRecord]:
         consumer = await self.kit.entity()._stream.consume(
@@ -121,4 +132,24 @@ class StreamForwarder(Forwarder):
                 subject=msg.subject,
                 time=msg.timestamp,
                 payload=payload,
+            )
+
+
+class ProductForwarder(Forwarder):
+    """Forwarder specialization that monitors data products from a ServeHandler."""
+
+    def __init__(self, serve_handler: ServeHandler, *, targets: RecordQueueCollection):
+        super().__init__(targets=targets)
+        self.serve_handler = serve_handler
+
+    @override
+    async def _monitor(self) -> AsyncIterator[SKRecord]:
+        async for controller_id, product_id in self.serve_handler.watch_listing():
+            metadata = self.serve_handler.get_metadata(controller_id, product_id)
+
+            yield SKRecord(
+                kind="product",
+                subject=sk.Subject(path=(controller_id,), prop=product_id),
+                time=datetime.now(UTC),
+                payload=metadata,
             )

@@ -5,7 +5,7 @@ from typing import Any
 
 import uuid_utils.compat as uuid
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field, model_validator
@@ -22,8 +22,15 @@ from sensorkit.core.controller import ControllerState
 from sensorkit.core.device import DeviceState
 from sensorkit.core.entity import DeviceDetails, EntityInfo
 from sensorkit.core.program import ProgramState
-from sensorkit.webapi.forwarder import SHUTDOWN, KeyValueForwarder, SKRecord, StreamForwarder
+from sensorkit.webapi.forwarder import (
+    KeyValueForwarder,
+    ProductForwarder,
+    SHUTDOWN,
+    SKRecord,
+    StreamForwarder,
+)
 from sensorkit.webapi.schema import add_sensorkit_schema
+from sensorkit.webapi.serve import ServeDataConfig, ServeHandler
 
 
 class WebAPIConfig(BaseModel):
@@ -32,6 +39,7 @@ class WebAPIConfig(BaseModel):
     port: int = 8000
     host: str = "0.0.0.0"
     agent: sk.EntityRef = sk.EntityRef("agent")
+    serve_data_products: list[ServeDataConfig] = []
 
 
 class AgentOverrideRequest(BaseModel):
@@ -98,6 +106,8 @@ class WebAPI:
         self.client_queues: set[asyncio.Queue[SKRecord]] = set()
         self.kv_forwarder = KeyValueForwarder(kit, targets=self.client_queues)
         self.stream_forwarder = StreamForwarder(kit, targets=self.client_queues)
+        self._serve_handlers: list[ServeHandler] = []
+        self._product_forwarders: list[ProductForwarder] = []
         self.app = self._create_fastapi_app()
         self.server = uvicorn.Server(
             uvicorn.Config(
@@ -254,6 +264,86 @@ class WebAPI:
                 await self.kit.controller(controller_id).abort_task(task_id)
 
             return _status_ok()
+
+        @app.get("/controller/{controller_id}/products", tags=["Controller"])
+        async def list_controller_products(controller_id: str) -> list[str]:
+            """List data products associated with a controller."""
+            return [
+                product_id
+                for handler in self._serve_handlers
+                for cid, product_id in await handler.get_listing()
+                if cid == controller_id
+            ]
+
+        @app.get("/controller/{controller_id}/products/subscribe", tags=["Controller"], response_class=EventSourceResponse)
+        async def subscribe_controller_products(request: Request, controller_id: str):
+            """SSE stream of product arrivals for a controller, including initial listing."""
+            request.state.is_sse = True
+            queue: asyncio.Queue[SKRecord] = asyncio.Queue()
+            initial_records = [
+                record
+                for forwarder in self._product_forwarders
+                for record in forwarder.snapshot()
+                if str(record.subject.entity()) == controller_id
+            ]
+            self.client_queues.add(queue)
+
+            try:
+                for record in initial_records:
+                    yield ServerSentEvent(data=record)
+
+                while True:
+                    record = await queue.get()
+                    try:
+                        if record.kind == "product" and str(record.subject.entity()) == controller_id:
+                            yield ServerSentEvent(data=record)
+                    finally:
+                        queue.task_done()
+            except asyncio.CancelledError:
+                host = request.client.host if request.client else "unknown"
+                logger.debug(f"SSE client disconnected: {host}")
+            finally:
+                self.client_queues.remove(queue)
+
+        @app.get("/controller/{controller_id}/product/{product_id}/data", tags=["Controller"])
+        async def get_controller_product_data(controller_id: str, product_id: str):
+            """Return the raw FITS data for a product."""
+            for handler in self._serve_handlers:
+                products = handler._cache.get(controller_id, {})
+
+                if product_id in products:
+                    raw_bytes = await handler.get_data(controller_id, product_id)
+                    return Response(content=raw_bytes, media_type="application/fits")
+
+            raise HTTPException(status_code=404, detail="Product not found")
+
+        @app.get("/controller/{controller_id}/product/{product_id}/preview", tags=["Controller"])
+        async def get_controller_product_preview(controller_id: str, product_id: str):
+            """Return a JPEG preview image generated from the FITS product data."""
+            for handler in self._serve_handlers:
+                products = handler._cache.get(controller_id, {})
+
+                if product_id in products:
+                    raw_bytes = await handler.get_data(controller_id, product_id)
+
+                    try:
+                        jpeg_bytes = await asyncio.to_thread(_fits_to_jpeg, raw_bytes)
+                    except Exception as err:
+                        raise HTTPException(status_code=422, detail=f"Could not generate preview: {err}") from err
+                    return Response(content=jpeg_bytes, media_type="image/jpeg")
+
+            raise HTTPException(status_code=404, detail="Product not found")
+
+        @app.get("/controller/{controller_id}/product/{product_id}/metadata", tags=["Controller"])
+        async def get_controller_product_metadata(controller_id: str, product_id: str) -> dict:
+            """Return the cached metadata for a product as a JSON object."""
+            for handler in self._serve_handlers:
+                products = handler._cache.get(controller_id, {})
+
+                if product_id in products:
+                    return handler.get_metadata(controller_id, product_id)
+
+            raise HTTPException(status_code=404, detail="Product not found")
 
         # Program
 
@@ -427,6 +517,20 @@ class WebAPI:
         """Run the FastAPI server."""
         await self.kv_forwarder.start(task_group=task_group)
         await self.stream_forwarder.start(task_group=task_group)
+
+        self._serve_handlers = []
+        self._product_forwarders = []
+
+        for serve_config in self.config.serve_data_products:
+            handler = serve_config.create_handler()
+            forwarder = ProductForwarder(handler, targets=self.client_queues)
+
+            await forwarder.start(task_group=task_group)
+            handler.start_monitor()
+
+            self._serve_handlers.append(handler)
+            self._product_forwarders.append(forwarder)
+
         await self.server.serve()
 
     async def shutdown(self):
@@ -439,5 +543,45 @@ class WebAPI:
         if self.server.started:
             await self.server.shutdown()
 
+        for handler in self._serve_handlers:
+            await handler.stop_monitor()
+
+        for forwarder in self._product_forwarders:
+            await forwarder.stop()
+
         await self.kv_forwarder.stop()
         await self.stream_forwarder.stop()
+
+
+def _fits_to_jpeg(raw_bytes: bytes) -> bytes:
+    import io
+
+    import numpy as np
+    from astropy.io import fits
+    from PIL import Image
+
+    with fits.open(io.BytesIO(raw_bytes)) as hdul:
+        data = None
+        for hdu in hdul:
+            if hdu.data is not None and hdu.data.ndim >= 2:
+                data = hdu.data
+                break
+
+    if data is None:
+        raise ValueError("No 2D image data found in FITS file")
+
+    # Collapse any leading dimensions down to 2D
+    while data.ndim > 2:
+        data = data[0]
+
+    data = data.astype(np.float32)
+    low, high = np.percentile(data, (1, 99))
+    if high > low:
+        scaled = np.clip((data - low) / (high - low), 0.0, 1.0)
+    else:
+        scaled = np.zeros_like(data)
+
+    img = Image.fromarray((scaled * 255).astype(np.uint8), mode="L")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
