@@ -431,11 +431,6 @@ class NodePlatformMount(NodePlatformDevice):
                 await asyncio.sleep(self.config.status_frequency_slow)
                 continue
 
-            # logger.debug(
-            #     f"NodePlatform mount status: connected={self.device_connected}, "
-            #     f"slewing={self.mount_slewing}, tracking={self.mount_tracking}"
-            # )
-
             # Optical tube
             try:
                 ot: osapi.V1OpticalTubeStatus = await self.api.call("v1_get_optical_tube_status")
@@ -445,6 +440,24 @@ class NodePlatformMount(NodePlatformDevice):
                 logger.warning(f"Failed to update OT status ({e})")
                 await asyncio.sleep(self.config.status_frequency_slow)
                 continue
+
+            # ot_parts = []
+            # if ot.fans:
+            #     for fan in ot.fans.statuses:
+            #         role = fan.role.value if hasattr(fan.role, "value") else str(fan.role)
+            #         ot_parts.append(f"fan_{role}={'on' if fan.is_on else 'off'}")
+            # if ot.heaters:
+            #     for heater in ot.heaters.statuses:
+            #         role = heater.role.value if hasattr(heater.role, "value") else str(heater.role)
+            #         ot_parts.append(f"heater_{role}={heater.power}%")
+            # for sensor in temps or []:
+            #     ot_parts.append(f"temp_{sensor['role']}={sensor['temperatureCelsius']}°C")
+            # ot_str = ", ".join(ot_parts)
+            # logger.debug(
+            #     f"NodePlatform mount status: connected={self.device_connected}, "
+            #     f"slewing={self.mount_slewing}, tracking={self.mount_tracking}, "
+            #     f"{ot_str}"
+            # )
 
             await asyncio.sleep(self.config.status_frequency_slow)
 
