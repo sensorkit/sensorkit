@@ -68,8 +68,11 @@ class NodePlatformEnclosure(NodePlatformDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformEnclosureState()
 
-        await self.enclosure_init(sk.Init())
         self.start_status_loop(self.status_publish())
+        async with asyncio.timeout(self.config.timeout):
+            while self.device_connected is None:
+                await asyncio.sleep(self.config.status_frequency)
+        await self.enclosure_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
@@ -80,7 +83,6 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
     @sk.command_handler
     async def enclosure_init(self, cmd: sk.Init):
-        # Sync to the mount
         # FIXME: this likely replaces homing for Node Platform enclosures
         await self.api.call("v1_sync_enclosure_rotator_with_mount")
         await self.api.call("v1_sync_enclosure_window_with_mount")
@@ -88,10 +90,28 @@ class NodePlatformEnclosure(NodePlatformDevice):
         if not self.state.has_been_homed:
             await self.enclosure_home(sk.Home())
 
+        # Turn on all enclosure fans
+        if self.config.fans:
+            all_fan_roles = list(osapi.V1EnclosureFanRole)
+            await self.api.call(
+                "v1_turn_on_enclosure_fans",
+                osapi.V1TurnOnEnclosureFansRequest(roles=all_fan_roles),
+            )
+            logger.debug(f"turned on all enclosure fans: {[r.value for r in all_fan_roles]}")
+
     @sk.command_handler
     async def enclosure_deinit(self, cmd: sk.Deinit):
         await self.enclosure_stop(sk.Stop())
         await self.enclosure_close(CloseEnclosure())
+
+        # Turn off all enclosure fans
+        if self.config.fans:
+            all_fan_roles = list(osapi.V1EnclosureFanRole)
+            await self.api.call(
+                "v1_turn_off_enclosure_fans",
+                osapi.V1TurnOffEnclosureFansRequest(roles=all_fan_roles),
+            )
+            logger.debug(f"turned off all enclosure fans: {[r.value for r in all_fan_roles]}")
 
     @sk.command_handler
     async def enclosure_stop(self, cmd: sk.Stop):
@@ -303,6 +323,7 @@ class NodePlatformEnclosureConfig(NodePlatformDeviceConfig[NodePlatformEnclosure
     """Node Platform Enclosure configuration."""
 
     device_type: Literal["dome"] = "dome"
+    fans: bool = False
     status_frequency: float = 1.0
     timeout: float = 120.0
 

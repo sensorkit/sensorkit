@@ -541,13 +541,14 @@ class NodePlatformMount(NodePlatformDevice):
             )
             logger.debug(f"set {mirror} heater power to {power:.0f}%")
 
-        # Turn on all fans
-        all_fan_roles = list(osapi.V1OpticalTubeFanRole)
-        await self.api.call(
-            "v1_turn_on_optical_tube_fans",
-            osapi.V1TurnOnOpticalTubeFansRequest(roles=all_fan_roles),
-        )
-        logger.debug(f"turned on all fans: {[r.value for r in all_fan_roles]}")
+        # Turn on all OT fans
+        if self.config.fans:
+            all_fan_roles = list(osapi.V1OpticalTubeFanRole)
+            await self.api.call(
+                "v1_turn_on_optical_tube_fans",
+                osapi.V1TurnOnOpticalTubeFansRequest(roles=all_fan_roles),
+            )
+            logger.debug(f"turned on all OT fans: {[r.value for r in all_fan_roles]}")
 
     async def deinit_ot(self):
         """Turn off heaters and fans."""
@@ -568,19 +569,21 @@ class NodePlatformMount(NodePlatformDevice):
             )
             logger.debug(f"set {mirror} heater power to 0%")
 
-        # Turn off all fans
-        all_fan_roles = list(osapi.V1OpticalTubeFanRole)
-        await self.api.call(
-            "v1_turn_off_optical_tube_fans",
-            osapi.V1TurnOffOpticalTubeFansRequest(roles=all_fan_roles),
-        )
-        logger.debug(f"turned off all fans: {[r.value for r in all_fan_roles]}")
+        # Turn off all OT fans
+        if self.config.fans:
+            all_fan_roles = list(osapi.V1OpticalTubeFanRole)
+            await self.api.call(
+                "v1_turn_off_optical_tube_fans",
+                osapi.V1TurnOffOpticalTubeFansRequest(roles=all_fan_roles),
+            )
+            logger.debug(f"turned off all OT fans: {[r.value for r in all_fan_roles]}")
 
 
 class NodePlatformMountConfig(NodePlatformDeviceConfig[NodePlatformMount]):
     """Node Platform Mount configuration."""
 
     device_type: Literal["mount"] = "mount"
+    fans: bool = False
     heater_power: dict[str, float] = Field(default_factory=dict)
     status_frequency_slow: float = 1.0
     status_frequency_fast: float = 0.1
