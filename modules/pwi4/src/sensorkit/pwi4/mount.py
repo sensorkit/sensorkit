@@ -192,6 +192,9 @@ class PWI4Mount(PWI4Device):
 
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
+        if not self.device_connected:
+            return
+
         await self.mount_stop(sk.Stop())
 
         if self._wrap_task is not None:
