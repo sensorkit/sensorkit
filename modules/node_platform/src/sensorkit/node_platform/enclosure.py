@@ -200,8 +200,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
                 # logger.debug(
                 #     f"NodePlatform enclosure status: connected={connected}, "
-                #     f"state={shutter_state.value}, position={position}, "
-                #     f"operation_mode={self.operation_mode}"
+                #     f"state={shutter_state.value}, position={position}"
                 # )
 
                 await device.publish(Connected(is_connected=connected))

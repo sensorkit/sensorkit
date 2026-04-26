@@ -103,10 +103,10 @@ class NodePlatformFocuser(NodePlatformDevice):
                 if status.position is not None:
                     self.focuser_position = float(status.position.zaxis_microns)
 
-                logger.debug(
-                    f"NodePlatform focuser status: connected={status.connected}, "
-                    f"moving={status.moving}, position={self.focuser_position}"
-                )
+                # logger.debug(
+                #     f"NodePlatform focuser status: connected={status.connected}, "
+                #     f"moving={status.moving}, position={self.focuser_position}"
+                # )
 
                 device = sk.device()
                 await device.publish(Connected(is_connected=status.connected))

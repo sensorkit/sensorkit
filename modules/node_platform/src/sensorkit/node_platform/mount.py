@@ -431,6 +431,11 @@ class NodePlatformMount(NodePlatformDevice):
                 await asyncio.sleep(self.config.status_frequency_slow)
                 continue
 
+            # logger.debug(
+            #     f"NodePlatform mount status: connected={self.device_connected}, "
+            #     f"slewing={self.mount_slewing}, tracking={self.mount_tracking}"
+            # )
+
             # Optical tube
             try:
                 ot: osapi.V1OpticalTubeStatus = await self.api.call("v1_get_optical_tube_status")
