@@ -135,6 +135,11 @@ class PWI4Rotator(PWI4Device):
                         Enabled(is_enabled=self.client.get_bool(st, "rotator.is_enabled"))
                     )
                     await device.publish(sk.RotatorPosition(position=self.rotator_position))
+
+                    # logger.debug(
+                    #     f"PWI4 rotator status: connected={connected}, "
+                    #     f"position={self.rotator_position}"
+                    # )
             except Exception as e:
                 logger.exception(f"Error in rotator status publish: {e}")
                 await asyncio.sleep(self.config.status_frequency)

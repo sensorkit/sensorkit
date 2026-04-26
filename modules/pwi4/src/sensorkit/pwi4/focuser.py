@@ -135,6 +135,11 @@ class PWI4Focuser(PWI4Device):
                         Enabled(is_enabled=self.client.get_bool(st, "focuser.is_enabled"))
                     )
                     await device.publish(sk.FocusPosition(position=self.focuser_position))
+
+                    # logger.debug(
+                    #     f"PWI4 focuser status: connected={connected}, "
+                    #     f"position={self.focuser_position}"
+                    # )
             except Exception as e:
                 logger.exception(f"Error in focuser status publish: {e}")
                 await asyncio.sleep(self.config.status_frequency)

@@ -137,6 +137,11 @@ class PWI4Cover(PWI4Device):
                 device = sk.device()
                 await device.publish(Connected(is_connected=connected))
                 await device.publish(Opened(is_open=is_open))
+
+                # logger.debug(
+                #     f"PWI4 cover status: connected={connected}, "
+                #     f"state={state_name}, is_open={is_open}"
+                # )
             except Exception as e:
                 logger.exception(f"Error in cover status publish: {e}")
                 await asyncio.sleep(self.config.status_frequency)

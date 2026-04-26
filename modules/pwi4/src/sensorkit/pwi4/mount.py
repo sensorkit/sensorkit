@@ -733,6 +733,10 @@ class PWI4Mount(PWI4Device):
                 else:
                     self.device_connected = self.client.get_bool(st, "mount.is_connected")
                     await sk.device().publish(Connected(is_connected=self.device_connected))
+
+                # logger.debug(
+                #     f"PWI4 mount status: connected={self.device_connected}"
+                # )
             except Exception as e:
                 logger.warning(f"Error in slow mount status_publish ({e})")
                 await asyncio.sleep(self.config.status_frequency_slow)
