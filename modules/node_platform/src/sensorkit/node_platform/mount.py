@@ -63,13 +63,11 @@ class NodePlatformMount(NodePlatformDevice):
 
         self.mount_slewing: bool | None = None
         self.mount_tracking: bool | None = None
+        self._fast_status_task: asyncio.Task | None = None
 
         # Cache for site info (location + time)
         self._site_info: dict[str, object] = {}
         self._location: EarthLocation | None = None
-
-        # Fast status task (started/stopped by command handlers)
-        self._fast_status_task: asyncio.Task | None = None
 
         # Start slow status publishing
         self.start_status_loop(self.status_publish_slow())

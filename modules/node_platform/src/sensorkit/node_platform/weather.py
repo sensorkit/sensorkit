@@ -63,8 +63,11 @@ class NodePlatformWeather(NodePlatformDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformWeatherState()
 
-        await self.weather_init(sk.Init())
         self.start_status_loop(self.status_publish())
+        async with asyncio.timeout(self.config.timeout):
+            while self.device_connected is None:
+                await asyncio.sleep(self.config.status_frequency)
+        await self.weather_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
@@ -75,10 +78,6 @@ class NodePlatformWeather(NodePlatformDevice):
 
     @sk.command_handler
     async def weather_init(self, cmd: sk.Init):
-        async with asyncio.timeout(self.config.timeout):
-            while self.device_connected is None:
-                await asyncio.sleep(self.config.status_frequency)
-
         # Discover which weather metric names are available on this node
         self._weather_metric_names: list[str] = []
         try:
