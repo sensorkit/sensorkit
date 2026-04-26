@@ -5,6 +5,7 @@ from typing import Literal, override
 
 import ourskyai_node_platform_api as osapi
 from loguru import logger
+from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected, Opened
@@ -17,6 +18,35 @@ from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 
 # Re-export SDK enums for convenience in config / external use
 EnclosureShutterState = osapi.EnclosureShutterState
+
+
+@sk.declare_keyword
+class EnclosureStatus(BaseModel):
+    # Shutter
+    shutter_state: str = "unknown"
+    shutter_position_percent: float | None = None
+
+    # Rotator
+    rotator_connected: bool = False
+    rotator_azimuth_degrees: float | None = None
+    rotator_synced_with_mount: bool = False
+
+    # Window
+    window_connected: bool = False
+    window_position_degrees: float | None = None
+    window_synced_with_mount: bool = False
+
+    # Fans
+    fans: list[dict] | None = None
+
+    # HVAC
+    hvac_connected: bool = False
+    hvac_on: bool = False
+    hvac_mode: str | None = None
+    hvac_fan_speed: str | None = None
+    hvac_target_temperature_celsius: int | None = None
+    hvac_temperature_celsius: int | None = None
+    hvac_error: str | None = None
 
 
 @sk.declare_device
@@ -194,13 +224,72 @@ class NodePlatformEnclosure(NodePlatformDevice):
                     EnclosureShutterState.MOVING_OPEN,
                 )
 
-                # logger.debug(
-                #     f"NodePlatform enclosure status: connected={connected}, "
-                #     f"state={shutter_state.value}, position={position}"
-                # )
-
                 await device.publish(Connected(is_connected=connected))
                 await device.publish(Opened(is_open=is_open))
+
+                # Build enclosure subsystem status
+                properties: dict = {
+                    "shutter_state": shutter_state.value
+                    if hasattr(shutter_state, "value")
+                    else str(shutter_state),
+                }
+                if position is not None:
+                    properties["shutter_position_percent"] = position
+
+                rotator = enclosure_status.rotator
+                if rotator is not None:
+                    properties["rotator_connected"] = rotator.connected
+                    properties["rotator_azimuth_degrees"] = rotator.azimuth_degrees
+                    properties["rotator_synced_with_mount"] = rotator.is_synced_with_mount
+
+                window = enclosure_status.window
+                if window is not None:
+                    properties["window_connected"] = window.connected
+                    properties["window_position_degrees"] = window.position_degrees
+                    properties["window_synced_with_mount"] = window.is_synced_with_mount or False
+
+                fans = enclosure_status.fans
+                if fans is not None and fans.statuses:
+                    properties["fans"] = [
+                        {
+                            "role": fan.role.value
+                            if hasattr(fan.role, "value")
+                            else str(fan.role),
+                            "is_on": fan.is_on,
+                            "connected": fan.connected,
+                        }
+                        for fan in fans.statuses
+                    ]
+
+                hvac = enclosure_status.hvac
+                if hvac is not None:
+                    properties["hvac_connected"] = hvac.connected
+                    if hvac.details is not None:
+                        d = hvac.details
+                        properties["hvac_on"] = d.is_on
+                        properties["hvac_mode"] = (
+                            d.mode.value if hasattr(d.mode, "value") else str(d.mode)
+                        )
+                        properties["hvac_fan_speed"] = (
+                            d.fan_speed.value
+                            if hasattr(d.fan_speed, "value")
+                            else str(d.fan_speed)
+                        )
+                        properties["hvac_target_temperature_celsius"] = (
+                            d.target_temperature_celsius
+                        )
+                        properties["hvac_temperature_celsius"] = d.temperature_celsius
+                        if d.error is not None:
+                            properties["hvac_error"] = (
+                                d.error.value if hasattr(d.error, "value") else str(d.error)
+                            )
+
+                await device.publish(EnclosureStatus(**properties))
+
+                # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+                # logger.debug(
+                #     f"NodePlatform enclosure status: connected={connected}, {properties_str}"
+                # )
 
             except Exception as e:
                 logger.warning(f"Failed to update Node Platform enclosure status ({e})")
