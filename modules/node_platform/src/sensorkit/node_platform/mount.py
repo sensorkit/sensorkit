@@ -14,8 +14,10 @@ from pydantic import BaseModel, Field
 import sensorkit.api as sk
 from sensorkit.astro.target import (
     AltAzTarget,
+    EphemerisTarget,
     FrameTarget,
     ICRSTarget,
+    RateTarget,
     TLETarget,
 )
 from sensorkit.models.devices import (
@@ -52,10 +54,9 @@ class NodePlatformMount(NodePlatformDevice):
     async def entity_init(self):
         device = sk.device()
 
-        # Restore last known state
         try:
             self.state = await device.kv_get_model(NodePlatformMountState)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformMountState()
@@ -71,7 +72,6 @@ class NodePlatformMount(NodePlatformDevice):
         self._fast_status_task: asyncio.Task | None = None
 
         # Start slow status publishing
-        logger.debug("starting node_platform mount status loop")
         self.start_status_loop(self.status_publish_slow())
 
         # Wait for initial status
@@ -108,9 +108,18 @@ class NodePlatformMount(NodePlatformDevice):
             f"time_unc={self._site_info['time_uncertainty_seconds']}s"
         )
 
+    @sk.on_detach
+    async def entity_deinit(self):
+        self._stop_fast_status()
+        await self.stop_status_loop()
+        await self.mount_deinit(sk.Deinit())
+        await self.api.close()
+        await sk.device().kv_put_model(self.state)
+
     @sk.command_handler
     async def mount_init(self, cmd: sk.Init):
-        self.require_connected()
+        await self.require_connected()
+        await self.mount_enable(sk.Enable())
         if not self.state.has_been_homed:
             await self.mount_home(sk.Home())
 
@@ -121,22 +130,41 @@ class NodePlatformMount(NodePlatformDevice):
     async def mount_deinit(self, cmd: sk.Deinit):
         await self.mount_stop(sk.Stop())
         await self.mount_park(sk.MoveToPark())
-        await self.api.call("v1_disable_mount_motors")
-        logger.debug("disabled mount motors")
+        await self.mount_disable(sk.Disable())
         await self.deinit_ot()
 
-    @sk.on_detach
-    async def entity_deinit(self):
-        logger.debug("stopping node_platform mount status loop")
-        self._stop_fast_status()
-        await self.stop_status_loop()
+    @sk.command_handler
+    async def mount_enable(self, cmd: sk.Enable):
+        await self.require_connected()
+        logger.debug("enabling mount motors")
+        await self.api.call("v1_enable_mount_motors")
+        logger.debug("enabled mount motors")
 
-        await sk.device().kv_put_model(self.state)
-        await self.api.close()
+    @sk.command_handler
+    async def mount_disable(self, cmd: sk.Disable):
+        await self.require_connected()
+        logger.debug("disabling mount motors")
+        await self.api.call("v1_disable_mount_motors")
+        logger.debug("disabled mount motors")
+
+    @sk.command_handler
+    async def mount_stop(self, cmd: sk.Stop):
+        await self.require_connected()
+        logger.debug("stopping node_platform mount")
+
+        await self.api.call("v1_halt_mount")
+        await asyncio.sleep(0.1)
+
+        async with asyncio.timeout(self.config.timeout):
+            while self.mount_slewing is None or self.mount_slewing:
+                await asyncio.sleep(self.config.status_frequency_slow)
+
+        self._stop_fast_status()
+        logger.debug("stopped node_platform mount")
 
     @sk.command_handler
     async def mount_home(self, cmd: sk.Home):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("homing node_platform mount")
 
         await self.api.call("v1_mount_go_to_home")
@@ -148,11 +176,12 @@ class NodePlatformMount(NodePlatformDevice):
 
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
+
         logger.debug("homed node_platform mount")
 
     @sk.command_handler
     async def mount_park(self, cmd: sk.MoveToPark):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("parking node_platform mount")
 
         self._stop_fast_status()
@@ -166,24 +195,20 @@ class NodePlatformMount(NodePlatformDevice):
         logger.debug("parked node_platform mount")
 
     @sk.command_handler
-    async def mount_stop(self, cmd: sk.Stop):
-        self.require_connected()
-        logger.debug("stopping node_platform mount")
-
-        self._stop_fast_status()
-        await self.api.call("v1_halt_mount")
-        await asyncio.sleep(0.1)
-
-        async with asyncio.timeout(self.config.timeout):
-            while self.mount_slewing is None or self.mount_slewing:
-                await asyncio.sleep(self.config.status_frequency_slow)
-
-        logger.debug("stopped node_platform mount")
-
-    @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
-        if not self.device_connected:
-            await self.mount_init(sk.Init())
+        await self.require_connected()
+
+        # target = await cmd.target.adapt(
+        #     ICRSTarget,
+        #     AltAzTarget,
+        #     (FrameTarget, ReferenceFrame.ICRF),
+        #     (FrameTarget, ReferenceFrame.ALTAZ),
+        #     TLETarget,
+        #     (RateTarget, ReferenceFrame.ICRF),
+        #     (EphemerisTarget, ReferenceFrame.ICRF),
+        #     observer=self._geodetic,
+        # )
+        target = cmd.target
 
         match cmd.target:
             case ICRSTarget():
@@ -237,13 +262,20 @@ class NodePlatformMount(NodePlatformDevice):
 
                 logger.debug("following TLE target")
 
+            case RateTarget():
+                logger.debug("executing Rate follow")
+                raise RuntimeError("No RateTarget support")
+
+            case EphemerisTarget():
+                logger.debug("executing Ephemeris follow")
+                raise RuntimeError("No EphemerisTarget support")
+
             case FrameTarget():
                 match cmd.target.frame:
                     case ReferenceFrame.ALTAZ:
-                        logger.debug("stopping tracking")
+                        logger.debug("disabling tracking")
                         self._stop_fast_status()
                         await self.api.call("v1_disable_mount_tracking")
-
                         async with asyncio.timeout(self.config.timeout):
                             while (
                                 self.mount_slewing is None
@@ -252,16 +284,16 @@ class NodePlatformMount(NodePlatformDevice):
                                 or self.mount_tracking
                             ):
                                 await asyncio.sleep(self.config.status_frequency_slow)
-
+                        logger.debug("disabled tracking")
                     case ReferenceFrame.ICRF:
-                        logger.debug("executing sidereal track")
+                        logger.debug("enabling sidereal tracking")
                         await self.api.call("v1_enable_mount_tracking")
                         self._start_fast_status()
                         await asyncio.sleep(0.1)
-
                         async with asyncio.timeout(self.config.timeout):
                             while self.mount_tracking is None or not self.mount_tracking:
                                 await asyncio.sleep(self.config.status_frequency_fast)
+                        logger.debug("enabled sidereal tracking")
 
                     case _:
                         raise RuntimeError(f"Need specific target to track {cmd.target.frame}")
@@ -406,6 +438,8 @@ class NodePlatformMount(NodePlatformDevice):
                 await self._publish_ot_status(ot, temps)
             except Exception as e:
                 logger.warning(f"Failed to update OT status ({e})")
+                await asyncio.sleep(self.config.status_frequency_slow)
+                continue
 
             await asyncio.sleep(self.config.status_frequency_slow)
 
@@ -417,6 +451,8 @@ class NodePlatformMount(NodePlatformDevice):
                 await self._publish_mount_status(status)
             except Exception as e:
                 logger.warning(f"Error in fast status_publish ({e})")
+                await asyncio.sleep(self.config.status_frequency_fast)
+                continue
 
             await asyncio.sleep(self.config.status_frequency_fast)
 

@@ -56,13 +56,28 @@ class NodePlatformWeather(NodePlatformDevice):
     async def entity_init(self):
         device = sk.device()
 
-        # Restore last known state
         try:
             self.state = await device.kv_get_model(NodePlatformWeatherState)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformWeatherState()
+
+        self.start_status_loop(self.status_publish())
+        await self.weather_init(sk.Init())
+
+    @sk.on_detach
+    async def entity_deinit(self):
+        await self.stop_status_loop()
+        await self.weather_deinit(sk.Deinit())
+        await self.api.close()
+        await sk.device().kv_put_model(self.state)
+
+    @sk.command_handler
+    async def weather_init(self, cmd: sk.Init):
+        async with asyncio.timeout(self.config.timeout):
+            while self.device_connected is None:
+                await asyncio.sleep(self.config.status_frequency)
 
         # Discover which weather metric names are available on this node
         self._weather_metric_names: list[str] = []
@@ -89,29 +104,9 @@ class NodePlatformWeather(NodePlatformDevice):
             await self.api.call("v1_enable_manual_operation")
             logger.debug("set node_platform to MANUAL mode")
 
-        # Start weather status publishing
-        logger.debug("starting node_platform weather status loop")
-        self.start_status_loop(self.status_publish())
-
-        # Wait for initial connected status
-        async with asyncio.timeout(self.config.timeout):
-            while self.device_connected is None:
-                await asyncio.sleep(self.config.status_frequency)
-
-    @sk.command_handler
-    async def weather_init(self, cmd: sk.Init):
-        pass
-
     @sk.command_handler
     async def weather_deinit(self, cmd: sk.Deinit):
         pass
-
-    @sk.on_detach
-    async def entity_deinit(self):
-        logger.debug("stopping node_platform weather status loop")
-        await self.stop_status_loop()
-
-        await sk.device().kv_put_model(self.state)
 
     async def status_publish(self):
         while True:
@@ -151,6 +146,8 @@ class NodePlatformWeather(NodePlatformDevice):
                     await sk.device().publish(Connected(is_connected=False))
             except Exception as e:
                 logger.exception(f"Error in status_publish get: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
@@ -228,8 +225,8 @@ class NodePlatformWeatherConfig(NodePlatformDeviceConfig[NodePlatformWeather]):
 
     device_type: Literal["weather"] = "weather"
     metric_lookback_seconds: float = 300.0
-    timeout: float = 30.0
     status_frequency: float = 30.0
+    timeout: float = 30.0
 
     @override
     def create_device(self):

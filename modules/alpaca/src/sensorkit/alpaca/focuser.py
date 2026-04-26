@@ -3,19 +3,19 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-from alpaca.focuser import Focuser
 from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from alpaca.focuser import Focuser
 from sensorkit.alpaca.device import (
     AlpacaDevice,
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
 from sensorkit.models.devices import Connected
-from sensorkit.std.traits import Temperature, TemperatureUnit
 from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
+from sensorkit.std.traits import Temperature, TemperatureUnit
 
 
 @sk.declare_keyword
@@ -38,30 +38,37 @@ class AlpacaFocuser(AlpacaDevice):
     """Alpaca Focuser implementation."""
 
     config: AlpacaFocuserConfig
+    device_name = "Focuser"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(AlpacaFocuserState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = AlpacaFocuserState()
 
+        self.focuser_position: float | None = None
+
         await self.focuser_init(sk.Init())
+        self.start_status_loop(self.status_publish())
+
+        async with asyncio.timeout(self.config.timeout):
+            while self.focuser_position is None:
+                await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.focuser_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def focuser_init(self, cmd: sk.Init):
-        self.device_name = "Focuser"
-        self.focuser = Focuser(
-            self.address, self.config.device_number, self.config.protocol
-        )
-        self.focuser_position: float | None = None
-
+        self._reconnect = lambda: self.focuser_connect(sk.Connect())
+        self.focuser = Focuser(self.address, self.config.device_number, self.config.protocol)
         await self.focuser_connect(sk.Connect())
 
         f = self.focuser
@@ -73,16 +80,9 @@ class AlpacaFocuser(AlpacaDevice):
         self._step_size = await self.get(f, "StepSize", None)
         self._temp_comp_available = await self.get(f, "TempCompAvailable", False)
 
-        self.start_status_loop(self.status_publish())
-
-        # Wait for initial position
-        async with asyncio.timeout(self.config.timeout):
-            while self.focuser_position is None:
-                await asyncio.sleep(self.config.status_frequency)
-
     @sk.command_handler
     async def focuser_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
+        await self.focuser_stop(sk.Stop())
         await self.focuser_disconnect(sk.Disconnect())
 
     @sk.command_handler
@@ -96,12 +96,19 @@ class AlpacaFocuser(AlpacaDevice):
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
-    async def focuser_change(self, cmd: ChangeFocusPosition):
-        self.require_connected()
+    async def focuser_stop(self, cmd: sk.Stop):
+        await self.require_connected()
+        logger.debug("stopping focuser")
+        await self.call(self.focuser, "Halt")
+        logger.debug("stopped focuser")
+
+    @sk.command_handler
+    async def focuser_change_position(self, cmd: ChangeFocusPosition):
+        await self.require_connected()
+        logger.debug(f"changing focus to position {cmd.position}")
+
         target = int(cmd.position)
         target = max(0, min(target, self._max_step))
-
-        logger.debug(f"changing to position {target}")
 
         if self._absolute:
             await self.call(self.focuser, "Move", target)
@@ -121,14 +128,7 @@ class AlpacaFocuser(AlpacaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug(f"changed to position {self.focuser_position}")
-
-    @sk.command_handler
-    async def focuser_stop(self, cmd: sk.Stop):
-        self.require_connected()
-        logger.debug("stopping focuser")
-        await self.call(self.focuser, "Halt")
-        logger.debug("stopped focuser")
+        logger.debug(f"changed focus to position {self.focuser_position}")
 
     async def status_publish(self):
         while True:
@@ -144,9 +144,7 @@ class AlpacaFocuser(AlpacaDevice):
                     position = await self.get(f, "Position", None)
                     if position is not None:
                         self.focuser_position = float(position)
-                        await device.publish(
-                            FocusPosition(position=self.focuser_position)
-                        )
+                        await device.publish(FocusPosition(position=self.focuser_position))
 
                     is_moving = await self.get(f, "IsMoving", False)
                     temp_comp = await self.get(f, "TempComp", False)
@@ -168,9 +166,7 @@ class AlpacaFocuser(AlpacaDevice):
                     if temperature is not None:
                         properties["temperature"] = temperature
 
-                    properties_str = ", ".join(
-                        f"{k}={v}" for k, v in properties.items()
-                    )
+                    properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
                     # logger.debug(
                     #     f"Alpaca focuser status: connected={connected}, position={position}, "
                     #     f"is_moving={is_moving}, {properties_str}"
@@ -180,20 +176,20 @@ class AlpacaFocuser(AlpacaDevice):
 
                     if temperature is not None:
                         await device.publish(
-                            Temperature(
-                                temperature=temperature, units=TemperatureUnit.CELSIUS
-                            )
+                            Temperature(temperature=temperature, units=TemperatureUnit.CELSIUS)
                         )
             except Exception as e:
                 logger.exception(f"Error in focuser status publish: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
 
 class AlpacaFocuserConfig(AlpacaDeviceConfig[AlpacaFocuser]):
     device_type: Literal["focuser"] = "focuser"
-    timeout: float = 60.0
     status_frequency: float = 1.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):

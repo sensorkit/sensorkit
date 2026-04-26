@@ -7,7 +7,12 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.astro.target import AltAzTarget, FrameTarget, ICRSTarget, TLETarget
+from sensorkit.astro.target import (
+    AltAzTarget,
+    FrameTarget,
+    ICRSTarget,
+    TLETarget,
+)
 from sensorkit.models.devices import (
     AltAzPointing,
     AxisRate,
@@ -15,6 +20,7 @@ from sensorkit.models.devices import (
     Connected,
     MountAxis,
     RADecPointing,
+    ReferenceFrame,
     SitePosition,
 )
 from sensorkit.nina.device import (
@@ -39,31 +45,38 @@ class NinaMount(NinaDevice):
     """NINA mount implementation."""
 
     config: NinaMountConfig
-    _home_task: asyncio.Task | None = None
+    device_name = "Mount"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(NinaMountState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = NinaMountState()
 
-        await self.mount_init(sk.Init())
+        self._tracking: bool | None = None
+        self._slewing: bool | None = None
+        self._fast_status_task: asyncio.Task | None = None
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.mount_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def mount_init(self, cmd: sk.Init):
-        self.device_name = "Mount"
-        self._tracking: bool | None = None
-        self._slewing: bool | None = None
+        self._reconnect = lambda: self.mount_connect(sk.Connect())
+        await self.mount_connect(sk.Connect())
+        self.start_status_loop(self.status_publish_slow())
 
-        await self.connect("mount")
-        await sk.device().publish(Connected(is_connected=True))
+        # Wait for initial status
+        async with asyncio.timeout(self.config.timeout):
+            while self.device_connected is None:
+                await asyncio.sleep(self.config.status_frequency_slow)
 
         # Read site position from mount info
         info = await self.info("mount")
@@ -79,40 +92,17 @@ class NinaMount(NinaDevice):
                 )
             )
 
-        self.start_status_loop(self.status_publish())
-
         # Home as needed
         if not self.state.has_been_homed:
-            self._home_task = asyncio.create_task(self.mount_home(sk.Home()))
+            await self.mount_home(sk.Home())
 
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
-        if self._home_task is not None:
-            self._home_task.cancel()
-            try:
-                await self._home_task
-            except asyncio.CancelledError:
-                pass
-
         if not self.device_connected:
             return
-
-        try:
-            info = await self.info("mount")
-            if not info.get("AtPark", False):
-                await self.client.get("/equipment/mount/tracking", enabled=False)
-                self._tracking = False
-                await self.client.get("/equipment/mount/park")
-        except Exception as e:
-            logger.warning(f"Error during mount deinit: {e}")
-
-        await self.stop_status_loop()
-
-        try:
-            await self.disconnect("mount")
-            await sk.device().publish(Connected(is_connected=False))
-        except Exception as e:
-            logger.warning(f"Error during mount disconnect: {e}")
+        await self.mount_stop(sk.Stop())
+        await self.mount_park(sk.MoveToPark())
+        await self.mount_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def mount_connect(self, cmd: sk.Connect):
@@ -124,36 +114,59 @@ class NinaMount(NinaDevice):
         await self.disconnect("mount")
         await sk.device().publish(Connected(is_connected=False))
 
+    async def mount_unpark(self):
+        await self.require_connected()
+        logger.debug("unparking mount")
+
+        info = await self.info("mount")
+        if info.get("AtPark", False):
+            await self.client.get("/equipment/mount/unpark")
+
+        logger.debug("unparked mount")
+
     @sk.command_handler
     async def mount_home(self, cmd: sk.Home):
-        self.require_connected()
+        await self.require_connected()
+        await self.mount_unpark()
         logger.debug("homing mount")
-        await self.client.get("/equipment/mount/find-home")
+
+        try:
+            await self.client.get("/equipment/mount/home")
+        except Exception:
+            logger.warning("Unable to home")
+            self.state.has_been_homed = True
+            await sk.device().kv_put_model(self.state)
+            return
 
         async with asyncio.timeout(self.config.timeout):
             while True:
                 info = await self.info("mount")
                 if info.get("AtHome", False) and not info.get("Slewing", True):
                     break
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(self.config.status_frequency_slow)
 
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
+
         logger.debug("homed mount")
 
     @sk.command_handler
     async def mount_stop(self, cmd: sk.Stop):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("stopping mount")
-        await self.client.get("/equipment/mount/stop-slew")
+
+        await self.client.get("/equipment/mount/slew/stop")
         await self.client.get("/equipment/mount/tracking", enabled=False)
         self._tracking = False
+
+        self._stop_fast_status()
         logger.debug("stopped mount")
 
     @sk.command_handler
     async def mount_park(self, cmd: sk.MoveToPark):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("parking mount")
+
         await self.client.get("/equipment/mount/park")
 
         async with asyncio.timeout(self.config.timeout):
@@ -161,34 +174,39 @@ class NinaMount(NinaDevice):
                 info = await self.info("mount")
                 if info.get("AtPark", False):
                     break
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(self.config.status_frequency_slow)
 
         logger.debug("parked mount")
 
     @sk.command_handler
     async def mount_set_park(self, cmd: sk.SetParkPosition):
-        self.require_connected()
+        await self.require_connected()
         await self.client.get("/equipment/mount/set-park-position")
 
     @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
-        if not self.device_connected:
-            await self.mount_init(sk.Init())
-        from sensorkit.astro.common import ReferenceFrame
+        await self.require_connected()
+        await self.mount_unpark()
 
+        # target = await cmd.target.adapt(
+        #     ICRSTarget,
+        #     AltAzTarget,
+        #     (FrameTarget, ReferenceFrame.ICRF),
+        #     (FrameTarget, ReferenceFrame.ALTAZ),
+        #     TLETarget,
+        #     (RateTarget, ReferenceFrame.ICRF),
+        #     (RateTarget, ReferenceFrame.ICRF),
+        #     (EphemerisTarget, ReferenceFrame.ICRF),
+        #     observer=self._geodetic,
+        # )
         target = cmd.target
-
-        # Unpark if needed
-        info = await self.info("mount")
-        if info.get("AtPark", False):
-            await self.client.get("/equipment/mount/unpark")
 
         match target:
             case ICRSTarget():
+                logger.debug("executing RADec follow")
+
                 ra_hours = target.coords.ra / 15.0
                 dec_deg = target.coords.dec
-
-                logger.debug(f"slewing to RA={ra_hours:.4f}h, Dec={dec_deg:.4f}°")
 
                 await self.client.get("/equipment/mount/tracking", enabled=True)
                 self._tracking = True
@@ -200,13 +218,14 @@ class NinaMount(NinaDevice):
                     waitToFinish=True,
                 )
 
-                await self._publish_pointing()
+                self._start_fast_status()
+                logger.debug("following RADec target")
 
             case AltAzTarget():
+                logger.debug("executing AltAz follow")
+
                 alt_deg = target.coords.alt
                 az_deg = target.coords.az
-
-                logger.debug(f"slewing to Alt={alt_deg:.4f}°, Az={az_deg:.4f}°")
 
                 await self.client.get(
                     "/equipment/mount/slew-altaz",
@@ -215,7 +234,7 @@ class NinaMount(NinaDevice):
                     waitToFinish=True,
                 )
 
-                await self._publish_pointing()
+                logger.debug("following AltAz target")
 
             case TLETarget():
                 # TODO: Implement PID-based rate tracking via core.
@@ -251,29 +270,45 @@ class NinaMount(NinaDevice):
                         waitToFinish=True,
                     )
 
-                    await self._publish_pointing()
+                    self._start_fast_status()
+                    logger.debug("following TLE target")
                 else:
                     logger.warning(f"Could not adapt TLE to ICRSTarget: {type(adapted).__name__}")
 
             case FrameTarget():
                 if target.frame == ReferenceFrame.ALTAZ:
+                    self._stop_fast_status()
+                    logger.debug("disabling tracking")
                     await self.client.get("/equipment/mount/tracking", enabled=False)
                     self._tracking = False
-                    logger.debug("disabled tracking (ALTAZ frame)")
+                    logger.debug("disabled tracking")
                 else:
+                    logger.debug("enabling sidereal tracking")
                     await self.client.get("/equipment/mount/tracking", enabled=True)
                     self._tracking = True
-                    logger.debug("enabled sidereal tracking (ICRF frame)")
-
-                await self._publish_rates()
+                    self._start_fast_status()
+                    logger.debug("enabled sidereal tracking")
 
             case _:
                 logger.warning(f"Unsupported target type: {type(target).__name__}")
 
-        logger.debug("slewed to target")
+    def _start_fast_status(self):
+        if self._fast_status_task is None or self._fast_status_task.done():
+            logger.debug("starting fast mount status loop")
+            self._fast_status_task = asyncio.create_task(self.status_publish_fast())
 
-    async def _publish_pointing(self) -> tuple[float, float, float, float]:
-        """Read and publish current pointing."""
+    def _stop_fast_status(self):
+        if self._fast_status_task is not None and not self._fast_status_task.done():
+            logger.debug("stopping fast mount status loop")
+            self._fast_status_task.cancel()
+            self._fast_status_task = None
+
+    @property
+    def _fast_status_active(self) -> bool:
+        return self._fast_status_task is not None and not self._fast_status_task.done()
+
+    async def _publish_mount_status(self):
+        _SIDEREAL_RATE_DEG_S = 15.04107 / 3600.0
 
         info = await self.info("mount")
         ra_hours = info.get("RightAscension", 0.0)
@@ -294,22 +329,12 @@ class NinaMount(NinaDevice):
                 azimuth_degrees=az_deg,
             )
         )
-        return ra_hours, dec_deg, alt_deg, az_deg
 
-    async def _publish_rates(
-        self,
-        ra_hours: float | None = None,
-        dec_deg: float | None = None,
-    ) -> tuple[float, float]:
-        """Publish rates. NINA doesn't expose offset rates, so rates are sidereal-only."""
-
-        _SIDEREAL_RATE_DEG_S = 15.04107 / 3600.0
+        # NINA doesn't expose offset rates, so rates are sidereal-only
         tracking = self._tracking or False
-
         total_ra_deg_s = _SIDEREAL_RATE_DEG_S if tracking else 0.0
-        total_dec_deg_s = 0.0
 
-        await sk.device().publish(
+        await device.publish(
             AxisRates(
                 azimuth=AxisRate(axis=MountAxis.AZIMUTH),
                 altitude=AxisRate(axis=MountAxis.ALTITUDE),
@@ -319,35 +344,31 @@ class NinaMount(NinaDevice):
                 ),
                 declination=AxisRate(
                     axis=MountAxis.DECLINATION,
-                    velocity=total_dec_deg_s,
+                    velocity=0.0,
                 ),
             )
         )
 
-        return total_ra_deg_s, total_dec_deg_s
-
-    async def status_publish(self):
+    async def status_publish_slow(self):
         while True:
             try:
                 info = await self.info("mount")
                 connected = info.get("Connected", False)
                 self.device_connected = connected
 
+                device = sk.device()
+                await device.publish(Connected(is_connected=connected))
+
                 if not connected:
-                    await sk.device().publish(Connected(is_connected=False))
-                    await asyncio.sleep(self.config.status_frequency)
+                    await asyncio.sleep(self.config.status_frequency_slow)
                     continue
 
                 self._slewing = info.get("Slewing", False)
                 self._tracking = info.get("Tracking", False)
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=True))
-
-                right_ascension, declination, altitude, azimuth = await self._publish_pointing()
-                right_ascension_rate, declination_rate = await self._publish_rates(
-                    ra_hours=right_ascension, dec_deg=declination
-                )
+                # Only publish pointing/rates if fast loop isn't handling it
+                if not self._fast_status_active:
+                    await self._publish_mount_status()
 
                 fields: dict = {
                     "tracking": self._tracking or False,
@@ -364,26 +385,34 @@ class NinaMount(NinaDevice):
                 if sidereal_time is not None:
                     fields["sidereal_time"] = sidereal_time
 
-                fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
-                logger.debug(
-                    f"NINA telescope status: connected={connected}, slewing={self._slewing}, "
-                    f"tracking={self._tracking}, RA={right_ascension}, Dec={declination}, "
-                    f"RA_rate={right_ascension_rate}, Dec_rate={declination_rate}, "
-                    f"alt={altitude}, az={azimuth}, "
-                    f"{fields_str}"
-                )
-
                 await device.publish(NinaMountStatus(**fields))
-            except Exception as e:
-                logger.exception(f"Error in mount status publish: {e}")
 
-            await asyncio.sleep(self.config.status_frequency)
+                fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+                # logger.debug(f"NINA mount status: connected={connected}, {fields_str}")
+            except Exception as e:
+                logger.exception(f"Error in slow mount status publish: {e}")
+                await asyncio.sleep(self.config.status_frequency_slow)
+                continue
+
+            await asyncio.sleep(self.config.status_frequency_slow)
+
+    async def status_publish_fast(self):
+        while True:
+            try:
+                await self._publish_mount_status()
+            except Exception as e:
+                logger.warning(f"Error in fast mount status publish ({e})")
+                await asyncio.sleep(self.config.status_frequency_fast)
+                continue
+
+            await asyncio.sleep(self.config.status_frequency_fast)
 
 
 class NinaMountConfig(NinaDeviceConfig[NinaMount]):
     device_type: Literal["mount"] = "mount"
+    status_frequency_slow: float = 1.0
+    status_frequency_fast: float = 0.1
     timeout: float = 300.0
-    status_frequency: float = 1.0
 
     @override
     def create_device(self):

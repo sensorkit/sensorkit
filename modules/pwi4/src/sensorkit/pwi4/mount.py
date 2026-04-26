@@ -132,6 +132,7 @@ class PWI4Mount(PWI4Device):
     """PWI4 mount implementation."""
 
     config: PWI4MountConfig
+    device_name = "Mount"
 
     def __init__(self, config: PWI4MountConfig, client: PWI4Client):
         super().__init__(config=config, client=client)
@@ -145,8 +146,10 @@ class PWI4Mount(PWI4Device):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(PWI4MountState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             self.state = PWI4MountState()
+            logger.warning(f"No saved state for {device.entity}")
 
         # Site location
         st = await self.client.status()
@@ -158,12 +161,13 @@ class PWI4Mount(PWI4Device):
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.mount_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def mount_init(self, cmd: sk.Init):
-        self.device_name = "Mount"
+        self._reconnect = lambda: self.mount_connect(sk.Connect())
 
         await self.mount_connect(sk.Connect())
         self.start_status_loop(self.status_publish_slow())
@@ -186,12 +190,10 @@ class PWI4Mount(PWI4Device):
                 )
             )
 
-        async with asyncio.timeout(self.config.timeout):
-            while self.device_connected is None:
-                await asyncio.sleep(self.config.status_frequency_slow)
-
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
+        await self.mount_stop(sk.Stop())
+
         if self._wrap_task is not None:
             self._wrap_task.cancel()
             try:
@@ -200,16 +202,13 @@ class PWI4Mount(PWI4Device):
                 pass
 
         await self.mount_park(sk.MoveToPark())
-
         await asyncio.gather(
             self.mount_disable_axis(sk.DisableAxis(axis=MountAxis.AZIMUTH)),
             self.mount_disable_axis(sk.DisableAxis(axis=MountAxis.ALTITUDE)),
         )
-
         await self.deinit_ot()
-
         self._stop_fast_status()
-        await self.stop_status_loop()
+        await self.mount_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def mount_connect(self, cmd: sk.Connect):
@@ -223,6 +222,7 @@ class PWI4Mount(PWI4Device):
 
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
+
         logger.debug("connected to mount")
 
     @sk.command_handler
@@ -237,11 +237,46 @@ class PWI4Mount(PWI4Device):
 
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
+
         logger.debug("disconnected from mount")
 
     @sk.command_handler
+    async def mount_enable_axis(self, cmd: sk.EnableAxis):
+        await self.require_connected()
+        axis = 0 if cmd.axis == MountAxis.AZIMUTH else 1
+        logger.debug(f"enabling axis {axis}")
+        await self.client.request("/mount/enable", params={"axis": axis})
+        logger.debug(f"enabled axis {axis}")
+
+    @sk.command_handler
+    async def mount_disable_axis(self, cmd: sk.DisableAxis):
+        await self.require_connected()
+        axis = 0 if cmd.axis == MountAxis.AZIMUTH else 1
+        logger.debug(f"disabling axis {axis}")
+        await self.client.request("/mount/disable", params={"axis": axis})
+        logger.debug(f"disabled axis {axis}")
+
+    @sk.command_handler
+    async def mount_stop(self, cmd: sk.Stop):
+        await self.require_connected()
+        logger.debug("stopping mount")
+
+        await self.client.request("/mount/stop")
+
+        async with asyncio.timeout(self.config.timeout):
+            await self.client.poll(
+                lambda s: (
+                    not self.client.get_bool(s, "mount.is_slewing")
+                    and not self.client.get_bool(s, "mount.is_tracking")
+                ),
+            )
+
+        self._stop_fast_status()
+        logger.debug("stopped mount")
+
+    @sk.command_handler
     async def mount_home(self, cmd: sk.Home):
-        self.require_connected()
+        await self.require_connected()
 
         # Check if mount has already homed
         st = await self.client.status()
@@ -260,26 +295,14 @@ class PWI4Mount(PWI4Device):
                     and self.client.get_bool(s, "mount.axis1.is_position_initialized")
                 ),
             )
+
         logger.debug("homed mount")
 
     @sk.command_handler
-    async def mount_stop(self, cmd: sk.Stop):
-        self._stop_fast_status()
-        logger.debug("stopping mount")
-        await self.client.request("/mount/stop")
-
-        async with asyncio.timeout(self.config.timeout):
-            await self.client.poll(
-                lambda s: (
-                    not self.client.get_bool(s, "mount.is_slewing")
-                    and not self.client.get_bool(s, "mount.is_tracking")
-                ),
-            )
-        logger.debug("stopped mount")
-
-    @sk.command_handler
     async def mount_park(self, cmd: sk.MoveToPark):
+        await self.require_connected()
         logger.debug("parking mount")
+
         await self.client.request("/mount/park")
 
         async with asyncio.timeout(self.config.timeout):
@@ -289,22 +312,12 @@ class PWI4Mount(PWI4Device):
                     and not self.client.get_bool(s, "mount.is_tracking")
                 ),
             )
+
         logger.debug("parked mount")
 
     @sk.command_handler
-    async def mount_enable_axis(self, cmd: sk.EnableAxis):
-        axis = 0 if cmd.axis == MountAxis.AZIMUTH else 1
-        await self.client.request("/mount/enable", params={"axis": axis})
-
-    @sk.command_handler
-    async def mount_disable_axis(self, cmd: sk.DisableAxis):
-        axis = 0 if cmd.axis == MountAxis.AZIMUTH else 1
-        await self.client.request("/mount/disable", params={"axis": axis})
-
-    @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
-        if not self.device_connected:
-            await self.mount_init(sk.Init())
+        await self.require_connected()
 
         target = await cmd.target.adapt(
             ICRSTarget,
@@ -320,6 +333,7 @@ class PWI4Mount(PWI4Device):
         match target:
             case ICRSTarget():
                 logger.debug("executing RADec follow")
+
                 await self.client.request(
                     "/mount/goto_ra_dec_j2000",
                     params={
@@ -341,6 +355,7 @@ class PWI4Mount(PWI4Device):
 
             case AltAzTarget():
                 logger.debug("executing AltAz follow")
+
                 await self.client.request(
                     "/mount/goto_alt_az",
                     params={
@@ -358,6 +373,7 @@ class PWI4Mount(PWI4Device):
 
             case TLETarget():
                 logger.debug("executing TLE follow")
+
                 await self.client.request(
                     "/mount/follow_tle",
                     params={
@@ -439,20 +455,30 @@ class PWI4Mount(PWI4Device):
                 match target.frame:
                     case ReferenceFrame.ALTAZ:
                         self._stop_fast_status()
+                        logger.debug("disabling tracking")
                         await self.client.request("/mount/tracking_off")
                         await self.client.poll(
                             lambda s: not self.client.get_bool(s, "mount.is_tracking"),
                         )
+                        logger.debug("disabled tracking")
                     case ReferenceFrame.ICRF:
+                        logger.debug("enabling sidereal tracking")
                         await self.client.request("/mount/tracking_on")
                         await self.client.poll(
                             lambda s: self.client.get_bool(s, "mount.is_tracking"),
                         )
                         self._start_fast_status()
+                        logger.debug("enabled sidereal tracking")
+
+            case _:
+                track_type = type(cmd.target).__name__
+                raise NotImplementedError(f"{track_type} tracking via PWI4 is not supported")
 
     @sk.command_handler
     async def mount_offset(self, cmd: ApplyOffset):
-        self.require_connected()
+        await self.require_connected()
+        logger.debug("applying offset")
+
         if isinstance(cmd.offset, RADecArcseconds):
             await self.client.request(
                 "/mount/offset",
@@ -470,13 +496,20 @@ class PWI4Mount(PWI4Device):
                 },
             )
 
+        logger.debug("applied offset")
+
     @sk.command_handler
     async def mount_set_wrap_range_min(self, cmd: SetAzimuthWrapRangeMin):
+        await self.require_connected()
+        logger.debug("setting azimuth wrap range min")
         await self.client.request("/mount/set_axis0_wrap_range_min", params={"degs": cmd.min})
         await sk.device().publish(AzimuthWrapRange(min=cmd.min, max=cmd.min + 360))
+        logger.debug("set azimuth wrap range min")
 
     @sk.command_handler
     async def model_add_point(self, cmd: ModelAddPoint):
+        await self.require_connected()
+        logger.debug("adding model point")
         if cmd.reference_frame != ReferenceFrame.ICRF:
             raise ValueError("Mount model points must be ICRF")
         await self.client.request(
@@ -486,39 +519,58 @@ class PWI4Mount(PWI4Device):
                 "dec_j2000_degs": cmd.declination_degrees,
             },
         )
+        logger.debug("added model point")
 
     @sk.command_handler
     async def model_delete_point(self, cmd: ModelDeletePoint):
+        await self.require_connected()
+        logger.debug("deleting model point")
         await self.client.request(
             "/mount/model/delete_point",
             params={"index": ",".join(str(i) for i in cmd.indexes)},
         )
+        logger.debug("deleted model point")
 
     @sk.command_handler
     async def model_enable_point(self, cmd: ModelEnablePoint):
+        await self.require_connected()
+        logger.debug("enabling model point")
         await self.client.request(
             "/mount/model/enable_point",
             params={"index": ",".join(str(i) for i in cmd.indexes)},
         )
+        logger.debug("enabled model point")
 
     @sk.command_handler
     async def model_disable_point(self, cmd: ModelDisablePoint):
+        await self.require_connected()
+        logger.debug("disabling model point")
         await self.client.request(
             "/mount/model/disable_point",
             params={"index": ",".join(str(i) for i in cmd.indexes)},
         )
+        logger.debug("disabled model point")
 
     @sk.command_handler
     async def model_clear_points(self, cmd: ModelClearPoints):
+        await self.require_connected()
+        logger.debug("clearing model points")
         await self.client.request("/mount/model/clear_points")
+        logger.debug("cleared model points")
 
     @sk.command_handler
     async def model_save(self, cmd: ModelSave):
+        await self.require_connected()
+        logger.debug("saving model")
         await self.client.request("/mount/model/save", params={"filename": cmd.filename})
+        logger.debug("saved model")
 
     @sk.command_handler
     async def model_load(self, cmd: ModelLoad):
+        await self.require_connected()
+        logger.debug("loading model")
         await self.client.request("/mount/model/load", params={"filename": cmd.filename})
+        logger.debug("loaded model")
 
     def _start_fast_status(self):
         if self._fast_status_task is None or self._fast_status_task.done():
@@ -680,6 +732,8 @@ class PWI4Mount(PWI4Device):
                     await sk.device().publish(Connected(is_connected=self.device_connected))
             except Exception as e:
                 logger.warning(f"Error in slow mount status_publish ({e})")
+                await asyncio.sleep(self.config.status_frequency_slow)
+                continue
 
             await asyncio.sleep(self.config.status_frequency_slow)
 
@@ -690,6 +744,8 @@ class PWI4Mount(PWI4Device):
                 await self._publish_mount_status(st)
             except Exception as e:
                 logger.warning(f"Error in fast mount status_publish ({e})")
+                await asyncio.sleep(self.config.status_frequency_fast)
+                continue
 
             await asyncio.sleep(self.config.status_frequency_fast)
 

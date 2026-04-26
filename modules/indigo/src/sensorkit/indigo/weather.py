@@ -92,6 +92,7 @@ class IndigoWeather(IndigoDevice):
     """
 
     config: IndigoWeatherConfig
+    device_name = "Weather"
 
     def __init__(self, config):
         super().__init__(config)
@@ -104,7 +105,9 @@ class IndigoWeather(IndigoDevice):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(IndigoWeatherState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = IndigoWeatherState()
 
         await self.weather_init(sk.Init())
@@ -116,33 +119,27 @@ class IndigoWeather(IndigoDevice):
 
     @sk.command_handler
     async def weather_init(self, cmd: sk.Init):
-        self.device_name = "Weather"
-
         # Connect WebSocket to INDIGO server
         await self.connect_to_server()
 
         # Register callback for numeric weather data
-        self.client.on_property(
-            self.config.indigo_device, "AUX_WEATHER"
-        )(self._on_weather_update)
+        self.client.on_property(self.config.indigo_device, "AUX_WEATHER")(self._on_weather_update)
 
         # Register callbacks for each condition property
         for prop_name in _CONDITION_PROPERTIES:
-            self.client.on_property(
-                self.config.indigo_device, prop_name
-            )(self._on_condition_update)
+            self.client.on_property(self.config.indigo_device, prop_name)(
+                self._on_condition_update
+            )
 
         # Track CONNECTION property to maintain device_connected state
-        self.client.on_property(
-            self.config.indigo_device, "CONNECTION"
-        )(self._on_connection_update)
+        self.client.on_property(self.config.indigo_device, "CONNECTION")(
+            self._on_connection_update
+        )
 
         # Wait for initial weather property to appear
         try:
             async with asyncio.timeout(self.config.timeout):
-                while not self.client.get_property(
-                    self.config.indigo_device, "AUX_WEATHER"
-                ):
+                while not self.client.get_property(self.config.indigo_device, "AUX_WEATHER"):
                     await asyncio.sleep(0.25)
         except TimeoutError:
             logger.warning(
@@ -207,9 +204,7 @@ class IndigoWeather(IndigoDevice):
             # Reset the debounce timer
             if self._conditions_debounce is not None:
                 self._conditions_debounce.cancel()
-            self._conditions_debounce = asyncio.create_task(
-                self._flush_conditions()
-            )
+            self._conditions_debounce = asyncio.create_task(self._flush_conditions())
 
     async def _flush_conditions(self):
         """Wait for the burst to settle, then publish once."""

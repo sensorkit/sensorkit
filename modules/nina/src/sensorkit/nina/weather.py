@@ -16,34 +16,35 @@ class NinaWeather(NinaDevice):
     """NINA ObservingConditions implementation."""
 
     config: NinaWeatherConfig
+    device_name = "Weather"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(NinaWeatherState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = NinaWeatherState()
 
+        self.start_status_loop(self.status_publish())
         await self.weather_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.weather_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def weather_init(self, cmd: sk.Init):
-        self.device_name = "Weather"
-        await self.connect("weather")
-        await sk.device().publish(Connected(is_connected=True))
-        self.start_status_loop(self.status_publish())
+        self._reconnect = lambda: self.weather_connect(sk.Connect())
+        await self.weather_connect(sk.Connect())
 
     @sk.command_handler
     async def weather_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
-        await self.disconnect("weather")
-        await sk.device().publish(Connected(is_connected=False))
+        await self.weather_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def weather_connect(self, cmd: sk.Connect):
@@ -77,24 +78,24 @@ class NinaWeather(NinaDevice):
                         rain_rate=info.get("RainRate"),
                     )
 
+                    await device.publish(weather)
+
                     weather_str = ", ".join(
                         f"{k}={v}" for k, v in weather.model_dump(exclude_none=True).items()
                     )
-                    # logger.debug(
-                    #     f"NINA observing conditions status: connected={connected}, {weather_str}"
-                    # )
-
-                    await device.publish(weather)
+                    # logger.debug(f"NINA weather status: connected={connected}, {weather_str}")
             except Exception as e:
                 logger.exception(f"Error in weather status publish: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
 
 class NinaWeatherConfig(NinaDeviceConfig[NinaWeather]):
     device_type: Literal["weather"] = "weather"
-    timeout: float = 30.0
     status_frequency: float = 30.0
+    timeout: float = 30.0
 
     @override
     def create_device(self):

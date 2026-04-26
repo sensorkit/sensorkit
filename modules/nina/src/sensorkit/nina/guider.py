@@ -53,40 +53,39 @@ class NinaGuider(NinaDevice):
     """NINA Guider implementation."""
 
     config: NinaGuiderConfig
+    device_name = "Guider"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(NinaGuiderState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = NinaGuiderState()
 
         await self.guider_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.guider_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def guider_init(self, cmd: sk.Init):
-        self.device_name = "Guider"
-        await self.connect("guider")
-        await sk.device().publish(Connected(is_connected=True))
-        self.start_status_loop(self.status_publish())
+        self._reconnect = lambda: self.guider_connect(sk.Connect())
+        await self.guider_connect(sk.Connect())
 
     @sk.command_handler
     async def guider_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
-        if not self.device_connected:
-            return
         try:
             await self.client.get("/equipment/guider/stop")
         except Exception:
             pass
-        await self.disconnect("guider")
-        await sk.device().publish(Connected(is_connected=False))
+        await self.guider_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def guider_connect(self, cmd: sk.Connect):
@@ -100,23 +99,25 @@ class NinaGuider(NinaDevice):
 
     @sk.command_handler
     async def guider_start(self, cmd: StartGuiding):
-        self.require_connected()
+        await self.require_connected()
         logger.debug(f"starting guiding (calibrate={cmd.calibrate})")
         await self.client.get("/equipment/guider/start", calibrate=cmd.calibrate)
 
     @sk.command_handler
     async def guider_stop(self, cmd: StopGuiding):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("stopping guiding")
         await self.client.get("/equipment/guider/stop")
 
     @sk.command_handler
     async def guider_dither(self, cmd: Dither):
-        self.require_connected()
+        await self.require_connected()
         logger.debug(f"dithering (amount={cmd.amount}, ra_only={cmd.ra_only})")
         await self.client.get(
             "/equipment/guider/dither",
-            amount=cmd.amount, raOnly=cmd.ra_only, waitToFinish=True,
+            amount=cmd.amount,
+            raOnly=cmd.ra_only,
+            waitToFinish=True,
         )
 
     async def status_publish(self):
@@ -147,14 +148,16 @@ class NinaGuider(NinaDevice):
                     await device.publish(NinaGuiderStatus(**fields))
             except Exception as e:
                 logger.exception(f"Error in guider status publish: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
 
 class NinaGuiderConfig(NinaDeviceConfig[NinaGuider]):
     device_type: Literal["guider"] = "guider"
-    timeout: float = 60.0
     status_frequency: float = 2.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):

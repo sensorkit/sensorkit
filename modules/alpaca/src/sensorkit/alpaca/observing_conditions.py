@@ -37,29 +37,33 @@ class AlpacaObservingConditions(AlpacaDevice):
     """Alpaca ObservingConditions implementation."""
 
     config: AlpacaObservingConditionsConfig
+    device_name = "ObservingConditions"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(AlpacaObservingConditionsState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = AlpacaObservingConditionsState()
 
         await self.observing_conditions_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.observing_conditions_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def observing_conditions_init(self, cmd: sk.Init):
-        self.device_name = "ObservingConditions"
+        self._reconnect = lambda: self.observing_conditions_connect(sk.Connect())
         self.oc = ObservingConditions(
             self.address, self.config.device_number, self.config.protocol
         )
-
         await self.observing_conditions_connect(sk.Connect())
 
         if self.config.average_period is not None:
@@ -68,11 +72,8 @@ class AlpacaObservingConditions(AlpacaDevice):
             except Exception:
                 logger.warning("Unable to set AveragePeriod")
 
-        self.start_status_loop(self.status_publish())
-
     @sk.command_handler
     async def observing_conditions_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
         await self.observing_conditions_disconnect(sk.Disconnect())
 
     @sk.command_handler
@@ -177,6 +178,8 @@ class AlpacaObservingConditions(AlpacaDevice):
                         await device.publish(AlpacaObservingConditionsStatus(**properties))
             except Exception as e:
                 logger.exception(f"Error in observing conditions status publish: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
@@ -184,8 +187,8 @@ class AlpacaObservingConditions(AlpacaDevice):
 class AlpacaObservingConditionsConfig(AlpacaDeviceConfig[AlpacaObservingConditions]):
     device_type: Literal["observing_conditions"] = "observing_conditions"
     average_period: float | None = None
-    timeout: float = 30.0
     status_frequency: float = 30.0
+    timeout: float = 30.0
 
     @override
     def create_device(self):

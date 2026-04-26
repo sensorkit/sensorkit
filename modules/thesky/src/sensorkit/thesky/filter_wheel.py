@@ -23,7 +23,7 @@ class TheSkyFilterWheel(TheSkyDevice):
     device_name = "Filter Wheel"
 
     # NOTE: the TheSky API allows for querying the name of a filter slot based on its index, but: 1) if you provide an
-    # index beyond the actual available indices, it does not error, rather it appear to move to the first index; and
+    # index beyond the actual available indices, it does not error, rather it appears to move to the first index; and
     # 2) looping through indices to retrieve the names would take an unnecessarily long time. And so we enforce that
     # the user define the names via config (e.g. {R: 0, G: 1, B: 2})
 
@@ -31,10 +31,9 @@ class TheSkyFilterWheel(TheSkyDevice):
     async def entity_init(self):
         device = sk.device()
 
-        # Restore last known state
         try:
             self.state = await device.kv_get_model(TheSkyFilterWheelState)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = TheSkyFilterWheelState()
@@ -43,50 +42,34 @@ class TheSkyFilterWheel(TheSkyDevice):
         self._filter_index = {idx: name for name, idx in self.config.filters.items()}
         assert len(self._filter_index) == len(self.config.filters)
 
-        self.filter_wheel_position = None
+        self.filter_wheel_position: float | None = None
 
-        # Initialize the filter wheel
-        # FIXME: this is temporary, while awaiting updates to the standard controller
         await self.filter_wheel_init(sk.Init())
-
-    @sk.on_detach
-    async def entity_deinit(self):
-        await sk.device().kv_put_model(self.state)
-
-        # De-initialize the filter wheel
-        # FIXME: this is temporary, while awaiting updates to the standard controller
-        await self.filter_wheel_deinit(sk.Deinit())
-
-    @sk.command_handler
-    async def filter_wheel_init(self, cmd: sk.Init):
-        # Connect to the hardware
-        await self.filter_wheel_connect(sk.Connect())
-
-        # Start filter wheel status publishing
-        # TODO: Use service context ThreadGroup.
-        logger.debug("starting thesky filter wheel status loop")
         self.start_status_loop(self.status_publish())
 
-        # Ensure an initial filter_wheel_position is received
         async with asyncio.timeout(self.config.timeout):
             while self.filter_wheel_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
+    @sk.on_detach
+    async def entity_deinit(self):
+        await self.stop_status_loop()
+        await self.filter_wheel_deinit(sk.Deinit())
+        await sk.device().kv_put_model(self.state)
+
     @sk.command_handler
-    async def filter_wheel_deinit(self, cmd: sk.Deinit):
-        # Connect to the hardware
+    async def filter_wheel_init(self, cmd: sk.Init):
+        self._reconnect = lambda: self.filter_wheel_connect(sk.Connect())
         await self.filter_wheel_connect(sk.Connect())
 
-        # Stop filter wheel status publishing
-        logger.debug("stopping thesky filter wheel status loop")
-        await self.stop_status_loop()
-
-        # Disconnect from the hardware
+    @sk.command_handler
+    async def filter_wheel_deinit(self, cmd: sk.Deinit):
         await self.filter_wheel_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def filter_wheel_connect(self, cmd: sk.Connect):
         logger.debug("connecting to thesky filter wheel")
+
         await self.execute(
             """
             ccdsoftCamera.Asynchronous = 1;
@@ -94,7 +77,6 @@ class TheSkyFilterWheel(TheSkyDevice):
             """
         )
 
-        # Wait for the filter wheel to connect
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.filterWheelIsConnected();""", "1")
 
@@ -106,13 +88,13 @@ class TheSkyFilterWheel(TheSkyDevice):
     @sk.command_handler
     async def filter_wheel_disconnect(self, cmd: sk.Disconnect):
         logger.debug("disconnecting from thesky filter wheel")
+
         await self.execute(
             """
             ccdsoftCamera.filterWheelDisconnect();
             """
         )
 
-        # Wait for the filter wheel to disconnect
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.filterWheelIsConnected();""", "0")
 
@@ -122,11 +104,12 @@ class TheSkyFilterWheel(TheSkyDevice):
         logger.debug("disconnected from thesky filter wheel")
 
     @sk.command_handler
-    async def set_filter(self, cmd: SetFilter):
+    async def filter_wheel_set_filter(self, cmd: SetFilter):
         # NOTE: TheSky does not actually change the filter until a call to TakeImage() is received, so we will have to
         # account for that delay wherever it makes sense to do so.
-        self.require_connected()
+        await self.require_connected()
         logger.debug(f"setting thesky filter wheel position to {cmd.filter}")
+
         match cmd.filter:
             case int():
                 index = cmd.filter
@@ -145,6 +128,8 @@ class TheSkyFilterWheel(TheSkyDevice):
             ccdsoftCamera.FilterIndexZeroBased = {index};
             """
         )
+
+        logger.debug(f"set thesky filter wheel position to {cmd.filter}")
 
     async def status_publish(self):
         while True:
@@ -199,8 +184,8 @@ class TheSkyFilterWheelConfig(TheSkyDeviceConfig[TheSkyFilterWheel]):
 
     device_type: Literal["filter_wheel"] = "filter_wheel"
     filters: dict[str, int] = {}
-    timeout: float = 60.0
     status_frequency: float = 1.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):

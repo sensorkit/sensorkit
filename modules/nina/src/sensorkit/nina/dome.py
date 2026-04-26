@@ -27,58 +27,40 @@ class NinaDome(NinaDevice):
     """NINA Dome implementation."""
 
     config: NinaDomeConfig
-    _home_task: asyncio.Task | None = None
+    device_name = "Dome"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(NinaDomeState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = NinaDomeState()
 
         await self.dome_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.dome_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def dome_init(self, cmd: sk.Init):
-        self.device_name = "Dome"
-        await self.connect("dome")
-        await sk.device().publish(Connected(is_connected=True))
-        self.start_status_loop(self.status_publish())
+        self._reconnect = lambda: self.dome_connect(sk.Connect())
+        await self.dome_connect(sk.Connect())
 
-        # Home as needed
         if not self.state.has_been_homed:
-            self._home_task = asyncio.create_task(self.dome_home(sk.Home()))
+            await self.dome_home(sk.Home())
 
     @sk.command_handler
     async def dome_deinit(self, cmd: sk.Deinit):
-        if not self.device_connected:
-            return
-
-        if self._home_task is not None:
-            self._home_task.cancel()
-            try:
-                await self._home_task
-            except asyncio.CancelledError:
-                pass
-
-        # Send the dome to its park position
-        try:
-            await self.client.get("/equipment/dome/park")
-            await self.disconnect("dome")
-            await sk.device().publish(Connected(is_connected=False))
-        except Exception as e:
-            logger.warning(f"Error during dome deinit: {e}")
-
-        # Stop dome status publishing
-        await self.stop_status_loop()
-
-        # Disconnect from the hardware
+        await self.dome_stop(sk.Stop())
+        await self.dome_close(CloseEnclosure())
+        await self.dome_park(sk.MoveToPark())
         await self.dome_disconnect(sk.Disconnect())
 
     @sk.command_handler
@@ -92,9 +74,17 @@ class NinaDome(NinaDevice):
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
+    async def dome_stop(self, cmd: sk.Stop):
+        await self.require_connected()
+        logger.debug("stopping dome")
+        await self.client.get("/equipment/dome/stop")
+        logger.debug("stopped dome")
+
+    @sk.command_handler
     async def dome_home(self, cmd: sk.Home):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("homing dome")
+
         await self.client.get("/equipment/dome/home")
         await asyncio.sleep(0.1)
 
@@ -107,19 +97,30 @@ class NinaDome(NinaDevice):
 
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
+
         logger.debug("homed dome")
 
     @sk.command_handler
-    async def dome_stop(self, cmd: sk.Stop):
-        self.require_connected()
-        logger.debug("stopping dome")
-        await self.client.get("/equipment/dome/stop")
-        logger.debug("stopped dome")
+    async def dome_park(self, cmd: sk.MoveToPark):
+        await self.require_connected()
+        logger.debug("parking dome")
+
+        await self.client.get("/equipment/dome/park")
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                info = await self.info("dome")
+                if info.get("AtPark", False):
+                    break
+                await asyncio.sleep(self.config.status_frequency)
+
+        logger.debug("parked dome")
 
     @sk.command_handler
     async def dome_open(self, cmd: OpenEnclosure):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("opening dome")
+
         await self.client.get("/equipment/dome/open")
         await asyncio.sleep(0.1)
 
@@ -134,8 +135,9 @@ class NinaDome(NinaDevice):
 
     @sk.command_handler
     async def dome_close(self, cmd: CloseEnclosure):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("closing dome")
+
         await self.client.get("/equipment/dome/close")
         await asyncio.sleep(0.1)
 
@@ -150,14 +152,16 @@ class NinaDome(NinaDevice):
 
     @sk.command_handler
     async def dome_move(self, cmd: MoveEnclosure):
-        self.require_connected()
+        await self.require_connected()
         logger.debug(f"slewing dome to azimuth {cmd.target_azimuth:.1f}°")
+
         await self.client.get(
             "/equipment/dome/slew",
             azimuth=cmd.target_azimuth,
             waitToFinish=True,
         )
-        logger.debug("slewed dome")
+
+        logger.debug(f"slewed dome to azimuth {cmd.target_azimuth:.1f}°")
 
     async def status_publish(self):
         while True:
@@ -171,7 +175,7 @@ class NinaDome(NinaDevice):
 
                 if connected:
                     shutter_status = info.get("ShutterStatus", "unknown")
-                    is_open = shutter_status in ("Open", "Opening")
+                    is_open = shutter_status == "ShutterOpen"
 
                     await device.publish(Opened(is_open=is_open))
 
@@ -190,20 +194,22 @@ class NinaDome(NinaDevice):
                     if following is not None:
                         fields["following"] = following
 
-                    fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
-                    logger.debug(f"NINA dome status: connected={connected}, {fields_str}")
-
                     await device.publish(NinaDomeStatus(**fields))
+
+                    fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+                    # logger.debug(f"NINA dome status: connected={connected}, {fields_str}")
             except Exception as e:
                 logger.exception(f"Error in dome status publish: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
 
 class NinaDomeConfig(NinaDeviceConfig[NinaDome]):
     device_type: Literal["dome"] = "dome"
-    timeout: float = 300.0
     status_frequency: float = 1.0
+    timeout: float = 300.0
 
     @override
     def create_device(self):

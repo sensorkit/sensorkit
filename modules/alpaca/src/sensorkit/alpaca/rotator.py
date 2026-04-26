@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-from alpaca.rotator import Rotator
 from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from alpaca.rotator import Rotator
 from sensorkit.alpaca.device import (
     AlpacaDevice,
     AlpacaDeviceConfig,
@@ -35,42 +35,42 @@ class AlpacaRotator(AlpacaDevice):
     """Alpaca Rotator implementation."""
 
     config: AlpacaRotatorConfig
+    device_name = "Rotator"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(AlpacaRotatorState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = AlpacaRotatorState()
 
+        self.rotator_position: float | None = None
+
         await self.rotator_init(sk.Init())
+        self.start_status_loop(self.status_publish())
+
+        async with asyncio.timeout(self.config.timeout):
+            while self.rotator_position is None:
+                await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.rotator_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def rotator_init(self, cmd: sk.Init):
-        self.device_name = "Rotator"
-        self.rotator = Rotator(
-            self.address, self.config.device_number, self.config.protocol
-        )
-        self.rotator_position: float | None = None
-
+        self._reconnect = lambda: self.rotator_connect(sk.Connect())
+        self.rotator = Rotator(self.address, self.config.device_number, self.config.protocol)
         await self.rotator_connect(sk.Connect())
 
         # Read capabilities
         self._can_reverse = await self.get(self.rotator, "CanReverse", False)
         self._step_size = await self.get(self.rotator, "StepSize", None)
-
-        self.start_status_loop(self.status_publish())
-
-        # Wait for initial position
-        async with asyncio.timeout(self.config.timeout):
-            while self.rotator_position is None:
-                await asyncio.sleep(self.config.status_frequency)
 
     @sk.command_handler
     async def rotator_deinit(self, cmd: sk.Deinit):
@@ -89,10 +89,10 @@ class AlpacaRotator(AlpacaDevice):
 
     @sk.command_handler
     async def rotator_change(self, cmd: ChangeRotatorPosition):
-        self.require_connected()
-        target = cmd.position
+        await self.require_connected()
+        logger.debug(f"changing rotator position to {cmd.target:.2f}°")
 
-        logger.debug(f"changing position to {target:.2f}°")
+        target = cmd.position
 
         await self.call(self.rotator, "MoveAbsolute", target)
 
@@ -107,7 +107,7 @@ class AlpacaRotator(AlpacaDevice):
 
     @sk.command_handler
     async def rotator_stop(self, cmd: sk.Stop):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("stopping rotator")
         await self.call(self.rotator, "Halt")
         logger.debug("stopped rotator")
@@ -127,18 +127,12 @@ class AlpacaRotator(AlpacaDevice):
                     position = await self.get(r, "Position", None)
                     target_position = await self.get(r, "TargetPosition", None)
                     is_moving = await self.get(r, "IsMoving", False)
-                    reverse = (
-                        await self.get(r, "Reverse", False)
-                        if self._can_reverse
-                        else False
-                    )
+                    reverse = await self.get(r, "Reverse", False) if self._can_reverse else False
 
                     if mechanical_position is not None:
                         self.rotator_position = float(mechanical_position)
 
-                    await device.publish(
-                        RotatorPosition(position=self.rotator_position or 0.0)
-                    )
+                    await device.publish(RotatorPosition(position=self.rotator_position or 0.0))
                     properties: dict = {
                         "is_moving": is_moving,
                     }
@@ -154,9 +148,7 @@ class AlpacaRotator(AlpacaDevice):
                     if self._step_size is not None:
                         properties["step_size"] = self._step_size
 
-                    properties_str = ", ".join(
-                        f"{k}={v}" for k, v in properties.items()
-                    )
+                    properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
                     # logger.debug(
                     #     f"Alpaca rotator status: connected={connected}, position={position}, "
                     #     f"target_position={target_position}, is_moving={is_moving}, "
@@ -166,14 +158,16 @@ class AlpacaRotator(AlpacaDevice):
                     await device.publish(AlpacaRotatorStatus(**properties))
             except Exception as e:
                 logger.exception(f"Error in rotator status publish: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
 
 class AlpacaRotatorConfig(AlpacaDeviceConfig[AlpacaRotator]):
     device_type: Literal["rotator"] = "rotator"
-    timeout: float = 60.0
     status_frequency: float = 1.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):

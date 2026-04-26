@@ -31,26 +31,29 @@ class NodePlatformEnclosure(NodePlatformDevice):
     async def entity_init(self):
         device = sk.device()
 
-        # Restore last known state
         try:
             self.state = await device.kv_get_model(NodePlatformEnclosureState)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformEnclosureState()
 
-        # Start enclosure status publishing
-        logger.debug("starting node_platform enclosure status loop")
         self.start_status_loop(self.status_publish())
+        await self.enclosure_init(sk.Init())
 
-        # Wait for initial status
+    @sk.on_detach
+    async def entity_deinit(self):
+        await self.stop_status_loop()
+        await self.enclosure_deinit(sk.Deinit())
+        await self.api.close()
+        await sk.device().kv_put_model(self.state)
+
+    @sk.command_handler
+    async def enclosure_init(self, cmd: sk.Init):
         async with asyncio.timeout(self.config.timeout):
             while self.device_connected is None:
                 await asyncio.sleep(self.config.status_frequency)
 
-    @sk.command_handler
-    async def enclosure_init(self, cmd: sk.Init):
-        self.require_connected()
         if not self.state.has_been_homed:
             await self.enclosure_home(sk.Home())
 
@@ -62,18 +65,23 @@ class NodePlatformEnclosure(NodePlatformDevice):
     @sk.command_handler
     async def enclosure_deinit(self, cmd: sk.Deinit):
         await self.enclosure_stop(sk.Stop())
+        await self.enclosure_close(CloseEnclosure())
 
-    @sk.on_detach
-    async def entity_deinit(self):
-        logger.debug("stopping node_platform enclosure status loop")
-        await self.stop_status_loop()
+    @sk.command_handler
+    async def enclosure_stop(self, cmd: sk.Stop):
+        await self.require_connected()
+        logger.debug("stopping node_platform enclosure")
 
-        await sk.device().kv_put_model(self.state)
-        await self.api.close()
+        await asyncio.gather(
+            self.api.call("v1_halt_enclosure_shutters"),
+            self.api.call("v1_halt_enclosure_window"),
+        )
+
+        logger.debug("stopped node_platform enclosure")
 
     @sk.command_handler
     async def enclosure_home(self, cmd: sk.Home):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("homing node_platform enclosure")
 
         await self.api.call("v1_home_enclosure_shutters")
@@ -90,33 +98,30 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
+
         logger.debug("homed node_platform enclosure")
 
     @sk.command_handler
-    async def enclosure_stop(self, cmd: sk.Stop):
-        self.require_connected()
-        logger.debug("stopping node_platform enclosure")
-
-        await asyncio.gather(
-            self.api.call("v1_halt_enclosure_shutters"),
-            self.api.call("v1_halt_enclosure_window"),
-        )
-        logger.debug("stopped node_platform enclosure")
-
-    @sk.command_handler
     async def enclosure_open(self, cmd: OpenEnclosure):
-        # Wait for entity_init to complete
-        async with asyncio.timeout(self.config.timeout):
-            while self.device_connected is None:
-                await asyncio.sleep(self.config.status_frequency)
-
-        self.require_connected()
+        await self.require_connected()
 
         if self.config.operation_mode == "assisted":
             logger.warning(
                 "Rejecting enclosure open (Node Platform controls shutter in ASSISTED mode)"
             )
             return
+
+        # Ensure we're not moving
+        async with asyncio.timeout(self.config.timeout):
+            while self.shutter_state in (
+                EnclosureShutterState.MOVING_OPEN,
+                EnclosureShutterState.MOVING_CLOSE,
+                EnclosureShutterState.HOMING,
+                EnclosureShutterState.ERROR,
+                EnclosureShutterState.UNKNOWN,
+                None,
+            ):
+                await asyncio.sleep(self.config.status_frequency)
 
         logger.debug("opening node_platform enclosure")
         req = osapi.V1OpenEnclosureShuttersRequest(ignore_safety=False)
@@ -131,18 +136,25 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
     @sk.command_handler
     async def enclosure_close(self, cmd: CloseEnclosure):
-        # Wait for entity_init to complete
-        async with asyncio.timeout(self.config.timeout):
-            while self.device_connected is None:
-                await asyncio.sleep(self.config.status_frequency)
-
-        self.require_connected()
+        await self.require_connected()
 
         if self.config.operation_mode == "assisted":
             logger.warning(
                 "Rejecting enclosure close (Node Platform controls shutter in ASSISTED mode)"
             )
             return
+
+        # Ensure we're not moving
+        async with asyncio.timeout(self.config.timeout):
+            while self.shutter_state in (
+                EnclosureShutterState.MOVING_OPEN,
+                EnclosureShutterState.MOVING_CLOSE,
+                EnclosureShutterState.HOMING,
+                EnclosureShutterState.ERROR,
+                EnclosureShutterState.UNKNOWN,
+                None,
+            ):
+                await asyncio.sleep(self.config.status_frequency)
 
         logger.debug("closing node_platform enclosure")
         await self.api.call("v1_close_enclosure_shutters")
@@ -197,6 +209,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
             except Exception as e:
                 logger.warning(f"Failed to update Node Platform enclosure status ({e})")
+                await asyncio.sleep(self.config.status_frequency)
                 continue
 
             await asyncio.sleep(self.config.status_frequency)
@@ -206,8 +219,8 @@ class NodePlatformEnclosureConfig(NodePlatformDeviceConfig[NodePlatformEnclosure
     """Node Platform Enclosure configuration."""
 
     device_type: Literal["dome"] = "dome"
-    timeout: float = 120.0
     status_frequency: float = 1.0
+    timeout: float = 120.0
 
     @override
     def create_device(self):

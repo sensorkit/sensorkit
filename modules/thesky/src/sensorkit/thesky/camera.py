@@ -65,38 +65,29 @@ class TheSkyCamera(TheSkyDevice):
     async def entity_init(self):
         device = sk.device()
 
-        # Restore last known state
         try:
             self.state = await device.kv_get_model(TheSkyCameraState)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = TheSkyCameraState()
 
-        # Initialize the camera
-        # FIXME: this is temporary, while awaiting updates to the standard controller
         await self.camera_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await sk.device().kv_put_model(self.state)
-
-        # De-initialize the camera
-        # FIXME: this is temporary, while awaiting updates to the standard controller
+        await self.stop_status_loop()
         await self.camera_deinit(sk.Deinit())
+        await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def camera_init(self, cmd: sk.Init):
-        # Connect to the hardware
+        self._reconnect = lambda: self.camera_connect(sk.Connect())
         await self.camera_connect(sk.Connect())
 
-        # Start camera status publishing
-        # TODO: Use service context ThreadGroup.
-        logger.debug("starting thesky camera status loop")
-        self.start_status_loop(self.status_publish())
-
         # Set the camera temperature
-        await self.set_temperature(
+        await self.camera_set_temperature(
             ConfigureCameraCooler(
                 enable=True,
                 setpoint=CameraSensorTemperature(
@@ -107,19 +98,13 @@ class TheSkyCamera(TheSkyDevice):
 
     @sk.command_handler
     async def camera_deinit(self, cmd: sk.Deinit):
-        # Connect to the hardware
-        await self.camera_connect(sk.Connect())
-
-        # Stop camera status publishing
-        logger.debug("stopping thesky camera status loop")
-        await self.stop_status_loop()
-
-        # Disconnect from the hardware
+        await self.camera_abort(sk.Abort())
         await self.camera_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def camera_connect(self, cmd: sk.Connect):
         logger.debug("connecting to thesky camera")
+
         await self.execute(
             """
             ccdsoftCamera.Asynchronous = 1;
@@ -128,7 +113,6 @@ class TheSkyCamera(TheSkyDevice):
             """
         )
 
-        # Wait for the camera to connect
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.Status;""", "Ready")
 
@@ -140,13 +124,13 @@ class TheSkyCamera(TheSkyDevice):
     @sk.command_handler
     async def camera_disconnect(self, cmd: sk.Disconnect):
         logger.debug("disconnecting from thesky camera")
+
         await self.execute(
             """
             ccdsoftCamera.Disconnect();
             """
         )
 
-        # Wait for the camera to disconnect
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.Status;""", "Not Connected")
 
@@ -156,10 +140,31 @@ class TheSkyCamera(TheSkyDevice):
         logger.debug("disconnected from thesky camera")
 
     @sk.command_handler
-    async def set_temperature(self, cmd: ConfigureCameraCooler):
-        self.require_connected()
+    async def camera_stop(self, cmd: sk.Stop):
+        await self.camera_abort(sk.Abort())
+
+    @sk.command_handler
+    async def camera_abort(self, cmd: sk.Abort):
+        await self.require_connected()
+        logger.debug("aborting thesky camera capture")
+
+        await self.execute(
+            """
+            ccdsoftCamera.Abort();
+            """
+        )
+
+        async with asyncio.timeout(self.config.timeout):
+            await self.poll("""ccdsoftCamera.Status;""", "Ready")
+
+        logger.debug("aborted thesky camera capture")
+
+    @sk.command_handler
+    async def camera_set_temperature(self, cmd: ConfigureCameraCooler):
+        await self.require_connected()
+        logger.debug(f"setting thesky camera temperature to {cmd.setpoint.temperature}")
+
         target = cmd.setpoint.temperature
-        logger.debug(f"setting thesky camera temperature to {target}")
         await self.execute(
             f"""
             ccdsoftCamera.TemperatureSetPoint = {target};
@@ -167,7 +172,6 @@ class TheSkyCamera(TheSkyDevice):
             """
         )
 
-        # Confirm the setpoint was accepted
         resp = await self.execute(
             """
             ccdsoftCamera.TemperatureSetPoint;
@@ -180,12 +184,13 @@ class TheSkyCamera(TheSkyDevice):
             logger.debug(f"set thesky camera temperature to {target} C")
 
     @sk.command_handler
-    async def set_binning(self, cmd: ConfigureCameraSensor):
-        self.require_connected()
+    async def camera_set_binning(self, cmd: ConfigureCameraSensor):
+        await self.require_connected()
+        logger.debug(f"setting thesky camera binning to ({bin_x}, {bin_y})")
+
         if cmd.binning is None:
             return
         bin_x, bin_y = int(cmd.binning.x), int(cmd.binning.y)
-        logger.debug(f"setting thesky camera binning to ({bin_x}, {bin_y})")
         await self.execute(
             f"""
             ccdsoftCamera.BinX = {bin_x};
@@ -193,7 +198,6 @@ class TheSkyCamera(TheSkyDevice):
             """
         )
 
-        # Confirm the binning values were accepted
         resp = await self.execute(
             """
             var Out;
@@ -212,27 +216,11 @@ class TheSkyCamera(TheSkyDevice):
             logger.debug(f"set thesky camera binning to ({actual_x}, {actual_y})")
 
     @sk.command_handler
-    async def abort(self, cmd: sk.Abort):
-        self.require_connected()
-        logger.debug("aborting thesky camera capture")
-        await self.execute(
-            """
-            ccdsoftCamera.Abort();
-            """
-        )
-
-        # Wait for the camera to abort
-        async with asyncio.timeout(self.config.timeout):
-            await self.poll("""ccdsoftCamera.Status;""", "Ready")
-        logger.debug("aborted thesky camera capture")
-
-    @sk.command_handler
     async def camera_capture(self, cmd: sk.CameraCapture):
-        self.require_connected()
+        await self.require_connected()
         logger.info(f"Requesting {cmd.integration_time:.1f} sec capture from TheSky camera")
-
-        # Start the capture
         logger.debug("starting thesky camera capture")
+
         frame_type = 1  # 1=Light, 2=Bias, 3=Dark, 4=Flat Field
         await self.execute(
             f"""
@@ -242,11 +230,9 @@ class TheSkyCamera(TheSkyDevice):
             """
         )
 
-        # Wait for it to finish
         async with asyncio.timeout(cmd.integration_time + self.config.timeout):
             await self.poll("""ccdsoftCamera.IsExposureComplete;""", "1", interval=0.01)
 
-        # Retrieve the image
         resp = await self.execute(
             """
             ccdsoftCameraImage.AttachToActiveImager();
@@ -288,7 +274,8 @@ class TheSkyCamera(TheSkyDevice):
         jd, bpp, binx, biny = [float(x) for x in resp.split(",")]
         cmd.context["date_obs"] = Time(jd, format="jd", scale="utc").isot
         cmd.context["exptime"] = cmd.integration_time
-        cmd.context["bitpix"] = _dtype_to_bitpix.get(dtype, 16)  # int(bpp)
+        cmd.context["bitpix"] = _dtype_to_bitpix.get(dtype, int(bpp))
+        cmd.context["bzero"] = _dtype_to_bzero.get(dtype, 0)
 
         if graph := await sk.device().data_graph():
             source = graph.app_source()
@@ -404,9 +391,9 @@ class TheSkyCameraConfig(TheSkyDeviceConfig[TheSkyCamera]):
     """TheSky Camera configuration."""
 
     device_type: Literal["camera"] = "camera"
-    temperature: float
-    timeout: float
+    temperature: float = -10.0
     status_frequency: float = 1.0
+    timeout: float
 
     @override
     def create_device(self):

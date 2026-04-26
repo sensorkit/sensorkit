@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from loguru import logger
 from pydantic import BaseModel
@@ -16,15 +17,27 @@ class AlpacaDevice:
 
     config: AlpacaDeviceConfig
     device_connected: bool | None = field(default=None, init=False)
-    device_name: str = "Device"
+    device_name: ClassVar[str] = "Device"
     _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
+    _reconnect: Callable[[], Coroutine] | None = field(default=None, init=False, repr=False)
 
     @property
     def address(self) -> str:
         return f"{self.config.host}:{self.config.port}"
 
-    def require_connected(self):
-        if not self.device_connected:
+    async def require_connected(self):
+        """Verify the device is connected, attempting to reconnect if not."""
+
+        if self.device_connected:
+            return
+        if self._reconnect is not None:
+            logger.warning(f"{self.device_name} not connected, attempting reconnect")
+            try:
+                async with asyncio.timeout(self.config.timeout):
+                    await self._reconnect()
+            except Exception as e:
+                raise DeviceConnectionError(f"{self.device_name} reconnect failed: {e}") from e
+        else:
             raise DeviceConnectionError(f"{self.device_name} not connected")
 
     async def call(self, device: Device, attr: str, *args, **kwargs) -> Any:

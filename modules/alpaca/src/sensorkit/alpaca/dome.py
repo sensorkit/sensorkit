@@ -62,28 +62,31 @@ class AlpacaDome(AlpacaDevice):
     """Alpaca Dome implementation."""
 
     config: AlpacaDomeConfig
-    _home_task: asyncio.Task | None = None
+    device_name = "Dome"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(AlpacaDomeState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = AlpacaDomeState()
 
         await self.dome_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.dome_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def dome_init(self, cmd: sk.Init):
-        self.device_name = "Dome"
+        self._reconnect = lambda: self.dome_connect(sk.Connect())
         self.dome = Dome(self.address, self.config.device_number, self.config.protocol)
-
         await self.dome_connect(sk.Connect())
 
         d = self.dome
@@ -98,28 +101,14 @@ class AlpacaDome(AlpacaDevice):
         self._can_slave = await self.get(d, "CanSlave", False)
         self._can_sync_azimuth = await self.get(d, "CanSyncAzimuth", False)
 
-        self.start_status_loop(self.status_publish())
-
-        # Home as needed
         if not self.state.has_been_homed:
-            self._home_task = asyncio.create_task(self.dome_home(sk.Home()))
+            await self.dome_home(sk.Home())
 
     @sk.command_handler
     async def dome_deinit(self, cmd: sk.Deinit):
-        if self._home_task is not None:
-            self._home_task.cancel()
-            try:
-                await self._home_task
-            except asyncio.CancelledError:
-                pass
-
-        # Send the dome to its park position
+        await self.dome_stop(sk.Stop())
+        await self.dome_close(CloseEnclosure())
         await self.dome_park(sk.MoveToPark())
-
-        # Stop dome status publishing
-        await self.stop_status_loop()
-
-        # Disconnect from the hardware
         await self.dome_disconnect(sk.Disconnect())
 
     @sk.command_handler
@@ -133,12 +122,18 @@ class AlpacaDome(AlpacaDevice):
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
+    async def dome_stop(self, cmd: sk.Stop):
+        await self.require_connected()
+        logger.debug("aborting slew")
+        await self.call(self.dome, "AbortSlew")
+        logger.debug("aborted slew")
+
+    @sk.command_handler
     async def dome_home(self, cmd: sk.Home):
-        self.require_connected()
+        await self.require_connected()
         if not self._can_find_home:
             logger.warning("Cannot find home")
             return
-
         logger.debug("homing dome")
 
         await self.call(self.dome, "FindHome")
@@ -159,12 +154,12 @@ class AlpacaDome(AlpacaDevice):
 
     @sk.command_handler
     async def dome_park(self, cmd: sk.MoveToPark):
-        self.require_connected()
+        await self.require_connected()
         if not self._can_park:
             logger.warning("Cannot park")
             return
-
         logger.debug("parking dome")
+
         await self.call(self.dome, "Park")
 
         async with asyncio.timeout(self.config.timeout):
@@ -177,19 +172,11 @@ class AlpacaDome(AlpacaDevice):
         logger.debug("parked dome")
 
     @sk.command_handler
-    async def dome_stop(self, cmd: sk.Stop):
-        self.require_connected()
-        logger.debug("aborting slew")
-        await self.call(self.dome, "AbortSlew")
-        logger.debug("aborted slew")
-
-    @sk.command_handler
     async def dome_open(self, cmd: OpenEnclosure):
-        self.require_connected()
+        await self.require_connected()
         if not self._can_set_shutter:
             logger.warning("Cannot set shutter")
             return
-
         logger.debug("opening shutter")
 
         await self.call(self.dome, "OpenShutter")
@@ -205,11 +192,10 @@ class AlpacaDome(AlpacaDevice):
 
     @sk.command_handler
     async def dome_close(self, cmd: CloseEnclosure):
-        self.require_connected()
+        await self.require_connected()
         if not self._can_set_shutter:
             logger.warning("Cannot set shutter")
             return
-
         logger.debug("closing shutter")
 
         await self.call(self.dome, "CloseShutter")
@@ -225,7 +211,7 @@ class AlpacaDome(AlpacaDevice):
 
     @sk.command_handler
     async def dome_move(self, cmd: MoveEnclosure):
-        self.require_connected()
+        await self.require_connected()
         if not self._can_set_azimuth:
             logger.warning("Cannot set azimuth")
             return
@@ -277,11 +263,7 @@ class AlpacaDome(AlpacaDevice):
                         if shutter_status is not None
                         else "unknown"
                     )
-                    is_open = (
-                        shutter_status in (_SHUTTER_OPEN, _SHUTTER_OPENING)
-                        if shutter_status is not None
-                        else False
-                    )
+                    is_open = shutter_status == _SHUTTER_OPEN
 
                     await device.publish(Opened(is_open=is_open))
 
@@ -329,14 +311,16 @@ class AlpacaDome(AlpacaDevice):
                     await device.publish(AlpacaDomeStatus(**properties))
             except Exception as e:
                 logger.exception(f"Error in dome status publish: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
 
 class AlpacaDomeConfig(AlpacaDeviceConfig[AlpacaDome]):
     device_type: Literal["dome"] = "dome"
-    timeout: float = 300.0
     status_frequency: float = 1.0
+    timeout: float = 300.0
 
     @override
     def create_device(self):

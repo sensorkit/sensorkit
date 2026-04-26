@@ -26,58 +26,41 @@ class TheSkyRotator(TheSkyDevice):
     async def entity_init(self):
         device = sk.device()
 
-        # Restore last known state
         try:
             self.state = await device.kv_get_model(TheSkyRotatorState)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = TheSkyRotatorState()
 
-        self.rotator_position = None
+        self.rotator_position: float | None = None
 
-        # Initialize the rotator
-        # FIXME: this is temporary, while awaiting updates to the standard controller
         await self.rotator_init(sk.Init())
-
-    @sk.on_detach
-    async def entity_deinit(self):
-        await sk.device().kv_put_model(self.state)
-
-        # De-initialize the rotator
-        # FIXME: this is temporary, while awaiting updates to the standard controller
-        await self.rotator_deinit(sk.Deinit())
-
-    @sk.command_handler
-    async def rotator_init(self, cmd: sk.Init):
-        # Connect to the hardware
-        await self.rotator_connect(sk.Connect())
-
-        # Start rotator status publishing
-        # TODO: Use service context ThreadGroup.
-        logger.debug("starting thesky rotator status loop")
         self.start_status_loop(self.status_publish())
 
-        # Ensure an initial rotator_position is received
         async with asyncio.timeout(self.config.timeout):
             while self.rotator_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
+    @sk.on_detach
+    async def entity_deinit(self):
+        await self.stop_status_loop()
+        await self.rotator_deinit(sk.Deinit())
+        await sk.device().kv_put_model(self.state)
+
     @sk.command_handler
-    async def rotator_deinit(self, cmd: sk.Deinit):
-        # Connect to the hardware
+    async def rotator_init(self, cmd: sk.Init):
+        self._reconnect = lambda: self.rotator_connect(sk.Connect())
         await self.rotator_connect(sk.Connect())
 
-        # Stop rotator status publishing
-        logger.debug("stopping thesky rotator status loop")
-        await self.stop_status_loop()
-
-        # Disconnect from the hardware
+    @sk.command_handler
+    async def rotator_deinit(self, cmd: sk.Deinit):
         await self.rotator_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def rotator_connect(self, cmd: sk.Connect):
         logger.debug("connecting to thesky rotator")
+
         await self.execute(
             """
             ccdsoftCamera.Asynchronous = 1;
@@ -85,7 +68,6 @@ class TheSkyRotator(TheSkyDevice):
             """
         )
 
-        # Wait for the rotator to connect
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.rotatorIsConnected();""", "1")
 
@@ -97,13 +79,13 @@ class TheSkyRotator(TheSkyDevice):
     @sk.command_handler
     async def rotator_disconnect(self, cmd: sk.Disconnect):
         logger.debug("disconnecting from thesky rotator")
+
         await self.execute(
             """
             ccdsoftCamera.rotatorDisconnect();
             """
         )
 
-        # Wait for the rotator to disconnect
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.rotatorIsConnected();""", "0")
 
@@ -114,8 +96,9 @@ class TheSkyRotator(TheSkyDevice):
 
     @sk.command_handler
     async def rotator_move(self, cmd: ChangeRotatorPosition):
-        self.require_connected()
+        await self.require_connected()
         logger.debug(f"moving thesky rotator position to {cmd.position}")
+
         if not (
             self.config.limit_min <= self.rotator_position + cmd.position <= self.config.limit_max
         ):
@@ -128,9 +111,9 @@ class TheSkyRotator(TheSkyDevice):
             """
         )
 
-        # Wait for the rotator move to complete
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.rotatorPositionAngle;""", f"{cmd.position}")
+
         logger.debug(f"moved thesky rotator position to {cmd.position}")
 
     async def status_publish(self):
@@ -179,10 +162,10 @@ class TheSkyRotatorConfig(TheSkyDeviceConfig[TheSkyRotator]):
     """TheSky Rotator configuration."""
 
     device_type: Literal["rotator"] = "rotator"
-    limit_max: float
-    limit_min: float
-    timeout: float = 60.0
+    limit_min: float = float("-inf")
+    limit_max: float = float("inf")
     status_frequency: float = 1.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):

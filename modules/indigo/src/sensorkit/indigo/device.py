@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from loguru import logger
 from pydantic import BaseModel
@@ -318,7 +318,7 @@ class IndigoDevice:
 
     config: IndigoDeviceConfig
     device_connected: bool | None = field(default=None, init=False)
-    device_name: str = "Device"
+    device_name: ClassVar[str] = "Device"
     _client: IndigoClient | None = field(default=None, init=False, repr=False)
 
     @property

@@ -9,7 +9,6 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.data.fits import ArrayInfo
 from sensorkit.models.devices import (
     CameraSensorSize,
     Connected,
@@ -121,43 +120,51 @@ class NinaCamera(NinaDevice):
     """NINA Camera implementation."""
 
     config: NinaCameraConfig
+    device_name = "Camera"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(NinaCameraState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = NinaCameraState()
 
         await self.camera_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.camera_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def camera_init(self, cmd: sk.Init):
-        self.device_name = "Camera"
-        self._sensor_width: int = 0
-        self._sensor_height: int = 0
-
-        await self.connect("camera")
-        await sk.device().publish(Connected(is_connected=True))
+        self._reconnect = lambda: self.camera_connect(sk.Connect())
+        await self.camera_connect(sk.Connect())
 
         # Read initial info for sensor dimensions
         info = await self.info("camera")
         self._x_size = info.get("XSize", 0)
         self._y_size = info.get("YSize", 0)
 
-        self.start_status_loop(self.status_publish())
+        # Set the camera temperature
+        await self.camera_set_temperature(
+            ConfigureCameraCooler(
+                enable=True,
+                setpoint=CameraSensorTemperature(
+                    temperature=self.config.temperature, units=TemperatureUnit.CELSIUS
+                ),
+            )
+        )
 
     @sk.command_handler
     async def camera_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
-        await self.disconnect("camera")
-        await sk.device().publish(Connected(is_connected=False))
+        await self.camera_abort(sk.Abort())
+        await self.camera_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def camera_connect(self, cmd: sk.Connect):
@@ -170,34 +177,49 @@ class NinaCamera(NinaDevice):
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
-    async def camera_set_binning(self, cmd: ConfigureCameraSensor):
-        self.require_connected()
-        if cmd.binning is None:
-            return
-        binning = f"{int(cmd.binning.x)}x{int(cmd.binning.y)}"
-        logger.debug(f"setting binning to {binning}")
-        await self.client.get("/equipment/camera/set-binning", binning=binning)
-        logger.debug(f"set binning to {binning}")
+    async def camera_stop(self, cmd: sk.Stop):
+        await self.camera_abort(sk.Abort())
+
+    @sk.command_handler
+    async def camera_abort(self, cmd: sk.Abort):
+        await self.require_connected()
+        logger.debug("aborting exposure")
+        await self.client.get("/equipment/camera/abort-exposure")
+        logger.debug("aborted exposure")
 
     @sk.command_handler
     async def camera_set_temperature(self, cmd: ConfigureCameraCooler):
-        self.require_connected()
+        await self.require_connected()
+        logger.debug(f"setting temperature to {cmd.setpoint.temperature} °C")
+
         target = cmd.setpoint.temperature
-        logger.debug(f"setting temperature to {target} °C")
         await self.client.get(
             "/equipment/camera/cool",
             temperature=target,
             minutes=5.0,
         )
+
         logger.debug(f"set temperature to {target} °C")
 
     @sk.command_handler
+    async def camera_set_binning(self, cmd: ConfigureCameraSensor):
+        await self.require_connected()
+        logger.debug(f"setting binning to {binning}")
+
+        if cmd.binning is None:
+            return
+        binning = f"{int(cmd.binning.x)}x{int(cmd.binning.y)}"
+        await self.client.get("/equipment/camera/set-binning", binning=binning)
+
+        logger.debug(f"set binning to {binning}")
+
+    @sk.command_handler
     async def camera_capture(self, cmd: sk.CameraCapture):
-        self.require_connected()
+        await self.require_connected()
+        logger.info(f"Requesting {cmd.integration_time:.1f} sec capture from NINA camera")
+        logger.debug("starting nina camera capture")
+
         exposure_seconds = float(cmd.integration_time)
-
-        logger.debug(f"starting {exposure_seconds:.3f} s Light exposure")
-
         exposure_start = datetime.now(UTC)
 
         # Capture with streaming for image data
@@ -227,13 +249,6 @@ class NinaCamera(NinaDevice):
             context["file_name"] = f"{uuid.uuid1()}.fits"
 
         logger.debug(f"capture completed ({exposure_seconds:.3f}s)")
-
-    @sk.command_handler
-    async def camera_abort(self, cmd: sk.Abort):
-        self.require_connected()
-        logger.debug("aborting exposure")
-        await self.client.get("/equipment/camera/abort-exposure")
-        logger.debug("aborted exposure")
 
     async def status_publish(self):
         while True:
@@ -336,19 +351,22 @@ class NinaCamera(NinaDevice):
                             fields[field_name] = val
 
                     fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
-                    logger.debug(f"NINA camera status: {fields_str}")
+                    # logger.debug(f"NINA camera status: {fields_str}")
 
                     await device.publish(NinaCameraStatus(**fields))
             except Exception as e:
                 logger.exception(f"Error in camera status publish: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
 
 class NinaCameraConfig(NinaDeviceConfig[NinaCamera]):
     device_type: Literal["camera"] = "camera"
-    timeout: float = 60.0
+    temperature: float = -10.0
     status_frequency: float = 1.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):

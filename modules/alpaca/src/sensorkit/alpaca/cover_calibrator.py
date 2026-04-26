@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-from alpaca.covercalibrator import CoverCalibrator
 from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from alpaca.covercalibrator import CoverCalibrator
 from sensorkit.alpaca.device import (
     AlpacaDevice,
     AlpacaDeviceConfig,
@@ -68,41 +68,41 @@ class AlpacaCoverCalibrator(AlpacaDevice):
     """Alpaca CoverCalibrator implementation."""
 
     config: AlpacaCoverCalibratorConfig
+    device_name = "CoverCalibrator"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(AlpacaCoverCalibratorState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = AlpacaCoverCalibratorState()
 
         await self.cover_calibrator_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.cover_calibrator_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def cover_calibrator_init(self, cmd: sk.Init):
-        self.device_name = "CoverCalibrator"
+        self._reconnect = lambda: self.cover_calibrator_connect(sk.Connect())
         self.cover_calibrator = CoverCalibrator(
             self.address, self.config.device_number, self.config.protocol
         )
-
         await self.cover_calibrator_connect(sk.Connect())
 
         # Read capabilities
-        self._max_brightness = await self.get(
-            self.cover_calibrator, "MaxBrightness", None
-        )
-
-        self.start_status_loop(self.status_publish())
+        self._max_brightness = await self.get(self.cover_calibrator, "MaxBrightness", None)
 
     @sk.command_handler
     async def cover_calibrator_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
+        await self.cover_calibrator_stop(sk.Stop())
         await self.cover_calibrator_disconnect(sk.Disconnect())
 
     @sk.command_handler
@@ -116,61 +116,43 @@ class AlpacaCoverCalibrator(AlpacaDevice):
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
-    async def cover_calibrator_open(self, cmd: OpenMirrorCover):
-        self.require_connected()
-        if self.state.cover_state == "open":
-            return
+    async def cover_calibrator_stop(self, cmd: sk.Stop):
+        await self.require_connected()
+        logger.debug("stopping cover calibrator")
+        await self.call(self.cover_calibrator, "HaltCover")
+        logger.debug("stopped cover calibrator")
 
+    @sk.command_handler
+    async def cover_calibrator_open(self, cmd: OpenMirrorCover):
+        await self.require_connected()
         logger.debug("opening cover calibrator")
 
         await self.call(self.cover_calibrator, "OpenCover")
 
         async with asyncio.timeout(self.config.timeout):
             while True:
-                state = await self.get(
-                    self.cover_calibrator, "CoverState", _COVER_UNKNOWN
-                )
-                moving = await self.get(self.cover_calibrator, "CoverMoving", False)
-                if state == _COVER_OPEN and not moving:
+                cover_state = await self.get(self.cover_calibrator, "CoverState", _COVER_UNKNOWN)
+                if cover_state == _COVER_OPEN:
                     break
                 await asyncio.sleep(self.config.status_frequency)
-
-        self.state.cover_state = "open"
-        await sk.device().kv_put_model(self.state)
 
         logger.debug("opened cover calibrator")
 
     @sk.command_handler
     async def cover_calibrator_close(self, cmd: CloseMirrorCover):
-        self.require_connected()
-        if self.state.cover_state == "closed":
-            return
-
+        await self.require_connected()
         logger.debug("closing cover calibrator")
 
         await self.call(self.cover_calibrator, "CloseCover")
 
         async with asyncio.timeout(self.config.timeout):
             while True:
-                state = await self.get(
-                    self.cover_calibrator, "CoverState", _COVER_UNKNOWN
-                )
-                moving = await self.get(self.cover_calibrator, "CoverMoving", False)
-                if state == _COVER_CLOSED and not moving:
+                cover_state = await self.get(self.cover_calibrator, "CoverState", _COVER_UNKNOWN)
+                if cover_state == _COVER_CLOSED:
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        self.state.cover_state = "closed"
-        await sk.device().kv_put_model(self.state)
-
         logger.debug("closed cover calibrator")
-
-    @sk.command_handler
-    async def cover_calibrator_stop(self, cmd: sk.Stop):
-        self.require_connected()
-        logger.debug("stopping cover calibrator")
-        await self.call(self.cover_calibrator, "HaltCover")
-        logger.debug("stopped cover calibrator")
 
     async def status_publish(self):
         while True:
@@ -185,18 +167,11 @@ class AlpacaCoverCalibrator(AlpacaDevice):
                 if connected:
                     cover_state = await self.get(c, "CoverState", _COVER_UNKNOWN)
                     cover_moving = await self.get(c, "CoverMoving", False)
-                    calibrator_state = await self.get(
-                        c, "CalibratorState", _CAL_NOT_PRESENT
-                    )
+                    calibrator_state = await self.get(c, "CalibratorState", _CAL_NOT_PRESENT)
                     calibrator_changing = await self.get(c, "CalibratorChanging", False)
                     brightness = await self.get(c, "Brightness", None)
 
                     is_open = cover_state == _COVER_OPEN
-
-                    if cover_state == _COVER_OPEN:
-                        self.state.cover_state = "open"
-                    elif cover_state == _COVER_CLOSED:
-                        self.state.cover_state = "closed"
 
                     # logger.debug(
                     #     f"Alpaca cover calibrator status: connected={connected}, cover_state={cover_state}, "
@@ -209,9 +184,7 @@ class AlpacaCoverCalibrator(AlpacaDevice):
                         AlpacaCoverCalibratorStatus(
                             cover_state=_COVER_NAMES.get(cover_state, "Unknown"),
                             cover_moving=cover_moving,
-                            calibrator_state=_CAL_NAMES.get(
-                                calibrator_state, "Unknown"
-                            ),
+                            calibrator_state=_CAL_NAMES.get(calibrator_state, "Unknown"),
                             calibrator_changing=calibrator_changing,
                             brightness=brightness,
                             max_brightness=self._max_brightness,
@@ -225,8 +198,8 @@ class AlpacaCoverCalibrator(AlpacaDevice):
 
 class AlpacaCoverCalibratorConfig(AlpacaDeviceConfig[AlpacaCoverCalibrator]):
     device_type: Literal["cover_calibrator"] = "cover_calibrator"
-    timeout: float = 60.0
     status_frequency: float = 1.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):
@@ -235,4 +208,3 @@ class AlpacaCoverCalibratorConfig(AlpacaDeviceConfig[AlpacaCoverCalibrator]):
 
 class AlpacaCoverCalibratorState(AlpacaDeviceState):
     device_type: Literal["cover_calibrator"] = "cover_calibrator"
-    cover_state: str = "unknown"

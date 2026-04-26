@@ -26,40 +26,42 @@ class NinaFocuser(NinaDevice):
     """NINA Focuser implementation."""
 
     config: NinaFocuserConfig
+    device_name = "Focuser"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(NinaFocuserState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = NinaFocuserState()
 
+        self.focuser_position: float | None = None
+
+        self.start_status_loop(self.status_publish())
         await self.focuser_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.focuser_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def focuser_init(self, cmd: sk.Init):
-        self.device_name = "Focuser"
-        self.focuser_position: float | None = None
-
-        await self.connect("focuser")
-        await sk.device().publish(Connected(is_connected=True))
-        self.start_status_loop(self.status_publish())
+        self._reconnect = lambda: self.focuser_connect(sk.Connect())
+        await self.focuser_connect(sk.Connect())
 
         async with asyncio.timeout(self.config.timeout):
             while self.focuser_position is None:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(self.config.status_frequency)
 
     @sk.command_handler
     async def focuser_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
-        await self.disconnect("focuser")
-        await sk.device().publish(Connected(is_connected=False))
+        await self.focuser_stop(sk.Stop())
+        await self.focuser_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def focuser_connect(self, cmd: sk.Connect):
@@ -72,8 +74,15 @@ class NinaFocuser(NinaDevice):
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
+    async def focuser_stop(self, cmd: sk.Stop):
+        await self.require_connected()
+        logger.debug("stopping focuser")
+        await self.client.get("/equipment/focuser/stop-move")
+        logger.debug("stopped focuser")
+
+    @sk.command_handler
     async def focuser_move(self, cmd: ChangeFocusPosition):
-        self.require_connected()
+        await self.require_connected()
         position = int(cmd.position)
         logger.debug(f"moving focuser to {position}")
         await self.client.get("/equipment/focuser/move", position=position)
@@ -86,13 +95,6 @@ class NinaFocuser(NinaDevice):
                 await asyncio.sleep(self.config.status_frequency)
 
         logger.debug(f"moved focuser to {self.focuser_position}")
-
-    @sk.command_handler
-    async def focuser_stop(self, cmd: sk.Stop):
-        self.require_connected()
-        logger.debug("stopping focuser")
-        await self.client.get("/equipment/focuser/stop-move")
-        logger.info("stopped focuser")
 
     async def status_publish(self):
         while True:
@@ -124,20 +126,24 @@ class NinaFocuser(NinaDevice):
                         if val is not None:
                             fields[key] = val
 
-                    fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
-                    # logger.debug(f"NINA focuser status: connected={connected}, {fields_str}")
-
                     await device.publish(NinaFocuserStatus(**fields))
+
+                    fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+                    # logger.debug(
+                    #     f"NINA focuser status: connected={connected}, {fields_str}"
+                    # )
             except Exception as e:
                 logger.exception(f"Error in focuser status publish: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
 
 class NinaFocuserConfig(NinaDeviceConfig[NinaFocuser]):
     device_type: Literal["focuser"] = "focuser"
-    timeout: float = 60.0
     status_frequency: float = 1.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):

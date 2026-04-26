@@ -27,61 +27,42 @@ class TheSkyOTA(TheSkyDevice):
     async def entity_init(self):
         device = sk.device()
 
-        # Restore last known state
         try:
             self.state = await device.kv_get_model(TheSkyOTAState)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = TheSkyOTAState()
 
-        # Initialize the OTA
-        # FIXME: this is temporary, while awaiting updates to the standard controller
         await self.ota_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await sk.device().kv_put_model(self.state)
-
-        # De-initialize the OTA
-        # FIXME: this is temporary, while awaiting updates to the standard controller
+        await self.stop_status_loop()
         await self.ota_deinit(sk.Deinit())
+        await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def ota_init(self, cmd: sk.Init):
-        # Connect to the hardware
+        self._reconnect = lambda: self.ota_connect(sk.Connect())
         await self.ota_connect(sk.Connect())
-
-        # Start OTA status publishing
-        # TODO: Use service context ThreadGroup.
-        logger.debug("starting thesky ota status loop")
-        self.start_status_loop(self.status_publish())
 
     @sk.command_handler
     async def ota_deinit(self, cmd: sk.Deinit):
-        # Connect to the hardware
-        await self.ota_connect(sk.Connect())
-
-        # Close the mirror cover
-        await self.ota_disconnect(sk.Disconnect())
-
-        # Stop OTA status publishing
-        logger.debug("stopping thesky ota status loop")
-        await self.stop_status_loop()
-
-        # Disconnect from the hardware
+        await self.ota_close(CloseMirrorCover())
         await self.ota_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def ota_connect(self, cmd: sk.Connect):
         logger.debug("connecting to thesky ota")
+
         await self.execute(
             """
             OpticalTubeAssembly.Connect();
             """
         )
 
-        # Wait for the OTA to connect
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""OpticalTubeAssembly.isConnected;""", "1")
 
@@ -93,13 +74,13 @@ class TheSkyOTA(TheSkyDevice):
     @sk.command_handler
     async def ota_disconnect(self, cmd: sk.Disconnect):
         logger.debug("disconnecting from thesky ota")
+
         await self.execute(
             """
             OpticalTubeAssembly.Disconnect();
             """
         )
 
-        # Wait for the OTA to disconnect
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""OpticalTubeAssembly.isConnected;""", "0")
 
@@ -110,7 +91,7 @@ class TheSkyOTA(TheSkyDevice):
 
     @sk.command_handler
     async def ota_open(self, cmd: OpenMirrorCover):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("opening thesky ota mirror cover")
 
         async with asyncio.timeout(self.config.timeout):
@@ -121,14 +102,14 @@ class TheSkyOTA(TheSkyDevice):
                 except OTACommandInProgressError:
                     await asyncio.sleep(0.5)
 
-        # Wait for the mirror cover to open
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""OpticalTubeAssembly.mirrorCoverState;""", "1")
+
         logger.debug("opened thesky ota mirror cover")
 
     @sk.command_handler
     async def ota_close(self, cmd: CloseMirrorCover):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("closing thesky ota mirror cover")
 
         async with asyncio.timeout(self.config.timeout):
@@ -139,9 +120,9 @@ class TheSkyOTA(TheSkyDevice):
                 except OTACommandInProgressError:
                     await asyncio.sleep(0.5)
 
-        # Wait for the mirror cover to close
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""OpticalTubeAssembly.mirrorCoverState;""", "0")
+
         logger.debug("closed thesky ota mirror cover")
 
     async def status_publish(self):
@@ -168,13 +149,13 @@ class TheSkyOTA(TheSkyDevice):
                 connected = bool(connected)
                 self.device_connected = connected
 
-                # logger.debug(
-                #     f"TheSky OTA status: connected={connected}, cover={cover_str}"
-                # )
+                is_open = int(cover_num) in (0, 1)
+
+                logger.debug(f"TheSky OTA status: connected={connected}, cover={cover_str}")
 
                 device = sk.device()
                 await device.publish(Connected(is_connected=connected))
-                await device.publish(Opened(is_open=int(cover_num) in (0, 1)))
+                await device.publish(Opened(is_open=is_open))
 
             except Exception as e:
                 logger.warning(f"Failed to update TheSky OTA status ({e})")
@@ -189,8 +170,8 @@ class TheSkyOTAConfig(TheSkyDeviceConfig[TheSkyOTA]):
     """TheSky OTA configuration."""
 
     device_type: Literal["ota"] = "ota"
-    timeout: float = 60.0
     status_frequency: float = 1.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):

@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-from alpaca.filterwheel import FilterWheel
 from loguru import logger
 
 import sensorkit.api as sk
+from alpaca.filterwheel import FilterWheel
 from sensorkit.alpaca.device import (
     AlpacaDevice,
     AlpacaDeviceConfig,
@@ -21,32 +21,42 @@ class AlpacaFilterWheel(AlpacaDevice):
     """Alpaca FilterWheel implementation."""
 
     config: AlpacaFilterWheelConfig
+    device_name = "FilterWheel"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(AlpacaFilterWheelState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
+            logger.warning(f"No saved state for {device.entity}")
             self.state = AlpacaFilterWheelState()
 
+        self.filter_wheel_position: float | None = None
+
         await self.filter_wheel_init(sk.Init())
+        self.start_status_loop(self.status_publish())
+
+        async with asyncio.timeout(self.config.timeout):
+            while self.filter_wheel_position is None:
+                await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.filter_wheel_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def filter_wheel_init(self, cmd: sk.Init):
-        self.device_name = "FilterWheel"
+        self._reconnect = lambda: self.filter_wheel_connect(sk.Connect())
         self.filter_wheel = FilterWheel(
             self.address, self.config.device_number, self.config.protocol
         )
-        self.filter_position: int | None = None
-        self._filter_names: list[str] = []
-
         await self.filter_wheel_connect(sk.Connect())
+
+        self._filter_names: list[str] = []
 
         # Read capabilities
         self._filter_names = await self.get(self.filter_wheel, "Names", [])
@@ -54,16 +64,8 @@ class AlpacaFilterWheel(AlpacaDevice):
             name: i for i, name in enumerate(self._filter_names)
         }
 
-        self.start_status_loop(self.status_publish())
-
-        # Wait for initial position
-        async with asyncio.timeout(self.config.timeout):
-            while self.filter_position is None:
-                await asyncio.sleep(self.config.status_frequency)
-
     @sk.command_handler
     async def filter_wheel_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
         await self.filter_wheel_disconnect(sk.Disconnect())
 
     @sk.command_handler
@@ -77,8 +79,9 @@ class AlpacaFilterWheel(AlpacaDevice):
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
-    async def filter_wheel_set(self, cmd: SetFilter):
-        self.require_connected()
+    async def filter_wheel_set_filter(self, cmd: SetFilter):
+        await self.require_connected()
+        logger.debug(f"setting filter wheel position to {cmd.filter}")
 
         if isinstance(cmd.filter, int):
             position = cmd.filter
@@ -87,8 +90,6 @@ class AlpacaFilterWheel(AlpacaDevice):
             if position is None:
                 logger.error(f"Unknown filter name: {cmd.filter}")
                 return
-
-        logger.debug(f"setting position to {position}")
 
         await self.put(self.filter_wheel, "Position", position)
 
@@ -100,9 +101,9 @@ class AlpacaFilterWheel(AlpacaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        self.filter_position = pos
+        self.filter_wheel_position = pos
 
-        logger.debug(f"set position to {self.filter_position}")
+        logger.debug(f"set filter wheel position to {self.filter_wheel_position}")
 
     async def status_publish(self):
         while True:
@@ -117,7 +118,7 @@ class AlpacaFilterWheel(AlpacaDevice):
                 if connected:
                     position = await self.get(fw, "Position", -1)
                     if position >= 0:
-                        self.filter_position = position
+                        self.filter_wheel_position = position
                         name = (
                             self._filter_names[position]
                             if position < len(self._filter_names)
@@ -131,14 +132,16 @@ class AlpacaFilterWheel(AlpacaDevice):
                         await device.publish(Filter(name=name, position=position))
             except Exception as e:
                 logger.exception(f"Error in filter wheel status publish: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
 
 class AlpacaFilterWheelConfig(AlpacaDeviceConfig[AlpacaFilterWheel]):
     device_type: Literal["filter_wheel"] = "filter_wheel"
-    timeout: float = 60.0
     status_frequency: float = 5.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):

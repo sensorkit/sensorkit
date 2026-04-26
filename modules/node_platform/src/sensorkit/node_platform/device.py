@@ -7,7 +7,6 @@ from typing import Any, ClassVar, Literal
 
 import ourskyai_node_platform_api as osapi
 from dotenv import dotenv_values
-from loguru import logger
 from pydantic import BaseModel
 
 
@@ -19,7 +18,7 @@ class NodePlatformDevice:
     _api: NodePlatformAPI | None = field(default=None, init=False)
 
     device_connected: bool | None = field(default=None, init=False)
-    device_name: str = "Device"
+    device_name: ClassVar[str] = "Device"
     _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
 
     @property
@@ -62,8 +61,9 @@ class NodePlatformDevice:
                 pass
             self._status_task = None
 
-    def require_connected(self):
+    async def require_connected(self):
         """Raise DeviceConnectionError if device is not connected."""
+
         if not self.device_connected:
             raise DeviceConnectionError(code=-3, message=f"{self.device_name} not connected")
 

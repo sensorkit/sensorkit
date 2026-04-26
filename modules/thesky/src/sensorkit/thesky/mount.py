@@ -65,10 +65,9 @@ class TheSkyMount(TheSkyDevice):
     async def entity_init(self):
         device = sk.device()
 
-        # Restore last known state
         try:
             self.state = await device.kv_get_model(TheSkyMountState)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = TheSkyMountState()
@@ -105,47 +104,33 @@ class TheSkyMount(TheSkyDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        await sk.device().kv_put_model(self.state)
-
-        # De-initialize the mount
-        # FIXME: this is temporary, while awaiting updates to the standard controller
+        await self.stop_status_loop()
         await self.mount_deinit(sk.Deinit())
+        await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def mount_init(self, cmd: sk.Init):
-        # Connect to the hardware
-        await self.mount_connect(sk.Connect())
+        self._reconnect = lambda: self.mount_connect(sk.Connect())
 
-        # Start mount status publishing (slow cadence; fast loop started during tracking)
-        logger.debug("starting thesky mount status loop")
+        await self.mount_connect(sk.Connect())
         self.start_status_loop(self.status_publish_slow())
 
-        # Home as needed
         if not self.state.has_been_homed:
             await self.mount_home(sk.Home())
 
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
-        # Connect to the hardware
-        await self.mount_connect(sk.Connect())
-
-        # Stop all current mount motion
+        if not self.device_connected:
+            return
         await self.mount_stop(sk.Stop())
-
-        # Send the mount to its park position
         await self.mount_park(sk.MoveToPark())
-
-        # Stop mount status publishing
-        logger.debug("stopping thesky mount status loop")
         self._stop_fast_status()
-        await self.stop_status_loop()
-
-        # Disconnect from the hardware
         await self.mount_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def mount_connect(self, cmd: sk.Connect):
         logger.debug("connecting to thesky mount")
+
         await self.execute(
             """
             sky6RASCOMTele.Asynchronous = 1;
@@ -153,7 +138,6 @@ class TheSkyMount(TheSkyDevice):
             """
         )
 
-        # Wait for the mount to connect
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6RASCOMTele.IsConnected;""", "1")
 
@@ -165,13 +149,13 @@ class TheSkyMount(TheSkyDevice):
     @sk.command_handler
     async def mount_disconnect(self, cmd: sk.Disconnect):
         logger.debug("disconnecting from thesky mount")
+
         await self.execute(
             """
             sky6RASCOMTheSky.DisconnectTelescope();
             """
         )
 
-        # Wait for the mount to disconnect
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6RASCOMTele.IsConnected;""", "0")
 
@@ -181,25 +165,45 @@ class TheSkyMount(TheSkyDevice):
         logger.debug("disconnected from thesky mount")
 
     @sk.command_handler
+    async def mount_stop(self, cmd: sk.Stop):
+        await self.mount_unpark()
+        logger.debug("stopping thesky mount")
+
+        await self.execute(
+            """
+            sky6RASCOMTele.Abort();
+            sky6RASCOMTele.SetTracking(0,1,0,0);
+            """
+        )
+
+        async with asyncio.timeout(self.config.timeout):
+            await self.poll("""sky6RASCOMTele.IsTracking;""", "0")
+
+        self._stop_fast_status()
+        logger.debug("stopped thesky mount")
+
+    @sk.command_handler
     async def mount_park(self, cmd: sk.MoveToPark):
-        self.require_connected()
+        await self.require_connected()
         logger.debug("parking thesky mount")
+
         await self.execute(
             """
             sky6RASCOMTele.ParkAndDoNotDisconnect();
             """
         )
 
-        # Wait for the mount to finish parking
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6RASCOMTele.IsParked();""", "true")
+
         logger.debug("parked thesky mount")
 
     async def mount_unpark(self):
         # This is unique to TheSky. It requires you to unpark the mount before issuing any
         # other motion command.
-        self.require_connected()
+        await self.require_connected()
         logger.debug("unparking thesky mount")
+
         await self.execute(
             """
             var Out;
@@ -210,14 +214,13 @@ class TheSkyMount(TheSkyDevice):
             """
         )
 
-        # Wait for the mount to finish unparking
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6RASCOMTele.IsParked();""", "false")
+
         logger.debug("unparked thesky mount")
 
     @sk.command_handler
     async def mount_home(self, cmd: sk.Home):
-        self.require_connected()
         await self.mount_unpark()
         logger.debug("homing thesky mount")
 
@@ -233,12 +236,7 @@ class TheSkyMount(TheSkyDevice):
                 except MountCommandInProgressError:
                     await asyncio.sleep(0.5)
 
-        # Ensure it actually homed
         await self.poll("""sky6RASCOMTele.LastSlewError;""", "0")
-
-        # Persist to state
-        self.state.has_been_homed = True
-        await sk.device().kv_put_model(self.state)
 
         # Turn off sidereal tracking
         await self.execute(
@@ -247,36 +245,29 @@ class TheSkyMount(TheSkyDevice):
             """
         )
 
-        # Wait for the mount to stop tracking
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6RASCOMTele.IsTracking;""", "0")
+
+        self.state.has_been_homed = True
+        await sk.device().kv_put_model(self.state)
 
         logger.debug("homed thesky mount")
 
     @sk.command_handler
-    async def mount_stop(self, cmd: sk.Stop):
-        self.require_connected()
-        self._stop_fast_status()
-        logger.debug("stopping thesky mount")
-        await self.mount_unpark()
-        await self.execute(
-            """
-            sky6RASCOMTele.Abort();
-            sky6RASCOMTele.SetTracking(0,1,0,0);
-            """
-        )
-
-        # Wait for the mount to stop tracking
-        async with asyncio.timeout(self.config.timeout):
-            await self.poll("""sky6RASCOMTele.IsTracking;""", "0")
-        logger.debug("stopped thesky mount")
-
-    @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
-        if not self.device_connected:
-            await self.mount_init(sk.Init())
-
         await self.mount_unpark()
+
+        # target = await cmd.target.adapt(
+        #     ICRSTarget,
+        #     AltAzTarget,
+        #     (FrameTarget, ReferenceFrame.ICRF),
+        #     (FrameTarget, ReferenceFrame.ALTAZ),
+        #     TLETarget,
+        #     (RateTarget, ReferenceFrame.ICRF),
+        #     (EphemerisTarget, ReferenceFrame.ICRF),
+        #     observer=self._geodetic,
+        # )
+        target = cmd.target
 
         # Clear previous error(s)
         try:
@@ -288,7 +279,6 @@ class TheSkyMount(TheSkyDevice):
             case ICRSTarget():
                 logger.debug("executing RADec follow")
 
-                # Slew to RA/Dec
                 await self.execute(
                     f"""
                     sky6RASCOMTele.SlewToRaDec(
@@ -299,7 +289,6 @@ class TheSkyMount(TheSkyDevice):
                     """
                 )
 
-                # Wait for the mount to start tracking
                 async with asyncio.timeout(self.config.timeout):
                     await self.poll("""sky6RASCOMTele.IsTracking;""", "1")
 
@@ -309,7 +298,6 @@ class TheSkyMount(TheSkyDevice):
             case AltAzTarget():
                 logger.debug("executing AltAz follow")
 
-                # Slew to Alt/Az
                 await self.execute(
                     f"""
                     sky6RASCOMTele.SlewToAzAlt(
@@ -320,7 +308,6 @@ class TheSkyMount(TheSkyDevice):
                     """
                 )
 
-                # Wait for the mount to stop slewing
                 async with asyncio.timeout(self.config.timeout):
                     await self.poll("""sky6RASCOMTele.IsSlewComplete;""", "1")
 
@@ -363,7 +350,6 @@ class TheSkyMount(TheSkyDevice):
                     """
                 )
 
-                # Wait for the mount to start tracking
                 async with asyncio.timeout(self.config.timeout):
                     await self.poll("""Raven3.trackLEOStatus;""", "6")
 
@@ -371,7 +357,7 @@ class TheSkyMount(TheSkyDevice):
                 logger.debug("tracking TLE follow")
 
             case RateTarget():
-                logger.debug("executing rate follow")
+                logger.debug("executing Rate follow")
 
                 # Slew to initial position
                 await self.execute(
@@ -384,7 +370,6 @@ class TheSkyMount(TheSkyDevice):
                     """
                 )
 
-                # Wait for the mount to start tracking
                 async with asyncio.timeout(self.config.timeout):
                     await self.poll("""sky6RASCOMTele.IsTracking;""", "1")
 
@@ -413,32 +398,27 @@ class TheSkyMount(TheSkyDevice):
             case FrameTarget():
                 match cmd.target.frame:
                     case ReferenceFrame.ALTAZ:
-                        # Turn sidereal tracking off
                         self._stop_fast_status()
-                        logger.debug("stopping tracking")
+                        logger.debug("disabling tracking")
                         await self.execute(
                             """
                             sky6RASCOMTele.SetTracking(0,1,0,0);
                             """
                         )
-                        # Wait for the mount to stop tracking
                         async with asyncio.timeout(self.config.timeout):
                             await self.poll("""sky6RASCOMTele.IsTracking;""", "0")
-                        logger.debug("stopped tracking")
-
+                        logger.debug("disabled tracking")
                     case ReferenceFrame.ICRF:
-                        # Turn sidereal tracking on
-                        logger.debug("executing sidereal track")
+                        logger.debug("enabling sidereal tracking")
                         await self.execute(
                             """
                             sky6RASCOMTele.SetTracking(1,1,0,0);
                             """
                         )
-                        # Wait for the mount to start tracking
                         async with asyncio.timeout(self.config.timeout):
                             await self.poll("""sky6RASCOMTele.IsTracking;""", "1")
                         self._start_fast_status()
-                        logger.debug("sidereally tracking thesky mount")
+                        logger.debug("enabled sidereal tracking")
 
                     case _:
                         raise RuntimeError(f"Need specific target to track {cmd.target.frame}")
@@ -550,8 +530,14 @@ class TheSkyMount(TheSkyDevice):
                     await self._publish_mount_status()
                 else:
                     await sk.device().publish(Connected(is_connected=self.device_connected))
+
+                # logger.debug(
+                #     f"TheSky mount status: connected={self.device_connected}"
+                # )
             except Exception as e:
                 logger.warning(f"Error in slow mount status_publish ({e})")
+                await asyncio.sleep(self.config.status_frequency_slow)
+                continue
 
             await asyncio.sleep(self.config.status_frequency_slow)
 
@@ -561,6 +547,8 @@ class TheSkyMount(TheSkyDevice):
                 await self._publish_mount_status()
             except Exception as e:
                 logger.warning(f"Error in fast mount status_publish ({e})")
+                await asyncio.sleep(self.config.status_frequency_fast)
+                continue
 
             await asyncio.sleep(self.config.status_frequency_fast)
 

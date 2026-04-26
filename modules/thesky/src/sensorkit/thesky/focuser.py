@@ -26,58 +26,41 @@ class TheSkyFocuser(TheSkyDevice):
     async def entity_init(self):
         device = sk.device()
 
-        # Restore last known state
         try:
             self.state = await device.kv_get_model(TheSkyFocuserState)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = TheSkyFocuserState()
 
-        self.focuser_position = None
+        self.focuser_position: float | None = None
 
-        # Initialize the focuser
-        # FIXME: this is temporary, while awaiting updates to the standard controller
         await self.focuser_init(sk.Init())
-
-    @sk.on_detach
-    async def entity_deinit(self):
-        await sk.device().kv_put_model(self.state)
-
-        # De-initialize the focuser
-        # FIXME: this is temporary, while awaiting updates to the standard controller
-        await self.focuser_deinit(sk.Deinit())
-
-    @sk.command_handler
-    async def focuser_init(self, cmd: sk.Init):
-        # Connect to the hardware
-        await self.focuser_connect(sk.Connect())
-
-        # Start focuser status publishing
-        # TODO: Use service context ThreadGroup.
-        logger.debug("starting thesky focuser status loop")
         self.start_status_loop(self.status_publish())
 
-        # Ensure an initial focuser_position is received
         async with asyncio.timeout(self.config.timeout):
             while self.focuser_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
+    @sk.on_detach
+    async def entity_deinit(self):
+        await self.stop_status_loop()
+        await self.focuser_deinit(sk.Deinit())
+        await sk.device().kv_put_model(self.state)
+
     @sk.command_handler
-    async def focuser_deinit(self, cmd: sk.Deinit):
-        # Connect to the hardware
+    async def focuser_init(self, cmd: sk.Init):
+        self._reconnect = lambda: self.focuser_connect(sk.Connect())
         await self.focuser_connect(sk.Connect())
 
-        # Stop focuser status publishing
-        logger.debug("stopping thesky focuser status loop")
-        await self.stop_status_loop()
-
-        # Disconnect from the hardware
+    @sk.command_handler
+    async def focuser_deinit(self, cmd: sk.Deinit):
         await self.focuser_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def focuser_connect(self, cmd: sk.Connect):
         logger.debug("connecting to thesky focuser")
+
         await self.execute(
             """
             ccdsoftCamera.Asynchronous = 1;
@@ -85,7 +68,6 @@ class TheSkyFocuser(TheSkyDevice):
             """
         )
 
-        # Wait for the focuser to connect
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.focIsConnected;""", "1")
 
@@ -97,13 +79,13 @@ class TheSkyFocuser(TheSkyDevice):
     @sk.command_handler
     async def focuser_disconnect(self, cmd: sk.Disconnect):
         logger.debug("disconnecting from thesky focuser")
+
         await self.execute(
             """
             ccdsoftCamera.focDisconnect();
             """
         )
 
-        # Wait for the focuser to connect
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.focIsConnected;""", "0")
 
@@ -116,8 +98,9 @@ class TheSkyFocuser(TheSkyDevice):
     async def focuser_move(self, cmd: ChangeFocusPosition):
         # NOTE: the TheSky focuser simulator does not allow setting limits (for testing). As of this release, we respect
         # limits set via config, but a future release ought to respect both config and TheSky limits.
-        self.require_connected()
+        await self.require_connected()
         logger.debug(f"moving thesky focuser position to {cmd.position}")
+
         if not (self.config.limit_min <= cmd.position <= self.config.limit_max):
             logger.error(f"moving focus position ({cmd.position}) abandoned due to limits")
             raise RuntimeError(f"Focuser position ({cmd.position}) outside limits")
@@ -139,9 +122,9 @@ class TheSkyFocuser(TheSkyDevice):
         else:
             return
 
-        # Wait for the focus move to complete
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.focPosition;""", f"{cmd.position}")
+
         logger.debug(f"moved thesky focuser position to {cmd.position}")
 
     async def status_publish(self):
@@ -190,10 +173,10 @@ class TheSkyFocuserConfig(TheSkyDeviceConfig[TheSkyFocuser]):
     """TheSky Focuser configuration."""
 
     device_type: Literal["focuser"] = "focuser"
-    limit_max: float
-    limit_min: float
-    timeout: float = 60.0
+    limit_min: float = float("-inf")
+    limit_max: float = float("inf")
     status_frequency: float = 1.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):

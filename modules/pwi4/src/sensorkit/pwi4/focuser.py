@@ -15,38 +15,42 @@ class PWI4Focuser(PWI4Device):
     """PWI4 focuser implementation."""
 
     config: PWI4FocuserConfig
+    device_name = "Focuser"
 
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
         try:
             self.state = await device.kv_get_model(PWI4FocuserState)
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             self.state = PWI4FocuserState()
+            logger.warning(f"No saved state for {device.entity}")
+
+        self.focuser_position: float | None = None
 
         await self.focuser_init(sk.Init())
+        self.start_status_loop(self.status_publish())
+
+        async with asyncio.timeout(self.config.timeout):
+            while self.focuser_position is None:
+                await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
+        await self.stop_status_loop()
         await self.focuser_deinit(sk.Deinit())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def focuser_init(self, cmd: sk.Init):
-        self.device_name = "Focuser"
-
+        self._reconnect = lambda: self.focuser_connect(sk.Connect())
         await self.focuser_connect(sk.Connect())
         await self.focuser_enable(sk.Enable())
 
-        self.start_status_loop(self.status_publish())
-
-        async with asyncio.timeout(self.config.timeout):
-            while self.device_connected is None:
-                await asyncio.sleep(self.config.status_frequency)
-
     @sk.command_handler
     async def focuser_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
+        await self.focuser_stop(sk.Stop())
         await self.focuser_disable(sk.Disable())
         await self.focuser_disconnect(sk.Disconnect())
 
@@ -62,6 +66,7 @@ class PWI4Focuser(PWI4Device):
 
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
+
         logger.debug("connected to focuser")
 
     @sk.command_handler
@@ -76,31 +81,41 @@ class PWI4Focuser(PWI4Device):
 
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
+
         logger.debug("disconnected from focuser")
 
     @sk.command_handler
     async def focuser_enable(self, cmd: sk.Enable):
+        await self.require_connected()
+        logger.debug("enabling focuser")
         await self.client.request("/focuser/enable")
+        logger.debug("enabled focuser")
 
     @sk.command_handler
     async def focuser_disable(self, cmd: sk.Disable):
+        await self.require_connected()
+        logger.debug("disabling focuser")
         await self.client.request("/focuser/disable")
+        logger.debug("disabled focuser")
+
+    @sk.command_handler
+    async def focuser_stop(self, cmd: sk.Stop):
+        await self.require_connected()
+        logger.debug("stopping focuser")
+        await self.client.request("/focuser/stop")
+        logger.debug("stopped focuser")
 
     @sk.command_handler
     async def focuser_move(self, cmd: sk.ChangeFocusPosition):
-        self.require_connected()
+        await self.require_connected()
         logger.debug(f"moving focuser to {cmd.position}")
+
         await self.client.request("/focuser/goto", params={"target": cmd.position})
         await self.client.poll(
             lambda s: not self.client.get_bool(s, "focuser.is_moving"),
         )
-        logger.debug(f"moved focuser to {cmd.position}")
 
-    @sk.command_handler
-    async def focuser_stop(self, cmd: sk.Stop):
-        logger.debug("stopping focuser")
-        await self.client.request("/focuser/stop")
-        logger.debug("stopped focuser")
+        logger.debug(f"moved focuser to {cmd.position}")
 
     async def status_publish(self):
         while True:
@@ -112,15 +127,18 @@ class PWI4Focuser(PWI4Device):
                 device = sk.device()
                 await device.publish(Connected(is_connected=connected))
 
+                if st is not None:
+                    self.focuser_position = self.client.get_float(st, "focuser.position")
+
                 if connected:
                     await device.publish(
                         Enabled(is_enabled=self.client.get_bool(st, "focuser.is_enabled"))
                     )
-                    await device.publish(
-                        sk.FocusPosition(position=self.client.get_float(st, "focuser.position"))
-                    )
+                    await device.publish(sk.FocusPosition(position=self.focuser_position))
             except Exception as e:
                 logger.exception(f"Error in focuser status publish: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
