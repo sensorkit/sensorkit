@@ -50,17 +50,13 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
     @sk.command_handler
     async def enclosure_init(self, cmd: sk.Init):
-        async with asyncio.timeout(self.config.timeout):
-            while self.device_connected is None:
-                await asyncio.sleep(self.config.status_frequency)
-
-        if not self.state.has_been_homed:
-            await self.enclosure_home(sk.Home())
-
         # Sync to the mount
         # FIXME: this likely replaces homing for Node Platform enclosures
         await self.api.call("v1_sync_enclosure_rotator_with_mount")
         await self.api.call("v1_sync_enclosure_window_with_mount")
+
+        if not self.state.has_been_homed:
+            await self.enclosure_home(sk.Home())
 
     @sk.command_handler
     async def enclosure_deinit(self, cmd: sk.Deinit):
