@@ -38,8 +38,8 @@ class NodePlatformEnclosure(NodePlatformDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformEnclosureState()
 
-        self.start_status_loop(self.status_publish())
         await self.enclosure_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):

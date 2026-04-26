@@ -63,8 +63,8 @@ class NodePlatformWeather(NodePlatformDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformWeatherState()
 
-        self.start_status_loop(self.status_publish())
         await self.weather_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
