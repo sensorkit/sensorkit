@@ -53,6 +53,11 @@ _dtype_to_bitpix = {
     "float64": -64,
 }
 
+_dtype_to_bzero = {
+    "uint16": 32768,
+    "uint32": 2147483648,
+}
+
 
 @sk.declare_device
 class TheSkyCamera(TheSkyDevice):
@@ -275,6 +280,7 @@ class TheSkyCamera(TheSkyDevice):
         cmd.context["date_obs"] = Time(jd, format="jd", scale="utc").isot
         cmd.context["exptime"] = cmd.integration_time
         cmd.context["bitpix"] = _dtype_to_bitpix.get(dtype, int(bpp))
+        cmd.context["bscale"] = 1
         cmd.context["bzero"] = _dtype_to_bzero.get(dtype, 0)
 
         if graph := await sk.device().data_graph():

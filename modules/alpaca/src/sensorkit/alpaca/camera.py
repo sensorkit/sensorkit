@@ -383,6 +383,7 @@ class AlpacaCamera(AlpacaDevice):
         max_adu = await self.get(self.camera, "MaxADU", None)
         default_bitpix = (max_adu.bit_length() + 7) // 8 * 8 if max_adu else 16
         context["bitpix"] = _dtype_to_bitpix.get(dtype, default_bitpix)
+        context["bscale"] = 1
         context["bzero"] = _dtype_to_bzero.get(dtype, 0)
 
         last_exposure_start_time = await self.get(self.camera, "LastExposureStartTime", None)
