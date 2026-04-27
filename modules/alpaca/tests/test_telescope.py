@@ -71,6 +71,7 @@ def telescope():
     t._can_move_axis = [False, False, False]
     t._tracking = False
     t._slewing = False
+    t._fast_status_task = None
     t._site_lat = -31.0
     t._site_lon = 149.0
     t._site_elev = 1100.0

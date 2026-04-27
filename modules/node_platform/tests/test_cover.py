@@ -44,7 +44,7 @@ class TestCoverConfig:
 class TestCoverOpenClose:
     @pytest.mark.asyncio
     async def test_open(self, cover, api):
-        cover.cover_is_open = True  # Simulate status loop updating
+        api.set_response("v1_get_optical_tube_cover_status", make_cover_status(is_open=True))
 
         await cover.cover_open(OpenMirrorCover())
 
@@ -52,7 +52,7 @@ class TestCoverOpenClose:
 
     @pytest.mark.asyncio
     async def test_close(self, cover, api):
-        cover.cover_is_open = False  # Simulate status loop updating
+        api.set_response("v1_get_optical_tube_cover_status", make_cover_status(is_open=False))
 
         await cover.cover_close(CloseMirrorCover())
 

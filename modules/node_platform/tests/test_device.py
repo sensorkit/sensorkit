@@ -10,24 +10,27 @@ from sensorkit.node_platform.device import (
 
 
 class TestRequireConnected:
-    def test_returns_when_connected(self):
+    @pytest.mark.asyncio
+    async def test_returns_when_connected(self):
         config = NodePlatformDeviceConfig(host="localhost")
         device = NodePlatformDevice(config)
         device.device_connected = True
-        device.require_connected()  # Should not raise
+        await device.require_connected()  # Should not raise
 
-    def test_raises_when_disconnected(self):
+    @pytest.mark.asyncio
+    async def test_raises_when_disconnected(self):
         config = NodePlatformDeviceConfig(host="localhost")
         device = NodePlatformDevice(config)
         device.device_connected = False
 
         with pytest.raises(DeviceConnectionError):
-            device.require_connected()
+            await device.require_connected()
 
-    def test_raises_when_none(self):
+    @pytest.mark.asyncio
+    async def test_raises_when_none(self):
         config = NodePlatformDeviceConfig(host="localhost")
         device = NodePlatformDevice(config)
         # device_connected defaults to None
 
         with pytest.raises(DeviceConnectionError):
-            device.require_connected()
+            await device.require_connected()

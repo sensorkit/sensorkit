@@ -24,7 +24,7 @@ def filter_wheel():
     )
     fw.filter_wheel = mock
     fw.device_connected = True
-    fw.filter_position = 0
+    fw.filter_wheel_position = 0
     fw._filter_names = ["Red", "Green", "Blue", "Luminance"]
     fw._name_to_index = {"Red": 0, "Green": 1, "Blue": 2, "Luminance": 3}
     return fw
@@ -53,8 +53,8 @@ async def test_filter_wheel_set_by_name(filter_wheel):
     from sensorkit.std.optics import SetFilter
 
     filter_wheel.filter_wheel._properties["Position"] = 2
-    await filter_wheel.filter_wheel_set(SetFilter(filter="Blue"))
-    assert filter_wheel.filter_position == 2
+    await filter_wheel.filter_wheel_set_filter(SetFilter(filter="Blue"))
+    assert filter_wheel.filter_wheel_position == 2
 
 
 @pytest.mark.asyncio
@@ -62,8 +62,8 @@ async def test_filter_wheel_set_by_index(filter_wheel):
     from sensorkit.std.optics import SetFilter
 
     filter_wheel.filter_wheel._properties["Position"] = 3
-    await filter_wheel.filter_wheel_set(SetFilter(filter=3))
-    assert filter_wheel.filter_position == 3
+    await filter_wheel.filter_wheel_set_filter(SetFilter(filter=3))
+    assert filter_wheel.filter_wheel_position == 3
 
 
 @pytest.mark.asyncio
@@ -71,6 +71,6 @@ async def test_filter_wheel_set_invalid_name(filter_wheel):
     from sensorkit.std.optics import SetFilter
 
     # Setting an unknown filter name should not raise, just log and return
-    await filter_wheel.filter_wheel_set(SetFilter(filter="Nonexistent"))
+    await filter_wheel.filter_wheel_set_filter(SetFilter(filter="Nonexistent"))
     # Position should remain unchanged
-    assert filter_wheel.filter_position == 0
+    assert filter_wheel.filter_wheel_position == 0

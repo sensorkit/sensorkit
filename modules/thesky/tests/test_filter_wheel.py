@@ -43,7 +43,7 @@ async def test_set_filter_by_name(filter_wheel):
     import sensorkit.api as sk
 
     await filter_wheel.filter_wheel_connect(sk.Connect())
-    await filter_wheel.set_filter(SetFilter(filter="G"))
+    await filter_wheel.filter_wheel_set_filter(SetFilter(filter="G"))
 
     resp = await filter_wheel.execute("ccdsoftCamera.FilterIndexZeroBased;")
     assert int(float(resp)) == 1
@@ -54,7 +54,7 @@ async def test_set_filter_by_index(filter_wheel):
     import sensorkit.api as sk
 
     await filter_wheel.filter_wheel_connect(sk.Connect())
-    await filter_wheel.set_filter(SetFilter(filter=2))
+    await filter_wheel.filter_wheel_set_filter(SetFilter(filter=2))
 
     resp = await filter_wheel.execute("ccdsoftCamera.FilterIndexZeroBased;")
     assert int(float(resp)) == 2
@@ -66,7 +66,7 @@ async def test_set_filter_invalid_name(filter_wheel):
 
     await filter_wheel.filter_wheel_connect(sk.Connect())
     with pytest.raises(RuntimeError, match="unavailable"):
-        await filter_wheel.set_filter(SetFilter(filter="X"))
+        await filter_wheel.filter_wheel_set_filter(SetFilter(filter="X"))
 
 
 @pytest.mark.asyncio
@@ -75,4 +75,4 @@ async def test_set_filter_invalid_index(filter_wheel):
 
     await filter_wheel.filter_wheel_connect(sk.Connect())
     with pytest.raises(RuntimeError, match="unavailable"):
-        await filter_wheel.set_filter(SetFilter(filter=99))
+        await filter_wheel.filter_wheel_set_filter(SetFilter(filter=99))

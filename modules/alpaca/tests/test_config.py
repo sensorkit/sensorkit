@@ -111,13 +111,14 @@ class TestDeviceConfigs:
     def test_telescope_config(self):
         config = AlpacaTelescopeConfig(host="localhost")
         assert config.device_type == "telescope"
-        assert config.needs_homed is False
+        assert config.status_frequency_slow == 1.0
+        assert config.status_frequency_fast == 0.1
         assert config.timeout == 300.0
 
     def test_dome_config(self):
         config = AlpacaDomeConfig(host="localhost")
         assert config.device_type == "dome"
-        assert config.needs_homed is False
+        assert config.timeout == 300.0
 
     def test_focuser_config(self):
         config = AlpacaFocuserConfig(host="localhost")

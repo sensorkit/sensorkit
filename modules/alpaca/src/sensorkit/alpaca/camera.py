@@ -300,11 +300,11 @@ class AlpacaCamera(AlpacaDevice):
     @sk.command_handler
     async def camera_set_binning(self, cmd: ConfigureCameraSensor):
         await self.require_connected()
-        logger.debug(f"setting binning to {bin_x}x{bin_y}")
 
         if cmd.binning is None:
             return
         bin_x, bin_y = int(cmd.binning.x), int(cmd.binning.y)
+        logger.debug(f"setting binning to {bin_x}x{bin_y}")
 
         if not self._can_asymmetric_bin and bin_x != bin_y:
             logger.warning("Cannot asymmetric bin, using BinX")

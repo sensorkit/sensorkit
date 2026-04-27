@@ -186,11 +186,11 @@ class TheSkyCamera(TheSkyDevice):
     @sk.command_handler
     async def camera_set_binning(self, cmd: ConfigureCameraSensor):
         await self.require_connected()
-        logger.debug(f"setting thesky camera binning to ({bin_x}, {bin_y})")
 
         if cmd.binning is None:
             return
         bin_x, bin_y = int(cmd.binning.x), int(cmd.binning.y)
+        logger.debug(f"setting thesky camera binning to ({bin_x}, {bin_y})")
         await self.execute(
             f"""
             ccdsoftCamera.BinX = {bin_x};

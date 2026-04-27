@@ -63,4 +63,4 @@ async def test_focuser_move(focuser):
     from sensorkit.std.optics import ChangeFocusPosition
 
     focuser.focuser._properties["IsMoving"] = False
-    await focuser.focuser_change(ChangeFocusPosition(position=10000.0))
+    await focuser.focuser_change_position(ChangeFocusPosition(position=10000.0))

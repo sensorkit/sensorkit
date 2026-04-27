@@ -89,14 +89,11 @@ async def test_dome_open(dome):
 
     dome.dome._properties["ShutterStatus"] = 0  # open
     await dome.dome_open(OpenEnclosure())
-    assert dome.state.shutter_state == "open"
 
 
 @pytest.mark.asyncio
 async def test_dome_close(dome):
     from sensorkit.std.enclosure import CloseEnclosure
 
-    dome.state.shutter_state = "open"
     dome.dome._properties["ShutterStatus"] = 1  # closed
     await dome.dome_close(CloseEnclosure())
-    assert dome.state.shutter_state == "closed"

@@ -90,7 +90,7 @@ class AlpacaRotator(AlpacaDevice):
     @sk.command_handler
     async def rotator_change(self, cmd: ChangeRotatorPosition):
         await self.require_connected()
-        logger.debug(f"changing rotator position to {cmd.target:.2f}°")
+        logger.debug(f"changing rotator position to {cmd.position:.2f}°")
 
         target = cmd.position
 

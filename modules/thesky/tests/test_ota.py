@@ -54,7 +54,6 @@ async def test_ota_close(ota):
     await ota.ota_connect(sk.Connect())
     # Open first, then close
     await ota.ota_open(OpenMirrorCover())
-    ota.state.mirror_cover_status = "open"
     await ota.ota_close(CloseMirrorCover())
 
     resp = await ota.execute("OpticalTubeAssembly.mirrorCoverState;")
@@ -62,20 +61,26 @@ async def test_ota_close(ota):
 
 
 @pytest.mark.asyncio
-async def test_ota_open_skips_if_already_open(ota):
-    """Should return immediately if already open."""
+async def test_ota_open_when_already_open(ota):
+    """Opening when already open should succeed (idempotent)."""
     import sensorkit.api as sk
 
     await ota.ota_connect(sk.Connect())
-    ota.state.mirror_cover_status = "open"
     await ota.ota_open(OpenMirrorCover())
+    # Call again - should still succeed
+    await ota.ota_open(OpenMirrorCover())
+
+    resp = await ota.execute("OpticalTubeAssembly.mirrorCoverState;")
+    assert resp.strip() == "1"
 
 
 @pytest.mark.asyncio
-async def test_ota_close_skips_if_already_closed(ota):
-    """Should return immediately if already closed."""
+async def test_ota_close_when_already_closed(ota):
+    """Closing when already closed should succeed (idempotent)."""
     import sensorkit.api as sk
 
     await ota.ota_connect(sk.Connect())
-    ota.state.mirror_cover_status = "closed"
     await ota.ota_close(CloseMirrorCover())
+
+    resp = await ota.execute("OpticalTubeAssembly.mirrorCoverState;")
+    assert resp.strip() == "0"

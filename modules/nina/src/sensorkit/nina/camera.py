@@ -203,12 +203,11 @@ class NinaCamera(NinaDevice):
 
     @sk.command_handler
     async def camera_set_binning(self, cmd: ConfigureCameraSensor):
-        await self.require_connected()
-        logger.debug(f"setting binning to {binning}")
-
         if cmd.binning is None:
             return
+        await self.require_connected()
         binning = f"{int(cmd.binning.x)}x{int(cmd.binning.y)}"
+        logger.debug(f"setting binning to {binning}")
         await self.client.get("/equipment/camera/set-binning", binning=binning)
 
         logger.debug(f"set binning to {binning}")

@@ -60,27 +60,30 @@ class TestAlpacaDevice:
         device = AlpacaDevice(config)
         assert device.address == "192.168.1.100:7654"
 
-    def test_require_connected_raises(self):
+    @pytest.mark.asyncio
+    async def test_require_connected_raises(self):
         config = AlpacaDeviceConfig(host="localhost")
         device = AlpacaDevice(config)
         device.device_connected = False
 
         with pytest.raises(DeviceConnectionError):
-            device.require_connected()
+            await device.require_connected()
 
-    def test_require_connected_none_raises(self):
+    @pytest.mark.asyncio
+    async def test_require_connected_none_raises(self):
         config = AlpacaDeviceConfig(host="localhost")
         device = AlpacaDevice(config)
         # device_connected defaults to None
 
         with pytest.raises(DeviceConnectionError):
-            device.require_connected()
+            await device.require_connected()
 
-    def test_require_connected_ok(self):
+    @pytest.mark.asyncio
+    async def test_require_connected_ok(self):
         config = AlpacaDeviceConfig(host="localhost")
         device = AlpacaDevice(config)
         device.device_connected = True
-        device.require_connected()  # Should not raise
+        await device.require_connected()  # Should not raise
 
     @pytest.mark.asyncio
     async def test_get_returns_default_on_not_implemented(self):

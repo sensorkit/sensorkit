@@ -87,10 +87,10 @@ def make_enclosure_status(**overrides):
 
 def make_cover_status(**overrides):
     """Build a mock V1OpticalTubeCoverStatus."""
-    status = MagicMock()
-    status.connected = overrides.get("connected", True)
-    status.is_open = overrides.get("is_open", False)
-    return status
+    return SimpleNamespace(
+        connected=overrides.get("connected", True),
+        is_open=overrides.get("is_open", False),
+    )
 
 
 def make_rotator_status(**overrides):

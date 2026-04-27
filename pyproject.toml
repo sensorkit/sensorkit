@@ -59,6 +59,10 @@ otto = [
 pwi4 = [
     "httpx",
 ]
+slack = [
+    "slack-sdk",
+    "aiohttp",
+]
 thesky = []
 webapi = [
     "fastapi>=0.115.12",
@@ -128,6 +132,7 @@ layers = [
     sensorkit.node_platform |
     sensorkit.otto |
     sensorkit.pwi4 |
+    sensorkit.slack |
     sensorkit.thesky
     """,
     "sensorkit.cli",
@@ -154,6 +159,7 @@ dev-mode-dirs = [
     "modules/node_platform/src",
     "modules/otto/src",
     "modules/pwi4/src",
+    "modules/slack/src",
     "modules/thesky/src",
     "modules/udl/src",
 ]
@@ -167,6 +173,7 @@ modules = [
     "node_platform",
     "otto",
     "pwi4",
+    "slack",
     "thesky",
     "udl",
 ]

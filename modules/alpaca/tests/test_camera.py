@@ -26,15 +26,11 @@ class TestCameraCapture:
         # Mock the camera object
         mock_camera = MagicMock()
         mock_camera.ImageReady = True
-        mock_camera.ImageArray = [
-            array.array("H", [100, 200, 300]),
-            array.array("H", [400, 500, 600]),
-        ]
+        mock_camera.ImageArrayRaw = array.array("H", [100, 200, 300, 400, 500, 600])
         cam.camera = mock_camera
 
         result = cam._do_capture(1.0, True, 10.0)
-        assert len(result) == 2
-        assert len(result[0]) == 3
+        assert len(result) == 6
         mock_camera.StartExposure.assert_called_once_with(1.0, True)
 
     def test_do_capture_polls_until_ready(self):
@@ -45,11 +41,11 @@ class TestCameraCapture:
         ready_calls = [False, False, True]
         mock_camera = MagicMock()
         type(mock_camera).ImageReady = property(lambda self: ready_calls.pop(0))
-        mock_camera.ImageArray = [array.array("H", [100])]
+        mock_camera.ImageArrayRaw = array.array("H", [100])
         cam.camera = mock_camera
 
         result = cam._do_capture(0.1, True, 10.0)
-        assert result == [array.array("H", [100])]
+        assert result == array.array("H", [100])
 
     def test_do_capture_timeout(self):
         """Test that capture raises RuntimeError on timeout."""

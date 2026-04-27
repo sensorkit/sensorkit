@@ -50,26 +50,29 @@ class TestNinaDeviceState:
 
 
 class TestNinaDevice:
-    def test_require_connected_raises(self):
+    @pytest.mark.asyncio
+    async def test_require_connected_raises(self):
         config = NinaDeviceConfig(host="localhost")
         device = NinaDevice(config)
         device.device_connected = False
 
         with pytest.raises(DeviceConnectionError):
-            device.require_connected()
+            await device.require_connected()
 
-    def test_require_connected_none_raises(self):
+    @pytest.mark.asyncio
+    async def test_require_connected_none_raises(self):
         config = NinaDeviceConfig(host="localhost")
         device = NinaDevice(config)
 
         with pytest.raises(DeviceConnectionError):
-            device.require_connected()
+            await device.require_connected()
 
-    def test_require_connected_ok(self):
+    @pytest.mark.asyncio
+    async def test_require_connected_ok(self):
         config = NinaDeviceConfig(host="localhost")
         device = NinaDevice(config)
         device.device_connected = True
-        device.require_connected()
+        await device.require_connected()
 
     def test_client_property(self):
         config = NinaDeviceConfig(host="myhost", port=2000)

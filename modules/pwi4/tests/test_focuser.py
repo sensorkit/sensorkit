@@ -15,7 +15,7 @@ class TestPWI4FocuserConfig:
         config = PWI4FocuserConfig()
         assert config.device_type == "focuser"
         assert config.status_frequency == 1.0
-        assert config.disable_on_deinit is False
+        assert config.timeout == 60.0
 
     def test_create_device(self):
         config = PWI4FocuserConfig()
@@ -71,6 +71,7 @@ class TestPWI4Focuser:
         client = MockPWI4Client()
         config = PWI4FocuserConfig()
         focuser = PWI4Focuser(config=config, client=client)
+        focuser.device_connected = True
 
         await focuser.focuser_stop(MagicMock())
 
@@ -78,29 +79,19 @@ class TestPWI4Focuser:
         assert len(reqs) == 1
 
     @pytest.mark.asyncio
-    async def test_deinit_disables_if_configured(self):
-        client = MockPWI4Client()
-        config = PWI4FocuserConfig(disable_on_deinit=True)
-        focuser = PWI4Focuser(config=config, client=client)
-
-        await focuser.focuser_deinit(MagicMock())
-
-        disable_reqs = client.find_requests("/focuser/disable")
-        disconnect_reqs = client.find_requests("/focuser/disconnect")
-        assert len(disable_reqs) == 1
-        assert len(disconnect_reqs) == 1
-
-    @pytest.mark.asyncio
-    async def test_deinit_skips_disable_by_default(self):
+    async def test_deinit_stops_disables_and_disconnects(self):
         client = MockPWI4Client()
         config = PWI4FocuserConfig()
         focuser = PWI4Focuser(config=config, client=client)
+        focuser.device_connected = True
 
         await focuser.focuser_deinit(MagicMock())
 
+        stop_reqs = client.find_requests("/focuser/stop")
         disable_reqs = client.find_requests("/focuser/disable")
         disconnect_reqs = client.find_requests("/focuser/disconnect")
-        assert len(disable_reqs) == 0
+        assert len(stop_reqs) == 1
+        assert len(disable_reqs) == 1
         assert len(disconnect_reqs) == 1
 
     @pytest.mark.asyncio

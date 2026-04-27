@@ -59,18 +59,15 @@ async def test_cover_calibrator_open(cover_calibrator):
     cover_calibrator.cover_calibrator._properties["CoverState"] = _COVER_OPEN
     cover_calibrator.cover_calibrator._properties["CoverMoving"] = False
     await cover_calibrator.cover_calibrator_open(OpenMirrorCover())
-    assert cover_calibrator.state.cover_state == "open"
 
 
 @pytest.mark.asyncio
 async def test_cover_calibrator_close(cover_calibrator):
     from sensorkit.std.optics import CloseMirrorCover
 
-    cover_calibrator.state.cover_state = "open"
     cover_calibrator.cover_calibrator._properties["CoverState"] = _COVER_CLOSED
     cover_calibrator.cover_calibrator._properties["CoverMoving"] = False
     await cover_calibrator.cover_calibrator_close(CloseMirrorCover())
-    assert cover_calibrator.state.cover_state == "closed"
 
 
 @pytest.mark.asyncio

@@ -77,6 +77,7 @@ class TestPWI4Cover:
         client = MockPWI4Client()
         config = PWI4CoverConfig()
         cover = PWI4Cover(config=config, client=client)
+        cover.device_connected = True
 
         await cover.cover_stop(MagicMock())
 
@@ -85,14 +86,19 @@ class TestPWI4Cover:
 
     @pytest.mark.asyncio
     async def test_deinit_disconnects(self):
-        client = MockPWI4Client()
+        client = MockPWI4Client(
+            status_overrides={"mirrorcover.is_connected": "false"}
+        )
         config = PWI4CoverConfig()
         cover = PWI4Cover(config=config, client=client)
+        cover.device_connected = True
 
         await cover.cover_deinit(MagicMock())
 
-        reqs = client.find_requests("/mirrorcover/disconnect")
-        assert len(reqs) == 1
+        stop_reqs = client.find_requests("/mirrorcover/stop")
+        disconnect_reqs = client.find_requests("/mirrorcover/disconnect")
+        assert len(stop_reqs) == 1
+        assert len(disconnect_reqs) == 1
 
     @pytest.mark.asyncio
     async def test_status_publishes_open_state(self):

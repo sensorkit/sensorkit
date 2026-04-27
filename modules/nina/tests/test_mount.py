@@ -36,6 +36,9 @@ def mount(client):
     m._site_lat = 32.0
     m._site_lon = -110.0
     m._site_elev = 700.0
+    m._tracking = None
+    m._slewing = None
+    m._fast_status_task = None
     return m
 
 
@@ -60,7 +63,7 @@ class TestMountHome:
     @pytest.mark.asyncio
     async def test_home(self, client, mount):
         await mount.mount_home(sk.Home())
-        reqs = client.find_requests("/equipment/mount/find-home")
+        reqs = client.find_requests("/equipment/mount/home")
         assert len(reqs) == 1
         assert mount.state.has_been_homed is True
 
@@ -69,7 +72,7 @@ class TestMountStop:
     @pytest.mark.asyncio
     async def test_stop(self, client, mount):
         await mount.mount_stop(sk.Stop())
-        reqs = client.find_requests("/equipment/mount/stop-slew")
+        reqs = client.find_requests("/equipment/mount/slew/stop")
         assert len(reqs) == 1
         reqs = client.find_requests("/equipment/mount/tracking")
         assert any(p.get("enabled") is False for _, p in reqs)

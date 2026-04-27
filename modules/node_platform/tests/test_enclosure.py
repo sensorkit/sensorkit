@@ -75,10 +75,13 @@ class TestEnclosureInit:
 
     @pytest.mark.asyncio
     async def test_deinit_stops(self, enclosure, api):
+        enclosure.shutter_state = osapi.EnclosureShutterState.CLOSED
+
         await enclosure.enclosure_deinit(sk.Deinit())
 
         assert len(api.find_calls("v1_halt_enclosure_shutters")) == 1
         assert len(api.find_calls("v1_halt_enclosure_window")) == 1
+        assert len(api.find_calls("v1_close_enclosure_shutters")) == 1
 
 
 class TestEnclosureOpenClose:

@@ -43,7 +43,7 @@ async def test_set_temperature(camera):
     import sensorkit.api as sk
 
     await camera.camera_connect(sk.Connect())
-    await camera.set_temperature(
+    await camera.camera_set_temperature(
         ConfigureCameraCooler(
             enable=True,
             setpoint=CameraSensorTemperature(temperature=-20, units=TemperatureUnit.CELSIUS),
@@ -59,7 +59,7 @@ async def test_set_binning(camera):
     import sensorkit.api as sk
 
     await camera.camera_connect(sk.Connect())
-    await camera.set_binning(
+    await camera.camera_set_binning(
         ConfigureCameraSensor(binning=Binning(x=2, y=2))
     )
     resp = await camera.execute(
@@ -79,4 +79,4 @@ async def test_set_binning_none(camera):
     import sensorkit.api as sk
 
     await camera.camera_connect(sk.Connect())
-    await camera.set_binning(ConfigureCameraSensor())
+    await camera.camera_set_binning(ConfigureCameraSensor())

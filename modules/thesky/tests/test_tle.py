@@ -69,9 +69,10 @@ async def test_write_tle(mount):
     assert tle_path is not None
 
     import pathlib
-    # The path may be a TheSky-style path; read from the actual write location
+    # The path uses the satellite designator from TLE line1 as filename
     import tempfile
-    write_path = pathlib.Path(tempfile.gettempdir()) / "tle.txt"
+    designator = ISS_TLE.line1.split()[1]
+    write_path = pathlib.Path(tempfile.gettempdir()) / f"tle_{designator}.txt"
     content = write_path.read_text()
 
     assert ISS_TLE.line1 in content

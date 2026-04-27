@@ -35,6 +35,9 @@ def mount(client):
     m._site_lat = 32.0
     m._site_lon = -110.0
     m._site_elev = 700.0
+    m._tracking = None
+    m._slewing = None
+    m._fast_status_task = None
     return m
 
 
