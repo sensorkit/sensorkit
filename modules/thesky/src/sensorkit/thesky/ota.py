@@ -151,7 +151,7 @@ class TheSkyOTA(TheSkyDevice):
 
                 is_open = int(cover_num) in (0, 1)
 
-                logger.debug(f"TheSky OTA status: connected={connected}, cover={cover_str}")
+                # logger.debug(f"TheSky OTA status: connected={connected}, cover={cover_str}")
 
                 device = sk.device()
                 await device.publish(Connected(is_connected=connected))

@@ -119,9 +119,9 @@ class TheSkyWeather(TheSkyDevice):
                 self.device_connected = connected
                 good_to_go = bool(good_to_go)
 
-                logger.debug(
-                    f"TheSky weather status: connected={connected}, good_to_go={good_to_go}"
-                )
+                # logger.debug(
+                #     f"TheSky weather status: connected={connected}, good_to_go={good_to_go}"
+                # )
 
                 device = sk.device()
                 await device.publish(Connected(is_connected=connected))
