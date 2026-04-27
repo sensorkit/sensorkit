@@ -211,6 +211,7 @@ class PWI4Mount(PWI4Device):
         )
         await self.deinit_ot()
         self._stop_fast_status()
+        await self.stop_status_loop()
         await self.mount_disconnect(sk.Disconnect())
 
     @sk.command_handler

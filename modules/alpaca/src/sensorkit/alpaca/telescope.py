@@ -185,6 +185,8 @@ class AlpacaTelescope(AlpacaDevice):
             self._tracking = False
         if self._can_park:
             await self.telescope_park(sk.MoveToPark())
+        self._stop_fast_status()
+        await self.stop_status_loop()
         await self.telescope_disconnect(sk.Disconnect())
 
     @sk.command_handler

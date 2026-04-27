@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import uuid
 from datetime import UTC, datetime
 from typing import Literal, override
 
+from astropy.io import fits
 from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from sensorkit.data.fits import ArrayInfo
 from sensorkit.models.devices import (
     CameraSensorSize,
     Connected,
@@ -215,39 +219,87 @@ class NinaCamera(NinaDevice):
     @sk.command_handler
     async def camera_capture(self, cmd: sk.CameraCapture):
         await self.require_connected()
-        logger.info(f"Requesting {cmd.integration_time:.1f} sec capture from NINA camera")
-        logger.debug("starting nina camera capture")
-
         exposure_seconds = float(cmd.integration_time)
-        exposure_start = datetime.now(UTC)
+        logger.info(f"Requesting {exposure_seconds:.1f} sec capture from NINA camera")
 
-        # Capture with streaming for image data
-        resp = await self.client.get_raw(
+        # Get image count before capture so we can detect when the new image is saved
+        count_before = await self.client.get("/image-history", count=True)
+
+        # Capture and save raw FITS (NINA saves asynchronously after capture completes)
+        exposure_start = datetime.now(UTC)
+        await self.client.get(
             "/equipment/camera/capture",
             duration=exposure_seconds,
-            getResult=True,
-            stream=True,
-            waitForResult=True,
             imageType="LIGHT",
+            save=True,
+            waitForResult=True,
             omitImage=True,
         )
 
-        # Get the image data separately after capture completes
-        # NINA returns capture metadata; actual image is via save or separate fetch
-        # For now, we note the capture completed and let NINA save the file
-        # The DataGraph can watch NINA's output directory
+        # Poll until the image appears in NINA's history
+        async with asyncio.timeout(30.0):
+            while True:
+                count_after = await self.client.get("/image-history", count=True)
+                if count_after > count_before:
+                    break
+                await asyncio.sleep(0.5)
 
-        context = cmd.context
-        context["date_obs"] = str(exposure_start)
-        context["exptime"] = exposure_seconds
-        context["instrume"] = str(sk.device().entity)
-        context["xbinning"] = 1
-        context["ybinning"] = 1
+        # Retrieve the raw FITS data (base64-encoded)
+        index = count_after - 1
+        logger.debug(f"retrieving FITS image at index {index}")
+        fits_b64 = await self.client.get(f"/image/{index}", raw_fits=True)
+        fits_bytes = await asyncio.to_thread(base64.b64decode, fits_b64)
 
-        if not context.get("file_name", None):
-            context["file_name"] = f"{uuid.uuid1()}.fits"
+        # Parse the FITS to extract pixel data and metadata
+        hdul = await asyncio.to_thread(fits.open, io.BytesIO(fits_bytes))
+        try:
+            hdr = hdul[0].header
+            data = hdul[0].data
+            height, width = data.shape
+            dtype = str(data.dtype)
+            image_bytes = await asyncio.to_thread(data.tobytes)
 
-        logger.debug(f"capture completed ({exposure_seconds:.3f}s)")
+            # Get image history metadata
+            history_resp = await self.client.get("/image-history", index=index)
+            history = history_resp[0] if isinstance(history_resp, list) else history_resp
+
+            # Build context
+            context = cmd.context
+            context.set(ArrayInfo(shape=(height, width), dtype=dtype))
+            context["bitpix"] = int(hdr.get("BITPIX", 16))
+            context["bscale"] = float(hdr.get("BSCALE", 1))
+            context["bzero"] = float(hdr.get("BZERO", 0))
+            context["date_obs"] = str(exposure_start)
+            context["exptime"] = exposure_seconds
+            context["instrume"] = history.get("CameraName", str(sk.device().entity))
+            context["xbinning"] = await self._get_binning_x()
+            context["ybinning"] = await self._get_binning_y()
+
+            if not context.get("file_name", None):
+                context["file_name"] = history.get("Filename", f"{uuid.uuid1()}.fits")
+
+            # Write to DataGraph
+            if graph := await sk.device().data_graph():
+                source = graph.app_source()
+                writer = source.produce(context)
+                writer.write(image_bytes)
+                logger.debug(f"wrote {len(image_bytes)} bytes to DataGraph")
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+            else:
+                logger.warning("No DataGraph defined; discarding data")
+
+        finally:
+            hdul.close()
+
+    async def _get_binning_x(self) -> int:
+        info = await self.info("camera")
+        return info.get("BinX", 1)
+
+    async def _get_binning_y(self) -> int:
+        info = await self.info("camera")
+        return info.get("BinY", 1)
 
     async def status_publish(self):
         while True:

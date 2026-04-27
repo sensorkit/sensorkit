@@ -125,6 +125,7 @@ class TheSkyMount(TheSkyDevice):
         await self.mount_stop(sk.Stop())
         await self.mount_park(sk.MoveToPark())
         self._stop_fast_status()
+        await self.stop_status_loop()
         await self.mount_disconnect(sk.Disconnect())
 
     @sk.command_handler
