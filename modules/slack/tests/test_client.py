@@ -23,12 +23,13 @@ class TestPostMessage:
     @pytest.mark.asyncio
     async def test_returns_ts_on_success(self, mock_web_client):
         mock_web_client.chat_postMessage = AsyncMock(
-            return_value={"ok": True, "ts": "1234567890.123456"}
+            return_value={"ok": True, "channel": "C0123456789", "ts": "1234567890.123456"}
         )
 
         client = SlackClient("xoxb-test")
-        ts = await client.post_message("#test", "hello")
+        channel_id, ts = await client.post_message("#test", "hello")
 
+        assert channel_id == "C0123456789"
         assert ts == "1234567890.123456"
         mock_web_client.chat_postMessage.assert_awaited_once_with(
             channel="#test",
@@ -72,8 +73,9 @@ class TestPostMessage:
         )
 
         client = SlackClient("xoxb-test")
-        ts = await client.post_message("#bad-channel", "hello")
+        channel_id, ts = await client.post_message("#bad-channel", "hello")
 
+        assert channel_id is None
         assert ts is None
 
     @pytest.mark.asyncio
@@ -83,8 +85,9 @@ class TestPostMessage:
         )
 
         client = SlackClient("xoxb-test")
-        ts = await client.post_message("#test", "hello")
+        channel_id, ts = await client.post_message("#test", "hello")
 
+        assert channel_id is None
         assert ts is None
 
 

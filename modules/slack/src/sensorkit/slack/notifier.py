@@ -139,16 +139,16 @@ class SlackNotifier:
         is_attachment = blocks_or_attachments and "color" in blocks_or_attachments[0]
 
         for ch_config in channels:
-            ts = await self._client.post_message(
+            channel_id, ts = await self._client.post_message(
                 channel=ch_config.channel,
                 text=fallback_text,
                 blocks=blocks_or_attachments if not is_attachment else None,
                 attachments=blocks_or_attachments if is_attachment else None,
             )
 
-            if ts and alert_key:
+            if ts and alert_key and channel_id:
                 alerts = self._active_alerts.setdefault(alert_key, [])
-                alerts.append((ch_config.channel, ts, severity))
+                alerts.append((channel_id, ts, severity))
 
             if ts:
                 self._messages_sent += 1

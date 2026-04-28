@@ -27,7 +27,7 @@ class SlackClient:
     ) -> str | None:
         """Post a message to a Slack channel.
 
-        Returns the message timestamp (ts) for threading, or None on failure.
+        Returns (channel_id, ts) for threading and reactions, or (None, None) on failure.
         """
 
         try:
@@ -38,13 +38,13 @@ class SlackClient:
                 attachments=attachments,
                 thread_ts=thread_ts,
             )
-            return response.get("ts")
+            return response.get("channel"), response.get("ts")
         except SlackApiError as e:
             logger.warning(f"Slack API error posting to {channel}: {e.response['error']}")
-            return None
+            return None, None
         except Exception as e:
             logger.warning(f"Error posting to Slack channel {channel}: {e}")
-            return None
+            return None, None
 
     async def add_reaction(
         self,

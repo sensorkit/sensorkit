@@ -292,7 +292,11 @@ class AlpacaCamera(AlpacaDevice):
 
         target = cmd.setpoint.temperature
 
-        await self.put(self.camera, "CoolerOn", cmd.enable)
+        try:
+            await self.put(self.camera, "CoolerOn", cmd.enable)
+        except Exception:
+            logger.warning("Cannot set CoolerOn but can set SetCCDTemperature")
+
         await self.put(self.camera, "SetCCDTemperature", target)
 
         logger.debug(f"set CCD temperature to {target} °C")

@@ -29,7 +29,6 @@ def format_alert(
     Info uses plain section blocks.
     """
 
-    fallback = f"[{_SEVERITY_LABELS[severity]}] {title}: {body}"
     color = _SEVERITY_COLORS.get(severity)
 
     blocks = [
@@ -45,9 +44,13 @@ def format_alert(
         ]
         blocks.append({"type": "section", "fields": field_blocks})
 
+    # Fallback text for notifications/accessibility
+    fallback = f"[{_SEVERITY_LABELS[severity]}] {title}: {body}"
+
     if color:
-        # Use attachments for colored sidebar (critical/warning)
-        return [{"color": color, "blocks": blocks}], fallback
+        # Use attachments for colored sidebar (critical/warning).
+        # Set text to empty so Slack doesn't duplicate above the attachment.
+        return [{"color": color, "blocks": blocks, "fallback": fallback}], ""
     else:
         # Plain blocks for info
         return blocks, fallback

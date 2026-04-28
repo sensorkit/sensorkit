@@ -92,7 +92,7 @@ def mock_slack_client():
     """A mock SlackClient."""
 
     client = AsyncMock()
-    client.post_message = AsyncMock(return_value="1234567890.123456")
+    client.post_message = AsyncMock(return_value=("C0123456789", "1234567890.123456"))
     client.add_reaction = AsyncMock(return_value=True)
     client.close = AsyncMock()
     return client

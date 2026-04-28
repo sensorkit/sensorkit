@@ -12,13 +12,15 @@ class TestFormatAlert:
         # Critical uses attachments with color sidebar
         assert len(blocks) == 1
         assert blocks[0]["color"] == "#E01E5A"
-        assert "CRITICAL" in fallback
+        assert "CRITICAL" in blocks[0]["fallback"]
+        assert fallback == ""
 
     def test_warning_uses_yellow_color(self):
         blocks, fallback = format_alert(SeverityLevel.WARNING, "Test", "Body")
         assert len(blocks) == 1
         assert blocks[0]["color"] == "#ECB22E"
-        assert "WARNING" in fallback
+        assert "WARNING" in blocks[0]["fallback"]
+        assert fallback == ""
 
     def test_info_uses_plain_blocks(self):
         blocks, fallback = format_alert(SeverityLevel.INFO, "Test", "Body")
@@ -47,7 +49,8 @@ class TestFormatAlert:
         assert len(field_block["fields"]) == 2
 
     def test_fallback_text(self):
-        _, fallback = format_alert(SeverityLevel.CRITICAL, "Alert!", "Something broke")
+        blocks, _ = format_alert(SeverityLevel.CRITICAL, "Alert!", "Something broke")
+        fallback = blocks[0]["fallback"]
         assert "Alert!" in fallback
         assert "Something broke" in fallback
 
