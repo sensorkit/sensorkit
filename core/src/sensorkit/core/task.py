@@ -35,10 +35,13 @@ class ControllerTask(RegistryBaseModel):
 
     def set_context(self, context: KeywordDict):
         """Associate context with the task."""
-        if self.context is not None:
-            raise RuntimeError("Context already set")
+        if self.context is None:
+            self.context = context
+            return
 
-        self.context = context
+        for kw, value in context.items():
+            if kw not in self.context:
+                self.context[kw] = value
 
     def get_context(self):
         """Return the context associated with this task."""
@@ -47,46 +50,55 @@ class ControllerTask(RegistryBaseModel):
 
 class InitTask(ControllerTask):
     """Init Task"""
+
     task_type: Literal["init"] = "init"
 
     @override
     def target_state(self):
         from sensorkit.core.controller import InternalControllerState
+
         return InternalControllerState.OPERATE
 
 
 class StandbyTask(ControllerTask):
     """Standby Task"""
+
     task_type: Literal["standby"] = "standby"
 
     @override
     def target_state(self):
         from sensorkit.core.controller import InternalControllerState
+
         return InternalControllerState.STANDBY
 
 
 class ShutdownTask(ControllerTask):
     """Shutdown Task"""
+
     task_type: Literal["shutdown"] = "shutdown"
 
     @override
     def target_state(self):
         from sensorkit.core.controller import InternalControllerState
+
         return InternalControllerState.SHUTDOWN
 
 
 class CalibrateTask(ControllerTask):
     """Calibrate Task"""
+
     task_type: Literal["calibrate"] = "calibrate"
 
 
 class RecoverTask(ControllerTask):
     """Recover Task"""
+
     task_type: Literal["recover"] = "recover"
 
 
 class CollectTask(ControllerTask):
     """Collect Task"""
+
     task_type: Literal["collect"] = "collect"
 
 
