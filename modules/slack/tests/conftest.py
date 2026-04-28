@@ -39,7 +39,6 @@ def sample_config() -> SlackConfig:
 
     return SlackConfig(
         entity="slack_notifier",
-        token="xoxb-test-token",
         channels={
             "alerts": ChannelConfig(
                 channel="#alerts",

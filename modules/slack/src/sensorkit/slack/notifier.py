@@ -223,6 +223,30 @@ class SlackNotifier:
             except Exception as e:
                 logger.warning(f"Error in dedup flush: {e}")
 
+    # -- Event filtering --
+
+    @staticmethod
+    def _event_matches_filters(event: Event, filters: dict[str, object] | None) -> bool:
+        """Check if an event's fields match the rule's filters."""
+
+        if not filters:
+            return True
+        event_data = event.model_dump(exclude={"event_model", "event_id"})
+        for key, expected in filters.items():
+            actual = event_data.get(key)
+            # Coerce types for comparison (e.g. "false" vs False from YAML)
+            if isinstance(expected, bool):
+                if actual is not None:
+                    actual = bool(actual)
+            elif isinstance(expected, (int, float)) and actual is not None:
+                try:
+                    actual = type(expected)(actual)
+                except (TypeError, ValueError):
+                    pass
+            if actual != expected:
+                return False
+        return True
+
     # -- Event watching --
 
     async def _watch_events(self, rule: NotificationRule):
@@ -258,7 +282,8 @@ class SlackNotifier:
         client = self.sk_client.entity(entity_name)
         async for event in await client.monitor_all_events():
             if rule.events and event.event_model in rule.events:
-                await self._send_event_notification(rule, entity_name, event)
+                if self._event_matches_filters(event, rule.filters):
+                    await self._send_event_notification(rule, entity_name, event)
 
     async def _watch_events_all(self, rule: NotificationRule):
         """Monitor events from all entities using backend wildcard subscription."""
@@ -276,8 +301,9 @@ class SlackNotifier:
                 continue
 
             if rule.events and event.event_model in rule.events:
-                entity_name = ".".join(msg.subject.path)
-                await self._send_event_notification(rule, entity_name, event)
+                if self._event_matches_filters(event, rule.filters):
+                    entity_name = ".".join(msg.subject.path)
+                    await self._send_event_notification(rule, entity_name, event)
 
     # -- State watching --
 
@@ -355,14 +381,23 @@ class SlackNotifier:
         self._state_cache[key] = value
 
         if previous is _UNSET:
-            return
+            # For 'becomes' conditions, seed with the opposite of the threshold
+            # so the first matching value fires immediately.
+            from sensorkit.common.condition import BecomesCondition
+            if isinstance(watch.condition, BecomesCondition):
+                if isinstance(watch.condition.threshold, bool):
+                    previous = not watch.condition.threshold
+                else:
+                    previous = None
+            else:
+                return
 
         was_active = self._active_cache.get(key, False)
         should_notify, is_active = watch.condition.evaluate(value, previous, was_active)
         self._active_cache[key] = is_active
 
         if should_notify:
-            await self._send_state_notification(rule, entity_name, watch, previous, value)
+            await self._send_state_notification(rule, entity_name, watch, previous, value, model)
         elif was_active and not is_active:
             # Condition cleared — send resolved notification
             field_label = watch.field or watch.keyword
@@ -410,12 +445,18 @@ class SlackNotifier:
         watch: StateWatch,
         previous: object,
         current: object,
+        model: object | None = None,
     ):
         """Format and send a state change notification."""
 
         field_label = watch.field or watch.keyword
 
         if rule.message_template:
+            # Flatten the full keyword model so template can access sibling fields
+            # (e.g. {reason}, {constraint_kind} even when watching just {active})
+            extra: dict[str, object] = {}
+            if isinstance(model, dict):
+                extra.update(model)
             body = rule.message_template.format(
                 keyword=watch.keyword,
                 field=field_label,
@@ -423,6 +464,7 @@ class SlackNotifier:
                 previous=previous,
                 value=current,
                 rule=rule.name,
+                **extra,
             )
         else:
             body = f"{field_label}: `{previous}` -> `{current}`"

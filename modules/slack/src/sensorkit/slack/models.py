@@ -29,6 +29,7 @@ class NotificationRule(BaseModel):
     severity: SeverityLevel = SeverityLevel.INFO
     entities: list[str] | None = None
     events: list[str] | None = None
+    filters: dict[str, object] | None = None  # event field filters
     state_watches: list[StateWatch] | None = None
     message_template: str | None = None
     deduplicate: int | None = None  # seconds
@@ -47,6 +48,6 @@ class SlackConfig(BaseModel):
     """Root configuration for the Slack notification service."""
 
     entity: str
-    token: str
+    env_file: str = ".env"
     channels: dict[str, ChannelConfig]
     rules: list[NotificationRule] = []

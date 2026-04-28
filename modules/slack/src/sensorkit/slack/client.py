@@ -71,5 +71,5 @@ class SlackClient:
     async def close(self):
         """Close the underlying aiohttp session."""
 
-        if self._client._session:
-            await self._client._session.close()
+        if self._client.session:
+            await self._client.session.close()

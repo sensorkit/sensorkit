@@ -62,6 +62,7 @@ pwi4 = [
 slack = [
     "slack-sdk",
     "aiohttp",
+    "python-dotenv",
 ]
 thesky = []
 webapi = [

@@ -3,17 +3,29 @@ from __future__ import annotations
 import asyncio
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from typing import Literal, final, override
 
 from loguru import logger
 from pydantic import BaseModel
 
 from sensorkit.common.condition import AnyCondition, resolve_field
+from sensorkit.common.keyword import declare_keyword
 from sensorkit.core.client import SensorKit
 from sensorkit.models.safety import BasicSafety
 from sensorkit.std.weather import BasicWeather
 
 type AnyConstraint = WeatherConstraint | SafetyConstraint | GenericConstraint
+
+
+@declare_keyword
+class ConstraintStatus(BaseModel):
+    """Published when a constraint is set or cleared."""
+
+    constraint_kind: str  # "weather", "safety", "conditional"
+    active: bool
+    reason: str
+    provider: str | None = None
 
 
 class Constraint(BaseModel, ABC):
@@ -40,6 +52,19 @@ class ConstraintEvaluator:
         self.ready = asyncio.Event()
         self.active = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._on_change: Callable[[ConstraintStatus], Awaitable[None]] | None = None
+
+    def set_on_change(self, callback: Callable[[ConstraintStatus], Awaitable[None]]):
+        """Register a callback invoked when the constraint state changes."""
+        self._on_change = callback
+
+    async def _notify(self, status: ConstraintStatus):
+        """Fire the on_change callback if registered."""
+        if self._on_change is not None:
+            try:
+                await self._on_change(status)
+            except Exception:
+                logger.debug("Failed to publish ConstraintStatus", exc_info=True)
 
     def start(self, *, task_group: asyncio.TaskGroup | None = None, **kwargs):
         """Launch the constraint monitoring task in *task_group* (or the running loop)."""
@@ -61,57 +86,83 @@ class WeatherConstraint(Constraint):
     time_to_live: float = 30.0
     hold_duration: float = 0.0
 
-    def check_weather(self, weather: BasicWeather, was_active: bool = False) -> bool:
-        """Returns True to activate, False to clear, or previous state (deadband)."""
+    def check_weather(self, weather: BasicWeather, was_active: bool = False) -> tuple[bool, str]:
+        """Returns (active, reason) describing whether the constraint should be set."""
         if (
             weather.humidity is None
             or weather.wind_speed is None
             or weather.rain_rate is None
         ):
-            return True
-        elif (
-            weather.humidity > self.humidity_max
-            or weather.wind_speed > self.wind_max
-            or weather.rain_rate > self.rain_max
-        ):
-            return True
-        elif (
-            weather.humidity < self.humidity_max - self.humidity_deadband
-            or weather.wind_speed < self.wind_max - self.wind_deadband
-            or weather.rain_rate < self.rain_max - self.rain_deadband
-        ):
-            return False
-        return was_active
+            missing = []
+            if weather.humidity is None:
+                missing.append("humidity")
+            if weather.wind_speed is None:
+                missing.append("wind_speed")
+            if weather.rain_rate is None:
+                missing.append("rain_rate")
+            return True, f"missing data ({', '.join(missing)})"
 
-    async def _hold_and_clear(self, active: asyncio.Event):
+        exceeded = []
+        if weather.humidity > self.humidity_max:
+            exceeded.append(f"humidity {weather.humidity:.0f}% > {self.humidity_max:.0f}%")
+        if weather.wind_speed > self.wind_max:
+            exceeded.append(f"wind {weather.wind_speed:.1f} > {self.wind_max:.1f}")
+        if weather.rain_rate > self.rain_max:
+            exceeded.append(f"rain {weather.rain_rate:.2f} > {self.rain_max:.2f}")
+        if exceeded:
+            return True, ", ".join(exceeded)
+
+        cleared = []
+        if weather.humidity < self.humidity_max - self.humidity_deadband:
+            cleared.append(f"humidity {weather.humidity:.0f}% < {self.humidity_max - self.humidity_deadband:.0f}%")
+        if weather.wind_speed < self.wind_max - self.wind_deadband:
+            cleared.append(f"wind {weather.wind_speed:.1f} < {self.wind_max - self.wind_deadband:.1f}")
+        if weather.rain_rate < self.rain_max - self.rain_deadband:
+            cleared.append(f"rain {weather.rain_rate:.2f} < {self.rain_max - self.rain_deadband:.2f}")
+        if cleared:
+            return False, ", ".join(cleared)
+        return was_active, "deadband"
+
+    async def _hold_and_clear(self, active: asyncio.Event, evaluator: ConstraintEvaluator):
         await asyncio.sleep(self.hold_duration)
         logger.info("Clearing weather constraint (hold period expired)")
         active.clear()
+        await evaluator._notify(ConstraintStatus(
+            constraint_kind=self.kind, active=False, reason="hold period expired", provider=self.provider,
+        ))
 
-    def _apply_result(
+    async def _apply_result(
         self,
-        result: bool,
-        active: asyncio.Event,
+        result: tuple[bool, str],
+        evaluator: ConstraintEvaluator,
         hold_task: asyncio.Task | None,
         from_data: bool,
     ) -> tuple[asyncio.Task | None, bool]:
         """Apply a weather check result. Returns (hold_task, from_data)."""
-        if result is True:
+        is_active, reason = result
+        active = evaluator.active
+        if is_active is True:
             if hold_task is not None and not hold_task.done():
                 hold_task.cancel()
                 hold_task = None
             if not active.is_set():
-                logger.info("Setting weather constraint")
+                logger.info(f"Setting weather constraint ({reason})")
+                await evaluator._notify(ConstraintStatus(
+                    constraint_kind=self.kind, active=True, reason=reason, provider=self.provider,
+                ))
             active.set()
             return hold_task, True
-        elif result is False and active.is_set():
+        elif is_active is False and active.is_set():
             if self.hold_duration > 0 and from_data:
                 if hold_task is None or hold_task.done():
-                    logger.info(f"Weather cleared, holding constraint for {self.hold_duration}s")
-                    hold_task = asyncio.create_task(self._hold_and_clear(active))
+                    logger.info(f"Weather cleared ({reason}), holding constraint for {self.hold_duration}s")
+                    hold_task = asyncio.create_task(self._hold_and_clear(active, evaluator))
             else:
-                logger.info("Clearing weather constraint")
+                logger.info(f"Clearing weather constraint ({reason})")
                 active.clear()
+                await evaluator._notify(ConstraintStatus(
+                    constraint_kind=self.kind, active=False, reason=reason, provider=self.provider,
+                ))
         return hold_task, from_data
 
     @override
@@ -129,8 +180,8 @@ class WeatherConstraint(Constraint):
             try:
                 async with asyncio.timeout(self.time_to_live) as timeout:
                     async for _, weather in stream:
-                        hold_task, from_data = self._apply_result(
-                            self.check_weather(weather, evaluator.active.is_set()), evaluator.active, hold_task, from_data
+                        hold_task, from_data = await self._apply_result(
+                            self.check_weather(weather, evaluator.active.is_set()), evaluator, hold_task, from_data
                         )
 
                         # Mark as ready once we have received at least one weather record.
@@ -143,8 +194,12 @@ class WeatherConstraint(Constraint):
                 if hold_task is not None and not hold_task.done():
                     hold_task.cancel()
                     hold_task = None
+                reason = f"no data for {self.time_to_live}s"
                 if not evaluator.active.is_set():
-                    logger.info(f"Setting weather constraint (no data for {self.time_to_live}s)")
+                    logger.info(f"Setting weather constraint ({reason})")
+                    await evaluator._notify(ConstraintStatus(
+                        constraint_kind=self.kind, active=True, reason=reason, provider=self.provider,
+                    ))
                 evaluator.active.set()
 
             # Mark as ready.
@@ -179,19 +234,28 @@ class SafetyConstraint(Constraint):
                         if not safety.is_safe:
                             if not evaluator.active.is_set():
                                 logger.info(f"Setting safety constraint from {self.provider}")
+                                await evaluator._notify(ConstraintStatus(
+                                    constraint_kind=self.kind, active=True, reason="unsafe", provider=self.provider,
+                                ))
                             evaluator.active.set()
                         else:
                             if evaluator.active.is_set():
                                 logger.info(f"Clearing safety constraint from {self.provider}")
+                                await evaluator._notify(ConstraintStatus(
+                                    constraint_kind=self.kind, active=False, reason="safe", provider=self.provider,
+                                ))
                             evaluator.active.clear()
 
                         evaluator.ready.set()
 
                         timeout.reschedule(asyncio.get_running_loop().time() + self.time_to_live)
             except TimeoutError:
+                reason = f"no data for {self.time_to_live}s"
                 if not evaluator.active.is_set():
-                    logger.info(f"Setting safety constraint from {self.provider} (no data for {self.time_to_live}s)")
-
+                    logger.info(f"Setting safety constraint from {self.provider} ({reason})")
+                    await evaluator._notify(ConstraintStatus(
+                        constraint_kind=self.kind, active=True, reason=reason, provider=self.provider,
+                    ))
                 evaluator.active.set()
 
             stream = await provider.monitor(BasicSafety)
@@ -207,19 +271,27 @@ class GenericConstraint(Constraint):
     condition: AnyCondition
     time_to_live: float = 30.0
 
-    def _apply(
+    async def _apply(
         self, evaluator: ConstraintEvaluator, current: object, previous: object, was_active: bool, label: str
     ) -> tuple[object, bool]:
         """Evaluate the condition and update the evaluator. Returns (current, was_active)."""
         _, is_active = self.condition.evaluate(current, previous, was_active)
 
         if is_active:
+            reason = f"{label} = {current}"
             if not evaluator.active.is_set():
-                logger.info(f"Setting conditional constraint on {label}")
+                logger.info(f"Setting conditional constraint on {reason}")
+                await evaluator._notify(ConstraintStatus(
+                    constraint_kind=self.kind, active=True, reason=reason, provider=self.entity,
+                ))
             evaluator.active.set()
         else:
+            reason = f"{label} = {current}"
             if evaluator.active.is_set():
-                logger.info(f"Clearing conditional constraint on {label}")
+                logger.info(f"Clearing conditional constraint on {reason}")
+                await evaluator._notify(ConstraintStatus(
+                    constraint_kind=self.kind, active=False, reason=reason, provider=self.entity,
+                ))
             evaluator.active.clear()
 
         return current, is_active
@@ -253,7 +325,7 @@ class GenericConstraint(Constraint):
                         current = resolve_field(data, self.field) if self.field else data
 
                         if previous is not _UNSET:
-                            previous, was_active = self._apply(
+                            previous, was_active = await self._apply(
                                 evaluator, current, previous, was_active, label
                             )
                             evaluator.ready.set()
@@ -265,11 +337,12 @@ class GenericConstraint(Constraint):
                         )
 
             except TimeoutError:
+                reason = f"{label} (no data for {self.time_to_live}s)"
                 if not evaluator.active.is_set():
-                    logger.info(
-                        f"Setting conditional constraint on {label} "
-                        f"(no data for {self.time_to_live}s)"
-                    )
+                    logger.info(f"Setting conditional constraint on {reason}")
+                    await evaluator._notify(ConstraintStatus(
+                        constraint_kind=self.kind, active=True, reason=reason, provider=self.entity,
+                    ))
                 evaluator.active.set()
 
             consumer = await client._stream.consume(include_latest=True)

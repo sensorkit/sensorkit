@@ -21,6 +21,10 @@ Real-time Slack notifications and daily summaries for SensorKit observatory oper
    - `reactions:write` — add reaction emojis
 3. Install the app to your workspace
 4. Copy the **Bot User OAuth Token** (`xoxb-...`)
+5. Add the token to your `.env` file:
+   ```
+   SLACK_BOT_TOKEN=xoxb-your-token-here
+   ```
 
 ### 2. Invite the Bot
 
@@ -49,7 +53,7 @@ entity: slack_service
 key: SlackConfig
 value:
   entity: slack_notifier
-  token: ${SLACK_BOT_TOKEN}
+  env_file: ".env"
   channels:
     alerts:
       channel: "#observatory-alerts"

@@ -96,7 +96,6 @@ class TestSlackConfig:
     def test_parse_from_dict(self):
         config = SlackConfig.model_validate({
             "entity": "slack_notifier",
-            "token": "xoxb-test",
             "channels": {
                 "alerts": {
                     "channel": "#observatory-alerts",
@@ -124,7 +123,7 @@ class TestSlackConfig:
         })
 
         assert config.entity == "slack_notifier"
-        assert config.token == "xoxb-test"
+        assert config.env_file == ".env"
         assert len(config.channels) == 2
         assert len(config.rules) == 1
         assert config.rules[0].severity == SeverityLevel.CRITICAL
@@ -133,7 +132,6 @@ class TestSlackConfig:
     def test_empty_rules(self):
         config = SlackConfig(
             entity="test",
-            token="xoxb-test",
             channels={"log": ChannelConfig(channel="#log")},
         )
         assert config.rules == []

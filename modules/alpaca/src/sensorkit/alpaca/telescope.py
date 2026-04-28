@@ -107,7 +107,6 @@ class AlpacaTelescope(AlpacaDevice):
         self._reconnect = lambda: self.telescope_connect(sk.Connect())
         self.telescope = Telescope(self.address, self.config.device_number, self.config.protocol)
         await self.telescope_connect(sk.Connect())
-        self.start_status_loop(self.status_publish_slow())
 
         t = self.telescope
 
@@ -158,6 +157,8 @@ class AlpacaTelescope(AlpacaDevice):
 
         # Read available tracking rates
         self._tracking_rates = await self.get(t, "TrackingRates", [])
+
+        self.start_status_loop(self.status_publish_slow())
 
         if not self.state.has_been_homed:
             self.telescope_home(sk.Home())

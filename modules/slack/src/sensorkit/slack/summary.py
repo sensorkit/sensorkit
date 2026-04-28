@@ -151,13 +151,13 @@ class SummaryAccumulator:
 
         while True:
             try:
-                subject = Subject.from_parts("*", SpecialProperty.EVENTS)
+                subject = Subject(path=(), prop=SpecialProperty.EVENTS)
                 consumer_name = "slack-summary-tasks"
 
-                async for msg in self._sk_client.backend.impl.stream_consume(
-                    subject=str(subject),
-                    durable_name=consumer_name,
-                ):
+                consumer = await self._sk_client.backend.impl.stream_consume(
+                    subject, durable_name=consumer_name,
+                )
+                async for msg in consumer:
                     try:
                         data = json.loads(msg.data)
                         event_model = data.get("event_model")
@@ -193,13 +193,13 @@ class SummaryAccumulator:
 
         while True:
             try:
-                subject = Subject.from_parts("*", SpecialProperty.ALL_DESCENDANTS)
+                subject = Subject(path=(), prop=SpecialProperty.ALL_DESCENDANTS)
                 consumer_name = "slack-summary-health"
 
-                async for msg in self._sk_client.backend.impl.stream_consume(
-                    subject=str(subject),
-                    durable_name=consumer_name,
-                ):
+                consumer = await self._sk_client.backend.impl.stream_consume(
+                    subject, durable_name=consumer_name,
+                )
+                async for msg in consumer:
                     try:
                         data = json.loads(msg.data)
                         keyword_model = data.get("keyword_model", "")
@@ -230,13 +230,13 @@ class SummaryAccumulator:
 
         while True:
             try:
-                subject = Subject.from_parts("*", SpecialProperty.ALL_DESCENDANTS)
+                subject = Subject(path=(), prop=SpecialProperty.ALL_DESCENDANTS)
                 consumer_name = "slack-summary-safety"
 
-                async for msg in self._sk_client.backend.impl.stream_consume(
-                    subject=str(subject),
-                    durable_name=consumer_name,
-                ):
+                consumer = await self._sk_client.backend.impl.stream_consume(
+                    subject, durable_name=consumer_name,
+                )
+                async for msg in consumer:
                     try:
                         data = json.loads(msg.data)
                         keyword_model = data.get("keyword_model", "")

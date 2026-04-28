@@ -66,34 +66,45 @@ def test_weather_constraint():
 
     # No data -> becomes active
     w = BasicWeather(humidity=None, wind_speed=None, rain_rate=None)
-    assert c.check_weather(w)
+    active, reason = c.check_weather(w)
+    assert active
+    assert "missing data" in reason
 
     # Move to good range -> should clear
     w = BasicWeather(humidity=0.0, wind_speed=1e9, rain_rate=1e9)
-    assert not c.check_weather(w)
+    active, reason = c.check_weather(w)
+    assert not active
 
     # Above max -> becomes active (keep other metrics high to avoid influencing outcome)
     w_high = BasicWeather(humidity=60.0, wind_speed=1e9, rain_rate=1e9)
-    assert c.check_weather(w_high)
+    active, reason = c.check_weather(w_high)
+    assert active
+    assert "humidity" in reason
 
     # Move into the deadband (between 45 and 50) -> should keep previous state (remain active)
     w_deadband = BasicWeather(humidity=47.0, wind_speed=1e9, rain_rate=1e9)
-    assert c.check_weather(w_deadband, was_active=True)
+    active, _ = c.check_weather(w_deadband, was_active=True)
+    assert active
 
     # Drop below max - deadband (i.e., < 45) -> should clear
     w_clear = BasicWeather(humidity=40.0, wind_speed=1e9, rain_rate=1e9)
-    assert not c.check_weather(w_clear, was_active=True)
+    active, _ = c.check_weather(w_clear, was_active=True)
+    assert not active
 
     # Back into deadband -> should keep previous state (remain cleared)
     w_deadband_again = BasicWeather(humidity=48.0, wind_speed=1e9, rain_rate=1e9)
-    assert not c.check_weather(w_deadband_again, was_active=False)
+    active, _ = c.check_weather(w_deadband_again, was_active=False)
+    assert not active
 
     # Exceed max again -> becomes active
     w_exceed = BasicWeather(humidity=51.0, wind_speed=1e9, rain_rate=1e9)
-    assert c.check_weather(w_exceed)
+    active, reason = c.check_weather(w_exceed)
+    assert active
+    assert "humidity" in reason
 
 
-def test_generic_constraint():
+@pytest.mark.asyncio
+async def test_generic_constraint():
     """Test that GenericConstraint wires condition evaluation to the evaluator's active flag."""
     c = GenericConstraint(
         entity="dummy",
@@ -104,25 +115,25 @@ def test_generic_constraint():
     ev = c.make_evaluator()
 
     # Cross above threshold -> activates
-    _, was_active = c._apply(ev, current=55.0, previous=45.0, was_active=False, label="test")
+    _, was_active = await c._apply(ev, current=55.0, previous=45.0, was_active=False, label="test")
     assert ev.active.is_set()
     assert was_active
 
     # Still in deadband (>= 45) -> stays active
-    _, was_active = c._apply(ev, current=47.0, previous=55.0, was_active=True, label="test")
+    _, was_active = await c._apply(ev, current=47.0, previous=55.0, was_active=True, label="test")
     assert ev.active.is_set(), "Should remain active inside deadband"
 
     # Drop below deadband (< 45) -> clears
-    _, was_active = c._apply(ev, current=40.0, previous=47.0, was_active=True, label="test")
+    _, was_active = await c._apply(ev, current=40.0, previous=47.0, was_active=True, label="test")
     assert not ev.active.is_set(), "Should clear when below deadband"
     assert not was_active
 
     # Rise into deadband but not crossing threshold -> stays cleared
-    _, was_active = c._apply(ev, current=48.0, previous=40.0, was_active=False, label="test")
+    _, was_active = await c._apply(ev, current=48.0, previous=40.0, was_active=False, label="test")
     assert not ev.active.is_set(), "Should stay cleared inside deadband if not crossed"
 
     # Cross above again -> re-activates
-    _, was_active = c._apply(ev, current=51.0, previous=48.0, was_active=False, label="test")
+    _, was_active = await c._apply(ev, current=51.0, previous=48.0, was_active=False, label="test")
     assert ev.active.is_set()
     assert was_active
 
@@ -138,16 +149,21 @@ def test_weather_constraint_wind():
     )
 
     # Below threshold → safe
-    assert not c.check_weather(BasicWeather(humidity=50.0, wind_speed=20.0, rain_rate=10.0))
+    active, _ = c.check_weather(BasicWeather(humidity=50.0, wind_speed=20.0, rain_rate=10.0))
+    assert not active
 
     # Above max → active
-    assert c.check_weather(BasicWeather(humidity=50.0, wind_speed=35.0, rain_rate=10.0))
+    active, reason = c.check_weather(BasicWeather(humidity=50.0, wind_speed=35.0, rain_rate=10.0))
+    assert active
+    assert "wind" in reason
 
     # Inside deadband (between 25 and 30) → stays active (other metrics at max, not below)
-    assert c.check_weather(BasicWeather(humidity=50.0, wind_speed=27.0, rain_rate=10.0), was_active=True)
+    active, _ = c.check_weather(BasicWeather(humidity=50.0, wind_speed=27.0, rain_rate=10.0), was_active=True)
+    assert active
 
     # Below deadband (<25) → clears
-    assert not c.check_weather(BasicWeather(humidity=50.0, wind_speed=20.0, rain_rate=10.0), was_active=True)
+    active, _ = c.check_weather(BasicWeather(humidity=50.0, wind_speed=20.0, rain_rate=10.0), was_active=True)
+    assert not active
 
 
 def test_weather_constraint_rain():
@@ -161,16 +177,21 @@ def test_weather_constraint_rain():
     )
 
     # Below threshold → safe
-    assert not c.check_weather(BasicWeather(humidity=50.0, wind_speed=30.0, rain_rate=1.0))
+    active, _ = c.check_weather(BasicWeather(humidity=50.0, wind_speed=30.0, rain_rate=1.0))
+    assert not active
 
     # Above max → active
-    assert c.check_weather(BasicWeather(humidity=50.0, wind_speed=30.0, rain_rate=6.0))
+    active, reason = c.check_weather(BasicWeather(humidity=50.0, wind_speed=30.0, rain_rate=6.0))
+    assert active
+    assert "rain" in reason
 
     # Inside deadband (between 3 and 5) → stays active (other metrics at max, not below)
-    assert c.check_weather(BasicWeather(humidity=50.0, wind_speed=30.0, rain_rate=4.0), was_active=True)
+    active, _ = c.check_weather(BasicWeather(humidity=50.0, wind_speed=30.0, rain_rate=4.0), was_active=True)
+    assert active
 
     # Below deadband (<3) → clears
-    assert not c.check_weather(BasicWeather(humidity=50.0, wind_speed=30.0, rain_rate=2.0), was_active=True)
+    active, _ = c.check_weather(BasicWeather(humidity=50.0, wind_speed=30.0, rain_rate=2.0), was_active=True)
+    assert not active
 
 
 def test_weather_constraint_partial_none_data():
@@ -183,13 +204,19 @@ def test_weather_constraint_partial_none_data():
     )
 
     # Only humidity missing
-    assert c.check_weather(BasicWeather(humidity=None, wind_speed=5.0, rain_rate=0.0))
+    active, reason = c.check_weather(BasicWeather(humidity=None, wind_speed=5.0, rain_rate=0.0))
+    assert active
+    assert "humidity" in reason
 
     # Only wind missing
-    assert c.check_weather(BasicWeather(humidity=50.0, wind_speed=None, rain_rate=0.0))
+    active, reason = c.check_weather(BasicWeather(humidity=50.0, wind_speed=None, rain_rate=0.0))
+    assert active
+    assert "wind_speed" in reason
 
     # Only rain missing
-    c.check_weather(BasicWeather(humidity=50.0, wind_speed=5.0, rain_rate=None))
+    active, reason = c.check_weather(BasicWeather(humidity=50.0, wind_speed=5.0, rain_rate=None))
+    assert active
+    assert "rain_rate" in reason
 
 
 def test_weather_constraint_no_deadband():
@@ -203,10 +230,12 @@ def test_weather_constraint_no_deadband():
     )
 
     # Above → active
-    c.check_weather(BasicWeather(humidity=55.0, wind_speed=0.0, rain_rate=0.0))
+    active, _ = c.check_weather(BasicWeather(humidity=55.0, wind_speed=0.0, rain_rate=0.0))
+    assert active
 
     # Just below max → clears immediately (no deadband)
-    c.check_weather(BasicWeather(humidity=49.0, wind_speed=0.0, rain_rate=0.0))
+    active, _ = c.check_weather(BasicWeather(humidity=49.0, wind_speed=0.0, rain_rate=0.0))
+    assert not active
 
 
 def test_weather_constraint_defaults():
@@ -274,7 +303,8 @@ async def test_evaluator_kwargs_forwarded():
     assert received == {"foo": "bar", "num": 42}
 
 
-def test_generic_constraint_crosses_below():
+@pytest.mark.asyncio
+async def test_generic_constraint_crosses_below():
     c = GenericConstraint(
         entity="sensor",
         keyword="Temperature",
@@ -284,25 +314,26 @@ def test_generic_constraint_crosses_below():
     ev = c.make_evaluator()
 
     # Cross below 0 → activates
-    _, was_active = c._apply(ev, current=-1.0, previous=5.0, was_active=False, label="test")
+    _, was_active = await c._apply(ev, current=-1.0, previous=5.0, was_active=False, label="test")
     assert ev.active.is_set()
     assert was_active
 
     # Remain below threshold → stays active
-    _, was_active = c._apply(ev, current=-3.0, previous=-1.0, was_active=True, label="test")
+    _, was_active = await c._apply(ev, current=-3.0, previous=-1.0, was_active=True, label="test")
     assert ev.active.is_set()
 
     # Rise into deadband (0 to 2) → stays active
-    _, was_active = c._apply(ev, current=1.0, previous=-3.0, was_active=True, label="test")
+    _, was_active = await c._apply(ev, current=1.0, previous=-3.0, was_active=True, label="test")
     assert ev.active.is_set()
 
     # Rise above deadband (> 2) → clears
-    _, was_active = c._apply(ev, current=3.0, previous=1.0, was_active=True, label="test")
+    _, was_active = await c._apply(ev, current=3.0, previous=1.0, was_active=True, label="test")
     assert not ev.active.is_set()
     assert not was_active
 
 
-def test_generic_constraint_no_field():
+@pytest.mark.asyncio
+async def test_generic_constraint_no_field():
     """GenericConstraint without a field uses raw data."""
     c = GenericConstraint(
         entity="sensor",
@@ -314,11 +345,11 @@ def test_generic_constraint_no_field():
     ev = c.make_evaluator()
 
     # Cross above → activates
-    _, was_active = c._apply(ev, current=110.0, previous=90.0, was_active=False, label="test")
+    _, was_active = await c._apply(ev, current=110.0, previous=90.0, was_active=False, label="test")
     assert ev.active.is_set()
 
     # Drop below → clears (no deadband)
-    _, was_active = c._apply(ev, current=90.0, previous=110.0, was_active=True, label="test")
+    _, was_active = await c._apply(ev, current=90.0, previous=110.0, was_active=True, label="test")
     assert not ev.active.is_set()
 
 

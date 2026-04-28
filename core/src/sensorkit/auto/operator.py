@@ -22,7 +22,8 @@ from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.task import TaskContexts
 from sensorkit.core.program import ControllerOffers, ProgramClient, ProgramDiscovery, ProgramState
 from sensorkit.models.devices import SitePosition
-from sensorkit.auto.constraint import AnyConstraint
+from sensorkit.auto.constraint import AnyConstraint, ConstraintStatus
+from sensorkit.common.keyword import dump_keyword_json, get_keyword_info
 
 
 class ControllerConfig(BaseModel):
@@ -105,8 +106,15 @@ class ControllerDriver:
         # and a demand state is set.
         self.lifecycle.start(kit.controller(self.config.name), task_group=task_group)
 
-        # Start constraint evaluators.
+        # Start constraint evaluators with publish callback.
+        controller_client = kit.controller(self.config.name)
+
+        async def _publish_constraint_status(status: ConstraintStatus):
+            info = get_keyword_info(status)
+            await controller_client._stream.publish(info.key, dump_keyword_json(status))
+
         for constraint in self.constraints:
+            constraint.set_on_change(_publish_constraint_status)
             constraint.start(task_group=task_group, kit=kit)
 
         # Wait for all constraints to become ready.
