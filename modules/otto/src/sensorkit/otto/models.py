@@ -30,6 +30,8 @@ class CollectConfig(BaseModel):
     track_mode: str
     dither: bool = False
     dither_amount_arcsec: float = 0.0
+    scan_mode: bool = False
+    scan_direction: Literal["eastward", "westward"] | None = None
     filters: List[str] = Field(default_factory=list)
     exposure_min: int = 1
     exposure_max: int = 10

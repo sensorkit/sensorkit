@@ -97,15 +97,15 @@ async def fetch_tles(
     return tles, status_code
 
 
-def check_satellite_visibility(
+def calculate_satellite_position(
         tles: dict[str, dict[str, str]],
         object: str,
         latitude: float,
         longitude: float,
         elevation: float,
-) -> tuple[float, bool] | None:
+) -> tuple[float, float, bool] | None:
     """
-    Check if a satellite is visible.
+    Calculate a satellite's current position relative to an observer.
 
     Args:
         tles: Dictionary of TLEs keyed by NORAD ID
@@ -115,9 +115,10 @@ def check_satellite_visibility(
         elevation: Observer elevation in meters
 
     Returns:
-        Tuple of (altitude, is_rising) or None if no TLE found
+        Tuple of (altitude, azimuth, is_rising) or None if no TLE found
         - altitude: Current altitude in degrees
-        - rising: True/False
+        - azimuth: Current azimuth in degrees
+        - rising: True if satellite altitude is increasing
     """
     # Check if we have TLE for this object
     if object not in tles:
@@ -149,6 +150,7 @@ def check_satellite_visibility(
         alt, az, distance = topocentric.altaz()
 
         altitude = alt.degrees
+        azimuth = az.degrees
 
         # Calculate position one minute in the future to determine if rising/falling
         future = ts.from_datetime(datetime.now(UTC).replace(microsecond=0))
@@ -161,7 +163,7 @@ def check_satellite_visibility(
         # Determine if rising or falling
         rising = future_altitude > altitude
 
-        return altitude, rising
+        return altitude, azimuth, rising
 
     except Exception as e:
         logger.exception(f"Error calculating satellite position for {object}: {e}")
