@@ -91,7 +91,7 @@ class NodePlatformMount(NodePlatformDevice):
         self._geodetic = Geodetic(
             lon=self._site_info["longitude_degrees"],
             lat=self._site_info["latitude_degrees"],
-            elev=self._site_info["height_meters"] / 1000,
+            elev=self._site_info["height_meters"],
         )
         self._location = EarthLocation(
             lat=self._site_info["latitude_degrees"] * u.deg,
@@ -214,12 +214,12 @@ class NodePlatformMount(NodePlatformDevice):
             observer=self._geodetic,
         )
 
-        match cmd.target:
+        match target:
             case ICRSTarget():
                 logger.debug("executing RADec follow")
 
                 req = osapi.V1GoToMountCoordinatesRequest(
-                    ra=target.coords.ra / 15,
+                    ra=target.coords.ra,
                     dec=target.coords.dec,
                 )
                 await self.api.call("v1_go_to_mount_coordinates", req)
@@ -253,8 +253,8 @@ class NodePlatformMount(NodePlatformDevice):
                 logger.debug("executing TLE follow")
 
                 req = osapi.V1FollowTLERequest(
-                    tle_line1=cmd.target.tle.line1,
-                    tle_line2=cmd.target.tle.line2,
+                    tle_line1=target.tle.line1,
+                    tle_line2=target.tle.line2,
                 )
                 await self.api.call("v1_mount_follow_tle", req)
                 self._start_fast_status()

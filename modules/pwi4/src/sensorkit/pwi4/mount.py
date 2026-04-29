@@ -156,7 +156,7 @@ class PWI4Mount(PWI4Device):
         lat = self.client.get_float(st, "site.latitude_degs")
         lon = self.client.get_float(st, "site.longitude_degs")
         height_m = self.client.get_float(st, "site.height_meters")
-        self._geodetic = Geodetic(lon=lon, lat=lat, elev=height_m / 1000)
+        self._geodetic = Geodetic(lon=lon, lat=lat, elev=height_m)
         self._location = EarthLocation.from_geodetic(lon=lon, lat=lat, height=height_m)
 
     @sk.on_detach
