@@ -12,6 +12,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
+from sensorkit.astro.common import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
     EphemerisTarget,
@@ -67,6 +68,7 @@ class NodePlatformMount(NodePlatformDevice):
 
         # Cache for site info (location + time)
         self._site_info: dict[str, object] = {}
+        self._geodetic: Geodetic | None = None
         self._location: EarthLocation | None = None
 
         # Start slow status publishing
@@ -86,6 +88,11 @@ class NodePlatformMount(NodePlatformDevice):
         # if location.gps_details:
         #     self._site_info["gps_fix"] = location.gps_details.fix
         #     self._site_info["gps_position_error_meters"] = location.gps_details.position_error_meters
+        self._geodetic = Geodetic(
+            lon=self._site_info["longitude_degrees"],
+            lat=self._site_info["latitude_degrees"],
+            elev=self._site_info["height_meters"] / 1000,
+        )
         self._location = EarthLocation(
             lat=self._site_info["latitude_degrees"] * u.deg,
             lon=self._site_info["longitude_degrees"] * u.deg,
@@ -196,25 +203,24 @@ class NodePlatformMount(NodePlatformDevice):
     async def mount_follow_target(self, cmd: sk.FollowTarget):
         await self.require_connected()
 
-        # target = await cmd.target.adapt(
-        #     ICRSTarget,
-        #     AltAzTarget,
-        #     (FrameTarget, ReferenceFrame.ICRF),
-        #     (FrameTarget, ReferenceFrame.ALTAZ),
-        #     TLETarget,
-        #     (RateTarget, ReferenceFrame.ICRF),
-        #     (EphemerisTarget, ReferenceFrame.ICRF),
-        #     observer=self._geodetic,
-        # )
-        target = cmd.target
+        target = await cmd.target.adapt(
+            ICRSTarget,
+            AltAzTarget,
+            (FrameTarget, ReferenceFrame.ICRF),
+            (FrameTarget, ReferenceFrame.ALTAZ),
+            TLETarget,
+            (RateTarget, ReferenceFrame.ICRF),
+            (EphemerisTarget, ReferenceFrame.ICRF),
+            observer=self._geodetic,
+        )
 
         match cmd.target:
             case ICRSTarget():
                 logger.debug("executing RADec follow")
 
                 req = osapi.V1GoToMountCoordinatesRequest(
-                    ra=cmd.target.right_ascension_hours * 15,
-                    dec=cmd.target.declination,
+                    ra=target.coords.ra / 15,
+                    dec=target.coords.dec,
                 )
                 await self.api.call("v1_go_to_mount_coordinates", req)
                 self._start_fast_status()
@@ -230,8 +236,8 @@ class NodePlatformMount(NodePlatformDevice):
                 logger.debug("executing AltAz follow")
 
                 req = osapi.V1GoToMountCoordinatesRequest(
-                    altitude=cmd.target.altitude_degrees,
-                    azimuth=cmd.target.azimuth_degrees,
+                    altitude=target.coords.alt,
+                    azimuth=target.coords.az,
                 )
                 await self.api.call("v1_go_to_mount_coordinates", req)
                 self._start_fast_status()
