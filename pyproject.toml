@@ -152,6 +152,7 @@ source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["core/src/sensorkit"]
+dev-mode-exact = true
 dev-mode-dirs = [
     "core/src",
     "modules/alpaca/src",
