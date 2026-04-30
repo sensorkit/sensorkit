@@ -59,6 +59,7 @@ class SummaryAccumulator:
         self._tasks.append(asyncio.create_task(self._watch_safety()))
 
         try:
+            last_post_date = None
             while True:
                 sleep_seconds = self._seconds_until_post()
                 logger.debug(
@@ -66,8 +67,14 @@ class SummaryAccumulator:
                     f"until {self._post_at} {self._tz}"
                 )
                 await asyncio.sleep(sleep_seconds)
+
+                today = datetime.now(self._tz).date()
+                if last_post_date == today:
+                    continue
+
                 await self._post_summary()
                 self._reset()
+                last_post_date = today
         except asyncio.CancelledError:
             for task in self._tasks:
                 task.cancel()
@@ -151,13 +158,15 @@ class SummaryAccumulator:
 
         while True:
             try:
-                subject = Subject(path=(), prop=SpecialProperty.EVENTS)
+                subject = Subject(path=(), prop=SpecialProperty.ALL_DESCENDANTS)
                 consumer_name = "slack-summary-tasks"
 
                 consumer = await self._sk_client.backend.impl.stream_consume(
                     subject, durable_name=consumer_name,
                 )
                 async for msg in consumer:
+                    if msg.subject.prop != SpecialProperty.EVENTS:
+                        continue
                     try:
                         data = json.loads(msg.data)
                         event_model = data.get("event_model")
@@ -172,11 +181,15 @@ class SummaryAccumulator:
                             self._observation_counts["attempted"] += 1
                             self._transition_state("executing")
                         elif finished:
-                            success = finished.get("success", False) if isinstance(finished, dict) else False
-                            if success:
-                                self._observation_counts["completed"] += 1
+                            if isinstance(finished, dict):
+                                errored = finished.get("error", False)
+                                aborted = finished.get("aborted", False)
+                                if not errored and not aborted:
+                                    self._observation_counts["completed"] += 1
+                                else:
+                                    self._observation_counts["failed"] += 1
                             else:
-                                self._observation_counts["failed"] += 1
+                                self._observation_counts["completed"] += 1
                             self._transition_state("idle")
 
                     except Exception as e:
@@ -200,14 +213,13 @@ class SummaryAccumulator:
                     subject, durable_name=consumer_name,
                 )
                 async for msg in consumer:
+                    if msg.subject.prop == SpecialProperty.EVENTS:
+                        continue
+                    if msg.subject.prop != "Connected":
+                        continue
                     try:
                         data = json.loads(msg.data)
-                        keyword_model = data.get("keyword_model", "")
-
-                        if keyword_model != "Connected":
-                            continue
-
-                        entity = msg.subject.split(".")[0] if "." in msg.subject else "unknown"
+                        entity = ".".join(msg.subject.path)
                         is_connected = data.get("is_connected", True)
 
                         now = datetime.now(self._tz).strftime("%H:%M:%S")
@@ -237,13 +249,12 @@ class SummaryAccumulator:
                     subject, durable_name=consumer_name,
                 )
                 async for msg in consumer:
+                    if msg.subject.prop == SpecialProperty.EVENTS:
+                        continue
+                    if "Safety" not in str(msg.subject.prop):
+                        continue
                     try:
                         data = json.loads(msg.data)
-                        keyword_model = data.get("keyword_model", "")
-
-                        if "Safety" not in keyword_model:
-                            continue
-
                         is_safe = data.get("is_safe", True)
                         now = datetime.now(self._tz).strftime("%H:%M:%S")
 

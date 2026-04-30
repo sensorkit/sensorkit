@@ -40,7 +40,8 @@ class TLECache(BaseModel):
 
 @sk.declare_program
 class OttoProgram:
-    def __init__(self):
+    def __init__(self, config: OttoConfig):
+        self.config = config
         self.task_queue: TaskQueue | None = None
 
         self.tles: Dict[str, Dict[str, str]] = {}
@@ -59,7 +60,7 @@ class OttoProgram:
         except Exception as e:
             logger.warning(f"Failed to save state: {e}")
 
-    async def _reload_config(self, future: asyncio.Future[OttoConfig]):
+    async def _watch_config(self):
         async for config in self.program.kv_monitor_model(OttoConfig):
             self.config = config
 
@@ -75,18 +76,6 @@ class OttoProgram:
                 self.state.blacklist = []
                 logger.info(f"Loaded {len(config.task.objects)} objects from config")
 
-            if not future.done():
-                future.set_result(config)
-
-    async def _load_config(self) -> OttoConfig:
-        fut = asyncio.get_event_loop().create_future()
-
-        # Reload config when it changes
-        self.program.task_group.create_task(self._reload_config(fut))
-
-        await fut
-        return fut.result()
-
     @sk.on_attach
     async def program_init(self):
         """Load state, set up the controller, task queue, and optionally start task generation and image publishing."""
@@ -98,8 +87,8 @@ class OttoProgram:
         except Exception:
             logger.warning(f"No saved state for {self.program.entity}")
 
-        # Load initial config
-        await self._load_config()
+        # Watch for live config changes
+        self.program.task_group.create_task(self._watch_config())
 
         # Initialize list manager
         self.list_manager = ObjectListManager(self.state, self._save_state)

@@ -93,11 +93,10 @@ class AlpacaFilterWheel(AlpacaDevice):
 
         await self.put(self.filter_wheel, "Position", position)
 
-        # Wait for filter change — position reads as -1 while moving
         async with asyncio.timeout(self.config.timeout):
             while True:
                 pos = await self.get(self.filter_wheel, "Position", -1)
-                if pos >= 0:
+                if pos == position:
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
