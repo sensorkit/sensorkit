@@ -192,3 +192,7 @@ class AuthenticationError(NodePlatformError):
 
 class NotFoundError(NodePlatformError):
     code = 404
+
+
+class InternalServerError(NodePlatformError):
+    code = 500
