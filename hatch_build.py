@@ -19,7 +19,7 @@ class CustomBuildHook(BuildHookInterface):
     PLUGIN_NAME = "custom"
 
     def initialize(self, version: str, build_data: dict) -> None:
-        if self.target_name in ("editable", "sdist"):
+        if version != "standard":
             return
 
         for module in self.config.get("modules", []):
