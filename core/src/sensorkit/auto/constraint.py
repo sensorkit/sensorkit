@@ -270,17 +270,36 @@ class GenericConstraint(Constraint):
     field: str | None = None
     condition: AnyCondition
     time_to_live: float = 30.0
+    hold_duration: float = 0.0
     activate_on_timeout: bool = True
     """If True (default), activate the constraint when no data arrives within time_to_live.
     If False, the constraint stays inactive when data is absent — useful for optional sensors."""
 
+    async def _hold_and_clear(self, evaluator: ConstraintEvaluator, label: str):
+        await asyncio.sleep(self.hold_duration)
+        logger.info(f"Clearing conditional constraint on {label} (hold period expired)")
+        evaluator.active.clear()
+        await evaluator._notify(ConstraintStatus(
+            constraint_kind=self.kind, active=False, reason=f"{label} hold period expired", provider=self.entity,
+        ))
+
     async def _apply(
-        self, evaluator: ConstraintEvaluator, current: object, previous: object, was_active: bool, label: str
-    ) -> tuple[object, bool]:
-        """Evaluate the condition and update the evaluator. Returns (current, was_active)."""
+        self,
+        evaluator: ConstraintEvaluator,
+        current: object,
+        previous: object,
+        was_active: bool,
+        label: str,
+        hold_task: asyncio.Task | None,
+    ) -> tuple[object, bool, asyncio.Task | None]:
+        """Evaluate the condition and update the evaluator. Returns (current, was_active, hold_task)."""
         _, is_active = self.condition.evaluate(current, previous, was_active)
 
         if is_active:
+            # Cancel any pending hold timer
+            if hold_task is not None and not hold_task.done():
+                hold_task.cancel()
+                hold_task = None
             reason = f"{label} = {current}"
             if not evaluator.active.is_set():
                 logger.info(f"Setting conditional constraint on {reason}")
@@ -289,15 +308,20 @@ class GenericConstraint(Constraint):
                 ))
             evaluator.active.set()
         else:
-            reason = f"{label} = {current}"
             if evaluator.active.is_set():
-                logger.info(f"Clearing conditional constraint on {reason}")
-                await evaluator._notify(ConstraintStatus(
-                    constraint_kind=self.kind, active=False, reason=reason, provider=self.entity,
-                ))
-            evaluator.active.clear()
+                reason = f"{label} = {current}"
+                if self.hold_duration > 0:
+                    if hold_task is None or hold_task.done():
+                        logger.info(f"Conditional constraint cleared ({reason}), holding for {self.hold_duration}s")
+                        hold_task = asyncio.create_task(self._hold_and_clear(evaluator, label))
+                else:
+                    logger.info(f"Clearing conditional constraint on {reason}")
+                    await evaluator._notify(ConstraintStatus(
+                        constraint_kind=self.kind, active=False, reason=reason, provider=self.entity,
+                    ))
+                    evaluator.active.clear()
 
-        return current, is_active
+        return current, is_active, hold_task
 
     @override
     async def check_task(self, evaluator: ConstraintEvaluator, kit: SensorKit):
@@ -309,6 +333,7 @@ class GenericConstraint(Constraint):
         _UNSET = object()
         previous: object = _UNSET
         was_active = False
+        hold_task: asyncio.Task | None = None
 
         if not self.activate_on_timeout:
             evaluator.ready.set()
@@ -331,8 +356,8 @@ class GenericConstraint(Constraint):
                         current = resolve_field(data, self.field) if self.field else data
 
                         if previous is not _UNSET:
-                            previous, was_active = await self._apply(
-                                evaluator, current, previous, was_active, label
+                            previous, was_active, hold_task = await self._apply(
+                                evaluator, current, previous, was_active, label, hold_task
                             )
                             evaluator.ready.set()
                         else:
