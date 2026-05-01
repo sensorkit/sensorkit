@@ -206,7 +206,7 @@ class TheSkyDome(TheSkyDevice):
                 if attempt == max_retries:
                     raise
                 logger.warning(
-                    f"dome command failed (attempt {attempt + 1}/{max_retries + 1}), "
+                    f"Dome command failed (attempt {attempt + 1}/{max_retries + 1}), "
                     f"reconnecting and retrying"
                 )
                 try:

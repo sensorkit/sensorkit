@@ -59,6 +59,16 @@ otto = [
 pwi4 = [
     "httpx",
 ]
+sky-transmission = [
+    "allclear",
+    "alpyca>=3.1.0",
+    "Pillow",
+    "imageio[pyav]",
+    "watchdog",
+    "fastapi>=0.115.12",
+    "uvicorn>=0.34.0",
+    "matplotlib",
+]
 slack = [
     "slack-sdk",
     "aiohttp",
@@ -133,6 +143,7 @@ layers = [
     sensorkit.node_platform |
     sensorkit.otto |
     sensorkit.pwi4 |
+    sensorkit.sky_transmission |
     sensorkit.slack |
     sensorkit.thesky
     """,
@@ -162,6 +173,7 @@ dev-mode-dirs = [
     "modules/otto/src",
     "modules/pwi4/src",
     "modules/slack/src",
+    "modules/sky_transmission/src",
     "modules/thesky/src",
     "modules/udl/src",
 ]
@@ -175,6 +187,7 @@ modules = [
     "node_platform",
     "otto",
     "pwi4",
+    "sky_transmission",
     "slack",
     "thesky",
     "udl",

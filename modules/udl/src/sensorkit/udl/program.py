@@ -3,12 +3,11 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List
-
-import os
 
 import httpx
 from dotenv import dotenv_values
@@ -18,17 +17,17 @@ from unifieddatalibrary import AsyncUnifieddatalibrary
 from unifieddatalibrary.types import CollectRequestFull
 
 import sensorkit.api as sk
-from sensorkit.astro.common import Cartesian, Equatorial, StateVector, TLE
+from sensorkit.astro.common import TLE, Cartesian, Equatorial, StateVector
 from sensorkit.astro.target import ICRSTarget, StateVectorTarget, TLETarget
 from sensorkit.models.devices import SitePosition, Target
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
-
 from sensorkit.udl.models import ResponseStatus, UDLConfig, UDLReferenceFrame
 from sensorkit.udl.task_queue import TaskQueue
 
 
 class UDLState(BaseModel):
     """Persistent state for UDL program."""
+
     pending_tasks: List[Dict] = Field(default_factory=list)
 
 
@@ -70,9 +69,11 @@ class UDLProgram:
     async def _save_state(self) -> None:
         """Persist current state to KV store."""
         try:
-            self.state.pending_tasks = [
-                request.model_dump(mode="json") for request in self.queue.iter()
-            ] if self.queue else []
+            self.state.pending_tasks = (
+                [request.model_dump(mode="json") for request in self.queue.iter()]
+                if self.queue
+                else []
+            )
             await self.program.kv_put_model(self.state)
         except Exception as e:
             logger.warning(f"Failed to save state: {e}")
@@ -295,12 +296,16 @@ class UDLProgram:
         # Extract context values
         file_path = context.get("file_path")
         path = Path(file_path) if isinstance(file_path, (str, Path)) else None
-        filename = path.name if path else context.get("file_name", f"{request.id}_{context.get('frame_num', 0)}.fits")
+        filename = (
+            path.name
+            if path
+            else context.get("file_name", f"{request.id}_{context.get('frame_num', 0)}.fits")
+        )
 
         date_obs = context.get("date_obs")
         exp_start_time = datetime.fromisoformat(date_obs) if date_obs else datetime.now(UTC)
 
-        exposure_time = context.get("etime") or (request.integration_time / 1000.0 if request.integration_time else 1.0)
+        exposure_time = context.get("exptime")
         exp_end_time = exp_start_time + timedelta(seconds=float(exposure_time))
 
         # sequenceId must be >= 1 (UDL requirement)
@@ -351,7 +356,7 @@ class UDLProgram:
 
         # Create ZIP in memory and upload
         zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr(metadata_fname, metadata_bytes)
             zf.writestr(filename, data)
         zip_buffer.seek(0)
@@ -379,7 +384,7 @@ class UDLProgram:
             save_path.mkdir(parents=True, exist_ok=True)
             zip_path = save_path / f"{Path(data_fname).stem}.zip"
 
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr(data_fname, data)
                 zf.writestr(metadata_fname, metadata_bytes)
 
@@ -401,9 +406,7 @@ class UDLProgram:
         if target is None:
             logger.warning(f"Task ({request.id}): Could not build target, skipping")
             await self._send_response(
-                request,
-                ResponseStatus.REJECTED,
-                notes="Unsupported target type"
+                request, ResponseStatus.REJECTED, notes="Unsupported target type"
             )
             await self.queue.remove_task(request.id)
             yield None
@@ -421,7 +424,9 @@ class UDLProgram:
             target=target,
             end_time=end_time,
             camera_params=CameraParameterSet(
-                integration_time_seconds=(request.integration_time / 1000.0) if request.integration_time else 1.0,
+                integration_time_seconds=(request.integration_time / 1000.0)
+                if request.integration_time
+                else 1.0,
                 frame_count=request.num_frames or 1,
             ),
         )
@@ -435,19 +440,21 @@ class UDLProgram:
         except asyncio.CancelledError as e:
             logger.warning(f"Task ({request.id}): cancelled. {e=}")
             await self._send_response(
-                request, ResponseStatus.CANCELLED, notes=str(e),
+                request,
+                ResponseStatus.CANCELLED,
+                notes=str(e),
             )
         except Exception as e:
             logger.warning(f"Task ({request.id}): failed. {e=}")
             await self._send_response(
-                request, ResponseStatus.FAILED, notes=str(e),
+                request,
+                ResponseStatus.FAILED,
+                notes=str(e),
             )
         finally:
             await self.queue.remove_task(request.id)
             # Keep task reference for imagery publishing correlation
-            asyncio.get_event_loop().call_later(
-                300, lambda: self.tasks.pop(request.id, None)
-            )
+            asyncio.get_event_loop().call_later(300, lambda: self.tasks.pop(request.id, None))
 
     # ── Target building ──
 
@@ -479,6 +486,7 @@ class UDLProgram:
                 except ValueError:
                     logger.warning(f"Unknown reference frame {frame_str}, defaulting to GCRF")
                     from sensorkit.astro.common import ReferenceFrame
+
                     ref_frame = ReferenceFrame.GCRF
 
                 return StateVectorTarget(

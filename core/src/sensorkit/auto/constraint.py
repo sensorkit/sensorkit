@@ -270,6 +270,9 @@ class GenericConstraint(Constraint):
     field: str | None = None
     condition: AnyCondition
     time_to_live: float = 30.0
+    activate_on_timeout: bool = True
+    """If True (default), activate the constraint when no data arrives within time_to_live.
+    If False, the constraint stays inactive when data is absent — useful for optional sensors."""
 
     async def _apply(
         self, evaluator: ConstraintEvaluator, current: object, previous: object, was_active: bool, label: str
@@ -307,6 +310,9 @@ class GenericConstraint(Constraint):
         previous: object = _UNSET
         was_active = False
 
+        if not self.activate_on_timeout:
+            evaluator.ready.set()
+
         client = kit.entity(self.entity)
         consumer = await client._stream.consume(include_latest=True)
 
@@ -338,11 +344,20 @@ class GenericConstraint(Constraint):
 
             except TimeoutError:
                 reason = f"{label} (no data for {self.time_to_live}s)"
-                if not evaluator.active.is_set():
-                    logger.info(f"Setting conditional constraint on {reason}")
-                    await evaluator._notify(ConstraintStatus(
-                        constraint_kind=self.kind, active=True, reason=reason, provider=self.entity,
-                    ))
-                evaluator.active.set()
+                if self.activate_on_timeout:
+                    if not evaluator.active.is_set():
+                        logger.info(f"Setting conditional constraint on {reason}")
+                        await evaluator._notify(ConstraintStatus(
+                            constraint_kind=self.kind, active=True, reason=reason, provider=self.entity,
+                        ))
+                    evaluator.active.set()
+                else:
+                    if evaluator.active.is_set():
+                        logger.info(f"Clearing conditional constraint on {reason}")
+                        await evaluator._notify(ConstraintStatus(
+                            constraint_kind=self.kind, active=False, reason=reason, provider=self.entity,
+                        ))
+                    evaluator.active.clear()
+                    evaluator.ready.set()
 
             consumer = await client._stream.consume(include_latest=True)
