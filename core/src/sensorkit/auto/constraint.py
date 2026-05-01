@@ -112,15 +112,19 @@ class WeatherConstraint(Constraint):
         if exceeded:
             return True, ", ".join(exceeded)
 
-        cleared = []
-        if weather.humidity < self.humidity_max - self.humidity_deadband:
-            cleared.append(f"humidity {weather.humidity:.0f}% < {self.humidity_max - self.humidity_deadband:.0f}%")
-        if weather.wind_speed < self.wind_max - self.wind_deadband:
-            cleared.append(f"wind {weather.wind_speed:.1f} < {self.wind_max - self.wind_deadband:.1f}")
-        if weather.rain_rate < self.rain_max - self.rain_deadband:
-            cleared.append(f"rain {weather.rain_rate:.2f} < {self.rain_max - self.rain_deadband:.2f}")
-        if cleared:
-            return False, ", ".join(cleared)
+        # Clear only when ALL parameters are below their deadband-adjusted thresholds.
+        # If any parameter is in the deadband zone, stay in the current state.
+        all_cleared = (
+            weather.humidity < self.humidity_max - self.humidity_deadband
+            and weather.wind_speed < self.wind_max - self.wind_deadband
+            and weather.rain_rate < self.rain_max - self.rain_deadband
+        )
+        if all_cleared:
+            reasons = []
+            reasons.append(f"humidity {weather.humidity:.0f}% < {self.humidity_max - self.humidity_deadband:.0f}%")
+            reasons.append(f"wind {weather.wind_speed:.1f} < {self.wind_max - self.wind_deadband:.1f}")
+            reasons.append(f"rain {weather.rain_rate:.2f} < {self.rain_max - self.rain_deadband:.2f}")
+            return False, ", ".join(reasons)
         return was_active, "deadband"
 
     async def _hold_and_clear(self, active: asyncio.Event, evaluator: ConstraintEvaluator):

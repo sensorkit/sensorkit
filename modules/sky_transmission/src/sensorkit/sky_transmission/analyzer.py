@@ -239,7 +239,7 @@ class SkyTransmissionAnalyzer:
 
         await self._entity.publish(
             SkyTransmission(
-                clear_fraction=result.clear_fraction,
+                clear_fraction=round(result.clear_fraction, 2),
                 n_matched=result.n_matched,
                 n_expected=result.n_expected,
                 threshold=self.config.allclear.clear_threshold,
