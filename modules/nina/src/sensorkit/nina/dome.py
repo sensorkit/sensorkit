@@ -7,7 +7,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected, Opened
+from sensorkit.models.devices import AltAzPointing, Connected, Opened
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
 
@@ -189,6 +189,10 @@ class NinaDome(NinaDevice):
                     azimuth = info.get("Azimuth")
                     if azimuth is not None:
                         fields["azimuth"] = azimuth
+                        await device.publish(AltAzPointing(
+                            azimuth_degrees=azimuth,
+                            altitude_degrees=0.0,
+                        ))
 
                     following = info.get("Following")
                     if following is not None:

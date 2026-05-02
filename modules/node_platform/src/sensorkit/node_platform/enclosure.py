@@ -8,7 +8,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected, Opened
+from sensorkit.models.devices import AltAzPointing, Connected, Opened
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
@@ -246,6 +246,14 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
                 await device.publish(Connected(is_connected=connected))
                 await device.publish(Opened(is_open=is_open))
+
+                # Publish enclosure pointing from rotator azimuth and window position
+                rotator = enclosure_status.rotator
+                window = enclosure_status.window
+                rot_az = rotator.azimuth_degrees if rotator else None
+                win_alt = window.position_degrees if window else None
+                if rot_az is not None and win_alt is not None:
+                    await device.publish(AltAzPointing(azimuth_degrees=rot_az, altitude_degrees=win_alt))
 
                 # Build enclosure subsystem status
                 properties: dict = {

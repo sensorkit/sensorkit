@@ -13,7 +13,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Connected, Opened
+from sensorkit.models.devices import AltAzPointing, Connected, Opened
 from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
 
 _SHUTTER_OPEN = 0
@@ -275,6 +275,9 @@ class AlpacaDome(AlpacaDevice):
                         "at_park": at_park,
                     }
 
+                    azimuth = None
+                    altitude = None
+
                     if self._can_set_azimuth:
                         properties["can_set_azimuth"] = True
                         azimuth = await self.get(d, "Azimuth", None)
@@ -286,6 +289,17 @@ class AlpacaDome(AlpacaDevice):
                         altitude = await self.get(d, "Altitude", None)
                         if altitude is not None:
                             properties["altitude"] = altitude
+
+                    if azimuth is not None and altitude is not None:
+                        await device.publish(AltAzPointing(
+                            azimuth_degrees=azimuth,
+                            altitude_degrees=altitude,
+                        ))
+                    elif azimuth is not None:
+                        await device.publish(AltAzPointing(
+                            azimuth_degrees=azimuth,
+                            altitude_degrees=0.0,
+                        ))
 
                     if self._can_slave:
                         properties["can_slave"] = True

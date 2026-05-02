@@ -270,6 +270,7 @@ class TheSkyDome(TheSkyDevice):
                     Out = [
                         sky6Dome.IsConnected,
                         sky6Dome.slitState(),
+                        sky6Dome.dEl,
                         sky6Dome.dAz,
                         sky6Dome.IsGotoComplete
                     ];
@@ -282,20 +283,20 @@ class TheSkyDome(TheSkyDevice):
 
             try:
                 # 0=unknown, 1=open, 2=closed
-                connected, slit_num, az, is_tracking = [float(x) for x in resp.split(",")]
+                connected, slit_num, alt, az, is_tracking = [float(x) for x in resp.split(",")]
                 slit_str = {0: "unknown", 1: "open", 2: "closed"}.get(int(slit_num), "unknown")
 
                 connected = bool(connected)
                 self.device_connected = connected
 
                 # logger.debug(
-                #     f"TheSky dome status: connected={connected}, slit={slit_str}, az={az}"
+                #     f"TheSky dome status: connected={connected}, slit={slit_str}, alt={alt}, az={az}"
                 # )
 
                 device = sk.device()
                 await device.publish(Connected(is_connected=connected))
                 await device.publish(Opened(is_open=int(slit_num) in (0, 1)))
-                await device.publish(AltAzPointing(altitude_degrees=0, azimuth_degrees=az))
+                await device.publish(AltAzPointing(altitude_degrees=alt, azimuth_degrees=az))
                 await device.publish(IsTracking(is_tracking=bool(is_tracking)))
 
             except Exception as e:
