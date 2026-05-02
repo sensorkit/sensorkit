@@ -338,6 +338,7 @@ class GenericConstraint(Constraint):
         previous: object = _UNSET
         was_active = False
         hold_task: asyncio.Task | None = None
+        skip_replay = False
 
         if not self.activate_on_timeout:
             evaluator.ready.set()
@@ -360,10 +361,14 @@ class GenericConstraint(Constraint):
                         current = resolve_field(data, self.field) if self.field else data
 
                         if previous is not _UNSET:
-                            previous, was_active, hold_task = await self._apply(
-                                evaluator, current, previous, was_active, label, hold_task
-                            )
-                            evaluator.ready.set()
+                            if skip_replay:
+                                skip_replay = False
+                                previous = current
+                            else:
+                                previous, was_active, hold_task = await self._apply(
+                                    evaluator, current, previous, was_active, label, hold_task
+                                )
+                                evaluator.ready.set()
                         else:
                             previous = current
 
@@ -388,5 +393,6 @@ class GenericConstraint(Constraint):
                         ))
                     evaluator.active.clear()
                     evaluator.ready.set()
+                    skip_replay = True
 
             consumer = await client._stream.consume(include_latest=True)
