@@ -39,8 +39,12 @@ class NinaRotator(NinaDevice):
 
         self.rotator_position: float | None = None
 
-        self.start_status_loop(self.status_publish())
         await self.rotator_init(sk.Init())
+        self.start_status_loop(self.status_publish())
+
+        async with asyncio.timeout(self.config.timeout):
+            while self.rotator_position is None:
+                await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
@@ -52,10 +56,6 @@ class NinaRotator(NinaDevice):
     async def rotator_init(self, cmd: sk.Init):
         self._reconnect = lambda: self.rotator_connect(sk.Connect())
         await self.rotator_connect(sk.Connect())
-
-        async with asyncio.timeout(self.config.timeout):
-            while self.rotator_position is None:
-                await asyncio.sleep(self.config.status_frequency)
 
     @sk.command_handler
     async def rotator_deinit(self, cmd: sk.Deinit):

@@ -40,8 +40,12 @@ class NinaFocuser(NinaDevice):
 
         self.focuser_position: float | None = None
 
-        self.start_status_loop(self.status_publish())
         await self.focuser_init(sk.Init())
+        self.start_status_loop(self.status_publish())
+
+        async with asyncio.timeout(self.config.timeout):
+            while self.focuser_position is None:
+                await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
@@ -53,10 +57,6 @@ class NinaFocuser(NinaDevice):
     async def focuser_init(self, cmd: sk.Init):
         self._reconnect = lambda: self.focuser_connect(sk.Connect())
         await self.focuser_connect(sk.Connect())
-
-        async with asyncio.timeout(self.config.timeout):
-            while self.focuser_position is None:
-                await asyncio.sleep(self.config.status_frequency)
 
     @sk.command_handler
     async def focuser_deinit(self, cmd: sk.Deinit):
