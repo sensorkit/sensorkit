@@ -7,7 +7,7 @@ from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected
-from sensorkit.std.optics import Filter, SetFilter
+from sensorkit.std.optics import Filter, Filters, SetFilter
 from sensorkit.thesky.device import (
     TheSkyDevice,
     TheSkyDeviceConfig,
@@ -38,11 +38,7 @@ class TheSkyFilterWheel(TheSkyDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = TheSkyFilterWheelState()
 
-        # Build an inverted index for name lookups
-        self._filter_index = {idx: name for name, idx in self.config.filters.items()}
-        assert len(self._filter_index) == len(self.config.filters)
-
-        self.filter_wheel_position: float | None = None
+            self.filter_wheel_position: float | None = None
 
         await self.filter_wheel_init(sk.Init())
         self.start_status_loop(self.status_publish())
@@ -62,13 +58,25 @@ class TheSkyFilterWheel(TheSkyDevice):
         self._reconnect = lambda: self.filter_wheel_connect(sk.Connect())
         await self.filter_wheel_connect(sk.Connect())
 
+        # Build an inverted index for name lookups
+        self._filter_index = {idx: name for name, idx in self.config.filters.items()}
+        assert len(self._filter_index) == len(self.config.filters)
+
+        await sk.device().publish(
+            Filters(
+                filters=[
+                    Filter(name=name, position=idx) for name, idx in self.config.filters.items()
+                ]
+            )
+        )
+
     @sk.command_handler
     async def filter_wheel_deinit(self, cmd: sk.Deinit):
         await self.filter_wheel_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def filter_wheel_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to thesky filter wheel")
+        logger.debug("connecting to FilterWheel")
 
         await self.execute(
             """
@@ -83,11 +91,11 @@ class TheSkyFilterWheel(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to thesky filter wheel")
+        logger.debug("connected to FilterWheel")
 
     @sk.command_handler
     async def filter_wheel_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from thesky filter wheel")
+        logger.debug("disconnecting from FilterWheel")
 
         await self.execute(
             """
@@ -101,26 +109,26 @@ class TheSkyFilterWheel(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from thesky filter wheel")
+        logger.debug("disconnected from FilterWheel")
 
     @sk.command_handler
     async def filter_wheel_set_filter(self, cmd: SetFilter):
         # NOTE: TheSky does not actually change the filter until a call to TakeImage() is received, so we will have to
         # account for that delay wherever it makes sense to do so.
         await self.require_connected()
-        logger.debug(f"setting thesky filter wheel position to {cmd.filter}")
+        logger.debug(f"setting filter wheel position to {cmd.filter}")
 
         match cmd.filter:
             case int():
                 index = cmd.filter
                 if index not in self._filter_index:
-                    logger.error(f"filter ({cmd.filter}) unavailable")
+                    logger.error(f"Filter ({cmd.filter}) unavailable")
                     raise RuntimeError(f"Filter ({cmd.filter}) unavailable")
             case str():
                 index = self.config.filters.get(cmd.filter)
 
                 if index is None:
-                    logger.error(f"filter ({cmd.filter}) unavailable")
+                    logger.error(f"Filter ({cmd.filter}) unavailable")
                     raise RuntimeError(f"Filter ({cmd.filter}) unavailable")
 
         await self.execute(
@@ -129,7 +137,7 @@ class TheSkyFilterWheel(TheSkyDevice):
             """
         )
 
-        logger.debug(f"set thesky filter wheel position to {cmd.filter}")
+        logger.debug(f"set filter wheel position to {cmd.filter}")
 
     async def status_publish(self):
         while True:

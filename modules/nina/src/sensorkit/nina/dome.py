@@ -76,14 +76,14 @@ class NinaDome(NinaDevice):
     @sk.command_handler
     async def dome_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("stopping dome")
+        logger.debug("stopping enclosure")
         await self.client.get("/equipment/dome/stop")
-        logger.debug("stopped dome")
+        logger.debug("stopped enclosure")
 
     @sk.command_handler
     async def dome_home(self, cmd: sk.Home):
         await self.require_connected()
-        logger.debug("homing dome")
+        logger.debug("homing enclosure")
 
         await self.client.get("/equipment/dome/home")
         await asyncio.sleep(0.1)
@@ -98,12 +98,12 @@ class NinaDome(NinaDevice):
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
 
-        logger.debug("homed dome")
+        logger.debug("homed enclosure")
 
     @sk.command_handler
     async def dome_park(self, cmd: sk.MoveToPark):
         await self.require_connected()
-        logger.debug("parking dome")
+        logger.debug("parking enclosure")
 
         await self.client.get("/equipment/dome/park")
 
@@ -114,12 +114,12 @@ class NinaDome(NinaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("parked dome")
+        logger.debug("parked enclosure")
 
     @sk.command_handler
     async def dome_open(self, cmd: OpenEnclosure):
         await self.require_connected()
-        logger.debug("opening dome")
+        logger.debug("opening enclosure")
 
         await self.client.get("/equipment/dome/open")
         await asyncio.sleep(0.1)
@@ -131,12 +131,12 @@ class NinaDome(NinaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("opened dome")
+        logger.debug("opened enclosure")
 
     @sk.command_handler
     async def dome_close(self, cmd: CloseEnclosure):
         await self.require_connected()
-        logger.debug("closing dome")
+        logger.debug("closing enclosure")
 
         await self.client.get("/equipment/dome/close")
         await asyncio.sleep(0.1)
@@ -148,12 +148,12 @@ class NinaDome(NinaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("closed dome")
+        logger.debug("closed enclosure")
 
     @sk.command_handler
     async def dome_move(self, cmd: MoveEnclosure):
         await self.require_connected()
-        logger.debug(f"slewing dome to azimuth {cmd.target_azimuth:.1f}°")
+        logger.debug(f"moving enclosure to azimuth {cmd.target_azimuth:.1f}°")
 
         await self.client.get(
             "/equipment/dome/slew",
@@ -161,7 +161,7 @@ class NinaDome(NinaDevice):
             waitToFinish=True,
         )
 
-        logger.debug(f"slewed dome to azimuth {cmd.target_azimuth:.1f}°")
+        logger.debug(f"moved enclosure to azimuth {cmd.target_azimuth:.1f}°")
 
     async def status_publish(self):
         while True:

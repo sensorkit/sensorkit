@@ -59,7 +59,7 @@ class TheSkyRotator(TheSkyDevice):
 
     @sk.command_handler
     async def rotator_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to thesky rotator")
+        logger.debug("connecting to Rotator")
 
         await self.execute(
             """
@@ -74,11 +74,11 @@ class TheSkyRotator(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to thesky rotator")
+        logger.debug("connected to Rotator")
 
     @sk.command_handler
     async def rotator_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from thesky rotator")
+        logger.debug("disconnecting from Rotator")
 
         await self.execute(
             """
@@ -92,17 +92,17 @@ class TheSkyRotator(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from thesky rotator")
+        logger.debug("disconnected from Rotator")
 
     @sk.command_handler
-    async def rotator_move(self, cmd: ChangeRotatorPosition):
+    async def rotator_change(self, cmd: ChangeRotatorPosition):
         await self.require_connected()
-        logger.debug(f"moving thesky rotator position to {cmd.position}")
+        logger.debug(f"changing rotator position to {cmd.position}")
 
         if not (
             self.config.limit_min <= self.rotator_position + cmd.position <= self.config.limit_max
         ):
-            logger.error(f"setting rotator position ({cmd.position}) abandoned due to limits")
+            logger.error(f"Setting rotator position ({cmd.position}) abandoned due to limits")
             raise RuntimeError(f"Rotator position ({cmd.position}) outside limits")
 
         await self.execute(
@@ -114,7 +114,7 @@ class TheSkyRotator(TheSkyDevice):
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.rotatorPositionAngle;""", f"{cmd.position}")
 
-        logger.debug(f"moved thesky rotator position to {cmd.position}")
+        logger.debug(f"changed rotator position to {cmd.position}")
 
     async def status_publish(self):
         while True:

@@ -81,10 +81,10 @@ class NinaFocuser(NinaDevice):
         logger.debug("stopped focuser")
 
     @sk.command_handler
-    async def focuser_move(self, cmd: ChangeFocusPosition):
+    async def focuser_change(self, cmd: ChangeFocusPosition):
         await self.require_connected()
         position = int(cmd.position)
-        logger.debug(f"moving focuser to {position}")
+        logger.debug(f"changing focuser to {position}")
         await self.client.get("/equipment/focuser/move", position=position)
 
         async with asyncio.timeout(self.config.timeout):
@@ -94,7 +94,7 @@ class NinaFocuser(NinaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug(f"moved focuser to {self.focuser_position}")
+        logger.debug(f"changed focuser to {self.focuser_position}")
 
     async def status_publish(self):
         while True:

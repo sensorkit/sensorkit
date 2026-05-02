@@ -63,14 +63,14 @@ class NodePlatformFocuser(NodePlatformDevice):
     @sk.command_handler
     async def focuser_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("stopping node_platform focuser")
+        logger.debug("stopping focuser")
         await self.api.call("v1_halt_focuser")
-        logger.debug("stopped node_platform focuser")
+        logger.debug("stopped focuser")
 
     @sk.command_handler
-    async def focuser_move(self, cmd: ChangeFocusPosition):
+    async def focuser_change(self, cmd: ChangeFocusPosition):
         await self.require_connected()
-        logger.debug(f"moving node_platform focuser position to {cmd.position}")
+        logger.debug(f"changed focuser position to {cmd.position}")
 
         req = osapi.V1GoToFocuserPositionRequest(
             position=cmd.position,
@@ -84,7 +84,7 @@ class NodePlatformFocuser(NodePlatformDevice):
             while self.focuser_moving is None or self.focuser_moving:
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug(f"moved node_platform focuser position to {cmd.position}")
+        logger.debug(f"changed focuser position to {cmd.position}")
 
     async def status_publish(self):
         while True:

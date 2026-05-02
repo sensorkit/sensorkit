@@ -106,16 +106,16 @@ class PWI4Rotator(PWI4Device):
         logger.debug("stopped rotator")
 
     @sk.command_handler
-    async def rotator_move(self, cmd: sk.ChangeRotatorPosition):
+    async def rotator_change(self, cmd: sk.ChangeRotatorPosition):
         await self.require_connected()
-        logger.debug(f"moving rotator to {cmd.position}°")
+        logger.debug(f"changing rotator to position {cmd.position}°")
 
         await self.client.request("/rotator/goto_mech", params={"degs": cmd.position})
         await self.client.poll(
             lambda s: not self.client.get_bool(s, "rotator.is_moving"),
         )
 
-        logger.debug(f"moved rotator to {cmd.position}°")
+        logger.debug(f"changed rotator to position {cmd.position}°")
 
     async def status_publish(self):
         while True:

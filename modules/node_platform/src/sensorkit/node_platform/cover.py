@@ -57,14 +57,14 @@ class NodePlatformCover(NodePlatformDevice):
     @sk.command_handler
     async def cover_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("stopping node_platform cover")
+        logger.debug("stopping mirror cover")
         await self.api.call("v1_halt_optical_tube_cover")
-        logger.debug("stopped node_platform cover")
+        logger.debug("stopped mirror cover")
 
     @sk.command_handler
     async def cover_open(self, cmd: OpenMirrorCover):
         await self.require_connected()
-        logger.debug("opening node_platform cover")
+        logger.debug("opening mirror cover")
 
         await self.api.call("v1_open_optical_tube_cover")
         await asyncio.sleep(0.1)
@@ -76,12 +76,12 @@ class NodePlatformCover(NodePlatformDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("opened node_platform cover")
+        logger.debug("opened mirror cover")
 
     @sk.command_handler
     async def cover_close(self, cmd: CloseMirrorCover):
         await self.require_connected()
-        logger.debug("closing node_platform cover")
+        logger.debug("closing mirror cover")
 
         await self.api.call("v1_close_optical_tube_cover")
         await asyncio.sleep(0.1)
@@ -93,7 +93,7 @@ class NodePlatformCover(NodePlatformDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("closed node_platform cover")
+        logger.debug("closed mirror cover")
 
     async def status_publish(self):
         while True:
@@ -120,7 +120,7 @@ class NodePlatformCover(NodePlatformDevice):
                 await device.publish(Opened(is_open=is_open))
 
             except Exception as e:
-                logger.warning(f"Failed to update node_platform cover status ({e})")
+                logger.warning(f"Failed to update Node Platform cover status ({e})")
                 await asyncio.sleep(self.config.status_frequency)
                 continue
 

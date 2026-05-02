@@ -103,7 +103,7 @@ class AlpacaFocuser(AlpacaDevice):
         logger.debug("stopped focuser")
 
     @sk.command_handler
-    async def focuser_change_position(self, cmd: ChangeFocusPosition):
+    async def focuser_change(self, cmd: ChangeFocusPosition):
         await self.require_connected()
         logger.debug(f"changing focus to position {cmd.position}")
 

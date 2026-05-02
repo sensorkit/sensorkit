@@ -116,7 +116,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
     @sk.command_handler
     async def enclosure_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("stopping node_platform enclosure")
+        logger.debug("stopping enclosure")
 
         await asyncio.gather(
             self.api.call("v1_halt_enclosure_shutters"),
@@ -128,7 +128,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
     @sk.command_handler
     async def enclosure_home(self, cmd: sk.Home):
         await self.require_connected()
-        logger.debug("homing node_platform enclosure")
+        logger.debug("homing enclosure")
 
         await self.api.call("v1_home_enclosure_shutters")
         await asyncio.sleep(0.1)
@@ -145,7 +145,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
 
-        logger.debug("homed node_platform enclosure")
+        logger.debug("homed enclosure")
 
     @sk.command_handler
     async def enclosure_open(self, cmd: OpenEnclosure):
@@ -169,7 +169,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
             ):
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("opening node_platform enclosure")
+        logger.debug("opening enclosure")
         req = osapi.V1OpenEnclosureShuttersRequest(ignore_safety=False)
         await self.api.call("v1_open_enclosure_shutters", req)
         await asyncio.sleep(0.1)
@@ -178,7 +178,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
             while self.shutter_state is not EnclosureShutterState.OPENED:
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("opened node_platform enclosure")
+        logger.debug("opened enclosure")
 
     @sk.command_handler
     async def enclosure_close(self, cmd: CloseEnclosure):
@@ -202,7 +202,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
             ):
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("closing node_platform enclosure")
+        logger.debug("closing enclosure")
         await self.api.call("v1_close_enclosure_shutters")
         await asyncio.sleep(0.1)
 
@@ -210,7 +210,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
             while self.shutter_state is not EnclosureShutterState.CLOSED:
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("closed node_platform enclosure")
+        logger.debug("closed enclosure")
 
     async def status_publish(self):
         while True:

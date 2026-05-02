@@ -118,14 +118,14 @@ class AlpacaCoverCalibrator(AlpacaDevice):
     @sk.command_handler
     async def cover_calibrator_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("stopping cover calibrator")
+        logger.debug("stopping mirror cover")
         await self.call(self.cover_calibrator, "HaltCover")
-        logger.debug("stopped cover calibrator")
+        logger.debug("stopped mirror cover")
 
     @sk.command_handler
     async def cover_calibrator_open(self, cmd: OpenMirrorCover):
         await self.require_connected()
-        logger.debug("opening cover calibrator")
+        logger.debug("opening mirror cover")
 
         await self.call(self.cover_calibrator, "OpenCover")
 
@@ -136,12 +136,12 @@ class AlpacaCoverCalibrator(AlpacaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("opened cover calibrator")
+        logger.debug("opened mirror cover")
 
     @sk.command_handler
     async def cover_calibrator_close(self, cmd: CloseMirrorCover):
         await self.require_connected()
-        logger.debug("closing cover calibrator")
+        logger.debug("closing mirror cover")
 
         await self.call(self.cover_calibrator, "CloseCover")
 
@@ -152,7 +152,7 @@ class AlpacaCoverCalibrator(AlpacaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("closed cover calibrator")
+        logger.debug("closed mirror cover")
 
     async def status_publish(self):
         while True:

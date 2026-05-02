@@ -106,16 +106,16 @@ class PWI4Focuser(PWI4Device):
         logger.debug("stopped focuser")
 
     @sk.command_handler
-    async def focuser_move(self, cmd: sk.ChangeFocusPosition):
+    async def focuser_change(self, cmd: sk.ChangeFocusPosition):
         await self.require_connected()
-        logger.debug(f"moving focuser to {cmd.position}")
+        logger.debug(f"changing focuser to position {cmd.position}")
 
         await self.client.request("/focuser/goto", params={"target": cmd.position})
         await self.client.poll(
             lambda s: not self.client.get_bool(s, "focuser.is_moving"),
         )
 
-        logger.debug(f"moved focuser to {cmd.position}")
+        logger.debug(f"changed focuser to position {cmd.position}")
 
     async def status_publish(self):
         while True:

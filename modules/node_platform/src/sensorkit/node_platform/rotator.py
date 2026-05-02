@@ -67,14 +67,14 @@ class NodePlatformRotator(NodePlatformDevice):
     @sk.command_handler
     async def rotator_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("stopping node_platform rotator")
+        logger.debug("stopping rotator")
         await self.api.call("v1_halt_rotator")
-        logger.debug("stopped node_platform rotator")
+        logger.debug("stopped rotator")
 
     @sk.command_handler
-    async def rotator_move(self, cmd: ChangeRotatorPosition):
+    async def rotator_change(self, cmd: ChangeRotatorPosition):
         await self.require_connected()
-        logger.debug(f"moving node_platform rotator to position {cmd.position}°")
+        logger.debug(f"changing rotator to position {cmd.position}°")
 
         req = osapi.V1GoToRotatorPositionRequest(
             position_degrees=cmd.position,
@@ -88,7 +88,7 @@ class NodePlatformRotator(NodePlatformDevice):
             while self.rotator_moving is None or self.rotator_moving:
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug(f"moved node_platform rotator to position {cmd.position}°")
+        logger.debug(f"changed rotator to position {cmd.position}°")
 
     async def status_publish(self):
         while True:

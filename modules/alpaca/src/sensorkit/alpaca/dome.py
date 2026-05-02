@@ -124,9 +124,9 @@ class AlpacaDome(AlpacaDevice):
     @sk.command_handler
     async def dome_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("aborting slew")
+        logger.debug("stopping enclosure")
         await self.call(self.dome, "AbortSlew")
-        logger.debug("aborted slew")
+        logger.debug("stopped enclosure")
 
     @sk.command_handler
     async def dome_home(self, cmd: sk.Home):
@@ -134,7 +134,7 @@ class AlpacaDome(AlpacaDevice):
         if not self._can_find_home:
             logger.warning("Cannot find home")
             return
-        logger.debug("homing dome")
+        logger.debug("homing enclosure")
 
         await self.call(self.dome, "FindHome")
         await asyncio.sleep(0.5)
@@ -150,7 +150,7 @@ class AlpacaDome(AlpacaDevice):
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
 
-        logger.debug("homed dome")
+        logger.debug("homed enclosure")
 
     @sk.command_handler
     async def dome_park(self, cmd: sk.MoveToPark):
@@ -158,7 +158,7 @@ class AlpacaDome(AlpacaDevice):
         if not self._can_park:
             logger.warning("Cannot park")
             return
-        logger.debug("parking dome")
+        logger.debug("parking enclosure")
 
         await self.call(self.dome, "Park")
 
@@ -169,7 +169,7 @@ class AlpacaDome(AlpacaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("parked dome")
+        logger.debug("parked enclosure")
 
     @sk.command_handler
     async def dome_open(self, cmd: OpenEnclosure):
@@ -177,7 +177,7 @@ class AlpacaDome(AlpacaDevice):
         if not self._can_set_shutter:
             logger.warning("Cannot set shutter")
             return
-        logger.debug("opening shutter")
+        logger.debug("opening enclosure")
 
         await self.call(self.dome, "OpenShutter")
 
@@ -188,7 +188,7 @@ class AlpacaDome(AlpacaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("opened shutter")
+        logger.debug("opened enclosure")
 
     @sk.command_handler
     async def dome_close(self, cmd: CloseEnclosure):
@@ -196,7 +196,7 @@ class AlpacaDome(AlpacaDevice):
         if not self._can_set_shutter:
             logger.warning("Cannot set shutter")
             return
-        logger.debug("closing shutter")
+        logger.debug("closing enclosure")
 
         await self.call(self.dome, "CloseShutter")
 
@@ -207,7 +207,7 @@ class AlpacaDome(AlpacaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("closed shutter")
+        logger.debug("closed enclosure")
 
     @sk.command_handler
     async def dome_move(self, cmd: MoveEnclosure):
@@ -217,7 +217,7 @@ class AlpacaDome(AlpacaDevice):
             return
 
         logger.debug(
-            f"slewing to altitude={cmd.target_altitude}°, azimuth {cmd.target_azimuth:.1f}°"
+            f"moving to altitude={cmd.target_altitude}°, azimuth {cmd.target_azimuth:.1f}°"
         )
 
         await self.call(self.dome, "SlewToAzimuth", cmd.target_azimuth)
@@ -239,7 +239,7 @@ class AlpacaDome(AlpacaDevice):
                     await asyncio.sleep(self.config.status_frequency)
 
         logger.debug(
-            f"slewed to altitude={cmd.target_altitude}°, azimuth {cmd.target_azimuth:.1f}°"
+            f"moved to altitude={cmd.target_altitude}°, azimuth {cmd.target_azimuth:.1f}°"
         )
 
     async def status_publish(self):

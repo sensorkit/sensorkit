@@ -194,7 +194,7 @@ class NinaCamera(NinaDevice):
     @sk.command_handler
     async def camera_set_temperature(self, cmd: ConfigureCameraCooler):
         await self.require_connected()
-        logger.debug(f"setting temperature to {cmd.setpoint.temperature} °C")
+        logger.debug(f"setting camera temperature to {cmd.setpoint.temperature} °C")
 
         target = cmd.setpoint.temperature
         await self.client.get(
@@ -203,7 +203,7 @@ class NinaCamera(NinaDevice):
             minutes=5.0,
         )
 
-        logger.debug(f"set temperature to {target} °C")
+        logger.debug(f"set camera temperature to {target} °C")
 
     @sk.command_handler
     async def camera_set_binning(self, cmd: ConfigureCameraSensor):
@@ -211,16 +211,16 @@ class NinaCamera(NinaDevice):
             return
         await self.require_connected()
         binning = f"{int(cmd.binning.x)}x{int(cmd.binning.y)}"
-        logger.debug(f"setting binning to {binning}")
+        logger.debug(f"setting camera binning to {binning}")
         await self.client.get("/equipment/camera/set-binning", binning=binning)
 
-        logger.debug(f"set binning to {binning}")
+        logger.debug(f"set camera binning to {binning}")
 
     @sk.command_handler
     async def camera_capture(self, cmd: sk.CameraCapture):
         await self.require_connected()
         exposure_seconds = float(cmd.integration_time)
-        logger.info(f"Requesting {exposure_seconds:.1f} sec capture from NINA camera")
+        logger.info(f"Requesting {exposure_seconds:.1f} sec capture from camera")
 
         # Get image count before capture so we can detect when the new image is saved
         count_before = await self.client.get("/image-history", count=True)

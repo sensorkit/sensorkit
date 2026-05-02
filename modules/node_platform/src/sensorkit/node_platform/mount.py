@@ -155,7 +155,7 @@ class NodePlatformMount(NodePlatformDevice):
     @sk.command_handler
     async def mount_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("stopping node_platform mount")
+        logger.debug("stopping mount")
 
         await self.api.call("v1_halt_mount")
         await asyncio.sleep(0.1)
@@ -165,12 +165,12 @@ class NodePlatformMount(NodePlatformDevice):
                 await asyncio.sleep(self.config.status_frequency_slow)
 
         self._stop_fast_status()
-        logger.debug("stopped node_platform mount")
+        logger.debug("stopped mount")
 
     @sk.command_handler
     async def mount_home(self, cmd: sk.Home):
         await self.require_connected()
-        logger.debug("homing node_platform mount")
+        logger.debug("homing mount")
 
         await self.api.call("v1_mount_go_to_home")
         await asyncio.sleep(0.1)
@@ -182,12 +182,12 @@ class NodePlatformMount(NodePlatformDevice):
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
 
-        logger.debug("homed node_platform mount")
+        logger.debug("homed mount")
 
     @sk.command_handler
     async def mount_park(self, cmd: sk.MoveToPark):
         await self.require_connected()
-        logger.debug("parking node_platform mount")
+        logger.debug("parking mount")
 
         self._stop_fast_status()
         await self.api.call("v1_park_mount")
@@ -197,7 +197,7 @@ class NodePlatformMount(NodePlatformDevice):
             while self.mount_slewing is None or self.mount_slewing:
                 await asyncio.sleep(self.config.status_frequency_slow)
 
-        logger.debug("parked node_platform mount")
+        logger.debug("parked mount")
 
     @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):

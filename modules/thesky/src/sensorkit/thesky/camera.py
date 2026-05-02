@@ -108,7 +108,7 @@ class TheSkyCamera(TheSkyDevice):
 
     @sk.command_handler
     async def camera_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to thesky camera")
+        logger.debug("connecting to Camera")
 
         await self.execute(
             """
@@ -124,11 +124,11 @@ class TheSkyCamera(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to thesky camera")
+        logger.debug("connected to Camera")
 
     @sk.command_handler
     async def camera_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from thesky camera")
+        logger.debug("disconnecting from Camera")
 
         await self.execute(
             """
@@ -142,7 +142,7 @@ class TheSkyCamera(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from thesky camera")
+        logger.debug("disconnected from Camera")
 
     @sk.command_handler
     async def camera_stop(self, cmd: sk.Stop):
@@ -151,7 +151,7 @@ class TheSkyCamera(TheSkyDevice):
     @sk.command_handler
     async def camera_abort(self, cmd: sk.Abort):
         await self.require_connected()
-        logger.debug("aborting thesky camera capture")
+        logger.debug("aborting camera capture")
 
         await self.execute(
             """
@@ -162,12 +162,12 @@ class TheSkyCamera(TheSkyDevice):
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.Status;""", "Ready")
 
-        logger.debug("aborted thesky camera capture")
+        logger.debug("aborted camera capture")
 
     @sk.command_handler
     async def camera_set_temperature(self, cmd: ConfigureCameraCooler):
         await self.require_connected()
-        logger.debug(f"setting thesky camera temperature to {cmd.setpoint.temperature}")
+        logger.debug(f"setting camera temperature to {cmd.setpoint.temperature}")
 
         target = cmd.setpoint.temperature
         await self.execute(
@@ -186,7 +186,7 @@ class TheSkyCamera(TheSkyDevice):
         if temp != target:
             logger.warning(f"Requested camera temperature of {target} C, got {temp} C")
         else:
-            logger.debug(f"set thesky camera temperature to {target} C")
+            logger.debug(f"set camera temperature to {target} C")
 
     @sk.command_handler
     async def camera_set_binning(self, cmd: ConfigureCameraSensor):
@@ -195,7 +195,7 @@ class TheSkyCamera(TheSkyDevice):
         if cmd.binning is None:
             return
         bin_x, bin_y = int(cmd.binning.x), int(cmd.binning.y)
-        logger.debug(f"setting thesky camera binning to ({bin_x}, {bin_y})")
+        logger.debug(f"setting camera binning to ({bin_x}, {bin_y})")
         await self.execute(
             f"""
             ccdsoftCamera.BinX = {bin_x};
@@ -218,13 +218,13 @@ class TheSkyCamera(TheSkyDevice):
                 f"Requested camera binning of ({bin_x}, {bin_y}), got ({actual_x}, {actual_y})"
             )
         else:
-            logger.debug(f"set thesky camera binning to ({actual_x}, {actual_y})")
+            logger.debug(f"set camera binning to ({actual_x}, {actual_y})")
 
     @sk.command_handler
     async def camera_capture(self, cmd: sk.CameraCapture):
         await self.require_connected()
-        logger.info(f"Requesting {cmd.integration_time:.1f} sec capture from TheSky camera")
-        logger.debug("starting thesky camera capture")
+        logger.info(f"Requesting {cmd.integration_time:.1f} sec capture from camera")
+        logger.debug("starting camera capture")
 
         frame_type = 1  # 1=Light, 2=Bias, 3=Dark, 4=Flat Field
         await self.execute(
@@ -256,13 +256,11 @@ class TheSkyCamera(TheSkyDevice):
         )
 
         if not data or not data[0]:
-            logger.error("No data returned from TheSky camera!")
+            logger.error("No data returned from camera!")
             return
 
         dtype = _array_typecode_to_dtype.get(data[0].typecode)
-        logger.info(
-            f"Got TheSky image array with {len(data)} rows, {len(data[0])} cols, dtype {dtype}"
-        )
+        logger.debug(f"got image array with {len(data)} rows, {len(data[0])} cols, dtype {dtype}")
 
         # Set context
         resp = await self.execute(
@@ -318,7 +316,7 @@ class TheSkyCamera(TheSkyDevice):
         else:
             logger.warning("discarding data since no DataGraph is defined!")
 
-        logger.debug("completed thesky camera capture")
+        logger.debug("completed camera capture")
 
     def _pixels_from_csv_block(self, csv_block: str, dtype: str = "uint16") -> list[array.array]:
         """

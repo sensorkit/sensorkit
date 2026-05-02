@@ -80,16 +80,16 @@ class NinaRotator(NinaDevice):
         logger.debug("stopped rotator")
 
     @sk.command_handler
-    async def rotator_move(self, cmd: ChangeRotatorPosition):
+    async def rotator_change(self, cmd: ChangeRotatorPosition):
         await self.require_connected()
         target = cmd.position
-        logger.debug(f"moving rotator to {target:.1f}°")
+        logger.debug(f"changing rotator to position {target:.1f}°")
         await self.client.get(
             "/equipment/rotator/move",
             positionAngle=target,
             waitToFinish=True,
         )
-        logger.debug(f"moved rotator to {self.rotator_position:.1f}°")
+        logger.debug(f"changed rotator to position {self.rotator_position:.1f}°")
 
     async def status_publish(self):
         while True:

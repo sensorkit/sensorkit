@@ -82,7 +82,7 @@ class TheSkyDome(TheSkyDevice):
 
     @sk.command_handler
     async def dome_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to thesky dome")
+        logger.debug("connecting to Dome")
 
         await self.execute(
             """
@@ -96,11 +96,11 @@ class TheSkyDome(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to thesky dome")
+        logger.debug("connected to Dome")
 
     @sk.command_handler
     async def dome_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from thesky dome")
+        logger.debug("disconnecting from Dome")
 
         await self.execute(
             """
@@ -114,25 +114,25 @@ class TheSkyDome(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from thesky dome")
+        logger.debug("disconnected from Dome")
 
     @sk.command_handler
     async def dome_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("stopping thesky dome")
+        logger.debug("stopping dome")
 
         # Send Abort on a separate TCP connection, bypassing the script lock.
         # This ensures we can stop the dome even while another command (e.g.
         # OpenSlit/CloseSlit) is in flight and holding the lock.
         await send_thesky_script(self.config.host, self.config.port, b"sky6Dome.Abort();")
 
-        logger.debug("stopped thesky dome")
+        logger.debug("stopped dome")
 
     @sk.command_handler
     async def dome_home(self, cmd: sk.Home):
         await self.require_connected()
         await self.dome_unpark()
-        logger.debug("homing thesky dome")
+        logger.debug("homing dome")
 
         try:
             async with asyncio.timeout(self.config.timeout):
@@ -149,7 +149,7 @@ class TheSkyDome(TheSkyDevice):
             logger.warning("Unable to home dome")
             return
 
-        logger.debug("homed thesky dome")
+        logger.debug("homed dome")
 
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
@@ -157,7 +157,7 @@ class TheSkyDome(TheSkyDevice):
     @sk.command_handler
     async def dome_park(self, cmd: sk.MoveToPark):
         await self.require_connected()
-        logger.debug("parking thesky dome")
+        logger.debug("parking dome")
 
         async with asyncio.timeout(self.config.timeout):
             while True:
@@ -170,13 +170,13 @@ class TheSkyDome(TheSkyDevice):
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6Dome.IsParkComplete;""", "1")
 
-        logger.debug("parked thesky dome")
+        logger.debug("parked dome")
 
     async def dome_unpark(self):
         # This is unique to TheSky. It requires you to unpark the dome before issuing any
         # other motion command.
         await self.require_connected()
-        logger.debug("unparking thesky dome")
+        logger.debug("unparking dome")
 
         async with asyncio.timeout(self.config.timeout):
             while True:
@@ -193,7 +193,7 @@ class TheSkyDome(TheSkyDevice):
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6Dome.IsUnparkComplete;""", "1")
 
-        logger.debug("unparked thesky dome")
+        logger.debug("unparked dome")
 
     async def _retry_with_reconnect(self, action, max_retries=2):
         """Try action; on CommandFailedError, reconnect to TheSky and retry."""
@@ -220,7 +220,7 @@ class TheSkyDome(TheSkyDevice):
         await self.require_connected()
         await self.dome_unpark()
 
-        logger.debug("opening thesky dome")
+        logger.debug("opening dome")
 
         async def _do_open():
             async with asyncio.timeout(self.config.timeout):
@@ -236,13 +236,13 @@ class TheSkyDome(TheSkyDevice):
 
         await self._retry_with_reconnect(_do_open)
 
-        logger.debug("opened thesky dome")
+        logger.debug("opened dome")
 
     @sk.command_handler
     async def dome_close(self, cmd: CloseEnclosure):
         await self.require_connected()
         await self.dome_unpark()
-        logger.debug("closing thesky dome")
+        logger.debug("closing dome")
 
         async def _do_close():
             async with asyncio.timeout(self.config.timeout):
@@ -258,7 +258,7 @@ class TheSkyDome(TheSkyDevice):
 
         await self._retry_with_reconnect(_do_close)
 
-        logger.debug("closed thesky dome")
+        logger.debug("closed dome")
 
     async def status_publish(self):
         while True:

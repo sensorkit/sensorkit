@@ -55,7 +55,7 @@ class TheSkyOTA(TheSkyDevice):
 
     @sk.command_handler
     async def ota_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to thesky ota")
+        logger.debug("connecting to OTA")
 
         await self.execute(
             """
@@ -69,11 +69,11 @@ class TheSkyOTA(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to thesky ota")
+        logger.debug("connected to OTA")
 
     @sk.command_handler
     async def ota_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from thesky ota")
+        logger.debug("disconnecting from OTA")
 
         await self.execute(
             """
@@ -87,12 +87,12 @@ class TheSkyOTA(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from thesky ota")
+        logger.debug("disconnected from OTA")
 
     @sk.command_handler
     async def ota_open(self, cmd: OpenMirrorCover):
         await self.require_connected()
-        logger.debug("opening thesky ota mirror cover")
+        logger.debug("opening ota mirror cover")
 
         async with asyncio.timeout(self.config.timeout):
             while True:
@@ -105,12 +105,12 @@ class TheSkyOTA(TheSkyDevice):
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""OpticalTubeAssembly.mirrorCoverState;""", "1")
 
-        logger.debug("opened thesky ota mirror cover")
+        logger.debug("opened ota mirror cover")
 
     @sk.command_handler
     async def ota_close(self, cmd: CloseMirrorCover):
         await self.require_connected()
-        logger.debug("closing thesky ota mirror cover")
+        logger.debug("closing ota mirror cover")
 
         async with asyncio.timeout(self.config.timeout):
             while True:
@@ -123,7 +123,7 @@ class TheSkyOTA(TheSkyDevice):
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""OpticalTubeAssembly.mirrorCoverState;""", "0")
 
-        logger.debug("closed thesky ota mirror cover")
+        logger.debug("closed ota mirror cover")
 
     async def status_publish(self):
         while True:

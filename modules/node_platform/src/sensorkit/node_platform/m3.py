@@ -61,14 +61,14 @@ class NodePlatformM3(NodePlatformDevice):
     @sk.command_handler
     async def m3_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("stopping node_platform m3")
+        logger.debug("stopping m3")
         await self.api.call("v1_halt_optical_tube_m3")
-        logger.debug("stopped node_platform m3")
+        logger.debug("stopped m3")
 
     # @sk.command_handler
-    # async def m3_go_to_port(self, cmd: sk.ChangeM3Port):
+    # async def m3_change(self, cmd: sk.ChangeM3Port):
     #     self.require_connected()
-    #     logger.debug(f"moving node_platform m3 to port {cmd.port}")
+    #     logger.debug(f"changing m3 to port {cmd.port}")
     #
     #     req = osapi.V1GoToOpticalTubeM3PortRequest(port=cmd.port)
     #     await self.api.call("v1_go_to_optical_tube_m3_port", req)
@@ -79,7 +79,7 @@ class NodePlatformM3(NodePlatformDevice):
     #         while self.m3_port is None or self.m3_port != cmd.port:
     #             await asyncio.sleep(self.config.status_frequency)
     #
-    #     logger.debug(f"moved node_platform m3 to port {cmd.port}")
+    #     logger.debug(f"changed m3 to port {cmd.port}")
 
     async def status_publish(self):
         while True:

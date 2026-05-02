@@ -59,7 +59,7 @@ class TheSkyFocuser(TheSkyDevice):
 
     @sk.command_handler
     async def focuser_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to thesky focuser")
+        logger.debug("connecting to Focuser")
 
         await self.execute(
             """
@@ -74,11 +74,11 @@ class TheSkyFocuser(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to thesky focuser")
+        logger.debug("connected to Focuser")
 
     @sk.command_handler
     async def focuser_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from thesky focuser")
+        logger.debug("disconnecting from Focuser")
 
         await self.execute(
             """
@@ -92,17 +92,17 @@ class TheSkyFocuser(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from thesky focuser")
+        logger.debug("disconnected from Focuser")
 
     @sk.command_handler
-    async def focuser_move(self, cmd: ChangeFocusPosition):
+    async def focuser_change(self, cmd: ChangeFocusPosition):
         # NOTE: the TheSky focuser simulator does not allow setting limits (for testing). As of this release, we respect
         # limits set via config, but a future release ought to respect both config and TheSky limits.
         await self.require_connected()
-        logger.debug(f"moving thesky focuser position to {cmd.position}")
+        logger.debug(f"changing focuser position to {cmd.position}")
 
         if not (self.config.limit_min <= cmd.position <= self.config.limit_max):
-            logger.error(f"moving focus position ({cmd.position}) abandoned due to limits")
+            logger.error(f"Moving focus position ({cmd.position}) abandoned due to limits")
             raise RuntimeError(f"Focuser position ({cmd.position}) outside limits")
 
         relative_position = cmd.position - self.focuser_position
@@ -125,7 +125,7 @@ class TheSkyFocuser(TheSkyDevice):
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""ccdsoftCamera.focPosition;""", f"{cmd.position}")
 
-        logger.debug(f"moved thesky focuser position to {cmd.position}")
+        logger.debug(f"changed focuser position to {cmd.position}")
 
     async def status_publish(self):
         while True:

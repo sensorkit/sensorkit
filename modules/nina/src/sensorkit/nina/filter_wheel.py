@@ -8,7 +8,7 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
-from sensorkit.std.optics import Filter, SetFilter
+from sensorkit.std.optics import Filter, Filters, SetFilter
 
 
 @sk.declare_device
@@ -30,8 +30,12 @@ class NinaFilterWheel(NinaDevice):
 
         self.filter_wheel_position: int | None = None
 
-        self.start_status_loop(self.status_publish())
         await self.filter_wheel_init(sk.Init())
+        self.start_status_loop(self.status_publish())
+
+        async with asyncio.timeout(self.config.timeout):
+            while self.filter_wheel_position is None:
+                await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
@@ -54,9 +58,14 @@ class NinaFilterWheel(NinaDevice):
             f.get("Name", ""): f.get("Id", i) for i, f in enumerate(available)
         }
 
-        async with asyncio.timeout(self.config.timeout):
-            while self.filter_wheel_position is None:
-                await asyncio.sleep(self.config.status_frequency)
+        await sk.device().publish(
+            Filters(
+                filters=[
+                    Filter(name=f.get("Name", str(i)), position=f.get("Id", i))
+                    for i, f in enumerate(available)
+                ]
+            )
+        )
 
     @sk.command_handler
     async def filter_wheel_deinit(self, cmd: sk.Deinit):
@@ -73,7 +82,7 @@ class NinaFilterWheel(NinaDevice):
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
-    async def filter_wheel_set(self, cmd: SetFilter):
+    async def filter_wheel_set_filter(self, cmd: SetFilter):
         await self.require_connected()
 
         if isinstance(cmd.filter, int):
@@ -97,7 +106,7 @@ class NinaFilterWheel(NinaDevice):
                 await asyncio.sleep(self.config.status_frequency)
 
         self.filter_wheel_position = filter_id
-        logger.debug(f"set filter to {self.filter_wheel_position}")
+        logger.debug(f"changed filter to {filter_id}")
 
     async def status_publish(self):
         while True:

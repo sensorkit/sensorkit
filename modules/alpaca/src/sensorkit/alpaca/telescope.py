@@ -203,7 +203,7 @@ class AlpacaTelescope(AlpacaDevice):
     @sk.command_handler
     async def telescope_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("stopping telescope")
+        logger.debug("stopping mount")
 
         await self.call(self.telescope, "AbortSlew")
         if self._can_set_tracking:
@@ -211,7 +211,7 @@ class AlpacaTelescope(AlpacaDevice):
             self._tracking = False
 
         self._stop_fast_status()
-        logger.debug("stopped telescope")
+        logger.debug("stopped mount")
 
     @sk.command_handler
     async def telescope_home(self, cmd: sk.Home):
@@ -220,7 +220,7 @@ class AlpacaTelescope(AlpacaDevice):
             logger.warning("Cannot find home")
             return
 
-        logger.debug("homing telescope")
+        logger.debug("homing mount")
 
         await self.call(self.telescope, "FindHome")
         await asyncio.sleep(self.config.status_frequency_slow)
@@ -232,7 +232,7 @@ class AlpacaTelescope(AlpacaDevice):
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
 
-        logger.debug("homed telescope")
+        logger.debug("homed mount")
 
     @sk.command_handler
     async def telescope_park(self, cmd: sk.MoveToPark):
@@ -241,7 +241,7 @@ class AlpacaTelescope(AlpacaDevice):
             logger.warning("Cannot park")
             return
 
-        logger.debug("parking telescope")
+        logger.debug("parking mount")
 
         await self.call(self.telescope, "Park")
 
@@ -252,7 +252,7 @@ class AlpacaTelescope(AlpacaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency_slow)
 
-        logger.debug("parked telescope")
+        logger.debug("parked mount")
 
     @sk.command_handler
     async def telescope_set_park(self, cmd: sk.SetParkPosition):

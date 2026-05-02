@@ -103,7 +103,7 @@ class AlpacaRotator(AlpacaDevice):
                     break
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug(f"changed position to {self.rotator_position:.2f}°")
+        logger.debug(f"changed rotator position to {self.rotator_position:.2f}°")
 
     @sk.command_handler
     async def rotator_stop(self, cmd: sk.Stop):

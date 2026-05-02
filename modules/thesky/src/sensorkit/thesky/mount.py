@@ -130,7 +130,7 @@ class TheSkyMount(TheSkyDevice):
 
     @sk.command_handler
     async def mount_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to thesky mount")
+        logger.debug("connecting to Mount")
 
         await self.execute(
             """
@@ -145,11 +145,11 @@ class TheSkyMount(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to thesky mount")
+        logger.debug("connected to Mount")
 
     @sk.command_handler
     async def mount_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from thesky mount")
+        logger.debug("disconnecting from Mount")
 
         await self.execute(
             """
@@ -163,12 +163,12 @@ class TheSkyMount(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from thesky mount")
+        logger.debug("disconnected from Mount")
 
     @sk.command_handler
     async def mount_stop(self, cmd: sk.Stop):
         await self.mount_unpark()
-        logger.debug("stopping thesky mount")
+        logger.debug("stopping mount")
 
         await self.execute(
             """
@@ -181,12 +181,12 @@ class TheSkyMount(TheSkyDevice):
             await self.poll("""sky6RASCOMTele.IsTracking;""", "0")
 
         self._stop_fast_status()
-        logger.debug("stopped thesky mount")
+        logger.debug("stopped mount")
 
     @sk.command_handler
     async def mount_park(self, cmd: sk.MoveToPark):
         await self.require_connected()
-        logger.debug("parking thesky mount")
+        logger.debug("parking mount")
 
         await self.execute(
             """
@@ -197,13 +197,13 @@ class TheSkyMount(TheSkyDevice):
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6RASCOMTele.IsParked();""", "true")
 
-        logger.debug("parked thesky mount")
+        logger.debug("parked mount")
 
     async def mount_unpark(self):
         # This is unique to TheSky. It requires you to unpark the mount before issuing any
         # other motion command.
         await self.require_connected()
-        logger.debug("unparking thesky mount")
+        logger.debug("unparking mount")
 
         await self.execute(
             """
@@ -218,12 +218,12 @@ class TheSkyMount(TheSkyDevice):
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6RASCOMTele.IsParked();""", "false")
 
-        logger.debug("unparked thesky mount")
+        logger.debug("unparked mount")
 
     @sk.command_handler
     async def mount_home(self, cmd: sk.Home):
         await self.mount_unpark()
-        logger.debug("homing thesky mount")
+        logger.debug("homing mount")
 
         async with asyncio.timeout(self.config.timeout):
             while True:
@@ -252,7 +252,7 @@ class TheSkyMount(TheSkyDevice):
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
 
-        logger.debug("homed thesky mount")
+        logger.debug("homed mount")
 
     @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):

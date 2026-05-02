@@ -13,7 +13,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceState,
 )
 from sensorkit.models.devices import Connected
-from sensorkit.std.optics import Filter, SetFilter
+from sensorkit.std.optics import Filter, Filters, SetFilter
 
 
 @sk.declare_device
@@ -63,6 +63,10 @@ class AlpacaFilterWheel(AlpacaDevice):
         self._name_to_index: dict[str, int] = {
             name: i for i, name in enumerate(self._filter_names)
         }
+
+        await sk.device().publish(Filters(
+            filters=[Filter(name=name, position=i) for i, name in enumerate(self._filter_names)]
+        ))
 
     @sk.command_handler
     async def filter_wheel_deinit(self, cmd: sk.Deinit):

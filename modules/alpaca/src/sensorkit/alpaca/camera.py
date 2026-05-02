@@ -284,7 +284,7 @@ class AlpacaCamera(AlpacaDevice):
     @sk.command_handler
     async def camera_set_temperature(self, cmd: ConfigureCameraCooler):
         await self.require_connected()
-        logger.debug(f"setting CCD temperature to {cmd.setpoint.temperature} °C")
+        logger.debug(f"setting camera temperature to {cmd.setpoint.temperature} °C")
 
         if not self._can_set_ccd_temperature:
             logger.warning("Cannot set CCD temperature")
@@ -299,7 +299,7 @@ class AlpacaCamera(AlpacaDevice):
 
         await self.put(self.camera, "SetCCDTemperature", target)
 
-        logger.debug(f"set CCD temperature to {target} °C")
+        logger.debug(f"set camera temperature to {target} °C")
 
     @sk.command_handler
     async def camera_set_binning(self, cmd: ConfigureCameraSensor):
@@ -308,7 +308,7 @@ class AlpacaCamera(AlpacaDevice):
         if cmd.binning is None:
             return
         bin_x, bin_y = int(cmd.binning.x), int(cmd.binning.y)
-        logger.debug(f"setting binning to {bin_x}x{bin_y}")
+        logger.debug(f"setting camera binning to {bin_x}x{bin_y}")
 
         if not self._can_asymmetric_bin and bin_x != bin_y:
             logger.warning("Cannot asymmetric bin, using BinX")
@@ -326,13 +326,13 @@ class AlpacaCamera(AlpacaDevice):
         await self.put(self.camera, "NumX", self._camera_x_size // bin_x)
         await self.put(self.camera, "NumY", self._camera_y_size // bin_y)
 
-        logger.debug(f"set binning to {bin_x}x{bin_y}")
+        logger.debug(f"set camera binning to {bin_x}x{bin_y}")
 
     @sk.command_handler
     async def camera_capture(self, cmd: sk.CameraCapture):
         await self.require_connected()
-        logger.info(f"Requesting {cmd.integration_time:.1f} sec capture from Alpaca camera")
-        logger.debug("starting alpaca camera capture")
+        logger.info(f"Requesting {cmd.integration_time:.1f} sec capture from camera")
+        logger.debug("starting camera capture")
 
         exposure_seconds = float(cmd.integration_time)
 
