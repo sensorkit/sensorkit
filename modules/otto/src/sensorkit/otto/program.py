@@ -84,8 +84,14 @@ class OttoProgram:
         # Restore last known state
         try:
             self.state = await self.program.kv_get_model(OttoState)
+            logger.debug(f"restored state for {self.program.entity}")
         except Exception:
             logger.warning(f"No saved state for {self.program.entity}")
+
+        # Seed whitelist from initial config if state is empty
+        if not self.state.whitelist and not self.state.graylist and not self.state.blacklist:
+            self.state.whitelist = list(self.config.task.objects)
+            logger.info(f"Loaded {len(self.state.whitelist)} objects from initial config")
 
         # Watch for live config changes
         self.program.task_group.create_task(self._watch_config())
@@ -300,9 +306,10 @@ class OttoProgram:
 
                 if not self.state.whitelist and not self.state.graylist:
                     logger.warning(
-                        "No viewable objects on whitelist nor graylist. Please pick new objects and reload Otto"
+                        "No viewable objects on whitelist nor graylist. Please pick new objects"
                     )
-                    return
+                    await asyncio.sleep(5)
+                    continue
                 elif not self.state.whitelist:
                     graylist_interval = getattr(self.config.task, "graylist_interval_minutes", 15)
                     logger.warning(

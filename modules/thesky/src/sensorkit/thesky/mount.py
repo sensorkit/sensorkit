@@ -33,6 +33,7 @@ from sensorkit.models.devices import (
     MountAxis,
     RADecPointing,
     ReferenceFrame,
+    SetParkPosition,
 )
 from sensorkit.thesky.device import (
     MountCommandInProgressError,
@@ -198,6 +199,19 @@ class TheSkyMount(TheSkyDevice):
             await self.poll("""sky6RASCOMTele.IsParked();""", "true")
 
         logger.debug("parked mount")
+
+    @sk.command_handler
+    async def mount_set_park_position(self, cmd: SetParkPosition):
+        await self.require_connected()
+        logger.debug("setting park position")
+
+        await self.execute(
+            """
+            sky6RASCOMTele.SetParkPosition();
+            """
+        )
+
+        logger.debug("set park position")
 
     async def mount_unpark(self):
         # This is unique to TheSky. It requires you to unpark the mount before issuing any
