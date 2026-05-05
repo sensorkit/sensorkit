@@ -252,13 +252,18 @@ class OttoProgram:
             yield None
 
     async def _build_scan_targets(self) -> list[str]:
-        """Build a list of whitelist objects sorted by azimuth for scan mode.
+        """Build a list of whitelist objects ordered for a single-flip sky walk.
 
-        Returns only objects above altitude_min. Sorted eastward (ascending
-        azimuth) by default, or westward (descending) if configured.
+        Targets are sorted by hour angle so the scan walks the sky continuously,
+        crossing the meridian exactly once. ``eastward`` (default) emits in
+        descending HA — starting at the far western horizon, walking east
+        through the meridian and continuing into the east. ``westward`` is the
+        symmetric reverse. All whitelist objects above ``altitude_min`` are
+        included.
         """
+        direction = self.config.collect.scan_direction or "eastward"
 
-        objects_with_az = []
+        candidates: list[tuple[str, float]] = []
         for obj_id in list(self.state.whitelist):
             result = calculate_satellite_position(
                 tles=self.tles,
@@ -269,19 +274,16 @@ class OttoProgram:
             )
             if result is None:
                 continue
-            altitude, azimuth, rising = result
-            if altitude >= self.config.collect.altitude_min:
-                objects_with_az.append((obj_id, azimuth))
+            altitude, _azimuth, _rising, hour_angle = result
+            if altitude < self.config.collect.altitude_min:
+                continue
+            candidates.append((obj_id, hour_angle))
 
-        reverse = self.config.collect.scan_direction == "westward"
-        objects_with_az.sort(key=lambda x: x[1], reverse=reverse)
+        # eastward = descending HA (+west → 0 → −east); westward = ascending.
+        reverse = direction == "eastward"
+        candidates.sort(key=lambda x: x[1], reverse=reverse)
 
-        direction = self.config.collect.scan_direction or "eastward"
-        if objects_with_az:
-            az_str = ", ".join(f"{obj}@{az:.0f}°" for obj, az in objects_with_az)
-            # logger.debug(f"scan targets ({direction}): {az_str}")
-
-        return [obj_id for obj_id, _ in objects_with_az]
+        return [obj_id for obj_id, _ in candidates]
 
     async def generate_tasks(self):
         """
@@ -346,7 +348,7 @@ class OttoProgram:
                             ListType.BLACKLIST,
                         )
                         continue
-                    altitude, azimuth, rising = result
+                    altitude, azimuth, rising, _hour_angle = result
 
                     # Determine which list this object should be on
                     if altitude < self.config.collect.altitude_min and not rising:

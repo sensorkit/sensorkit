@@ -103,7 +103,7 @@ def calculate_satellite_position(
         latitude: float,
         longitude: float,
         elevation: float,
-) -> tuple[float, float, bool] | None:
+) -> tuple[float, float, bool, float] | None:
     """
     Calculate a satellite's current position relative to an observer.
 
@@ -115,10 +115,11 @@ def calculate_satellite_position(
         elevation: Observer elevation in meters
 
     Returns:
-        Tuple of (altitude, azimuth, is_rising) or None if no TLE found
+        Tuple of (altitude, azimuth, is_rising, hour_angle) or None if no TLE found
         - altitude: Current altitude in degrees
         - azimuth: Current azimuth in degrees
         - rising: True if satellite altitude is increasing
+        - hour_angle: Hours; negative = east of meridian, positive = west of meridian
     """
     # Check if we have TLE for this object
     if object not in tles:
@@ -152,6 +153,12 @@ def calculate_satellite_position(
         altitude = alt.degrees
         azimuth = az.degrees
 
+        # Hour angle: HA = LST - RA, wrapped to [-12, 12). Negative = east of
+        # meridian, positive = west.
+        ra, _dec, _ = topocentric.radec()
+        last_hours = (now.gast + longitude / 15.0) % 24.0
+        hour_angle = ((last_hours - ra.hours + 12.0) % 24.0) - 12.0
+
         # Calculate position one minute in the future to determine if rising/falling
         future = ts.from_datetime(datetime.now(UTC).replace(microsecond=0))
         future = ts.tt_jd(future.tt + 60 / 86400.0)
@@ -163,7 +170,7 @@ def calculate_satellite_position(
         # Determine if rising or falling
         rising = future_altitude > altitude
 
-        return altitude, azimuth, rising
+        return altitude, azimuth, rising, hour_angle
 
     except Exception as e:
         logger.exception(f"Error calculating satellite position for {object}: {e}")
