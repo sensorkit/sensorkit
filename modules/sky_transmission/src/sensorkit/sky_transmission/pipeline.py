@@ -3,8 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 import io
 import pathlib
+import warnings
 
 import time
+
+from astropy.utils.exceptions import AstropyDeprecationWarning
+
+# Silence deprecation noise emitted by photutils when called from allclear.
+# Scoped to photutils so we don't hide warnings raised by astropy itself or by
+# SensorKit code elsewhere.
+warnings.filterwarnings(
+    "ignore",
+    category=AstropyDeprecationWarning,
+    module=r"photutils\..*",
+)
 
 from allclear.api import SkyTransmissionResult, get_sky_transmission
 from allclear.instrument import InstrumentModel
