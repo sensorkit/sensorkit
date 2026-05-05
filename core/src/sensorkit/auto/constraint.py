@@ -393,6 +393,12 @@ class GenericConstraint(Constraint):
                         ))
                     evaluator.active.clear()
                     evaluator.ready.set()
-                    skip_replay = True
+
+                # The next consumer reopen with include_latest=True will replay
+                # the cached pre-timeout value. That value is the same one we
+                # already processed before the silence window, so re-evaluating
+                # it would just undo whatever the timeout branch above just
+                # decided (flapping). Skip it regardless of activate_on_timeout.
+                skip_replay = True
 
             consumer = await client._stream.consume(include_latest=True)
