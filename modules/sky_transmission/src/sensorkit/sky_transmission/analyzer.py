@@ -126,6 +126,9 @@ class SkyTransmissionAnalyzer:
                 path = await queue.get()
                 if not any(fnmatch(path.name, p) for p in patterns):
                     continue
+                if not await self._wait_for_stable_file(path):
+                    logger.warning(f"giving up on unstable file {path}")
+                    continue
                 try:
                     await self._process_frame(image_path=str(path))
                 except asyncio.CancelledError:
@@ -134,6 +137,40 @@ class SkyTransmissionAnalyzer:
                     logger.exception(f"frame processing error for {path}")
         finally:
             observer.stop()
+
+    async def _wait_for_stable_file(
+        self,
+        path: pathlib.Path,
+        *,
+        poll_interval: float = 0.5,
+        stable_for: float = 1.0,
+        timeout: float = 60.0,
+    ) -> bool:
+        """Wait until *path* exists, is non-empty, and its size has been unchanged
+        for *stable_for* seconds (so the writer has flushed and closed). Returns
+        False if the file never stabilises within *timeout*."""
+        deadline = time.monotonic() + timeout
+        last_size = -1
+        stable_since: float | None = None
+
+        while time.monotonic() < deadline:
+            try:
+                size = path.stat().st_size
+            except FileNotFoundError:
+                size = -1
+
+            now = time.monotonic()
+            if size > 0 and size == last_size:
+                stable_since = stable_since or now
+                if now - stable_since >= stable_for:
+                    return True
+            else:
+                stable_since = None
+                last_size = size
+
+            await asyncio.sleep(poll_interval)
+
+        return False
 
     async def _alpaca_loop(self):
         from alpyca.camera import Camera
