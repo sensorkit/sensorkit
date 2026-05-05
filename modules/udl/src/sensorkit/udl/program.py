@@ -25,6 +25,11 @@ from sensorkit.udl.models import ResponseStatus, UDLConfig, UDLReferenceFrame
 from sensorkit.udl.task_queue import TaskQueue
 
 
+def _udl_ts(dt: datetime) -> str:
+    """Format a datetime as UDL expects: ISO 8601 UTC with trailing 'Z' (no offset)."""
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 class UDLState(BaseModel):
     """Persistent state for UDL program."""
 
@@ -130,7 +135,8 @@ class UDLProgram:
 
         logger.debug(f"starting UDL program for {self.program.entity}")
 
-        # Get site location from controller
+        # Get site location from controller. SkyImagery accepts uploads without
+        # senlat/senlon/senalt, so warn but proceed if it's not available.
         try:
             controller_client = self.program.sensorkit().controller(self.config.controller)
             self._site = await controller_client.kv_get_model(SitePosition)
@@ -139,7 +145,10 @@ class UDLProgram:
                 f"lon={self._site.longitude_degrees}, alt={self._site.altitude_km}km"
             )
         except Exception as e:
-            logger.warning(f"Could not read site position from controller: {e}")
+            logger.warning(
+                f"Could not read SitePosition from controller {self.config.controller}: {e}. "
+                f"SkyImagery will be uploaded without senlat/senlon/senalt."
+            )
 
         # Initialize task queue with offer window integration
         self.queue = TaskQueue(self.program)
@@ -199,10 +208,10 @@ class UDLProgram:
         try:
             now = datetime.now(UTC)
             page = await self.client.collect_requests.list(
-                start_time=f"<{now.isoformat()}",
+                start_time=f"<{_udl_ts(now)}",
                 extra_query={
                     "origSensorId": self.config.api.id_sensor,
-                    "endTime": f">{now.isoformat()}",
+                    "endTime": f">{_udl_ts(now)}",
                 },
             )
 
@@ -317,8 +326,8 @@ class UDLProgram:
             "classificationMarking": request.classification_marking,
             "idSensor": self.config.api.id_sensor,
             "satNo": request.sat_no,
-            "expStartTime": exp_start_time.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-            "expEndTime": exp_end_time.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "expStartTime": _udl_ts(exp_start_time),
+            "expEndTime": _udl_ts(exp_end_time),
             "imageSetId": request.id,
             "imageSetLength": request.num_frames or 1,
             "sequenceId": sequence_id,
@@ -329,14 +338,18 @@ class UDLProgram:
             "filesize": len(data),
             "source": self.config.api.source,
             "dataMode": request.data_mode or "TEST",
-            "imageType": "FITS",
+            "imageType": context.get("image_type") or self.config.image_type,
         }
 
-        # Add sensor location if available
         if self._site:
             metadata["senlat"] = self._site.latitude_degrees
             metadata["senlon"] = self._site.longitude_degrees
             metadata["senalt"] = self._site.altitude_km
+        else:
+            logger.warning(
+                f"Task ({request.id}): publishing SkyImagery without sensor location "
+                f"(no SitePosition from controller {self.config.controller})"
+            )
 
         # Remove None values
         metadata = {k: v for k, v in metadata.items() if v is not None}

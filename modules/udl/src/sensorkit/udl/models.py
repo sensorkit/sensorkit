@@ -85,3 +85,10 @@ class UDLConfig(BaseModel):
         default=None,
         description="Path to save skyimagery archives locally before upload"
     )
+    image_type: str = Field(
+        default="FITS",
+        description=(
+            "Default SkyImagery imageType (e.g. FITS, EOSSA, EOCHIP, MP4). "
+            "Per-frame override is honored if the data graph context provides 'image_type'."
+        ),
+    )

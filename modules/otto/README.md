@@ -76,8 +76,8 @@ value:
       keyword_map:
         task_id: TASK_ID
         frame_num: FRAMENUM
-        image_width: NAXIS2
-        image_height: NAXIS1
+        image_width: NAXIS1
+        image_height: NAXIS2
       output:
         - sink
     sink:
