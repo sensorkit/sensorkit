@@ -11,6 +11,7 @@ class AcquisitionConfig(BaseModel):
     mode: str = "watch_directory"
     watch_path: str | None = None
     watch_pattern: list[str] | str = "*.fits"
+    watch_recursive: bool = False
     alpaca_host: str | None = None
     alpaca_port: int = 11111
     alpaca_device_number: int = 0

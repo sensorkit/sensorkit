@@ -113,10 +113,13 @@ class SkyTransmissionAnalyzer:
         queue: asyncio.Queue[pathlib.Path] = asyncio.Queue()
         handler = _FileHandler(queue, asyncio.get_running_loop())
         observer = Observer()
-        observer.schedule(handler, str(watch_path), recursive=False)
+        observer.schedule(handler, str(watch_path), recursive=acquisition.watch_recursive)
         observer.start()
 
-        logger.debug(f"watching {watch_path} for {patterns}")
+        logger.debug(
+            f"watching {watch_path} for {patterns} "
+            f"(recursive={acquisition.watch_recursive})"
+        )
 
         try:
             while True:
