@@ -29,6 +29,8 @@ from sensorkit.models.devices import (
     MountAxis,
     RADecPointing,
     ReferenceFrame,
+    Slewing,
+    Tracking,
 )
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
@@ -426,6 +428,8 @@ class NodePlatformMount(NodePlatformDevice):
                 self.mount_tracking = status.is_tracking
 
                 await sk.device().publish(Connected(is_connected=status.connected))
+                await sk.device().publish(Slewing(is_slewing=self.mount_slewing))
+                await sk.device().publish(Tracking(is_tracking=self.mount_tracking))
 
                 # Only publish pointing/rates if the fast loop isn't handling it
                 if not self._fast_status_active:

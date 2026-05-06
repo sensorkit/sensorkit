@@ -41,10 +41,10 @@ if COMPAT:
     BaseCommand = DeviceCommand
 
 
-
 # TODO: Phase out in favor of DeviceDetails
 class Capabilities(BaseModel):
     """Deprecated device capability descriptor. Prefer ``DeviceDetails``."""
+
     type: Literal["device"] = "device"
     commands: list[str] = Field(default_factory=list)
     device_type: str | None = None
@@ -54,6 +54,7 @@ class Capabilities(BaseModel):
 @declare_keyword
 class Opened(BaseModel):
     """Keyword reporting whether a device (e.g., dome, mirror cover) is currently open."""
+
     is_open: bool
 
 
@@ -61,6 +62,7 @@ class Opened(BaseModel):
 @declare_keyword
 class SitePosition(BaseModel):
     """Geographic location of the observing site in degrees and km."""
+
     latitude_degrees: float
     longitude_degrees: float
     altitude_km: float
@@ -87,6 +89,7 @@ class SitePosition(BaseModel):
 @declare_keyword
 class AltAzPointing(BaseModel):
     """Current telescope pointing in horizontal (altitude/azimuth) coordinates."""
+
     altitude_degrees: float
     azimuth_degrees: float
 
@@ -100,6 +103,7 @@ class AltAzPointing(BaseModel):
 @declare_keyword
 class RADecPointing(BaseModel):
     """Current telescope pointing in equatorial (RA/Dec) coordinates."""
+
     right_ascension_hours: float
     declination_degrees: float
     reference_frame: ReferenceFrame = ReferenceFrame.ICRF
@@ -139,46 +143,66 @@ class SetBinning(BaseCommand, Binning):
 class Open(BaseCommand):
     command_id: Literal["Open"] = "Open"
 
+
 class Close(BaseCommand):
     command_id: Literal["Close"] = "Close"
 
+
 # TODO: Overhaul the remaining interfaces below and move to mount.py
+
 
 class MountAxis(enum.StrEnum):
     """Identifies a physical axis of a telescope mount."""
-    ALTITUDE="altitude"
-    AZIMUTH="azimuth"
-    RIGHT_ASCENSION="right_ascension"
-    DECLINATION="declination"
+
+    ALTITUDE = "altitude"
+    AZIMUTH = "azimuth"
+    RIGHT_ASCENSION = "right_ascension"
+    DECLINATION = "declination"
+
 
 class EnableAxis(BaseCommand):
     command_id: Literal["EnableAxis"] = "EnableAxis"
     axis: MountAxis
 
+
 class DisableAxis(BaseCommand):
     command_id: Literal["DisableAxis"] = "DisableAxis"
     axis: MountAxis
 
+
 @declare_keyword
 class AxisEnabled(BaseModel):
     """Keyword reporting whether a specific mount axis is enabled."""
+
     enabled: bool
     axis: MountAxis
+
 
 @declare_keyword
 class AxisRate(BaseModel):
     """Keyword reporting position, velocity, and acceleration for a single mount axis."""
+
     axis: MountAxis
 
-    mechanical_position: float | None = Field(None, description="Current Mechanical position (degrees)")
-    min_mechanical_position: float | None = Field(None, description="Maximum mechanical position (degrees)")
-    max_mechanical_position: float | None = Field(None, description="Maximum mechanical position (degrees)")
+    mechanical_position: float | None = Field(
+        None, description="Current Mechanical position (degrees)"
+    )
+    min_mechanical_position: float | None = Field(
+        None, description="Maximum mechanical position (degrees)"
+    )
+    max_mechanical_position: float | None = Field(
+        None, description="Maximum mechanical position (degrees)"
+    )
 
     velocity: float | None = Field(None, description="Current Velocity (Degrees per Second)")
     max_velocity: float | None = Field(None, description="Max Velocity (Degrees per Second)")
 
-    acceleration: float | None = Field(None, description="Current Acceleration (Degrees per Second ^2)")
-    max_acceleration: float | None = Field(None, description="Max Acceleration (Degrees per Second ^2)")
+    acceleration: float | None = Field(
+        None, description="Current Acceleration (Degrees per Second ^2)"
+    )
+    max_acceleration: float | None = Field(
+        None, description="Max Acceleration (Degrees per Second ^2)"
+    )
 
     measured_current: float | None = Field(None, description="Measured current (Amps)")
 
@@ -186,6 +210,7 @@ class AxisRate(BaseModel):
 @declare_keyword
 class AxisRates(BaseModel):
     """Aggregated AxisRate data for all mount axes."""
+
     azimuth: AxisRate | None = None
     altitude: AxisRate | None = None
     right_ascension: AxisRate | None = None
@@ -195,33 +220,56 @@ class AxisRates(BaseModel):
 @declare_keyword
 class AxisTargetDistance(BaseModel):
     """Distance between current and target axis position, in arcseconds."""
+
     distance_arcseconds: float
     rms_error_arcseconds: float | None = None
     axis: MountAxis
 
+
+@declare_keyword
+class Slewing(BaseModel):
+    """Indicates whether a mount is slewing."""
+
+    is_slewing: bool
+
+
+@declare_keyword
+class Tracking(BaseModel):
+    """Indicates whether a mount is tracking."""
+
+    is_tracking: bool
+
+
 @dataclass
 class AltAzArcseconds:
     """An angular offset expressed in altitude and azimuth arcseconds."""
+
     azimuth_arcseconds: float
     altitude_arcseconds: float
+
 
 @dataclass
 class RADecArcseconds:
     """An angular offset expressed in right-ascension and declination arcseconds."""
+
     right_ascension_arcseconds: float
     declination_arcseconds: float
+
 
 class ApplyOffset(BaseCommand):
     command_id: Literal["ApplyOffset"] = "ApplyOffset"
     offset: AltAzArcseconds | RADecArcseconds
 
+
 class FollowTarget(BaseCommand):
     command_id: Literal["FollowTarget"] = "FollowTarget"
     target: Target
 
+
 class SetParkPosition(BaseCommand):
     command_id: Literal["SetParkPosition"] = "SetParkPosition"
     position: Coordinates
+
 
 class MoveToPark(BaseCommand):
     command_id: Literal["MoveToPark"] = "MoveToPark"
@@ -230,11 +278,14 @@ class MoveToPark(BaseCommand):
 class Init(BaseCommand):
     command_id: Literal["Init"] = "Init"
 
+
 class Deinit(BaseCommand):
     command_id: Literal["Deinit"] = "Deinit"
 
+
 class Home(BaseCommand):
     command_id: Literal["Home"] = "Home"
+
 
 class Stop(BaseCommand):
     command_id: Literal["Stop"] = "Stop"
@@ -243,46 +294,59 @@ class Stop(BaseCommand):
 class SetSyncEnabled(BaseCommand, Enabled):
     command_id: Literal["SetSyncEnabled"] = "SetSyncEnabled"
 
+
 @dataclass
 class AzimuthRange:
     """A range of azimuth values defining a wrap constraint."""
+
     min: float
     max: float | None = None
+
 
 @declare_keyword
 class AzimuthWrapRange(AzimuthRange):
     """Keyword reporting the configured azimuth wrap range for the mount."""
+
     ...
+
 
 class SetAzimuthWrapRangeMin(BaseCommand, AzimuthWrapRange):
     command_id: Literal["SetAzimuthWrapRangeMin"] = "SetAzimuthWrapRangeMin"
+
 
 # Model Commands
 class ModelAddPoint(BaseCommand):
     command_id: Literal["ModelAddPoint"] = "ModelAddPoint"
     point: RADecPointing
 
+
 class ModelDeletePoint(BaseCommand):
     command_id: Literal["ModelDeletePoint"] = "ModelDeletePoint"
     indexes: list[int]
+
 
 class ModelEnablePoint(BaseCommand):
     command_id: Literal["ModelEnablePoint"] = "ModelEnablePoint"
     indexes: list[int]
 
+
 class ModelDisablePoint(BaseCommand):
     command_id: Literal["ModelDisablePoint"] = "ModelDisablePoint"
     indexes: list[int]
 
+
 class ModelClearPoints(BaseCommand):
     command_id: Literal["ModelClearPoints"] = "ModelClearPoints"
+
 
 class ModelSaveAsDefault(BaseCommand):
     command_id: Literal["ModelSaveAsDefault"] = "ModelSaveAsDefault"
 
+
 class ModelSave(BaseCommand):
     command_id: Literal["ModelSave"] = "ModelSave"
     filename: str
+
 
 class ModelLoad(BaseCommand):
     command_id: Literal["ModelLoad"] = "ModelLoad"

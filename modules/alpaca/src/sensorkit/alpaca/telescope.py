@@ -35,6 +35,8 @@ from sensorkit.models.devices import (
     RADecPointing,
     ReferenceFrame,
     SitePosition,
+    Slewing,
+    Tracking,
 )
 
 iers.conf.auto_download = False
@@ -560,6 +562,9 @@ class AlpacaTelescope(AlpacaDevice):
 
                 self._slewing = await self.get(t, "Slewing", False)
                 self._tracking = await self.get(t, "Tracking", False)
+
+                await device.publish(Slewing(is_slewing=self._slewing))
+                await device.publish(Tracking(is_tracking=self._tracking))
 
                 # Only publish pointing/rates if fast loop isn't handling it
                 if not self._fast_status_active:

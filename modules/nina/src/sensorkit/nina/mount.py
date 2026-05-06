@@ -22,6 +22,8 @@ from sensorkit.models.devices import (
     RADecPointing,
     ReferenceFrame,
     SitePosition,
+    Slewing,
+    Tracking,
 )
 from sensorkit.nina.device import (
     NinaDevice,
@@ -367,6 +369,9 @@ class NinaMount(NinaDevice):
 
                 self._slewing = info.get("Slewing", False)
                 self._tracking = info.get("Tracking", False)
+
+                await device.publish(Slewing(is_slewing=self._slewing))
+                await device.publish(Tracking(is_tracking=self._tracking))
 
                 # Only publish pointing/rates if fast loop isn't handling it
                 if not self._fast_status_active:

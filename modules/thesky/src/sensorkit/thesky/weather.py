@@ -17,7 +17,7 @@ from sensorkit.thesky.device import (
 
 @sk.declare_keyword
 class GoodToGo(BaseModel):
-    good_to_go: bool
+    is_good_to_go: bool
 
 
 @sk.declare_device
@@ -125,7 +125,7 @@ class TheSkyWeather(TheSkyDevice):
 
                 device = sk.device()
                 await device.publish(Connected(is_connected=connected))
-                await device.publish(GoodToGo(good_to_go=good_to_go))
+                await device.publish(GoodToGo(is_good_to_go=good_to_go))
 
             except Exception as e:
                 logger.warning(f"Failed to update TheSky weather status ({e})")

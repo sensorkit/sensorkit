@@ -34,12 +34,15 @@ from sensorkit.models.devices import (
     RADecPointing,
     ReferenceFrame,
     SetParkPosition,
+    Slewing,
+    Tracking,
 )
 from sensorkit.thesky.device import (
     MountCommandInProgressError,
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
+    TheSkyError,
 )
 
 iers.conf.auto_download = False
@@ -341,6 +344,7 @@ class TheSkyMount(TheSkyDevice):
 
                 # Update the TLE file
                 tle_path = self.write_tle(tle)
+                designator = tle.line1.split()[1]  # e.g. "12345U"
                 await self.execute(
                     f"""
                     Raven3.trackLEODoCommand(
@@ -355,15 +359,52 @@ class TheSkyMount(TheSkyDevice):
                 )
                 await asyncio.sleep(0.5)
 
-                # Select the target and begin the follow
-                await self.execute(
+                # Find the just-loaded satellite, verify the chart selection
+                # actually points at it, and only then call trackLEOBegin.
+                # If Find returns no matches, TheSky raises ObjectNotFoundError
+                # (250) at the script level. If it matches but the first hit
+                # isn't our satellite, trackLEOBegin would error 7503 ("Target
+                # not a satellite") -- detect that here and surface a diagnostic
+                # message instead.
+                result = await self.execute(
                     f"""
-                    sky6StarChart.Find(
-                        '{tle.line1.split()[1]}'
-                    );
-                    Raven3.trackLEOBegin();
+                    var Out;
+                    sky6StarChart.Find('{designator}');
+                    var n = sky6ObjectInformation.Count;
+                    var parts = ['count=' + n];
+                    var ok = false;
+                    for (var i = 0; i < n; i++) {{
+                        sky6ObjectInformation.Index = i;
+                        sky6ObjectInformation.Property(0);
+                        var name = sky6ObjectInformation.ObjInfoPropOut;
+                        parts.push(i + ':' + name);
+                        if (i === 0 && name.indexOf('#{designator}') >= 0) {{
+                            ok = true;
+                        }}
+                    }}
+                    if (ok) {{
+                        Raven3.trackLEOBegin();
+                        Out = 'OK|' + parts.join('|');
+                    }} else {{
+                        Out = 'BAD|' + parts.join('|');
+                    }}
                     """
                 )
+
+                if result.startswith("BAD|"):
+                    logger.warning(
+                        f"TLE follow chart-selection mismatch for {designator};"
+                        f" skipped trackLEOBegin. Find diagnostic: {result}"
+                    )
+                    raise TheSkyError(
+                        message=(
+                            f"chart selection isn't the loaded satellite for"
+                            f" {designator}: {result}"
+                        ),
+                        code=-1,
+                    )
+
+                logger.debug(f"TLE follow Find diagnostic for {designator}: {result}")
 
                 async with asyncio.timeout(self.config.timeout):
                     await self.poll("""Raven3.trackLEOStatus;""", "6")
@@ -494,18 +535,32 @@ class TheSkyMount(TheSkyDevice):
                 sky6RASCOMTele.dDec,
                 sky6RASCOMTele.dDecTrackingRate,
                 sky6RASCOMTele.dAlt,
-                sky6RASCOMTele.dAz
+                sky6RASCOMTele.dAz,
+                sky6RASCOMTele.IsSlewComplete,
+                sky6RASCOMTele.IsTracking
             ];
             """
         )
 
-        connected, ra, ra_rate, dec, dec_rate, alt, az = [float(x) for x in resp.split(",")]
+        (
+            connected,
+            ra,
+            ra_rate,
+            dec,
+            dec_rate,
+            alt,
+            az,
+            slew_complete,
+            tracking,
+        ) = [float(x) for x in resp.split(",")]
 
         connected = bool(connected)
         self.device_connected = connected
 
         device = sk.device()
         await device.publish(Connected(is_connected=connected))
+        await device.publish(Slewing(is_slewing=not bool(slew_complete)))
+        await device.publish(Tracking(is_tracking=bool(tracking)))
         await device.publish(RADecPointing(right_ascension_hours=ra, declination_degrees=dec))
         await device.publish(AltAzPointing(altitude_degrees=alt, azimuth_degrees=az))
 

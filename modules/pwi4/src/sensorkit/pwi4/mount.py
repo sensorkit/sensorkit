@@ -41,6 +41,8 @@ from sensorkit.models.devices import (
     RADecPointing,
     ReferenceFrame,
     SetAzimuthWrapRangeMin,
+    Slewing,
+    Tracking,
 )
 from sensorkit.pwi4.device import (
     PWI4Client,
@@ -600,6 +602,13 @@ class PWI4Mount(PWI4Device):
 
         if not connected:
             return
+
+        await device.publish(
+            Slewing(is_slewing=self.client.get_bool(st, "mount.is_slewing"))
+        )
+        await device.publish(
+            Tracking(is_tracking=self.client.get_bool(st, "mount.is_tracking"))
+        )
 
         ra_hours = self.client.get_float(st, "mount.ra_j2000_hours")
         dec_degs = self.client.get_float(st, "mount.dec_j2000_degs")
