@@ -54,7 +54,8 @@ class TheSkyWeather(TheSkyDevice):
 
     @sk.command_handler
     async def weather_deinit(self, cmd: sk.Deinit):
-        await self.weather_disconnect(sk.Disconnect())
+        # Do not disconnect, else `Good To Go` resets
+        pass
 
     @sk.command_handler
     async def weather_connect(self, cmd: sk.Connect):
