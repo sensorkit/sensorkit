@@ -165,6 +165,10 @@ async def go_command(
         return
 
     async def run():
-        await run_services(entrypoints, max_restarts=-1 if restart else 0)
+        await run_services(
+            entrypoints,
+            max_restarts=-1 if restart else 0,
+            shutdown_timeout=300.0,
+        )
 
     await handle_errors(run)
