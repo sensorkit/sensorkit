@@ -39,6 +39,7 @@ from sensorkit.models.devices import (
 )
 from sensorkit.thesky.device import (
     MountCommandInProgressError,
+    ProcessAbortedError,
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
@@ -171,6 +172,7 @@ class TheSkyMount(TheSkyDevice):
 
     @sk.command_handler
     async def mount_stop(self, cmd: sk.Stop):
+        self._stop_fast_status()
         await self.mount_unpark()
         logger.debug("stopping mount")
 
@@ -189,6 +191,7 @@ class TheSkyMount(TheSkyDevice):
 
     @sk.command_handler
     async def mount_park(self, cmd: sk.MoveToPark):
+        self._stop_fast_status()
         await self.require_connected()
         logger.debug("parking mount")
 
@@ -239,6 +242,7 @@ class TheSkyMount(TheSkyDevice):
 
     @sk.command_handler
     async def mount_home(self, cmd: sk.Home):
+        self._stop_fast_status()
         await self.mount_unpark()
         logger.debug("homing mount")
 
@@ -273,6 +277,7 @@ class TheSkyMount(TheSkyDevice):
 
     @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
+        self._stop_fast_status()
         await self.mount_unpark()
 
         # target = await cmd.target.adapt(
@@ -286,12 +291,6 @@ class TheSkyMount(TheSkyDevice):
         #     observer=self._geodetic,
         # )
         target = cmd.target
-
-        # Clear previous error(s)
-        try:
-            await self.execute("""Raven3.trackLEOAbort();""")
-        except Exception as e:
-            logger.warning(f"Unable to abort track: {e}")
 
         match cmd.target:
             case ICRSTarget():
@@ -604,6 +603,9 @@ class TheSkyMount(TheSkyDevice):
                 # logger.debug(
                 #     f"TheSky mount status: connected={self.device_connected}"
                 # )
+            except ProcessAbortedError:
+                # TheSky returns 212 transiently after an `abort`; mount is fine
+                pass
             except Exception as e:
                 logger.warning(f"Error in slow mount status_publish ({e})")
                 await asyncio.sleep(self.config.status_frequency_slow)

@@ -38,7 +38,7 @@ class TheSkyFilterWheel(TheSkyDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = TheSkyFilterWheelState()
 
-            self.filter_wheel_position: float | None = None
+        self.filter_wheel_position: float | None = None
 
         await self.filter_wheel_init(sk.Init())
         self.start_status_loop(self.status_publish())
