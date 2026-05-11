@@ -330,7 +330,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
 class NodePlatformEnclosureConfig(NodePlatformDeviceConfig[NodePlatformEnclosure]):
     """Node Platform Enclosure configuration."""
 
-    device_type: Literal["dome"] = "dome"
+    device_type: Literal["enclosure"] = "enclosure"
     fans: bool = False
     status_frequency: float = 1.0
     timeout: float = 120.0
@@ -343,5 +343,5 @@ class NodePlatformEnclosureConfig(NodePlatformDeviceConfig[NodePlatformEnclosure
 class NodePlatformEnclosureState(NodePlatformDeviceState):
     """Node Platform Enclosure state."""
 
-    device_type: Literal["dome"] = "dome"
+    device_type: Literal["enclosure"] = "enclosure"
     has_been_homed: bool = False

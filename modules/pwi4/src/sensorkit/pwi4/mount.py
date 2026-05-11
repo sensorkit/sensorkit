@@ -163,8 +163,10 @@ class PWI4Mount(PWI4Device):
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
         await self.mount_deinit(sk.Deinit())
+        await asyncio.sleep(self.config.status_frequency_slow)
+        await self.stop_status_loop()
+        await self.mount_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
@@ -180,6 +182,7 @@ class PWI4Mount(PWI4Device):
         )
 
         await self.mount_home(sk.Home())
+        await self.mount_park(sk.MoveToPark())
 
         await self.init_ot()
 
@@ -197,6 +200,7 @@ class PWI4Mount(PWI4Device):
         if not self.device_connected:
             return
 
+        self._stop_fast_status()
         await self.mount_stop(sk.Stop())
 
         if self._wrap_task is not None:
@@ -212,9 +216,6 @@ class PWI4Mount(PWI4Device):
             self.mount_disable_axis(sk.DisableAxis(axis=MountAxis.ALTITUDE)),
         )
         await self.deinit_ot()
-        self._stop_fast_status()
-        await self.stop_status_loop()
-        await self.mount_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def mount_connect(self, cmd: sk.Connect):
@@ -291,6 +292,11 @@ class PWI4Mount(PWI4Device):
         ) and self.client.get_bool(st, "mount.axis1.is_position_initialized"):
             return
 
+        await asyncio.gather(
+            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.AZIMUTH)),
+            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.ALTITUDE)),
+        )
+
         logger.debug("homing mount")
         await self.client.request("/mount/find_home")
 
@@ -308,6 +314,11 @@ class PWI4Mount(PWI4Device):
     async def mount_park(self, cmd: sk.MoveToPark):
         await self.require_connected()
         logger.debug("parking mount")
+
+        await asyncio.gather(
+            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.AZIMUTH)),
+            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.ALTITUDE)),
+        )
 
         await self.client.request("/mount/park")
 
@@ -334,6 +345,11 @@ class PWI4Mount(PWI4Device):
             (RateTarget, ReferenceFrame.ICRF),
             (EphemerisTarget, ReferenceFrame.ICRF),
             observer=self._geodetic,
+        )
+
+        await asyncio.gather(
+            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.AZIMUTH)),
+            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.ALTITUDE)),
         )
 
         match target:

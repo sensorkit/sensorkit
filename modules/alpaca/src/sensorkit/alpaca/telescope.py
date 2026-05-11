@@ -100,8 +100,10 @@ class AlpacaTelescope(AlpacaDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
         await self.telescope_deinit(sk.Deinit())
+        await asyncio.sleep(self.config.status_frequency_slow)
+        await self.stop_status_loop()
+        await self.mount_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
@@ -182,15 +184,15 @@ class AlpacaTelescope(AlpacaDevice):
     async def telescope_deinit(self, cmd: sk.Deinit):
         if not self.device_connected:
             return
+
+        self._stop_fast_status()
         await self.telescope_stop(sk.Stop())
+
         if self._can_set_tracking:
             await self.put(self.telescope, "Tracking", False)
             self._tracking = False
         if self._can_park:
             await self.telescope_park(sk.MoveToPark())
-        self._stop_fast_status()
-        await self.stop_status_loop()
-        await self.telescope_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def telescope_connect(self, cmd: sk.Connect):

@@ -51,6 +51,7 @@ iers.conf.auto_download = False
 from astropy.utils.iers import conf  # noqa: E402
 
 conf.auto_max_age = None
+LEO_SLEWING, LEO_SETTLING, LEO_TRACKING = 4, 5, 6
 
 
 @sk.declare_device
@@ -109,8 +110,10 @@ class TheSkyMount(TheSkyDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
         await self.mount_deinit(sk.Deinit())
+        await asyncio.sleep(self.config.status_frequency_slow)
+        await self.stop_status_loop()
+        await self.mount_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
@@ -127,11 +130,10 @@ class TheSkyMount(TheSkyDevice):
     async def mount_deinit(self, cmd: sk.Deinit):
         if not self.device_connected:
             return
+
+        self._stop_fast_status()
         await self.mount_stop(sk.Stop())
         await self.mount_park(sk.MoveToPark())
-        self._stop_fast_status()
-        await self.stop_status_loop()
-        await self.mount_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def mount_connect(self, cmd: sk.Connect):
@@ -524,6 +526,8 @@ class TheSkyMount(TheSkyDevice):
     async def _publish_mount_status(self):
         resp = await self.execute(
             """
+            var LeoStatus = -1;
+            try { LeoStatus = Raven3.trackLEOStatus; } catch (e) {}
             var Out;
             sky6RASCOMTele.GetRaDec();
             sky6RASCOMTele.GetAzAlt();
@@ -536,7 +540,8 @@ class TheSkyMount(TheSkyDevice):
                 sky6RASCOMTele.dAlt,
                 sky6RASCOMTele.dAz,
                 sky6RASCOMTele.IsSlewComplete,
-                sky6RASCOMTele.IsTracking
+                sky6RASCOMTele.IsTracking,
+                LeoStatus
             ];
             """
         )
@@ -551,15 +556,25 @@ class TheSkyMount(TheSkyDevice):
             az,
             slew_complete,
             tracking,
+            leo_status
         ) = [float(x) for x in resp.split(",")]
 
         connected = bool(connected)
         self.device_connected = connected
 
+        leo_status = int(leo_status)
+        if leo_status in (LEO_SLEWING, LEO_SETTLING):
+            is_slewing, is_tracking = True, False
+        elif leo_status == LEO_TRACKING:
+            is_slewing, is_tracking = False, True
+        else:
+            is_slewing = not bool(slew_complete)
+            is_tracking = bool(tracking)
+
         device = sk.device()
         await device.publish(Connected(is_connected=connected))
-        await device.publish(Slewing(is_slewing=not bool(slew_complete)))
-        await device.publish(Tracking(is_tracking=bool(tracking)))
+        await device.publish(Slewing(is_slewing=is_slewing))
+        await device.publish(Tracking(is_tracking=is_tracking))
         await device.publish(RADecPointing(right_ascension_hours=ra, declination_degrees=dec))
         await device.publish(AltAzPointing(altitude_degrees=alt, azimuth_degrees=az))
 

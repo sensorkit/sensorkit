@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import timedelta
 from typing import Literal, override
 
 import astropy.units as u
+import numpy as np
 import ourskyai_node_platform_api as osapi
 from astropy.coordinates import ICRS, AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
@@ -117,9 +119,9 @@ class NodePlatformMount(NodePlatformDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        self._stop_fast_status()
-        await self.stop_status_loop()
         await self.mount_deinit(sk.Deinit())
+        await asyncio.sleep(self.config.status_frequency_slow)
+        await self.stop_status_loop()
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 
@@ -129,12 +131,14 @@ class NodePlatformMount(NodePlatformDevice):
         await self.mount_enable(sk.Enable())
         if not self.state.has_been_homed:
             await self.mount_home(sk.Home())
+        await self.mount_park(sk.MoveToPark())
 
         # Initialize the optical tube
         await self.init_ot()
 
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
+        self._stop_fast_status()
         await self.mount_stop(sk.Stop())
         await self.mount_park(sk.MoveToPark())
         await self.mount_disable(sk.Disable())
@@ -270,11 +274,63 @@ class NodePlatformMount(NodePlatformDevice):
 
             case RateTarget():
                 logger.debug("executing Rate follow")
-                raise RuntimeError("No RateTarget support")
+
+                t0 = target.initial_time
+                p0 = target.initial_coords
+                duration = self._seconds_to_set_at_rate(
+                    p0.ra, p0.dec, target.rates.ra, target.rates.dec, t0
+                )
+                t1 = t0 + timedelta(seconds=duration)
+                samples = [
+                    osapi.V1MountTrackPathRaDecSample(
+                        julian_day=Time(t0).jd,
+                        ra_degrees=p0.ra,
+                        dec_degrees=p0.dec,
+                    ),
+                    osapi.V1MountTrackPathRaDecSample(
+                        julian_day=Time(t1).jd,
+                        ra_degrees=p0.ra + target.rates.ra * duration,
+                        dec_degrees=p0.dec + target.rates.dec * duration,
+                    ),
+                ]
+                req = osapi.V1StartMountTrackPathRequest(
+                    frame=osapi.V1MountTrackPathFrame.APPARENT_RA_DEC,
+                    ra_dec_samples=samples,
+                )
+                await self.api.call("v1_start_mount_track_path", req)
+                self._start_fast_status()
+                await asyncio.sleep(0.1)
+
+                async with asyncio.timeout(self.config.timeout):
+                    while self.mount_tracking is None or not self.mount_tracking:
+                        await asyncio.sleep(self.config.status_frequency_fast)
+
+                logger.debug("following Rate target")
 
             case EphemerisTarget():
                 logger.debug("executing Ephemeris follow")
-                raise RuntimeError("No EphemerisTarget support")
+
+                samples = [
+                    osapi.V1MountTrackPathRaDecSample(
+                        julian_day=jd,
+                        ra_degrees=p.ra,
+                        dec_degrees=p.dec,
+                    )
+                    for jd, p in zip(target.jds, target.points)
+                ]
+                req = osapi.V1StartMountTrackPathRequest(
+                    frame=osapi.V1MountTrackPathFrame.J2000_RA_DEC,
+                    ra_dec_samples=samples,
+                )
+                await self.api.call("v1_start_mount_track_path", req)
+                self._start_fast_status()
+                await asyncio.sleep(0.1)
+
+                async with asyncio.timeout(self.config.timeout):
+                    while self.mount_tracking is None or not self.mount_tracking:
+                        await asyncio.sleep(self.config.status_frequency_fast)
+
+                logger.debug("following Ephemeris target")
 
             case FrameTarget():
                 match cmd.target.frame:
@@ -481,6 +537,34 @@ class NodePlatformMount(NodePlatformDevice):
                 continue
 
             await asyncio.sleep(self.config.status_frequency_fast)
+
+    def _seconds_to_set_at_rate(
+        self,
+        ra0_deg: float,
+        dec0_deg: float,
+        ra_rate_deg_per_sec: float,
+        dec_rate_deg_per_sec: float,
+        t0,
+    ) -> float:
+        max_window = 24 * 3600.0
+        step = 60.0
+        times_s = np.arange(0.0, max_window + step, step)
+        ras = ra0_deg + ra_rate_deg_per_sec * times_s
+        decs = dec0_deg + dec_rate_deg_per_sec * times_s
+        obstimes = Time(t0) + times_s * u.s
+
+        coords = SkyCoord(ra=ras * u.deg, dec=decs * u.deg, frame=ICRS())
+        alts = coords.transform_to(
+            AltAz(obstime=obstimes, location=self._location)
+        ).alt.deg
+
+        above = alts >= 0.0
+        if not above[0]:
+            return max_window
+        below_after = ~above
+        if not below_after.any():
+            return max_window
+        return float(times_s[int(np.argmax(below_after))])
 
     def altaz_rates_to_radec_rates(
         self,

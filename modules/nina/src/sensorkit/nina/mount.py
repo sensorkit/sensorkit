@@ -65,8 +65,10 @@ class NinaMount(NinaDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
         await self.mount_deinit(sk.Deinit())
+        await asyncio.sleep(self.config.status_frequency_slow)
+        await self.stop_status_loop()
+        await self.mount_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
@@ -102,11 +104,10 @@ class NinaMount(NinaDevice):
     async def mount_deinit(self, cmd: sk.Deinit):
         if not self.device_connected:
             return
+
+        self._stop_fast_status()
         await self.mount_stop(sk.Stop())
         await self.mount_park(sk.MoveToPark())
-        self._stop_fast_status()
-        await self.stop_status_loop()
-        await self.mount_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def mount_connect(self, cmd: sk.Connect):
