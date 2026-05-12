@@ -103,6 +103,8 @@ class IndigoWeather(IndigoDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(IndigoWeatherState)
             logger.debug(f"restored state for {device.entity}")
@@ -110,11 +112,17 @@ class IndigoWeather(IndigoDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = IndigoWeatherState()
 
+        # Initialize the weather
         await self.weather_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
+        # Deinitialize the weather
         await self.weather_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await self.disconnect_from_server()
+        await sk.device().publish(Connected(is_connected=False))
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
@@ -149,8 +157,7 @@ class IndigoWeather(IndigoDevice):
 
     @sk.command_handler
     async def weather_deinit(self, cmd: sk.Deinit):
-        await self.disconnect_from_server()
-        await sk.device().publish(Connected(is_connected=False))
+        pass
 
     async def _on_connection_update(self, prop: IndigoProperty, msg_type: str):
         """Track device connection state from INDIGO CONNECTION property."""

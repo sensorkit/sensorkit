@@ -73,6 +73,8 @@ class AlpacaCoverCalibrator(AlpacaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(AlpacaCoverCalibratorState)
             logger.debug(f"restored state for {device.entity}")
@@ -80,17 +82,24 @@ class AlpacaCoverCalibrator(AlpacaDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = AlpacaCoverCalibratorState()
 
+        # Initialize the cover calibrator
         await self.cover_calibrator_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the cover calibrator
         await self.cover_calibrator_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.cover_calibrator_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def cover_calibrator_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.cover_calibrator_connect(sk.Connect())
         self.cover_calibrator = CoverCalibrator(
             self.address, self.config.device_number, self.config.protocol
@@ -103,7 +112,7 @@ class AlpacaCoverCalibrator(AlpacaDevice):
     @sk.command_handler
     async def cover_calibrator_deinit(self, cmd: sk.Deinit):
         await self.cover_calibrator_stop(sk.Stop())
-        await self.cover_calibrator_disconnect(sk.Disconnect())
+        await self.cover_close(CloseMirrorCover())
 
     @sk.command_handler
     async def cover_calibrator_connect(self, cmd: sk.Connect):

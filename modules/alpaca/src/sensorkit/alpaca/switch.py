@@ -48,6 +48,8 @@ class AlpacaSwitch(AlpacaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(AlpacaSwitchDeviceState)
             logger.debug(f"restored state for {device.entity}")
@@ -57,17 +59,24 @@ class AlpacaSwitch(AlpacaDevice):
 
         self._max_switch: int = 0
 
+        # Initialize the switch
         await self.switch_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the switch
         await self.switch_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.switch_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def switch_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.switch_connect(sk.Connect())
         self.switch = Switch(self.address, self.config.device_number, self.config.protocol)
         await self.switch_connect(sk.Connect())
@@ -78,7 +87,6 @@ class AlpacaSwitch(AlpacaDevice):
     @sk.command_handler
     async def switch_deinit(self, cmd: sk.Deinit):
         await self.stop_status_loop()
-        await self.switch_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def switch_connect(self, cmd: sk.Connect):

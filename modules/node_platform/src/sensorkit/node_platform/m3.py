@@ -26,6 +26,7 @@ class NodePlatformM3(NodePlatformDevice):
     async def entity_init(self):
         device = sk.device()
 
+        # Restore state
         try:
             self.state = await device.kv_get_model(NodePlatformM3State)
             logger.debug(f"restored state for {device.entity}")
@@ -35,17 +36,23 @@ class NodePlatformM3(NodePlatformDevice):
 
         self.m3_port: int | None = None
 
+        # Initialize the M3
         await self.m3_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.m3_port is None:
                 await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the M3
         await self.m3_deinit(sk.Deinit())
+
+        # Clean up
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 

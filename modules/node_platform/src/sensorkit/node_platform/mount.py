@@ -59,6 +59,7 @@ class NodePlatformMount(NodePlatformDevice):
     async def entity_init(self):
         device = sk.device()
 
+        # Restore state
         try:
             self.state = await device.kv_get_model(NodePlatformMountState)
             logger.debug(f"restored state for {device.entity}")
@@ -112,14 +113,17 @@ class NodePlatformMount(NodePlatformDevice):
         logger.debug(
             f"site info: lat={self._site_info['latitude_degrees']}, "
             f"lon={self._site_info['longitude_degrees']}, "
-            f"height={self._site_info['height_meters']}m, "
+            f"height={self._site_info['height_meters']} m, "
             f"time_source={self._site_info['time_source']}, "
-            f"time_unc={self._site_info['time_uncertainty_seconds']}s"
+            f"time_unc={self._site_info['time_uncertainty_seconds']} s"
         )
 
     @sk.on_detach
     async def entity_deinit(self):
+        # Deinitialize the mount
         await self.mount_deinit(sk.Deinit())
+
+        # Clean up
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
         await self.api.close()
@@ -128,9 +132,15 @@ class NodePlatformMount(NodePlatformDevice):
     @sk.command_handler
     async def mount_init(self, cmd: sk.Init):
         await self.require_connected()
+
+        # Enable the motors
         await self.mount_enable(sk.Enable())
+
+        # Home, as needed
         if not self.state.has_been_homed:
             await self.mount_home(sk.Home())
+
+        # Go to park position for cover opening
         await self.mount_park(sk.MoveToPark())
 
         # Initialize the optical tube

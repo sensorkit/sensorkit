@@ -21,6 +21,8 @@ class NinaWeather(NinaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(NinaWeatherState)
             logger.debug(f"restored state for {device.entity}")
@@ -28,23 +30,30 @@ class NinaWeather(NinaDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NinaWeatherState()
 
+        # Initialize the weather
         self.start_status_loop(self.status_publish())
         await self.weather_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the weather
         await self.weather_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.weather_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def weather_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.weather_connect(sk.Connect())
         await self.weather_connect(sk.Connect())
 
     @sk.command_handler
     async def weather_deinit(self, cmd: sk.Deinit):
-        await self.weather_disconnect(sk.Disconnect())
+        pass
 
     @sk.command_handler
     async def weather_connect(self, cmd: sk.Connect):

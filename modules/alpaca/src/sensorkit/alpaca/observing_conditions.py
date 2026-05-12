@@ -42,6 +42,8 @@ class AlpacaObservingConditions(AlpacaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(AlpacaObservingConditionsState)
             logger.debug(f"restored state for {device.entity}")
@@ -49,23 +51,31 @@ class AlpacaObservingConditions(AlpacaDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = AlpacaObservingConditionsState()
 
+        # Initialize the observing conditions
         await self.observing_conditions_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the observing conditions
         await self.observing_conditions_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.observing_conditions_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def observing_conditions_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.observing_conditions_connect(sk.Connect())
         self.oc = ObservingConditions(
             self.address, self.config.device_number, self.config.protocol
         )
         await self.observing_conditions_connect(sk.Connect())
 
+        # Set the average period
         if self.config.average_period is not None:
             try:
                 await self.put(self.oc, "AveragePeriod", self.config.average_period)
@@ -74,7 +84,7 @@ class AlpacaObservingConditions(AlpacaDevice):
 
     @sk.command_handler
     async def observing_conditions_deinit(self, cmd: sk.Deinit):
-        await self.observing_conditions_disconnect(sk.Disconnect())
+        pass
 
     @sk.command_handler
     async def observing_conditions_connect(self, cmd: sk.Connect):

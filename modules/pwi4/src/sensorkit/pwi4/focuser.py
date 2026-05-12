@@ -20,6 +20,8 @@ class PWI4Focuser(PWI4Device):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(PWI4FocuserState)
             logger.debug(f"restored state for {device.entity}")
@@ -29,21 +31,29 @@ class PWI4Focuser(PWI4Device):
 
         self.focuser_position: float | None = None
 
+        # Initialize the focuser
         await self.focuser_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.focuser_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the focuser
         await self.focuser_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.focuser_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def focuser_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.focuser_connect(sk.Connect())
         await self.focuser_connect(sk.Connect())
         await self.focuser_enable(sk.Enable())
@@ -52,7 +62,6 @@ class PWI4Focuser(PWI4Device):
     async def focuser_deinit(self, cmd: sk.Deinit):
         await self.focuser_stop(sk.Stop())
         await self.focuser_disable(sk.Disable())
-        await self.focuser_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def focuser_connect(self, cmd: sk.Connect):
@@ -106,7 +115,7 @@ class PWI4Focuser(PWI4Device):
         logger.debug("stopped focuser")
 
     @sk.command_handler
-    async def focuser_change(self, cmd: sk.ChangeFocusPosition):
+    async def focuser_change(self, cmd: ChangeFocusPosition):
         await self.require_connected()
         logger.debug(f"changing focuser to position {cmd.position}")
 

@@ -26,6 +26,7 @@ class TheSkyRotator(TheSkyDevice):
     async def entity_init(self):
         device = sk.device()
 
+        # Restore state
         try:
             self.state = await device.kv_get_model(TheSkyRotatorState)
             logger.debug(f"restored state for {device.entity}")
@@ -35,27 +36,35 @@ class TheSkyRotator(TheSkyDevice):
 
         self.rotator_position: float | None = None
 
+        # Initialize the rotator
         await self.rotator_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.rotator_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the rotator
         await self.rotator_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.rotator_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def rotator_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.rotator_connect(sk.Connect())
         await self.rotator_connect(sk.Connect())
 
     @sk.command_handler
     async def rotator_deinit(self, cmd: sk.Deinit):
-        await self.rotator_disconnect(sk.Disconnect())
+        pass
 
     @sk.command_handler
     async def rotator_connect(self, cmd: sk.Connect):

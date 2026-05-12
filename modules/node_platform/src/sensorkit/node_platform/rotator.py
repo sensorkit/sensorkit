@@ -27,6 +27,7 @@ class NodePlatformRotator(NodePlatformDevice):
     async def entity_init(self):
         device = sk.device()
 
+        # Restore state
         try:
             self.state = await device.kv_get_model(NodePlatformRotatorState)
             logger.debug(f"restored state for {device.entity}")
@@ -37,22 +38,29 @@ class NodePlatformRotator(NodePlatformDevice):
         self.rotator_position: float | None = None
         self.rotator_moving: bool | None = None
 
+        # Initialize the rotator
         await self.rotator_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.rotator_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the rotator
         await self.rotator_deinit(sk.Deinit())
+
+        # Clean up
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def rotator_init(self, cmd: sk.Init):
+        # Toggle field derotation
         if self.config.derotate:
             await self.api.call("v1_enable_derotation_compensation")
         else:
@@ -83,10 +91,12 @@ class NodePlatformRotator(NodePlatformDevice):
         await self.api.call("v1_go_to_rotator_position", req)
         await asyncio.sleep(0.1)
 
-        # Wait for the rotator move to complete
         async with asyncio.timeout(self.config.timeout):
-            while self.rotator_moving is None or self.rotator_moving:
-                await asyncio.sleep(self.config.status_frequency)
+            while True:
+                status: osapi.V1RotatorStatus = await self.api.call("v1_get_rotator_status")
+                if not status.moving:
+                    break
+                await asyncio.sleep(1)
 
         logger.debug(f"changed rotator to position {cmd.position}°")
 

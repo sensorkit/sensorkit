@@ -146,6 +146,8 @@ class PWI4Mount(PWI4Device):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(PWI4MountState)
             logger.debug(f"restored state for {device.entity}")
@@ -155,15 +157,30 @@ class PWI4Mount(PWI4Device):
 
         # Site location
         st = await self.client.status()
-        lat = self.client.get_float(st, "site.latitude_degs")
-        lon = self.client.get_float(st, "site.longitude_degs")
-        height_m = self.client.get_float(st, "site.height_meters")
-        self._geodetic = Geodetic(lon=lon, lat=lat, elev=height_m)
-        self._location = EarthLocation.from_geodetic(lon=lon, lat=lat, height=height_m)
+        self._site_lat = self.client.get_float(st, "site.latitude_degs")
+        self._site_lon = self.client.get_float(st, "site.longitude_degs")
+        self._site_elev = self.client.get_float(st, "site.height_meters")
+        self._geodetic = Geodetic(
+            lon=self._site_lon,
+            lat=self._site_lat,
+            elev=self._site_elev,
+        )
+        self._location = EarthLocation(
+            lat=self._site_lat * u.deg,
+            lon=self._site_lon * u.deg,
+            height=(self._site_elev) * u.m,
+        )
+        logger.debug(
+            f"site info: lat={self._site_lat}, lon={self._site_lon}, "
+            f"height={self._site_elev} m"
+        )
 
     @sk.on_detach
     async def entity_deinit(self):
+        # Deinitialize the mount
         await self.mount_deinit(sk.Deinit())
+
+        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
         await self.mount_disconnect(sk.Disconnect())
@@ -171,21 +188,28 @@ class PWI4Mount(PWI4Device):
 
     @sk.command_handler
     async def mount_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.mount_connect(sk.Connect())
 
         await self.mount_connect(sk.Connect())
         self.start_status_loop(self.status_publish_slow())
 
+        # Enable the motors
         await asyncio.gather(
             self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.AZIMUTH)),
             self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.ALTITUDE)),
         )
 
+        # Home, as needed
         await self.mount_home(sk.Home())
+
+        # Go to park position for cover opening
         await self.mount_park(sk.MoveToPark())
 
+        # Initialize the optical tube
         await self.init_ot()
 
+        # Keep the mount azimuth centered w.r.t. the wrap
         if self.config.wrap_autocenter:
             self._wrap_task = asyncio.create_task(
                 wrap_autocenter_loop(

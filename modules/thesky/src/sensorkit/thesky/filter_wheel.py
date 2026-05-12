@@ -31,6 +31,7 @@ class TheSkyFilterWheel(TheSkyDevice):
     async def entity_init(self):
         device = sk.device()
 
+        # Restore state
         try:
             self.state = await device.kv_get_model(TheSkyFilterWheelState)
             logger.debug(f"restored state for {device.entity}")
@@ -40,21 +41,29 @@ class TheSkyFilterWheel(TheSkyDevice):
 
         self.filter_wheel_position: float | None = None
 
+        # Initialize the filter wheel
         await self.filter_wheel_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.filter_wheel_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the filter wheel
         await self.filter_wheel_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.filter_wheel_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def filter_wheel_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.filter_wheel_connect(sk.Connect())
         await self.filter_wheel_connect(sk.Connect())
 
@@ -72,7 +81,7 @@ class TheSkyFilterWheel(TheSkyDevice):
 
     @sk.command_handler
     async def filter_wheel_deinit(self, cmd: sk.Deinit):
-        await self.filter_wheel_disconnect(sk.Disconnect())
+        pass
 
     @sk.command_handler
     async def filter_wheel_connect(self, cmd: sk.Connect):

@@ -40,6 +40,8 @@ class AlpacaRotator(AlpacaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(AlpacaRotatorState)
             logger.debug(f"restored state for {device.entity}")
@@ -49,21 +51,29 @@ class AlpacaRotator(AlpacaDevice):
 
         self.rotator_position: float | None = None
 
+        # Initialize the rotator
         await self.rotator_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.rotator_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the rotator
         await self.rotator_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.rotator_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def rotator_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.rotator_connect(sk.Connect())
         self.rotator = Rotator(self.address, self.config.device_number, self.config.protocol)
         await self.rotator_connect(sk.Connect())
@@ -74,8 +84,7 @@ class AlpacaRotator(AlpacaDevice):
 
     @sk.command_handler
     async def rotator_deinit(self, cmd: sk.Deinit):
-        await self.stop_status_loop()
-        await self.rotator_disconnect(sk.Disconnect())
+        await self.rotator_stop(sk.Stop())
 
     @sk.command_handler
     async def rotator_connect(self, cmd: sk.Connect):
@@ -101,7 +110,7 @@ class AlpacaRotator(AlpacaDevice):
                 is_moving = await self.get(self.rotator, "IsMoving", False)
                 if not is_moving:
                     break
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(1)
 
         logger.debug(f"changed rotator position to {self.rotator_position:.2f}°")
 

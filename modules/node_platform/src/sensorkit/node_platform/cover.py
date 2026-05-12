@@ -26,6 +26,8 @@ class NodePlatformCover(NodePlatformDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(NodePlatformCoverState)
             logger.debug(f"restored state for {device.entity}")
@@ -33,26 +35,33 @@ class NodePlatformCover(NodePlatformDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformCoverState()
 
+        # Initialize the cover
         self.start_status_loop(self.status_publish())
+        async with asyncio.timeout(self.config.timeout):
+            while self.device_connected is None:
+                await asyncio.sleep(self.config.status_frequency)
         await self.cover_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the cover
         await self.cover_deinit(sk.Deinit())
+
+        # Clean up
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def cover_init(self, cmd: sk.Init):
-        async with asyncio.timeout(self.config.timeout):
-            while self.device_connected is None:
-                await asyncio.sleep(self.config.status_frequency)
+        pass
 
     @sk.command_handler
     async def cover_deinit(self, cmd: sk.Deinit):
         await self.require_connected()
         await self.cover_stop(sk.Stop())
+        await self.cover_close(CloseMirrorCover())
 
     @sk.command_handler
     async def cover_stop(self, cmd: sk.Stop):
@@ -74,7 +83,7 @@ class NodePlatformCover(NodePlatformDevice):
                 status = await self.api.call("v1_get_optical_tube_cover_status")
                 if status.is_open:
                     break
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(1)
 
         logger.debug("opened mirror cover")
 
@@ -91,7 +100,7 @@ class NodePlatformCover(NodePlatformDevice):
                 status = await self.api.call("v1_get_optical_tube_cover_status")
                 if not status.is_open:
                     break
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(1)
 
         logger.debug("closed mirror cover")
 

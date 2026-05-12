@@ -27,6 +27,7 @@ class NodePlatformFocuser(NodePlatformDevice):
     async def entity_init(self):
         device = sk.device()
 
+        # Restore state
         try:
             self.state = await device.kv_get_model(NodePlatformFocuserState)
             logger.debug(f"restored state for {device.entity}")
@@ -37,17 +38,23 @@ class NodePlatformFocuser(NodePlatformDevice):
         self.focuser_position: float | None = None
         self.focuser_moving: bool | None = None
 
+        # Initialize the focuser
         await self.focuser_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.focuser_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the focuser
         await self.focuser_deinit(sk.Deinit())
+
+        # Clean up
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 
@@ -79,10 +86,12 @@ class NodePlatformFocuser(NodePlatformDevice):
         await self.api.call("v1_go_to_focuser_position", req)
         await asyncio.sleep(0.1)
 
-        # Wait for the focus move to complete
         async with asyncio.timeout(self.config.timeout):
-            while self.focuser_moving is None or self.focuser_moving:
-                await asyncio.sleep(self.config.status_frequency)
+            while True:
+                status: osapi.V1FocuserStatus = await self.api.call("v1_get_focuser_status")
+                if not status.moving:
+                    break
+                await asyncio.sleep(0.5)
 
         logger.debug(f"changed focuser position to {cmd.position}")
 

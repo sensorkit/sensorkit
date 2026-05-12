@@ -21,6 +21,8 @@ class NinaSafetyMonitor(NinaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(NinaSafetyMonitorState)
             logger.debug(f"restored state for {device.entity}")
@@ -28,13 +30,19 @@ class NinaSafetyMonitor(NinaDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NinaSafetyMonitorState()
 
-        self.start_status_loop(self.status_publish())
+        # Initialize the safety monitor
         await self.safety_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the safety monitor
         await self.safety_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.safety_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
@@ -44,7 +52,7 @@ class NinaSafetyMonitor(NinaDevice):
 
     @sk.command_handler
     async def safety_deinit(self, cmd: sk.Deinit):
-        await self.safety_disconnect(sk.Disconnect())
+        pass
 
     @sk.command_handler
     async def safety_connect(self, cmd: sk.Connect):

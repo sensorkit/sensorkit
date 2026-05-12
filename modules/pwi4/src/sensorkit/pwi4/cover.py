@@ -21,6 +21,8 @@ class PWI4Cover(PWI4Device):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(PWI4CoverState)
             logger.debug(f"restored state for {device.entity}")
@@ -28,24 +30,31 @@ class PWI4Cover(PWI4Device):
             logger.warning(f"No saved state for {device.entity}")
             self.state = PWI4CoverState()
 
+        # Initialize the cover
         await self.cover_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the cover
         await self.cover_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.cover_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def cover_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.cover_connect(sk.Connect())
         await self.cover_connect(sk.Connect())
 
     @sk.command_handler
     async def cover_deinit(self, cmd: sk.Deinit):
         await self.cover_stop(sk.Stop())
-        await self.cover_disconnect(sk.Disconnect())
+        await self.cover_close(CloseMirrorCover())
 
     @sk.command_handler
     async def cover_connect(self, cmd: sk.Connect):
@@ -103,7 +112,7 @@ class PWI4Cover(PWI4Device):
                 state_name = self.client.get_str(st, "mirrorcover.overall_state_name", "")
                 if state_name.lower() == "open":
                     break
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(1)
 
         logger.debug("opened mirror cover")
 
@@ -120,7 +129,7 @@ class PWI4Cover(PWI4Device):
                 state_name = self.client.get_str(st, "mirrorcover.overall_state_name", "")
                 if state_name.lower() == "closed":
                     break
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(1)
 
         logger.debug("closed mirror cover")
 

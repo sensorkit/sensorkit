@@ -8,10 +8,11 @@ from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.models.devices import AltAzPointing, Connected, Opened
-from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
+from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
 from sensorkit.thesky.device import (
     CommandFailedError,
     DomeCommandInProgressError,
+    ProcessAbortedError,
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
@@ -41,6 +42,7 @@ class TheSkyDome(TheSkyDevice):
     async def entity_init(self):
         device = sk.device()
 
+        # Restore state
         try:
             self.state = await device.kv_get_model(TheSkyDomeState)
             logger.debug(f"restored state for {device.entity}")
@@ -48,20 +50,28 @@ class TheSkyDome(TheSkyDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = TheSkyDomeState()
 
+        # Initialize the dome
         await self.dome_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the dome
         await self.dome_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.dome_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def dome_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.dome_connect(sk.Connect())
         await self.dome_connect(sk.Connect())
 
+        # Home, as needed
         if not self.state.has_been_homed:
             self._home_task = asyncio.create_task(self.dome_home(sk.Home()))
 
@@ -78,7 +88,6 @@ class TheSkyDome(TheSkyDevice):
 
         await self.dome_close(CloseEnclosure())
         await self.dome_park(sk.MoveToPark())
-        await self.dome_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def dome_connect(self, cmd: sk.Connect):
@@ -260,6 +269,45 @@ class TheSkyDome(TheSkyDevice):
 
         logger.debug("closed dome")
 
+    @sk.command_handler
+    async def dome_move(self, cmd: MoveEnclosure):
+        await self.require_connected()
+        await self.dome_unpark()
+
+        # GotoAzEl requires both az and el; if no target altitude was provided,
+        # hold the current dome altitude.
+        if cmd.target_altitude is None:
+            resp = await self.execute(
+                """
+                sky6Dome.GetAzEl();
+                Out = sky6Dome.dEl;
+                """
+            )
+            target_el = float(resp)
+        else:
+            target_el = float(cmd.target_altitude)
+        target_az = float(cmd.target_azimuth)
+
+        logger.debug(f"moving dome to azimuth={target_az:.1f}°, elevation={target_el}°")
+
+        async def _do_move():
+            async with asyncio.timeout(self.config.timeout):
+                while True:
+                    try:
+                        await self.execute(
+                            f"""sky6Dome.GotoAzEl({target_az}, {target_el});"""
+                        )
+                        break
+                    except DomeCommandInProgressError:
+                        await asyncio.sleep(0.5)
+
+            async with asyncio.timeout(self.config.timeout):
+                await self.poll("""sky6Dome.IsGotoComplete;""", "1")
+
+        await self._retry_with_reconnect(_do_move)
+
+        logger.debug(f"moved dome to azimuth={target_az:.1f}°, elevation={target_el}°")
+
     async def status_publish(self):
         while True:
             try:
@@ -276,6 +324,9 @@ class TheSkyDome(TheSkyDevice):
                     ];
                     """
                 )
+            except ProcessAbortedError:
+                # TheSky returns 212 transiently after an `abort`; dome is fine
+                pass
             except Exception as e:
                 logger.exception(f"Error in status_publish execute: {e}")
                 await asyncio.sleep(self.config.status_frequency)

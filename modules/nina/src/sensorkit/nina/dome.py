@@ -32,6 +32,8 @@ class NinaDome(NinaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(NinaDomeState)
             logger.debug(f"restored state for {device.entity}")
@@ -39,20 +41,28 @@ class NinaDome(NinaDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NinaDomeState()
 
+        # Initialize the dome
         await self.dome_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the dome
         await self.dome_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.dome_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def dome_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.dome_connect(sk.Connect())
         await self.dome_connect(sk.Connect())
 
+        # Home, as needed
         if not self.state.has_been_homed:
             await self.dome_home(sk.Home())
 
@@ -61,7 +71,6 @@ class NinaDome(NinaDevice):
         await self.dome_stop(sk.Stop())
         await self.dome_close(CloseEnclosure())
         await self.dome_park(sk.MoveToPark())
-        await self.dome_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def dome_connect(self, cmd: sk.Connect):
@@ -129,7 +138,7 @@ class NinaDome(NinaDevice):
                 info = await self.info("dome")
                 if info.get("ShutterStatus") == "ShutterOpen":
                     break
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(1)
 
         logger.debug("opened enclosure")
 
@@ -146,7 +155,7 @@ class NinaDome(NinaDevice):
                 info = await self.info("dome")
                 if info.get("ShutterStatus") == "ShutterClosed":
                     break
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(1)
 
         logger.debug("closed enclosure")
 
@@ -160,6 +169,13 @@ class NinaDome(NinaDevice):
             azimuth=cmd.target_azimuth,
             waitToFinish=True,
         )
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                info = await self.info("dome")
+                if not info.get("Slewing", False):
+                    break
+                await asyncio.sleep(1)
 
         logger.debug(f"moved enclosure to azimuth {cmd.target_azimuth:.1f}°")
 

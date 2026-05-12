@@ -61,6 +61,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
     async def entity_init(self):
         device = sk.device()
 
+        # Restore state
         try:
             self.state = await device.kv_get_model(NodePlatformEnclosureState)
             logger.debug(f"restored state for {device.entity}")
@@ -68,6 +69,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformEnclosureState()
 
+        # Initialize the enclosure
         self.start_status_loop(self.status_publish())
         async with asyncio.timeout(self.config.timeout):
             while self.device_connected is None:
@@ -76,21 +78,26 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the enclosure
         await self.enclosure_deinit(sk.Deinit())
+
+        # Clean up
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def enclosure_init(self, cmd: sk.Init):
-        # FIXME: this likely replaces homing for Node Platform enclosures
+        # Ensure synchronization with the mount
         await self.api.call("v1_sync_enclosure_rotator_with_mount")
         await self.api.call("v1_sync_enclosure_window_with_mount")
 
+        # Home, as needed
         if not self.state.has_been_homed:
             await self.enclosure_home(sk.Home())
 
-        # Turn on all enclosure fans
+        # Turn on enclosure fans
         if self.config.fans:
             all_fan_roles = list(osapi.V1EnclosureFanRole)
             await self.api.call(
@@ -153,15 +160,25 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
         # Ensure we're not moving
         async with asyncio.timeout(self.config.timeout):
-            while self.shutter_state in (
-                EnclosureShutterState.MOVING_OPEN,
-                EnclosureShutterState.MOVING_CLOSE,
-                EnclosureShutterState.HOMING,
-                EnclosureShutterState.ERROR,
-                EnclosureShutterState.UNKNOWN,
-                None,
-            ):
-                await asyncio.sleep(self.config.status_frequency)
+            while True:
+                status: osapi.V2EnclosureStatus = await self.api.call(
+                    "v2_get_enclosure_status"
+                )
+                shutter_state = (
+                    status.shutters.statuses[0].state
+                    if status.shutters and status.shutters.statuses
+                    else None
+                )
+                if shutter_state not in (
+                    EnclosureShutterState.MOVING_OPEN,
+                    EnclosureShutterState.MOVING_CLOSE,
+                    EnclosureShutterState.HOMING,
+                    EnclosureShutterState.ERROR,
+                    EnclosureShutterState.UNKNOWN,
+                    None,
+                ):
+                    break
+                await asyncio.sleep(1)
 
         # ASSISTED mode no longer auto-opens on safe — switch to MANUAL mode for the
         # open, then restore ASSISTED (if configured) so unsafe-close behavior is preserved.
@@ -177,8 +194,18 @@ class NodePlatformEnclosure(NodePlatformDevice):
             await asyncio.sleep(0.1)
 
             async with asyncio.timeout(self.config.timeout):
-                while self.shutter_state is not EnclosureShutterState.OPENED:
-                    await asyncio.sleep(self.config.status_frequency)
+                while True:
+                    status: osapi.V2EnclosureStatus = await self.api.call(
+                        "v2_get_enclosure_status"
+                    )
+                    shutter_state = (
+                        status.shutters.statuses[0].state
+                        if status.shutters and status.shutters.statuses
+                        else None
+                    )
+                    if shutter_state is EnclosureShutterState.OPENED:
+                        break
+                    await asyncio.sleep(1)
 
             logger.debug("opened enclosure")
         finally:
@@ -192,15 +219,25 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
         # Ensure we're not moving
         async with asyncio.timeout(self.config.timeout):
-            while self.shutter_state in (
-                EnclosureShutterState.MOVING_OPEN,
-                EnclosureShutterState.MOVING_CLOSE,
-                EnclosureShutterState.HOMING,
-                EnclosureShutterState.ERROR,
-                EnclosureShutterState.UNKNOWN,
-                None,
-            ):
-                await asyncio.sleep(self.config.status_frequency)
+            while True:
+                status: osapi.V2EnclosureStatus = await self.api.call(
+                    "v2_get_enclosure_status"
+                )
+                shutter_state = (
+                    status.shutters.statuses[0].state
+                    if status.shutters and status.shutters.statuses
+                    else None
+                )
+                if shutter_state not in (
+                    EnclosureShutterState.MOVING_OPEN,
+                    EnclosureShutterState.MOVING_CLOSE,
+                    EnclosureShutterState.HOMING,
+                    EnclosureShutterState.ERROR,
+                    EnclosureShutterState.UNKNOWN,
+                    None,
+                ):
+                    break
+                await asyncio.sleep(1)
 
         # ASSISTED mode auto-closes on unsafe but ignores explicit close requests
         # — switch to MANUAL mode for the close, then restore ASSISTED (if configured).
@@ -215,8 +252,18 @@ class NodePlatformEnclosure(NodePlatformDevice):
             await asyncio.sleep(0.1)
 
             async with asyncio.timeout(self.config.timeout):
-                while self.shutter_state is not EnclosureShutterState.CLOSED:
-                    await asyncio.sleep(self.config.status_frequency)
+                while True:
+                    status: osapi.V2EnclosureStatus = await self.api.call(
+                        "v2_get_enclosure_status"
+                    )
+                    shutter_state = (
+                        status.shutters.statuses[0].state
+                        if status.shutters and status.shutters.statuses
+                        else None
+                    )
+                    if shutter_state is EnclosureShutterState.CLOSED:
+                        break
+                    await asyncio.sleep(1)
 
             logger.debug("closed enclosure")
         finally:

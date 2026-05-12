@@ -70,6 +70,7 @@ class TheSkyCamera(TheSkyDevice):
     async def entity_init(self):
         device = sk.device()
 
+        # Restore state
         try:
             self.state = await device.kv_get_model(TheSkyCameraState)
             logger.debug(f"restored state for {device.entity}")
@@ -77,17 +78,24 @@ class TheSkyCamera(TheSkyDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = TheSkyCameraState()
 
+        # Initialize the camera
         await self.camera_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the camera
         await self.camera_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.camera_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def camera_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.camera_connect(sk.Connect())
         await self.camera_connect(sk.Connect())
 
@@ -104,7 +112,6 @@ class TheSkyCamera(TheSkyDevice):
     @sk.command_handler
     async def camera_deinit(self, cmd: sk.Deinit):
         await self.camera_abort(sk.Abort())
-        await self.camera_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def camera_connect(self, cmd: sk.Connect):
@@ -182,9 +189,9 @@ class TheSkyCamera(TheSkyDevice):
             ccdsoftCamera.TemperatureSetPoint;
             """
         )
-        temp = float(resp)
-        if temp != target:
-            logger.warning(f"Requested camera temperature of {target} C, got {temp} C")
+        temperature_set_point = float(resp)
+        if temperature_set_point != target:
+            logger.warning(f"Requested camera temperature of {target} C, got {temperature_set_point} C")
         else:
             logger.debug(f"set camera temperature to {target} C")
 
@@ -214,8 +221,9 @@ class TheSkyCamera(TheSkyDevice):
         )
         actual_x, actual_y = [int(x) for x in resp.split(",")]
         if actual_x != bin_x or actual_y != bin_y:
-            logger.warning(
-                f"Requested camera binning of ({bin_x}, {bin_y}), got ({actual_x}, {actual_y})"
+            raise RuntimeError(
+                f"Requested camera binning of ({bin_x}, {bin_y}), "
+                f"got ({actual_x}, {actual_y})"
             )
         else:
             logger.debug(f"set camera binning to ({actual_x}, {actual_y})")
@@ -226,6 +234,7 @@ class TheSkyCamera(TheSkyDevice):
         logger.info(f"Requesting {cmd.integration_time:.1f} sec capture from camera")
         logger.debug("starting camera capture")
 
+        # Start the exposure
         frame_type = 1  # 1=Light, 2=Bias, 3=Dark, 4=Flat Field
         await self.execute(
             f"""
@@ -262,7 +271,7 @@ class TheSkyCamera(TheSkyDevice):
         dtype = _array_typecode_to_dtype.get(data[0].typecode)
         logger.debug(f"got image array with {len(data)} rows, {len(data[0])} cols, dtype {dtype}")
 
-        # Set context
+        # Build data context
         resp = await self.execute(
             """
             var Out;
@@ -281,6 +290,7 @@ class TheSkyCamera(TheSkyDevice):
         cmd.context["bscale"] = 1
         cmd.context["bzero"] = _dtype_to_bzero.get(dtype, 0)
 
+        # Write it to the DataGraph
         if graph := await sk.device().data_graph():
             source = graph.app_source()
 

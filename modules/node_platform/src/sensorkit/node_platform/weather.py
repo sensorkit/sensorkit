@@ -56,6 +56,7 @@ class NodePlatformWeather(NodePlatformDevice):
     async def entity_init(self):
         device = sk.device()
 
+        # Restore state
         try:
             self.state = await device.kv_get_model(NodePlatformWeatherState)
             logger.debug(f"restored state for {device.entity}")
@@ -63,16 +64,22 @@ class NodePlatformWeather(NodePlatformDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformWeatherState()
 
+        # Initialize the weather
         await self.weather_init(sk.Init())
         self.start_status_loop(self.status_publish())
+
         async with asyncio.timeout(self.config.timeout):
             while self.device_connected is None:
                 await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the weather
         await self.weather_deinit(sk.Deinit())
+
+        # Clean up
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 

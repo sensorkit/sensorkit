@@ -129,6 +129,8 @@ class NinaCamera(NinaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(NinaCameraState)
             logger.debug(f"restored state for {device.entity}")
@@ -136,17 +138,24 @@ class NinaCamera(NinaDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NinaCameraState()
 
+        # Initialize the camera
         await self.camera_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the camera
         await self.camera_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.camera_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def camera_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.camera_connect(sk.Connect())
         await self.camera_connect(sk.Connect())
 
@@ -168,7 +177,6 @@ class NinaCamera(NinaDevice):
     @sk.command_handler
     async def camera_deinit(self, cmd: sk.Deinit):
         await self.camera_abort(sk.Abort())
-        await self.camera_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def camera_connect(self, cmd: sk.Connect):
@@ -203,18 +211,33 @@ class NinaCamera(NinaDevice):
             minutes=5.0,
         )
 
-        logger.debug(f"set camera temperature to {target} °C")
+        info = await self.info("camera")
+        set_point = info.get("TemperatureSetPoint")
+        if set_point != target:
+            logger.warning(f"Requested camera temperature of {target} C, got {set_point} C")
+        else:
+            logger.debug(f"set camera temperature to {target} C")
 
     @sk.command_handler
     async def camera_set_binning(self, cmd: ConfigureCameraSensor):
         if cmd.binning is None:
             return
         await self.require_connected()
-        binning = f"{int(cmd.binning.x)}x{int(cmd.binning.y)}"
-        logger.debug(f"setting camera binning to {binning}")
+        bin_x, bin_y = int(cmd.binning.x), int(cmd.binning.y)
+        binning = f"{bin_x}x{bin_y}"
+        logger.debug(f"setting camera binning to ({bin_x}, {bin_y})")
         await self.client.get("/equipment/camera/set-binning", binning=binning)
 
-        logger.debug(f"set camera binning to {binning}")
+        info = await self.info("camera")
+        actual_x = info.get("BinX")
+        actual_y = info.get("BinY")
+        if actual_x != bin_x or actual_y != bin_y:
+            raise RuntimeError(
+                f"Requested camera binning of ({bin_x}, {bin_y}), "
+                f"got ({actual_x}, {actual_y})"
+            )
+        else:
+            logger.debug(f"set camera binning to ({bin_x}, {bin_y})")
 
     @sk.command_handler
     async def camera_capture(self, cmd: sk.CameraCapture):

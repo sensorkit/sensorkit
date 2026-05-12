@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
+import astropy.units as u
+from astropy.coordinates import EarthLocation
 from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from sensorkit.astro.common import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
     FrameTarget,
@@ -52,6 +55,8 @@ class NinaMount(NinaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(NinaMountState)
             logger.debug(f"restored state for {device.entity}")
@@ -62,10 +67,15 @@ class NinaMount(NinaDevice):
         self._tracking: bool | None = None
         self._slewing: bool | None = None
         self._fast_status_task: asyncio.Task | None = None
+        self._geodetic: Geodetic | None = None
+        self._location: EarthLocation | None = None
 
     @sk.on_detach
     async def entity_deinit(self):
+        # Deinitialize the mount
         await self.mount_deinit(sk.Deinit())
+
+        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
         await self.mount_disconnect(sk.Disconnect())
@@ -73,6 +83,7 @@ class NinaMount(NinaDevice):
 
     @sk.command_handler
     async def mount_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.mount_connect(sk.Connect())
         await self.mount_connect(sk.Connect())
         self.start_status_loop(self.status_publish_slow())
@@ -94,6 +105,20 @@ class NinaMount(NinaDevice):
                     longitude_degrees=self._site_lon,
                     altitude_km=(self._site_elev or 0.0) / 1000.0,
                 )
+            )
+            self._geodetic = Geodetic(
+                lon=self._site_lon,
+                lat=self._site_lat,
+                elev=self._site_elev,
+            )
+            self._location = EarthLocation(
+                lat=self._site_lat * u.deg,
+                lon=self._site_lon * u.deg,
+                height=(self._site_elev) * u.m,
+            )
+            logger.debug(
+                f"site info: lat={self._site_lat}, lon={self._site_lon}, "
+                f"height={self._site_elev} m"
             )
 
         # Home as needed

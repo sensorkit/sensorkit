@@ -67,6 +67,8 @@ class AlpacaDome(AlpacaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(AlpacaDomeState)
             logger.debug(f"restored state for {device.entity}")
@@ -74,17 +76,24 @@ class AlpacaDome(AlpacaDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = AlpacaDomeState()
 
+        # Initialize the dome
         await self.dome_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the dome
         await self.dome_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.dome_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def dome_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.dome_connect(sk.Connect())
         self.dome = Dome(self.address, self.config.device_number, self.config.protocol)
         await self.dome_connect(sk.Connect())
@@ -101,6 +110,7 @@ class AlpacaDome(AlpacaDevice):
         self._can_slave = await self.get(d, "CanSlave", False)
         self._can_sync_azimuth = await self.get(d, "CanSyncAzimuth", False)
 
+        # Home, as needed
         if not self.state.has_been_homed:
             await self.dome_home(sk.Home())
 
@@ -109,7 +119,6 @@ class AlpacaDome(AlpacaDevice):
         await self.dome_stop(sk.Stop())
         await self.dome_close(CloseEnclosure())
         await self.dome_park(sk.MoveToPark())
-        await self.dome_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def dome_connect(self, cmd: sk.Connect):
@@ -137,7 +146,7 @@ class AlpacaDome(AlpacaDevice):
         logger.debug("homing enclosure")
 
         await self.call(self.dome, "FindHome")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.1)
 
         async with asyncio.timeout(self.config.timeout):
             while True:
@@ -186,7 +195,7 @@ class AlpacaDome(AlpacaDevice):
                 status = await self.get(self.dome, "ShutterStatus", None)
                 if status == _SHUTTER_OPEN:
                     break
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(1)
 
         logger.debug("opened enclosure")
 
@@ -205,7 +214,7 @@ class AlpacaDome(AlpacaDevice):
                 status = await self.get(self.dome, "ShutterStatus", None)
                 if status == _SHUTTER_CLOSED:
                     break
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(1)
 
         logger.debug("closed enclosure")
 
@@ -236,7 +245,7 @@ class AlpacaDome(AlpacaDevice):
                     slewing = await self.get(self.dome, "Slewing", True)
                     if not slewing:
                         break
-                    await asyncio.sleep(self.config.status_frequency)
+                    await asyncio.sleep(1)
 
         logger.debug(
             f"moved to altitude={cmd.target_altitude}°, azimuth {cmd.target_azimuth:.1f}°"

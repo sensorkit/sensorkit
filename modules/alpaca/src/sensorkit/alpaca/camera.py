@@ -162,6 +162,8 @@ class AlpacaCamera(AlpacaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(AlpacaCameraState)
             logger.debug(f"restored state for {device.entity}")
@@ -169,17 +171,24 @@ class AlpacaCamera(AlpacaDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = AlpacaCameraState()
 
+        # Initialize the camera
         await self.camera_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the camera
         await self.camera_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.camera_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def camera_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.camera_connect(sk.Connect())
         self.camera = Camera(self.address, self.config.device_number, self.config.protocol)
         await self.camera_connect(sk.Connect())
@@ -241,11 +250,8 @@ class AlpacaCamera(AlpacaDevice):
     @sk.command_handler
     async def camera_deinit(self, cmd: sk.Deinit):
         await self.camera_abort(sk.Abort())
-
         if self._data_tasks:
             await asyncio.gather(*self._data_tasks, return_exceptions=True)
-
-        await self.camera_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def camera_connect(self, cmd: sk.Connect):
@@ -299,7 +305,11 @@ class AlpacaCamera(AlpacaDevice):
 
         await self.put(self.camera, "SetCCDTemperature", target)
 
-        logger.debug(f"set camera temperature to {target} °C")
+        set_ccd_temperature = await self.get(self.camera, "SetCCDTemperature", None)
+        if set_ccd_temperature != target:
+            logger.warning(f"Requested camera temperature of {target} C, got {set_ccd_temperature} C")
+        else:
+            logger.debug(f"set camera temperature to {target} C")
 
     @sk.command_handler
     async def camera_set_binning(self, cmd: ConfigureCameraSensor):
@@ -320,13 +330,21 @@ class AlpacaCamera(AlpacaDevice):
         await self.put(self.camera, "BinX", bin_x)
         await self.put(self.camera, "BinY", bin_y)
 
+        actual_x = await self.get(self.camera, "BinX", None)
+        actual_y = await self.get(self.camera, "BinY", None)
+        if actual_x != bin_x or actual_y != bin_y:
+            raise RuntimeError(
+                f"Requested camera binning of ({bin_x}, {bin_y}), "
+                f"got ({actual_x}, {actual_y})"
+            )
+
         # Reset subframe to full frame under new binning
         await self.put(self.camera, "StartX", 0)
         await self.put(self.camera, "StartY", 0)
         await self.put(self.camera, "NumX", self._camera_x_size // bin_x)
         await self.put(self.camera, "NumY", self._camera_y_size // bin_y)
 
-        logger.debug(f"set camera binning to {bin_x}x{bin_y}")
+        logger.debug(f"set camera binning to ({bin_x}, {bin_y})")
 
     @sk.command_handler
     async def camera_capture(self, cmd: sk.CameraCapture):
@@ -355,6 +373,7 @@ class AlpacaCamera(AlpacaDevice):
 
         timeout_seconds = max(self.config.timeout, exposure_seconds * 3.0)
 
+        # Start the exposure
         try:
             date_obs_fallback = datetime.now(UTC)
             data: array.array = await asyncio.wait_for(
@@ -408,6 +427,7 @@ class AlpacaCamera(AlpacaDevice):
         if not context.get("file_name", None):
             context["file_name"] = f"{uuid.uuid1()}.fits"
 
+        # Reshape the array and write to the DataGraph
         task = asyncio.create_task(self._process_image(data, dtype, width, height, context))
         self._data_tasks.add(task)
         task.add_done_callback(self._data_tasks.discard)
@@ -473,7 +493,6 @@ class AlpacaCamera(AlpacaDevice):
                     bin_x = await self.get(c, "BinX", 1)
                     bin_y = await self.get(c, "BinY", 1)
 
-                    # Standard SK keywords consumed by the controller
                     await device.publish(Binning(x=bin_x, y=bin_y))
                     if self._camera_x_size and self._camera_y_size:
                         await device.publish(
@@ -613,7 +632,7 @@ class AlpacaCamera(AlpacaDevice):
                         properties["can_pulse_guide"] = True
                         properties["is_pulse_guiding"] = await self.get(c, "IsPulseGuiding", False)
 
-                    properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+                    # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
                     # logger.debug(
                     #     f"Alpaca camera status: connected={connected}, ccd_temperature={ccd_temperature}, "
                     #     f"bin_x={bin_x}, bin_y={bin_y}, {properties_str}"

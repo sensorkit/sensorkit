@@ -31,6 +31,8 @@ class AlpacaSafetyMonitor(AlpacaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(AlpacaSafetyMonitorState)
             logger.debug(f"restored state for {device.entity}")
@@ -38,24 +40,31 @@ class AlpacaSafetyMonitor(AlpacaDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = AlpacaSafetyMonitorState()
 
+        # Initialize the safety monitor
         await self.safety_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the safety monitor
         await self.safety_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.safety_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def safety_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.safety_connect(sk.Connect())
         self.monitor = SafetyMonitor(self.address, self.config.device_number, self.config.protocol)
         await self.safety_connect(sk.Connect())
 
     @sk.command_handler
     async def safety_deinit(self, cmd: sk.Deinit):
-        await self.safety_disconnect(sk.Disconnect())
+        pass
 
     @sk.command_handler
     async def safety_connect(self, cmd: sk.Connect):

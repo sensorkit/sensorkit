@@ -19,6 +19,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
+from sensorkit.astro.common import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
     FrameTarget,
@@ -87,6 +88,8 @@ class AlpacaTelescope(AlpacaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(AlpacaTelescopeState)
             logger.debug(f"restored state for {device.entity}")
@@ -97,10 +100,15 @@ class AlpacaTelescope(AlpacaDevice):
         self._tracking: bool | None = None
         self._slewing: bool | None = None
         self._fast_status_task: asyncio.Task | None = None
+        self._geodetic: Geodetic | None = None
+        self._location: EarthLocation | None = None
 
     @sk.on_detach
     async def entity_deinit(self):
+        # Deinitialize the telescope
         await self.telescope_deinit(sk.Deinit())
+
+        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
         await self.mount_disconnect(sk.Disconnect())
@@ -108,6 +116,7 @@ class AlpacaTelescope(AlpacaDevice):
 
     @sk.command_handler
     async def telescope_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.telescope_connect(sk.Connect())
         self.telescope = Telescope(self.address, self.config.device_number, self.config.protocol)
         await self.telescope_connect(sk.Connect())
@@ -141,7 +150,7 @@ class AlpacaTelescope(AlpacaDevice):
         self._alignment_mode = _ALIGNMENT_MODES.get(await self.get(t, "AlignmentMode", -1))
         self._does_refraction = await self.get(t, "DoesRefraction", None)
 
-        # Read and publish site position
+        # Site location
         self._site_lat = await self.get(t, "SiteLatitude", None)
         self._site_lon = await self.get(t, "SiteLongitude", None)
         self._site_elev = await self.get(t, "SiteElevation", None)
@@ -153,17 +162,27 @@ class AlpacaTelescope(AlpacaDevice):
                     altitude_km=(self._site_elev or 0.0) / 1000.0,
                 )
             )
-        self._location = EarthLocation(
-            lat=self._site_lat * u.deg,
-            lon=self._site_lon * u.deg,
-            height=self._site_elev * u.m,
-        )
+            self._geodetic = Geodetic(
+                lon=self._site_lon,
+                lat=self._site_lat,
+                elev=self._site_elev,
+            )
+            self._location = EarthLocation(
+                lat=self._site_lat * u.deg,
+                lon=self._site_lon * u.deg,
+                height=(self._site_elev) * u.m,
+            )
+            logger.debug(
+                f"site info: lat={self._site_lat}, lon={self._site_lon}, "
+                f"height={self._site_elev} m"
+            )
 
         # Read available tracking rates
         self._tracking_rates = await self.get(t, "TrackingRates", [])
 
         self.start_status_loop(self.status_publish_slow())
 
+        # Home, as needed
         if not self.state.has_been_homed:
             self.telescope_home(sk.Home())
 

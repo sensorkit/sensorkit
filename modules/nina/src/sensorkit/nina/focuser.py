@@ -31,6 +31,8 @@ class NinaFocuser(NinaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(NinaFocuserState)
             logger.debug(f"restored state for {device.entity}")
@@ -40,28 +42,35 @@ class NinaFocuser(NinaDevice):
 
         self.focuser_position: float | None = None
 
+        # Initialize the focuser
         await self.focuser_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.focuser_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the focuser
         await self.focuser_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.focuser_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def focuser_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.focuser_connect(sk.Connect())
         await self.focuser_connect(sk.Connect())
 
     @sk.command_handler
     async def focuser_deinit(self, cmd: sk.Deinit):
         await self.focuser_stop(sk.Stop())
-        await self.focuser_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def focuser_connect(self, cmd: sk.Connect):
@@ -85,6 +94,7 @@ class NinaFocuser(NinaDevice):
         await self.require_connected()
         position = int(cmd.position)
         logger.debug(f"changing focuser to {position}")
+
         await self.client.get("/equipment/focuser/move", position=position)
 
         async with asyncio.timeout(self.config.timeout):
@@ -92,7 +102,7 @@ class NinaFocuser(NinaDevice):
                 info = await self.info("focuser")
                 if not info.get("IsMoving", True):
                     break
-                await asyncio.sleep(self.config.status_frequency)
+                await asyncio.sleep(0.5)
 
         logger.debug(f"changed focuser to {self.focuser_position}")
 

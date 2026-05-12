@@ -20,6 +20,8 @@ class PWI4Rotator(PWI4Device):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(PWI4RotatorState)
             logger.debug(f"restored state for {device.entity}")
@@ -29,21 +31,29 @@ class PWI4Rotator(PWI4Device):
 
         self.rotator_position: float | None = None
 
+        # Initialize the rotator
         await self.rotator_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.rotator_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the rotator
         await self.rotator_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.rotator_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def rotator_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.rotator_connect(sk.Connect())
         await self.rotator_connect(sk.Connect())
         await self.rotator_enable(sk.Enable())
@@ -52,7 +62,6 @@ class PWI4Rotator(PWI4Device):
     async def rotator_deinit(self, cmd: sk.Deinit):
         await self.rotator_stop(sk.Stop())
         await self.rotator_disable(sk.Disable())
-        await self.rotator_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def rotator_connect(self, cmd: sk.Connect):
@@ -106,7 +115,7 @@ class PWI4Rotator(PWI4Device):
         logger.debug("stopped rotator")
 
     @sk.command_handler
-    async def rotator_change(self, cmd: sk.ChangeRotatorPosition):
+    async def rotator_change(self, cmd: ChangeRotatorPosition):
         await self.require_connected()
         logger.debug(f"changing rotator to position {cmd.position}°")
 

@@ -30,6 +30,8 @@ class NinaRotator(NinaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(NinaRotatorState)
             logger.debug(f"restored state for {device.entity}")
@@ -39,28 +41,35 @@ class NinaRotator(NinaDevice):
 
         self.rotator_position: float | None = None
 
+        # Initialize rotator
         await self.rotator_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.rotator_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the rotator
         await self.rotator_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.rotator_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def rotator_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.rotator_connect(sk.Connect())
         await self.rotator_connect(sk.Connect())
 
     @sk.command_handler
     async def rotator_deinit(self, cmd: sk.Deinit):
         await self.rotator_stop(sk.Stop())
-        await self.rotator_disconnect(sk.Disconnect())
 
     @sk.command_handler
     async def rotator_connect(self, cmd: sk.Connect):
@@ -84,11 +93,20 @@ class NinaRotator(NinaDevice):
         await self.require_connected()
         target = cmd.position
         logger.debug(f"changing rotator to position {target:.1f}°")
+
         await self.client.get(
             "/equipment/rotator/move",
             positionAngle=target,
             waitToFinish=True,
         )
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                info = await self.info("rotator")
+                if not info.get("IsMoving", True):
+                    break
+                await asyncio.sleep(1)
+
         logger.debug(f"changed rotator to position {self.rotator_position:.1f}°")
 
     async def status_publish(self):

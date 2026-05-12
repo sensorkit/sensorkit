@@ -33,6 +33,8 @@ class NinaSwitch(NinaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(NinaSwitchDeviceState)
             logger.debug(f"restored state for {device.entity}")
@@ -40,13 +42,19 @@ class NinaSwitch(NinaDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NinaSwitchDeviceState()
 
-        self.start_status_loop(self.status_publish())
+        # Initialize the switch
         await self.switch_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the switch
         await self.switch_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.switch_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
@@ -56,7 +64,7 @@ class NinaSwitch(NinaDevice):
 
     @sk.command_handler
     async def switch_deinit(self, cmd: sk.Deinit):
-        await self.switch_disconnect(sk.Disconnect())
+        pass
 
     @sk.command_handler
     async def switch_connect(self, cmd: sk.Connect):

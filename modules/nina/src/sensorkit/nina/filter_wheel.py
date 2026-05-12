@@ -21,6 +21,8 @@ class NinaFilterWheel(NinaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(NinaFilterWheelState)
             logger.debug(f"restored state for {device.entity}")
@@ -30,21 +32,29 @@ class NinaFilterWheel(NinaDevice):
 
         self.filter_wheel_position: int | None = None
 
+        # Initialize the filter wheel
         await self.filter_wheel_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.filter_wheel_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the filter wheel
         await self.filter_wheel_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.filter_wheel_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def filter_wheel_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.filter_wheel_connect(sk.Connect())
         await self.filter_wheel_connect(sk.Connect())
 
@@ -61,15 +71,14 @@ class NinaFilterWheel(NinaDevice):
         await sk.device().publish(
             Filters(
                 filters=[
-                    Filter(name=f.get("Name", str(i)), position=f.get("Id", i))
-                    for i, f in enumerate(available)
+                    Filter(name=f.get("Name", str(i)), position=f.get("Id", i)) for i, f in enumerate(available)
                 ]
             )
         )
 
     @sk.command_handler
     async def filter_wheel_deinit(self, cmd: sk.Deinit):
-        await self.filter_wheel_disconnect(sk.Disconnect())
+        pass
 
     @sk.command_handler
     async def filter_wheel_connect(self, cmd: sk.Connect):
@@ -96,7 +105,6 @@ class NinaFilterWheel(NinaDevice):
         logger.debug(f"changing filter to {filter_id}")
         await self.client.get("/equipment/filterwheel/change-filter", filterId=filter_id)
 
-        # Wait for filter change to complete
         async with asyncio.timeout(self.config.timeout):
             while True:
                 info = await self.info("filterwheel")

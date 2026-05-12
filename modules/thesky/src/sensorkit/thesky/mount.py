@@ -15,7 +15,7 @@ from astropy.utils import iers
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.astro.common import TLE
+from sensorkit.astro.common import TLE, Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
     EphemerisTarget,
@@ -71,6 +71,7 @@ class TheSkyMount(TheSkyDevice):
     async def entity_init(self):
         device = sk.device()
 
+        # Restore state
         try:
             self.state = await device.kv_get_model(TheSkyMountState)
             logger.debug(f"restored state for {device.entity}")
@@ -102,15 +103,29 @@ class TheSkyMount(TheSkyDevice):
             ];
             """
         )
-        latitude, longitude, time_zone, elevation = [float(x) for x in resp.split(",")]
-        longitude = -longitude if time_zone < 0 else longitude
+        self._site_lat, self._site_lon, time_zone, self._site_elev = [float(x) for x in resp.split(",")]
+        self._site_lon = -self._site_lon if time_zone < 0 else self._site_lon
+        self._geodetic = Geodetic(
+            lon=self._site_lon,
+            lat=self._site_lat,
+            elev=self._site_elev,
+        )
         self._location = EarthLocation(
-            lat=latitude * u.deg, lon=longitude * u.deg, height=elevation * u.m
+            lat=self._site_lat * u.deg,
+            lon=self._site_lon * u.deg,
+            height=(self._site_elev) * u.m,
+        )
+        logger.debug(
+            f"site info: lat={self._site_lat}, lon={self._site_lon}, "
+            f"height={self._site_elev} m"
         )
 
     @sk.on_detach
     async def entity_deinit(self):
+        # Deinitialize the mount
         await self.mount_deinit(sk.Deinit())
+
+        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
         await self.mount_disconnect(sk.Disconnect())
@@ -118,11 +133,13 @@ class TheSkyMount(TheSkyDevice):
 
     @sk.command_handler
     async def mount_init(self, cmd: sk.Init):
+        # Connect to the hardware
         self._reconnect = lambda: self.mount_connect(sk.Connect())
 
         await self.mount_connect(sk.Connect())
         self.start_status_loop(self.status_publish_slow())
 
+        # Home, as needed
         if not self.state.has_been_homed:
             await self.mount_home(sk.Home())
 

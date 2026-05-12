@@ -58,6 +58,8 @@ class NinaGuider(NinaDevice):
     @sk.on_attach
     async def entity_init(self):
         device = sk.device()
+
+        # Restore state
         try:
             self.state = await device.kv_get_model(NinaGuiderState)
             logger.debug(f"restored state for {device.entity}")
@@ -65,13 +67,19 @@ class NinaGuider(NinaDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NinaGuiderState()
 
+        # Initialize the guider
         await self.guider_init(sk.Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
-        await self.stop_status_loop()
+        # Deinitialize the guider
         await self.guider_deinit(sk.Deinit())
+
+        # Clean up, disconnect
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.guider_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
@@ -81,11 +89,7 @@ class NinaGuider(NinaDevice):
 
     @sk.command_handler
     async def guider_deinit(self, cmd: sk.Deinit):
-        try:
-            await self.client.get("/equipment/guider/stop")
-        except Exception:
-            pass
-        await self.guider_disconnect(sk.Disconnect())
+        await self.client.get("/equipment/guider/stop")
 
     @sk.command_handler
     async def guider_connect(self, cmd: sk.Connect):
