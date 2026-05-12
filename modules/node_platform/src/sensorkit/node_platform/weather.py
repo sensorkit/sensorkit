@@ -63,11 +63,11 @@ class NodePlatformWeather(NodePlatformDevice):
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformWeatherState()
 
+        await self.weather_init(sk.Init())
         self.start_status_loop(self.status_publish())
         async with asyncio.timeout(self.config.timeout):
             while self.device_connected is None:
                 await asyncio.sleep(self.config.status_frequency)
-        await self.weather_init(sk.Init())
 
     @sk.on_detach
     async def entity_deinit(self):
@@ -90,12 +90,14 @@ class NodePlatformWeather(NodePlatformDevice):
 
         # Set the configured operation mode on the Node Platform.
         #
-        # ASSISTED mode: the Node Platform controls opening/closing of the enclosure shutter based on
-        # its internal safety status. SensorKit publishes the safety status and operation mode as
-        # keywords, which can be used as agent constraints to shutdown the controller if needed.
+        # ASSISTED mode: the Node Platform closes the shutter on unsafe conditions,
+        # but does NOT auto-open on safe — the enclosure module temporarily
+        # switches to MANUAL to perform opens/closes, then restores ASSISTED (if configured)
+        # so unsafe-close still works. SensorKit publishes safety/mode keywords for
+        # agent constraints.
         #
-        # MANUAL mode: SensorKit is responsible for opening/closing the enclosure shutter based on
-        # its own constraint monitoring (e.g. weather constraints in the agent config).
+        # MANUAL mode: SensorKit is fully responsible for opening/closing the
+        # shutter via its own constraint monitoring.
         if self.config.operation_mode == "assisted":
             await self.api.call("v1_enable_assisted_operation")
             logger.debug("set Node Platform to ASSISTED mode")

@@ -151,12 +151,6 @@ class NodePlatformEnclosure(NodePlatformDevice):
     async def enclosure_open(self, cmd: OpenEnclosure):
         await self.require_connected()
 
-        if self.config.operation_mode == "assisted":
-            logger.warning(
-                "Rejecting enclosure open (Node Platform controls shutter in ASSISTED mode)"
-            )
-            return
-
         # Ensure we're not moving
         async with asyncio.timeout(self.config.timeout):
             while self.shutter_state in (
@@ -169,27 +163,33 @@ class NodePlatformEnclosure(NodePlatformDevice):
             ):
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("opening enclosure")
-        req = osapi.V1OpenEnclosureShuttersRequest(ignore_safety=False)
-        await self.api.call("v1_open_enclosure_shutters", req)
-        await asyncio.sleep(0.1)
+        # ASSISTED mode no longer auto-opens on safe — switch to MANUAL mode for the
+        # open, then restore ASSISTED (if configured) so unsafe-close behavior is preserved.
+        assisted = self.config.operation_mode == "assisted"
+        try:
+            if assisted:
+                await self.api.call("v1_enable_manual_operation")
+                logger.debug("switched Node Platform to MANUAL mode for enclosure open")
 
-        async with asyncio.timeout(self.config.timeout):
-            while self.shutter_state is not EnclosureShutterState.OPENED:
-                await asyncio.sleep(self.config.status_frequency)
+            logger.debug("opening enclosure")
+            req = osapi.V1OpenEnclosureShuttersRequest(ignore_safety=False)
+            await self.api.call("v1_open_enclosure_shutters", req)
+            await asyncio.sleep(0.1)
 
-        logger.debug("opened enclosure")
+            async with asyncio.timeout(self.config.timeout):
+                while self.shutter_state is not EnclosureShutterState.OPENED:
+                    await asyncio.sleep(self.config.status_frequency)
+
+            logger.debug("opened enclosure")
+        finally:
+            if assisted:
+                await self.api.call("v1_enable_assisted_operation")
+                logger.debug("restored Node Platform to ASSISTED mode")
 
     @sk.command_handler
     async def enclosure_close(self, cmd: CloseEnclosure):
         await self.require_connected()
 
-        if self.config.operation_mode == "assisted":
-            logger.warning(
-                "Rejecting enclosure close (Node Platform controls shutter in ASSISTED mode)"
-            )
-            return
-
         # Ensure we're not moving
         async with asyncio.timeout(self.config.timeout):
             while self.shutter_state in (
@@ -202,15 +202,27 @@ class NodePlatformEnclosure(NodePlatformDevice):
             ):
                 await asyncio.sleep(self.config.status_frequency)
 
-        logger.debug("closing enclosure")
-        await self.api.call("v1_close_enclosure_shutters")
-        await asyncio.sleep(0.1)
+        # ASSISTED mode auto-closes on unsafe but ignores explicit close requests
+        # — switch to MANUAL mode for the close, then restore ASSISTED (if configured).
+        assisted = self.config.operation_mode == "assisted"
+        try:
+            if assisted:
+                await self.api.call("v1_enable_manual_operation")
+                logger.debug("switched Node Platform to MANUAL mode for enclosure close")
 
-        async with asyncio.timeout(self.config.timeout):
-            while self.shutter_state is not EnclosureShutterState.CLOSED:
-                await asyncio.sleep(self.config.status_frequency)
+            logger.debug("closing enclosure")
+            await self.api.call("v1_close_enclosure_shutters")
+            await asyncio.sleep(0.1)
 
-        logger.debug("closed enclosure")
+            async with asyncio.timeout(self.config.timeout):
+                while self.shutter_state is not EnclosureShutterState.CLOSED:
+                    await asyncio.sleep(self.config.status_frequency)
+
+            logger.debug("closed enclosure")
+        finally:
+            if assisted:
+                await self.api.call("v1_enable_assisted_operation")
+                logger.debug("restored Node Platform to ASSISTED mode")
 
     async def status_publish(self):
         while True:
