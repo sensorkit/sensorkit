@@ -222,7 +222,13 @@ class PWI4Mount(PWI4Device):
     @sk.command_handler
     async def mount_deinit(self, cmd: sk.Deinit):
         if not self.device_connected:
-            return
+            # Init may not have run, but mount may still be tracking from a failed run.
+            # Connect so we can ensure it's parked.
+            try:
+                await self.mount_connect(sk.Connect())
+            except Exception:
+                logger.warning("Unable to connect mount for Deinit park; skipping")
+                return
 
         self._stop_fast_status()
         await self.mount_stop(sk.Stop())
