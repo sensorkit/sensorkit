@@ -294,13 +294,7 @@ class PWI4Mount(PWI4Device):
 
         await self.client.request("/mount/stop")
 
-        async with asyncio.timeout(self.config.timeout):
-            await self.client.poll(
-                lambda s: (
-                    not self.client.get_bool(s, "mount.is_slewing")
-                    and not self.client.get_bool(s, "mount.is_tracking")
-                ),
-            )
+        await self._wait_for_mount()
 
         self._stop_fast_status()
         logger.debug("stopped mount")
@@ -346,15 +340,16 @@ class PWI4Mount(PWI4Device):
 
         await self.client.request("/mount/park")
 
-        async with asyncio.timeout(self.config.timeout):
-            await self.client.poll(
-                lambda s: (
-                    not self.client.get_bool(s, "mount.is_slewing")
-                    and not self.client.get_bool(s, "mount.is_tracking")
-                ),
-            )
+        await self._wait_for_mount()
 
         logger.debug("parked mount")
+
+    @sk.command_handler
+    async def mount_set_park_position(self, cmd: sk.SetParkPosition):
+        await self.require_connected()
+        logger.debug("setting park position")
+        await self.client.request("/mount/set_park_here")
+        logger.debug("set park position")
 
     @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
@@ -387,16 +382,11 @@ class PWI4Mount(PWI4Device):
                         "dec_degs": target.coords.dec,
                     },
                 )
+                await asyncio.sleep(1)
 
-                await self.client.poll(
-                    lambda s: (
-                        not self.client.get_bool(s, "mount.is_slewing")
-                        and self.client.get_bool(s, "mount.is_tracking")
-                    ),
-                    delay=1,
-                )
-
+                await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
+
                 logger.debug("following RADec target")
 
             case AltAzTarget():
@@ -409,11 +399,10 @@ class PWI4Mount(PWI4Device):
                         "az_degs": target.coords.az,
                     },
                 )
+                await asyncio.sleep(1)
 
-                await self.client.poll(
-                    lambda s: not self.client.get_bool(s, "mount.is_slewing"),
-                    delay=1,
-                )
+                await self._wait_for_mount(tracking=False)
+                self._start_fast_status()
 
                 logger.debug("following AltAz target")
 
@@ -428,16 +417,11 @@ class PWI4Mount(PWI4Device):
                         "line3": target.tle.line2,
                     },
                 )
+                await asyncio.sleep(1)
 
-                await self.client.poll(
-                    lambda s: (
-                        not self.client.get_bool(s, "mount.is_slewing")
-                        and self.client.get_bool(s, "mount.is_tracking")
-                    ),
-                    delay=1,
-                )
-
+                await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
+
                 logger.debug("following TLE target")
 
             case RateTarget():
@@ -451,13 +435,9 @@ class PWI4Mount(PWI4Device):
                         "dec_degs": target.initial_coords.dec,
                     },
                 )
-                await self.client.poll(
-                    lambda s: (
-                        not self.client.get_bool(s, "mount.is_slewing")
-                        and self.client.get_bool(s, "mount.is_tracking")
-                    ),
-                    delay=1,
-                )
+                await asyncio.sleep(1)
+
+                await self._wait_for_mount(tracking=True)
 
                 # Apply offset rates (degrees/sec -> arcsec/sec)
                 await self.client.request(
@@ -467,8 +447,8 @@ class PWI4Mount(PWI4Device):
                         "dec_set_rate_arcsec_per_sec": target.rates.dec * 3600,
                     },
                 )
-
                 self._start_fast_status()
+
                 logger.debug("following Rate target")
 
             case EphemerisTarget():
@@ -485,16 +465,11 @@ class PWI4Mount(PWI4Device):
                         },
                     )
                 await self.client.request("/mount/radecpath/apply")
+                await asyncio.sleep(1)
 
-                await self.client.poll(
-                    lambda s: (
-                        not self.client.get_bool(s, "mount.is_slewing")
-                        and self.client.get_bool(s, "mount.is_tracking")
-                    ),
-                    delay=1,
-                )
-
+                await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
+
                 logger.debug("following Ephemeris target")
 
             case FrameTarget():
@@ -503,16 +478,12 @@ class PWI4Mount(PWI4Device):
                         self._stop_fast_status()
                         logger.debug("disabling tracking")
                         await self.client.request("/mount/tracking_off")
-                        await self.client.poll(
-                            lambda s: not self.client.get_bool(s, "mount.is_tracking"),
-                        )
+                        await self._wait_for_mount(tracking=False)
                         logger.debug("disabled tracking")
                     case ReferenceFrame.ICRF:
                         logger.debug("enabling sidereal tracking")
                         await self.client.request("/mount/tracking_on")
-                        await self.client.poll(
-                            lambda s: self.client.get_bool(s, "mount.is_tracking"),
-                        )
+                        await self._wait_for_mount(tracking=True)
                         self._start_fast_status()
                         logger.debug("enabled sidereal tracking")
 
@@ -617,6 +588,26 @@ class PWI4Mount(PWI4Device):
         logger.debug("loading model")
         await self.client.request("/mount/model/load", params={"filename": cmd.filename})
         logger.debug("loaded model")
+
+    async def _wait_for_mount(
+        self,
+        *,
+        slewing: bool = False,
+        tracking: bool = False,
+    ):
+        """Poll /status until mount.is_slewing and mount.is_tracking both match.
+
+        Bounded by config.timeout; polls every 0.2 s.
+        """
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                st = await self.client.status()
+                is_slewing = self.client.get_bool(st, "mount.is_slewing")
+                is_tracking = self.client.get_bool(st, "mount.is_tracking")
+                if is_slewing == slewing and is_tracking == tracking:
+                    break
+                await asyncio.sleep(0.2)
 
     def _start_fast_status(self):
         if self._fast_status_task is None or self._fast_status_task.done():

@@ -144,15 +144,18 @@ class NinaMount(NinaDevice):
         await self.disconnect("mount")
         await sk.device().publish(Connected(is_connected=False))
 
-    async def mount_unpark(self):
+    @sk.command_handler
+    async def mount_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("unparking mount")
+        logger.debug("stopping mount")
 
-        info = await self.info("mount")
-        if info.get("AtPark", False):
-            await self.client.get("/equipment/mount/unpark")
+        await self.client.get("/equipment/mount/slew/stop")
+        await self.client.get("/equipment/mount/tracking", enabled=False)
 
-        logger.debug("unparked mount")
+        await self._wait_for_mount()
+
+        self._stop_fast_status()
+        logger.debug("stopped mount")
 
     @sk.command_handler
     async def mount_home(self, cmd: sk.Home):
@@ -173,24 +176,12 @@ class NinaMount(NinaDevice):
                 info = await self.info("mount")
                 if info.get("AtHome", False) and not info.get("Slewing", True):
                     break
-                await asyncio.sleep(self.config.status_frequency_slow)
+                await asyncio.sleep(0.2)
 
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
 
         logger.debug("homed mount")
-
-    @sk.command_handler
-    async def mount_stop(self, cmd: sk.Stop):
-        await self.require_connected()
-        logger.debug("stopping mount")
-
-        await self.client.get("/equipment/mount/slew/stop")
-        await self.client.get("/equipment/mount/tracking", enabled=False)
-        self._tracking = False
-
-        self._stop_fast_status()
-        logger.debug("stopped mount")
 
     @sk.command_handler
     async def mount_park(self, cmd: sk.MoveToPark):
@@ -204,14 +195,26 @@ class NinaMount(NinaDevice):
                 info = await self.info("mount")
                 if info.get("AtPark", False):
                     break
-                await asyncio.sleep(self.config.status_frequency_slow)
+                await asyncio.sleep(0.2)
 
         logger.debug("parked mount")
 
     @sk.command_handler
-    async def mount_set_park(self, cmd: sk.SetParkPosition):
+    async def mount_set_park_position(self, cmd: sk.SetParkPosition):
         await self.require_connected()
+        logger.debug("setting park position")
         await self.client.get("/equipment/mount/set-park-position")
+        logger.debug("set park position")
+
+    async def mount_unpark(self):
+        await self.require_connected()
+        logger.debug("unparking mount")
+
+        info = await self.info("mount")
+        if info.get("AtPark", False):
+            await self.client.get("/equipment/mount/unpark")
+
+        logger.debug("unparked mount")
 
     @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
@@ -239,7 +242,6 @@ class NinaMount(NinaDevice):
                 dec_deg = target.coords.dec
 
                 await self.client.get("/equipment/mount/tracking", enabled=True)
-                self._tracking = True
 
                 await self.client.get(
                     "/equipment/mount/slew-radec",
@@ -247,8 +249,11 @@ class NinaMount(NinaDevice):
                     dec=dec_deg,
                     waitToFinish=True,
                 )
+                await asyncio.sleep(1)
 
+                await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
+
                 logger.debug("following RADec target")
 
             case AltAzTarget():
@@ -263,6 +268,10 @@ class NinaMount(NinaDevice):
                     azimuth=az_deg,
                     waitToFinish=True,
                 )
+                await asyncio.sleep(1)
+
+                await self._wait_for_mount(tracking=False)
+                self._start_fast_status()
 
                 logger.debug("following AltAz target")
 
@@ -292,15 +301,17 @@ class NinaMount(NinaDevice):
                     dec_deg = adapted.coords.dec
 
                     await self.client.get("/equipment/mount/tracking", enabled=True)
-                    self._tracking = True
                     await self.client.get(
                         "/equipment/mount/slew-radec",
                         ra=ra_hours,
                         dec=dec_deg,
                         waitToFinish=True,
                     )
+                    await asyncio.sleep(1)
 
+                    await self._wait_for_mount(tracking=True)
                     self._start_fast_status()
+
                     logger.debug("following TLE target")
                 else:
                     logger.warning(f"Could not adapt TLE to ICRSTarget: {type(adapted).__name__}")
@@ -310,17 +321,38 @@ class NinaMount(NinaDevice):
                     self._stop_fast_status()
                     logger.debug("disabling tracking")
                     await self.client.get("/equipment/mount/tracking", enabled=False)
-                    self._tracking = False
+                    await self._wait_for_mount()
                     logger.debug("disabled tracking")
                 else:
                     logger.debug("enabling sidereal tracking")
                     await self.client.get("/equipment/mount/tracking", enabled=True)
-                    self._tracking = True
+                    await self._wait_for_mount(tracking=True)
                     self._start_fast_status()
                     logger.debug("enabled sidereal tracking")
 
             case _:
                 logger.warning(f"Unsupported target type: {type(target).__name__}")
+
+    async def _wait_for_mount(
+        self,
+        *,
+        slewing: bool = False,
+        tracking: bool = False,
+    ):
+        """Poll /equipment/mount/info until Slewing and Tracking both match.
+
+        Bounded by config.timeout; polls every 0.2 s.
+        """
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                info = await self.info("mount")
+                if (
+                    info.get("Slewing", False) == slewing
+                    and info.get("Tracking", False) == tracking
+                ):
+                    break
+                await asyncio.sleep(0.2)
 
     def _start_fast_status(self):
         if self._fast_status_task is None or self._fast_status_task.done():

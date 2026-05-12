@@ -233,6 +233,8 @@ class AlpacaTelescope(AlpacaDevice):
             await self.put(self.telescope, "Tracking", False)
             self._tracking = False
 
+        self._wait_for_mount()
+
         self._stop_fast_status()
         logger.debug("stopped mount")
 
@@ -249,8 +251,11 @@ class AlpacaTelescope(AlpacaDevice):
         await asyncio.sleep(self.config.status_frequency_slow)
 
         async with asyncio.timeout(self.config.timeout):
-            while self._slewing is None or self._slewing:
-                await asyncio.sleep(self.config.status_frequency_slow)
+            while True:
+                at_home = await self.get(self.telescope, "AtHome", False)
+                if at_home:
+                    break
+                await asyncio.sleep(0.2)
 
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
@@ -273,17 +278,19 @@ class AlpacaTelescope(AlpacaDevice):
                 at_park = await self.get(self.telescope, "AtPark", False)
                 if at_park:
                     break
-                await asyncio.sleep(self.config.status_frequency_slow)
+                await asyncio.sleep(0.2)
 
         logger.debug("parked mount")
 
     @sk.command_handler
-    async def telescope_set_park(self, cmd: sk.SetParkPosition):
+    async def telescope_set_park_position(self, cmd: sk.SetParkPosition):
         await self.require_connected()
         if not self._can_set_park:
             logger.warning("Cannot set park")
             return
+        logger.debug("setting park position")
         await self.call(self.telescope, "SetPark")
+        logger.debug("set park position")
 
     def _resolve_tle_position_and_rates(self, tle_target: TLETarget):
         """Compute current ICRS position and RA/Dec offset rates from a TLE.
@@ -369,13 +376,11 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
                 elif self._can_slew:
                     await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
-                async with asyncio.timeout(self.config.timeout):
-                    while self._slewing is None or self._slewing:
-                        await asyncio.sleep(self.config.status_frequency_slow)
-
+                await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
+
                 logger.debug("following RADec target")
 
             case AltAzTarget():
@@ -388,11 +393,10 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.call(self.telescope, "SlewToAltAzAsync", az_deg, alt_deg)
                 elif self._can_slew_altaz:
                     await asyncio.to_thread(self.telescope.SlewToAltAz, az_deg, alt_deg)
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
-                async with asyncio.timeout(self.config.timeout):
-                    while self._slewing is None or self._slewing:
-                        await asyncio.sleep(self.config.status_frequency_slow)
+                await self._wait_for_mount()
+                await self._start_fast_status()
 
                 logger.debug("following AltAz target")
 
@@ -412,18 +416,16 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
                 elif self._can_slew:
                     await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
-                async with asyncio.timeout(self.config.timeout):
-                    while self._slewing is None or self._slewing:
-                        await asyncio.sleep(self.config.status_frequency_slow)
+                await self._wait_for_mount(tracking=True)
 
                 if self._can_set_right_ascension_rate:
                     await self.put(self.telescope, "RightAscensionRate", ra_rate)
                 if self._can_set_declination_rate:
                     await self.put(self.telescope, "DeclinationRate", dec_rate)
-
                 self._start_fast_status()
+
                 logger.debug("following TLE target")
 
             case RateTarget():
@@ -441,11 +443,9 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
                 elif self._can_slew:
                     await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
-                async with asyncio.timeout(self.config.timeout):
-                    while self._slewing is None or self._slewing:
-                        await asyncio.sleep(self.config.status_frequency_slow)
+                await self._wait_for_mount(tracking=True)
 
                 # Apply offset rates
                 # ASCOM RightAscensionRate: seconds of RA per sidereal second
@@ -457,8 +457,8 @@ class AlpacaTelescope(AlpacaDevice):
                 if self._can_set_declination_rate:
                     dec_rate = target.rates.dec * 3600.0
                     await self.put(self.telescope, "DeclinationRate", dec_rate)
-
                 self._start_fast_status()
+
                 logger.debug("following Rate target")
 
             case FrameTarget():
@@ -486,6 +486,25 @@ class AlpacaTelescope(AlpacaDevice):
             case _:
                 track_type = type(cmd.target).__name__
                 raise NotImplementedError(f"{track_type} tracking via Alpaca is not supported")
+
+    async def _wait_for_mount(
+        self,
+        *,
+        slewing: bool = False,
+        tracking: bool = False,
+    ):
+        """Poll the telescope until Slewing and Tracking both match.
+
+        Bounded by config.timeout; polls every 0.2 s.
+        """
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                is_slewing = await self.get(self.telescope, "Slewing", False)
+                is_tracking = await self.get(self.telescope, "Tracking", False)
+                if is_slewing == slewing and is_tracking == tracking:
+                    break
+                await asyncio.sleep(0.2)
 
     def _start_fast_status(self):
         if self._fast_status_task is None or self._fast_status_task.done():

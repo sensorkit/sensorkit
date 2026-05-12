@@ -203,7 +203,7 @@ class TheSkyMount(TheSkyDevice):
         )
 
         async with asyncio.timeout(self.config.timeout):
-            await self.poll("""sky6RASCOMTele.IsTracking;""", "0")
+            await self.poll("""sky6RASCOMTele.IsTracking;""", "0", interval=0.2)
 
         self._stop_fast_status()
         logger.debug("stopped mount")
@@ -255,7 +255,7 @@ class TheSkyMount(TheSkyDevice):
         )
 
         async with asyncio.timeout(self.config.timeout):
-            await self.poll("""sky6RASCOMTele.IsParked();""", "false")
+            await self.poll("""sky6RASCOMTele.IsParked();""", "false", interval=0.2)
 
         logger.debug("unparked mount")
 
@@ -326,9 +326,9 @@ class TheSkyMount(TheSkyDevice):
                 )
 
                 async with asyncio.timeout(self.config.timeout):
-                    await self.poll("""sky6RASCOMTele.IsTracking;""", "1")
-
+                    await self.poll("""sky6RASCOMTele.IsTracking;""", "1", interval=0.2)
                 self._start_fast_status()
+
                 logger.debug("following RADec target")
 
             case AltAzTarget():
@@ -345,7 +345,8 @@ class TheSkyMount(TheSkyDevice):
                 )
 
                 async with asyncio.timeout(self.config.timeout):
-                    await self.poll("""sky6RASCOMTele.IsSlewComplete;""", "1")
+                    await self.poll("""sky6RASCOMTele.IsSlewComplete;""", "1", interval=0.2)
+                self._start_fast_status()
 
                 logger.debug("following AltAz target")
 
@@ -425,9 +426,9 @@ class TheSkyMount(TheSkyDevice):
                 logger.debug(f"TLE follow Find diagnostic for {designator}: {result}")
 
                 async with asyncio.timeout(self.config.timeout):
-                    await self.poll("""Raven3.trackLEOStatus;""", "6")
-
+                    await self.poll("""Raven3.trackLEOStatus;""", "6", interval=0.2)
                 self._start_fast_status()
+
                 logger.debug("tracking TLE follow")
 
             case RateTarget():
@@ -445,7 +446,7 @@ class TheSkyMount(TheSkyDevice):
                 )
 
                 async with asyncio.timeout(self.config.timeout):
-                    await self.poll("""sky6RASCOMTele.IsTracking;""", "1")
+                    await self.poll("""sky6RASCOMTele.IsTracking;""", "1", interval=0.2)
 
                 # Apply custom offset rates (degrees/sec -> arcsec/sec)
                 ra_rate_arcsec = cmd.target.rates.ra * 3600
@@ -455,8 +456,8 @@ class TheSkyMount(TheSkyDevice):
                     sky6RASCOMTele.SetTracking(1, 0, {ra_rate_arcsec}, {dec_rate_arcsec});
                     """
                 )
-
                 self._start_fast_status()
+
                 logger.debug("following rate target")
 
             case StateVectorTarget():
@@ -490,7 +491,7 @@ class TheSkyMount(TheSkyDevice):
                             """
                         )
                         async with asyncio.timeout(self.config.timeout):
-                            await self.poll("""sky6RASCOMTele.IsTracking;""", "1")
+                            await self.poll("""sky6RASCOMTele.IsTracking;""", "1", interval=0.2)
                         self._start_fast_status()
                         logger.debug("enabled sidereal tracking")
 

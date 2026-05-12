@@ -46,7 +46,7 @@ nina = [
     "python-dotenv",
 ]
 node-platform = [
-    "ourskyai-node-platform-api",
+    "ourskyai-node-platform-api>=1.4.61",
     "python-dotenv",
 ]
 otto = [

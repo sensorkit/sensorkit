@@ -174,11 +174,9 @@ class NodePlatformMount(NodePlatformDevice):
         logger.debug("stopping mount")
 
         await self.api.call("v1_halt_mount")
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(1)
 
-        async with asyncio.timeout(self.config.timeout):
-            while self.mount_slewing is None or self.mount_slewing:
-                await asyncio.sleep(self.config.status_frequency_slow)
+        await self._wait_for_mount()
 
         self._stop_fast_status()
         logger.debug("stopped mount")
@@ -189,11 +187,9 @@ class NodePlatformMount(NodePlatformDevice):
         logger.debug("homing mount")
 
         await self.api.call("v1_mount_go_to_home")
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(1)
 
-        async with asyncio.timeout(self.config.timeout):
-            while self.mount_slewing is None or self.mount_slewing:
-                await asyncio.sleep(self.config.status_frequency_slow)
+        await self._wait_for_mount()
 
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
@@ -207,13 +203,18 @@ class NodePlatformMount(NodePlatformDevice):
 
         self._stop_fast_status()
         await self.api.call("v1_park_mount")
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(1)
 
-        async with asyncio.timeout(self.config.timeout):
-            while self.mount_slewing is None or self.mount_slewing:
-                await asyncio.sleep(self.config.status_frequency_slow)
+        await self._wait_for_mount()
 
         logger.debug("parked mount")
+
+    @sk.command_handler
+    async def mount_set_park_position(self, cmd: sk.SetParkPosition):
+        await self.require_connected()
+        logger.debug("setting park position")
+        await self.api.call("v1_set_mount_park_position_here")
+        logger.debug("set park position")
 
     @sk.command_handler
     async def mount_follow_target(self, cmd: sk.FollowTarget):
@@ -225,7 +226,7 @@ class NodePlatformMount(NodePlatformDevice):
             (FrameTarget, ReferenceFrame.ICRF),
             (FrameTarget, ReferenceFrame.ALTAZ),
             TLETarget,
-            (RateTarget, ReferenceFrame.ICRF),
+            (RateTarget, ReferenceFrame.CIRF),
             (EphemerisTarget, ReferenceFrame.ICRF),
             observer=self._geodetic,
         )
@@ -239,12 +240,10 @@ class NodePlatformMount(NodePlatformDevice):
                     dec=target.coords.dec,
                 )
                 await self.api.call("v1_go_to_mount_coordinates", req)
-                self._start_fast_status()
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
-                async with asyncio.timeout(self.config.timeout):
-                    while self.mount_tracking is None or not self.mount_tracking:
-                        await asyncio.sleep(self.config.status_frequency_fast)
+                await self._wait_for_mount(tracking=True)
+                self._start_fast_status()
 
                 logger.debug("following RA/Dec target")
 
@@ -256,12 +255,10 @@ class NodePlatformMount(NodePlatformDevice):
                     azimuth=target.coords.az,
                 )
                 await self.api.call("v1_go_to_mount_coordinates", req)
-                self._start_fast_status()
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
-                async with asyncio.timeout(self.config.timeout):
-                    while self.mount_slewing is None or self.mount_slewing:
-                        await asyncio.sleep(self.config.status_frequency_fast)
+                await self._wait_for_mount(tracking=False)
+                self._start_fast_status()
 
                 logger.debug("following Alt/Az target")
 
@@ -273,12 +270,10 @@ class NodePlatformMount(NodePlatformDevice):
                     tle_line2=target.tle.line2,
                 )
                 await self.api.call("v1_mount_follow_tle", req)
-                self._start_fast_status()
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
-                async with asyncio.timeout(self.config.timeout):
-                    while self.mount_tracking is None or not self.mount_tracking:
-                        await asyncio.sleep(self.config.status_frequency_fast)
+                await self._wait_for_mount(tracking=True)
+                self._start_fast_status()
 
                 logger.debug("following TLE target")
 
@@ -308,12 +303,10 @@ class NodePlatformMount(NodePlatformDevice):
                     ra_dec_samples=samples,
                 )
                 await self.api.call("v1_start_mount_track_path", req)
-                self._start_fast_status()
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
-                async with asyncio.timeout(self.config.timeout):
-                    while self.mount_tracking is None or not self.mount_tracking:
-                        await asyncio.sleep(self.config.status_frequency_fast)
+                await self._wait_for_mount(tracking=True)
+                self._start_fast_status()
 
                 logger.debug("following Rate target")
 
@@ -333,12 +326,10 @@ class NodePlatformMount(NodePlatformDevice):
                     ra_dec_samples=samples,
                 )
                 await self.api.call("v1_start_mount_track_path", req)
-                self._start_fast_status()
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(1)
 
-                async with asyncio.timeout(self.config.timeout):
-                    while self.mount_tracking is None or not self.mount_tracking:
-                        await asyncio.sleep(self.config.status_frequency_fast)
+                await self._wait_for_mount(tracking=True)
+                self._start_fast_status()
 
                 logger.debug("following Ephemeris target")
 
@@ -348,23 +339,13 @@ class NodePlatformMount(NodePlatformDevice):
                         logger.debug("disabling tracking")
                         self._stop_fast_status()
                         await self.api.call("v1_disable_mount_tracking")
-                        async with asyncio.timeout(self.config.timeout):
-                            while (
-                                self.mount_slewing is None
-                                or self.mount_slewing
-                                or self.mount_tracking is None
-                                or self.mount_tracking
-                            ):
-                                await asyncio.sleep(self.config.status_frequency_slow)
+                        await self._wait_for_mount(tracking=False)
                         logger.debug("disabled tracking")
                     case ReferenceFrame.ICRF:
                         logger.debug("enabling sidereal tracking")
                         await self.api.call("v1_enable_mount_tracking")
+                        await self._wait_for_mount(tracking=True)
                         self._start_fast_status()
-                        await asyncio.sleep(0.1)
-                        async with asyncio.timeout(self.config.timeout):
-                            while self.mount_tracking is None or not self.mount_tracking:
-                                await asyncio.sleep(self.config.status_frequency_fast)
                         logger.debug("enabled sidereal tracking")
 
                     case _:
@@ -375,6 +356,24 @@ class NodePlatformMount(NodePlatformDevice):
                 raise NotImplementedError(
                     f"{track_type} tracking via Node Platform is not supported"
                 )
+
+    async def _wait_for_mount(
+        self,
+        *,
+        slewing: bool = False,
+        tracking: bool = False,
+    ):
+        """Poll v2_get_mount_status until is_slewing and is_tracking both match.
+
+        Bounded by config.timeout; polls every 0.2 s.
+        """
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
+                if status.is_slewing == slewing and status.is_tracking == tracking:
+                    break
+                await asyncio.sleep(0.2)
 
     def _start_fast_status(self):
         if self._fast_status_task is None or self._fast_status_task.done():

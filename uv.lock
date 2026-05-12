@@ -1423,7 +1423,7 @@ wheels = [
 
 [[package]]
 name = "ourskyai-node-platform-api"
-version = "1.3.11360"
+version = "1.4.61"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
@@ -1431,9 +1431,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1b/74/3691dfcf75dddfeeaee2574769fb1f8e624bf22656ab4e917af12936b616/ourskyai_node_platform_api-1.3.11360.tar.gz", hash = "sha256:0252477d8fc57b212b8ceb11c41142c005b0dfb9a0c32869e3cda3a16ef74e37", size = 295746, upload-time = "2026-04-24T00:19:22.029Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/76/2d/bce7f76d938babbf98bd6d5dded51d8d00c2fab10fca74123b61f45e7966/ourskyai_node_platform_api-1.4.61.tar.gz", hash = "sha256:c1f704bb895271114e35de5f31010f5e03c77686c5c2242c61cd84360da7c501", size = 302512, upload-time = "2026-05-12T18:40:32.408Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/27/54/05a56a9ca25f4efd02f076749ce1a1211ade3006e64d612b630c92b3d529/ourskyai_node_platform_api-1.3.11360-py3-none-any.whl", hash = "sha256:1d19146af70e8d793b82a13b0bd5de83f3c14ef72a42adba25ca7a33e0db9d8c", size = 695465, upload-time = "2026-04-24T00:19:25.057Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/86/8b9fe55d84b898925fedafa89915affc336fb9f806146295c4aa2607bc39/ourskyai_node_platform_api-1.4.61-py3-none-any.whl", hash = "sha256:15f0bd4c2607616df7c2eda7812e76cdede6335bdeadc1be5342b08361ec1780", size = 711790, upload-time = "2026-05-12T18:40:36.405Z" },
 ]
 
 [[package]]
@@ -2210,7 +2210,7 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'sky-transmission'" },
     { name = "nats-py", specifier = "~=2.13" },
     { name = "numpy", marker = "extra == 'alpaca'", specifier = ">=1.24.0" },
-    { name = "ourskyai-node-platform-api", marker = "extra == 'node-platform'" },
+    { name = "ourskyai-node-platform-api", marker = "extra == 'node-platform'", specifier = ">=1.4.61" },
     { name = "pillow", specifier = ">=12.0.0" },
     { name = "pillow", marker = "extra == 'sky-transmission'" },
     { name = "pydantic", specifier = "~=2.11" },

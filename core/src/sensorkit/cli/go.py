@@ -1,4 +1,6 @@
 import asyncio
+import os
+import signal
 import textwrap
 
 import asyncclick as click
@@ -68,6 +70,17 @@ class ServiceConfig(BaseModel):
     metavar="name:module[:entrypoint]",
     help="Service name and entrypoint spec",
 )
+@click.option(
+    "--shutdown-timeout",
+    type=float,
+    default=180.0,
+    help=(
+        "Max seconds per service for graceful shutdown. Bounds the entire deinit "
+        "phase (entity @sk.on_detach callbacks) plus backend teardown. Pick a value "
+        "that comfortably covers your slowest hardware deinit (e.g. dome close, "
+        "mount park)."
+    ),
+)
 async def go_command(
     daemon: bool,
     restart: bool,
@@ -76,6 +89,7 @@ async def go_command(
     log_file_append: bool,
     log_level: str,
     add_service: tuple[str],
+    shutdown_timeout: float,
 ):
     """Launch and manage services."""
     import yaml
@@ -164,11 +178,47 @@ async def go_command(
         click.secho("No services defined!", fg="red", err=True)
         return
 
+    FORCE_QUIT_PRESSES = 3
+
+    async def install_escalation_handler():
+        # `run_services` installs its own SIGINT/SIGTERM handler synchronously before its
+        # first await. By the time this task gets to run, that handler is in place; we
+        # wrap it to add per-press feedback and a force-quit escape hatch.
+        await asyncio.sleep(0)
+        inner = signal.getsignal(signal.SIGINT)
+        count = 0
+
+        def escalate(sig, frame):
+            nonlocal count
+            count += 1
+            remaining = FORCE_QUIT_PRESSES - count
+
+            if count == 1:
+                logger.info(
+                    f"Shutdown signal received; allowing up to ~{shutdown_timeout * 2:.0f}s "
+                    f"per service for clean shutdown. "
+                    f"Press Ctrl-C {remaining} more times to force quit."
+                )
+                if callable(inner):
+                    inner(sig, frame)
+            elif count < FORCE_QUIT_PRESSES:
+                logger.warning(
+                    f"Shutdown in progress — press Ctrl-C {remaining} more time"
+                    f"{'s' if remaining != 1 else ''} to force quit"
+                )
+            else:
+                logger.error("Force quit")
+                os._exit(130)  # 128 + SIGINT
+
+        signal.signal(signal.SIGINT, escalate)
+        signal.signal(signal.SIGTERM, escalate)
+
     async def run():
+        asyncio.create_task(install_escalation_handler())
         await run_services(
             entrypoints,
             max_restarts=-1 if restart else 0,
-            shutdown_timeout=300.0,
+            shutdown_timeout=shutdown_timeout,
         )
 
     await handle_errors(run)
