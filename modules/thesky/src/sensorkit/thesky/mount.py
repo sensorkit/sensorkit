@@ -220,11 +220,13 @@ class TheSkyMount(TheSkyDevice):
         await self.require_connected()
         logger.debug("parking mount")
 
-        await self.execute(
-            """
-            sky6RASCOMTele.ParkAndDoNotDisconnect();
-            """
-        )
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                try:
+                    await self.execute("""sky6RASCOMTele.ParkAndDoNotDisconnect();""")
+                    break
+                except MountCommandInProgressError:
+                    await asyncio.sleep(0.5)
 
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6RASCOMTele.IsParked();""", "true")
