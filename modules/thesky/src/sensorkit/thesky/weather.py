@@ -48,10 +48,9 @@ class TheSkyWeather(TheSkyDevice):
         # Deinitialize the weather
         await self.weather_deinit(sk.Deinit())
 
-        # Clean up, disconnect
+        # Clean up, do not disconnect, else GoodToGo timer resets
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.weather_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
