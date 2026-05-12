@@ -22,6 +22,7 @@ from sensorkit.std.instrument import (
     ConfigureCameraSensor,
 )
 from sensorkit.thesky.device import (
+    ProcessAbortedError,
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
@@ -365,6 +366,9 @@ class TheSkyCamera(TheSkyDevice):
                     ];
                     """
                 )
+            except ProcessAbortedError:
+                # TheSky returns 212 transiently after an `abort`; camera is fine
+                pass
             except Exception as e:
                 logger.exception(f"Error in status_publish execute: {e}")
                 await asyncio.sleep(self.config.status_frequency)
