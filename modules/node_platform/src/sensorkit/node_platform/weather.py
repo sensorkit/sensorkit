@@ -110,24 +110,13 @@ class NodePlatformWeather(NodePlatformDevice):
     async def status_publish(self):
         while True:
             try:
-                weather_kw = await self._build_weather_keywords()
+                weather_kw, safety_kw = await self._build_weather_keywords()
                 if weather_kw is not None:
                     device = sk.device()
                     await device.publish(Connected(is_connected=True))
 
-                    # Safety status (independent of BasicWeather)
-                    try:
-                        safety: osapi.V1SafetyStatus = await self.api.call("v1_get_safety_status")
-                        await device.publish(
-                            Safety(
-                                is_safe=safety.is_safe,
-                                is_weather_safe=safety.is_weather_safe,
-                                is_all_sky_safe=safety.is_all_sky_safe,
-                                is_night=safety.is_night,
-                            )
-                        )
-                    except Exception as e:
-                        logger.warning(f"Safety status unavailable: {e}")
+                    if safety_kw is not None:
+                        await device.publish(safety_kw)
 
                     # Operation mode (allows agent to constrain on mode changes)
                     try:
@@ -152,6 +141,7 @@ class NodePlatformWeather(NodePlatformDevice):
 
     async def _build_weather_keywords(self):
         fields: dict[str, float | bool | None] = {}
+        safety_kw: Safety | None = None
 
         # 1. Weather station connected check
         try:
@@ -160,11 +150,11 @@ class NodePlatformWeather(NodePlatformDevice):
             )
             self.device_connected = ws_status.connected
             if not ws_status.connected:
-                return None
+                return None, None
         except Exception as e:
             logger.debug(f"Weather station status unavailable: {e}")
             self.device_connected = False
-            return None
+            return None, None
 
         # 2. Live weather metrics via system metrics endpoint
         try:
@@ -208,15 +198,31 @@ class NodePlatformWeather(NodePlatformDevice):
         except Exception as e:
             logger.debug(f"System metrics unavailable: {e}")
 
+        # 3. Safety status (independent of BasicWeather)
+        try:
+            safety: osapi.V1SafetyStatus = await self.api.call("v1_get_safety_status")
+            safety_kw = Safety(
+                is_safe=safety.is_safe,
+                is_weather_safe=safety.is_weather_safe,
+                is_all_sky_safe=safety.is_all_sky_safe,
+                is_night=safety.is_night,
+            )
+        except Exception as e:
+            logger.warning(f"Safety status unavailable: {e}")
+
         status_parts = [f"connected={self.device_connected}"]
         status_parts.extend(f"{k}={v:.3f}" for k, v in fields.items())
-        # logger.debug(f"NodePlatform weather status: {', '.join(status_parts)}")
+        if safety_kw is not None:
+            status_parts.extend(
+                f"{k}={v}" for k, v in safety_kw.model_dump().items()
+            )
+        logger.debug(f"NodePlatform weather status: {', '.join(status_parts)}")
 
         try:
-            return sk.BasicWeather(**fields)
+            return sk.BasicWeather(**fields), safety_kw
         except Exception as e:
             logger.warning(f"Failed to build BasicWeather model: {e}")
-            return None
+            return None, safety_kw
 
 
 class NodePlatformWeatherConfig(NodePlatformDeviceConfig[NodePlatformWeather]):
