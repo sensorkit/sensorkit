@@ -325,7 +325,7 @@ class AlpacaDome(AlpacaDevice):
                     if self._can_sync_azimuth:
                         properties["can_sync_azimuth"] = True
 
-                    properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+                    # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
                     # logger.debug(
                     #     f"Alpaca dome status: connected={connected}, shutter_status={shutter_status}, "
                     #     f"slewing={slewing}, {properties_str}"
