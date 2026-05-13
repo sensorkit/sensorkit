@@ -8,6 +8,7 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected, Enabled
 from sensorkit.pwi4.device import PWI4Client, PWI4Device, PWI4DeviceConfig, PWI4DeviceState
+from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
 
 
 @sk.declare_device
