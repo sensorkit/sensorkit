@@ -294,8 +294,8 @@ class NodePlatformMount(NodePlatformDevice):
                     ),
                     osapi.V1MountTrackPathRaDecSample(
                         julian_day=Time(t1).jd,
-                        ra_degrees=p0.ra + target.rates.ra * duration,
-                        dec_degrees=p0.dec + target.rates.dec * duration,
+                        ra_degrees=(p0.ra + target.rates.ra * duration) % 360,
+                        dec_degrees=max(-90.0, min(90.0, p0.dec + target.rates.dec * duration)),
                     ),
                 ]
                 req = osapi.V1StartMountTrackPathRequest(
