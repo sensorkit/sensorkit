@@ -112,7 +112,7 @@ class AlpacaCoverCalibrator(AlpacaDevice):
     @sk.command_handler
     async def cover_calibrator_deinit(self, cmd: sk.Deinit):
         await self.cover_calibrator_stop(sk.Stop())
-        await self.cover_close(CloseMirrorCover())
+        await self.cover_calibrator_close(CloseMirrorCover())
 
     @sk.command_handler
     async def cover_calibrator_connect(self, cmd: sk.Connect):

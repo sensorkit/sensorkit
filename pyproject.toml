@@ -60,7 +60,7 @@ pwi4 = [
     "httpx",
 ]
 sky-transmission = [
-    "allclear",
+    "allclear @ git+ssh://git@github.com/zgazak/allclear.git@main",
     "alpyca>=3.1.0",
     "Pillow",
     "imageio[pyav]",
@@ -68,6 +68,9 @@ sky-transmission = [
     "fastapi>=0.115.12",
     "uvicorn>=0.34.0",
     "matplotlib",
+]
+senpai = [
+    "senpai @ git+ssh://git@github.com/zgazak/senpai.git@big-optimize",
 ]
 slack = [
     "slack-sdk",
@@ -143,6 +146,7 @@ layers = [
     sensorkit.node_platform |
     sensorkit.otto |
     sensorkit.pwi4 |
+    sensorkit.senpai |
     sensorkit.sky_transmission |
     sensorkit.slack |
     sensorkit.thesky
@@ -158,6 +162,9 @@ layers = [
     "sensorkit.common",
 ]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.version]
 source = "vcs"
 
@@ -171,6 +178,7 @@ dev-mode-dirs = [
     "modules/node_platform/src",
     "modules/otto/src",
     "modules/pwi4/src",
+    "modules/senpai/src",
     "modules/slack/src",
     "modules/sky_transmission/src",
     "modules/thesky/src",
@@ -186,6 +194,7 @@ modules = [
     "node_platform",
     "otto",
     "pwi4",
+    "senpai",
     "sky_transmission",
     "slack",
     "thesky",

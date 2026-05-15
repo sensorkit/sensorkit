@@ -111,7 +111,7 @@ class AlpacaTelescope(AlpacaDevice):
         # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
-        await self.mount_disconnect(sk.Disconnect())
+        await self.telescope_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
@@ -205,7 +205,7 @@ class AlpacaTelescope(AlpacaDevice):
             # Init may not have run, but mount may still be tracking from a failed run.
             # Connect so we can ensure it's parked.
             try:
-                await self.mount_connect(sk.Connect())
+                await self.telescope_connect(sk.Connect())
             except Exception:
                 logger.warning("Unable to connect mount for Deinit park; skipping")
                 return
@@ -527,7 +527,7 @@ class AlpacaTelescope(AlpacaDevice):
     def _fast_status_active(self) -> bool:
         return self._fast_status_task is not None and not self._fast_status_task.done()
 
-    async def _publish_mount_status(self):
+    async def _publish_telescope_status(self):
         _SIDEREAL_RATE_DEG_S = 15.04107 / 3600.0
 
         t = self.telescope
@@ -614,7 +614,7 @@ class AlpacaTelescope(AlpacaDevice):
 
                 # Only publish pointing/rates if fast loop isn't handling it
                 if not self._fast_status_active:
-                    await self._publish_mount_status()
+                    await self._publish_telescope_status()
 
                 tracking_rate = await self.get(t, "TrackingRate", None)
 
@@ -669,7 +669,7 @@ class AlpacaTelescope(AlpacaDevice):
     async def status_publish_fast(self):
         while True:
             try:
-                await self._publish_mount_status()
+                await self._publish_telescope_status()
             except Exception as e:
                 logger.warning(f"Error in fast telescope status publish ({e})")
                 await asyncio.sleep(self.config.status_frequency_fast)
