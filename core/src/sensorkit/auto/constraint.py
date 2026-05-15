@@ -255,6 +255,15 @@ class SafetyConstraint(Constraint):
     kind: Literal["safety"] = "safety"
     provider: str
     time_to_live: float = 30.0
+    hold_duration: float = 0.0
+
+    async def _hold_and_clear(self, evaluator: ConstraintEvaluator):
+        await asyncio.sleep(self.hold_duration)
+        logger.info(f"Clearing safety constraint from {self.provider} (hold period expired)")
+        evaluator.active.clear()
+        await evaluator._notify(ConstraintStatus(
+            constraint_kind=self.kind, active=False, reason="hold period expired", provider=self.provider,
+        ))
 
     @override
     async def check_task(self, evaluator: ConstraintEvaluator, kit: SensorKit):
@@ -266,30 +275,60 @@ class SafetyConstraint(Constraint):
         stream = await asyncio.wait_for(
             provider.monitor(BasicSafety), timeout=self.time_to_live
         )
+        hold_task: asyncio.Task | None = None
+        from_data = False  # tracks whether active was set by a measurement vs. a timeout
 
         while True:
             try:
                 async with asyncio.timeout(self.time_to_live) as timeout:
                     async for _, safety in stream:
                         if not safety.is_safe:
-                            if not evaluator.active.is_set():
+                            # Cancel any pending hold timer
+                            if hold_task is not None and not hold_task.done():
+                                hold_task.cancel()
+                                hold_task = None
+                                logger.info(
+                                    f"Safety hold reset: provider {self.provider} reported unsafe again"
+                                )
+                            was_clear = not evaluator.active.is_set()
+                            if was_clear:
                                 logger.info(f"Setting safety constraint from {self.provider}")
                                 await evaluator._notify(ConstraintStatus(
                                     constraint_kind=self.kind, active=True, reason="unsafe", provider=self.provider,
                                 ))
                             evaluator.active.set()
+                            # Only flip from_data on a real clear→active transition. A confirming
+                            # sample on an already-set constraint (fail-closed init, stale-cache
+                            # replay, repeated unsafe) must not poison the flag.
+                            if was_clear:
+                                from_data = True
                         else:
                             if evaluator.active.is_set():
-                                logger.info(f"Clearing safety constraint from {self.provider}")
-                                await evaluator._notify(ConstraintStatus(
-                                    constraint_kind=self.kind, active=False, reason="safe", provider=self.provider,
-                                ))
-                            evaluator.active.clear()
+                                if self.hold_duration > 0 and from_data:
+                                    if hold_task is None or hold_task.done():
+                                        logger.info(
+                                            f"Safety cleared from {self.provider}, "
+                                            f"holding constraint for {self.hold_duration}s"
+                                        )
+                                        hold_task = asyncio.create_task(self._hold_and_clear(evaluator))
+                                else:
+                                    logger.info(f"Clearing safety constraint from {self.provider}")
+                                    await evaluator._notify(ConstraintStatus(
+                                        constraint_kind=self.kind, active=False, reason="safe", provider=self.provider,
+                                    ))
+                                    evaluator.active.clear()
+                                    from_data = False
 
                         evaluator.ready.set()
 
                         timeout.reschedule(asyncio.get_running_loop().time() + self.time_to_live)
             except TimeoutError:
+                # The active state we're about to assert came from a timeout, not a measurement,
+                # so the next safe sample shouldn't be held back by hold_duration.
+                from_data = False
+                if hold_task is not None and not hold_task.done():
+                    hold_task.cancel()
+                    hold_task = None
                 reason = f"no data for {self.time_to_live}s"
                 if not evaluator.active.is_set():
                     logger.info(f"Setting safety constraint from {self.provider} ({reason})")
