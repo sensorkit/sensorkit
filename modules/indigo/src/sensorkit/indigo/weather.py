@@ -14,7 +14,7 @@ from sensorkit.indigo.device import (
     IndigoProperty,
 )
 from sensorkit.models.devices import Connected
-from sensorkit.std.weather import BasicWeather
+from sensorkit.std.weather import BasicWeather, StandardWeather
 
 
 @sk.declare_keyword
@@ -81,7 +81,7 @@ def _active_switch(prop: IndigoProperty) -> str | None:
     return None
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardWeather)
 class IndigoWeather(IndigoDevice):
     """INDIGO AUX weather device.
 

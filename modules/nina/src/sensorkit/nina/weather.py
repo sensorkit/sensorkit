@@ -8,10 +8,10 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
-from sensorkit.std.weather import BasicWeather
+from sensorkit.std.weather import BasicWeather, StandardWeather
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardWeather)
 class NinaWeather(NinaDevice):
     """NINA ObservingConditions implementation."""
 

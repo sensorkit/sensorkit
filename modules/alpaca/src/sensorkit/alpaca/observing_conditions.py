@@ -14,7 +14,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceState,
 )
 from sensorkit.models.devices import Connected
-from sensorkit.std.weather import BasicWeather
+from sensorkit.std.weather import BasicWeather, StandardWeather
 
 
 @sk.declare_keyword
@@ -32,7 +32,7 @@ class AlpacaObservingConditionsStatus(BaseModel):
     time_since_last_update: dict[str, float] | None = None
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardWeather)
 class AlpacaObservingConditions(AlpacaDevice):
     """Alpaca ObservingConditions implementation."""
 

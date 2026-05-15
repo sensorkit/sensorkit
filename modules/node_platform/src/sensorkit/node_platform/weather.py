@@ -10,11 +10,13 @@ from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected
+from sensorkit.models.safety import BasicSafety, StandardSafety
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
     NodePlatformDeviceState,
 )
+from sensorkit.std.weather import StandardWeather
 
 # Map Node Platform system metric names to sk.BasicWeather() field names.
 _METRIC_FIELD_MAP: dict[str, str] = {
@@ -34,13 +36,14 @@ class OperationMode(BaseModel):
 
 @sk.declare_keyword
 class Safety(BaseModel):
-    is_safe: bool
+    """Node Platform extended safety status. The summary ``is_safe`` flag is published
+    separately via ``BasicSafety``; this keyword carries the breakdown."""
     is_weather_safe: bool
     is_all_sky_safe: bool
     is_night: bool
 
 
-@sk.declare_device
+@sk.declare_device(traits=[StandardWeather, StandardSafety])
 class NodePlatformWeather(NodePlatformDevice):
     """Node Platform Weather Station implementation.
 
@@ -119,12 +122,19 @@ class NodePlatformWeather(NodePlatformDevice):
     async def status_publish(self):
         while True:
             try:
-                weather_kw, safety_kw = await self._build_weather_keywords()
+                weather_kw, basic_safety_kw, safety_kw = await self._build_weather_keywords()
                 if weather_kw is not None:
                     device = sk.device()
                     await device.publish(Connected(is_connected=True))
 
+                    if basic_safety_kw is not None:
+                        # Standard go/no-go signal — what the StandardSafety archetype
+                        # asserts and what WeatherConstraint / SafetyConstraint consume.
+                        await device.publish(basic_safety_kw)
+
                     if safety_kw is not None:
+                        # Node Platform's breakdown of the safety signal (weather vs.
+                        # all-sky vs. day/night). Supplementary to BasicSafety.
                         await device.publish(safety_kw)
 
                     # Operation mode (allows agent to constrain on mode changes)
@@ -150,6 +160,7 @@ class NodePlatformWeather(NodePlatformDevice):
 
     async def _build_weather_keywords(self):
         fields: dict[str, float | bool | None] = {}
+        basic_safety_kw: BasicSafety | None = None
         safety_kw: Safety | None = None
 
         # 1. Weather station connected check
@@ -159,11 +170,11 @@ class NodePlatformWeather(NodePlatformDevice):
             )
             self.device_connected = ws_status.connected
             if not ws_status.connected:
-                return None, None
+                return None, None, None
         except Exception as e:
             logger.debug(f"Weather station status unavailable: {e}")
             self.device_connected = False
-            return None, None
+            return None, None, None
 
         # 2. Live weather metrics via system metrics endpoint
         try:
@@ -207,11 +218,13 @@ class NodePlatformWeather(NodePlatformDevice):
         except Exception as e:
             logger.debug(f"System metrics unavailable: {e}")
 
-        # 3. Safety status (independent of BasicWeather)
+        # 3. Safety status (independent of BasicWeather). The summary go/no-go flag
+        # goes into BasicSafety (the SK-standard keyword); the per-source breakdown
+        # goes into our local Safety keyword.
         try:
             safety: osapi.V1SafetyStatus = await self.api.call("v1_get_safety_status")
+            basic_safety_kw = BasicSafety(is_safe=safety.is_safe)
             safety_kw = Safety(
-                is_safe=safety.is_safe,
                 is_weather_safe=safety.is_weather_safe,
                 is_all_sky_safe=safety.is_all_sky_safe,
                 is_night=safety.is_night,
@@ -221,6 +234,8 @@ class NodePlatformWeather(NodePlatformDevice):
 
         status_parts = [f"connected={self.device_connected}"]
         status_parts.extend(f"{k}={v:.3f}" for k, v in fields.items())
+        if basic_safety_kw is not None:
+            status_parts.append(f"is_safe={basic_safety_kw.is_safe}")
         if safety_kw is not None:
             status_parts.extend(
                 f"{k}={v}" for k, v in safety_kw.model_dump().items()
@@ -228,10 +243,10 @@ class NodePlatformWeather(NodePlatformDevice):
         logger.debug(f"NodePlatform weather status: {', '.join(status_parts)}")
 
         try:
-            return sk.BasicWeather(**fields), safety_kw
+            return sk.BasicWeather(**fields), basic_safety_kw, safety_kw
         except Exception as e:
             logger.warning(f"Failed to build BasicWeather model: {e}")
-            return None, safety_kw
+            return None, basic_safety_kw, safety_kw
 
 
 class NodePlatformWeatherConfig(NodePlatformDeviceConfig[NodePlatformWeather]):

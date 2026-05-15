@@ -4,10 +4,10 @@ import asyncio
 from typing import Literal, override
 
 from loguru import logger
-from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected
+from sensorkit.models.safety import BasicSafety, StandardSafety
 from sensorkit.thesky.device import (
     TheSkyDevice,
     TheSkyDeviceConfig,
@@ -15,12 +15,7 @@ from sensorkit.thesky.device import (
 )
 
 
-@sk.declare_keyword
-class GoodToGo(BaseModel):
-    is_good_to_go: bool
-
-
-@sk.declare_device
+@sk.declare_device(type=StandardSafety)
 class TheSkyWeather(TheSkyDevice):
     """TheSky Weather implementation."""
 
@@ -48,7 +43,7 @@ class TheSkyWeather(TheSkyDevice):
         # Deinitialize the weather
         await self.weather_deinit(sk.Deinit())
 
-        # Clean up, do not disconnect, else GoodToGo timer resets
+        # Clean up, do not disconnect, else the safety timer resets
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await sk.device().kv_put_model(self.state)
@@ -120,19 +115,19 @@ class TheSkyWeather(TheSkyDevice):
                 continue
 
             try:
-                connected, good_to_go = [float(x) for x in resp.split(",")]
+                connected, is_safe = [float(x) for x in resp.split(",")]
 
                 connected = bool(connected)
                 self.device_connected = connected
-                good_to_go = bool(good_to_go)
+                is_safe = bool(is_safe)
 
                 # logger.debug(
-                #     f"TheSky weather status: connected={connected}, good_to_go={good_to_go}"
+                #     f"TheSky weather status: connected={connected}, is_safe={is_safe}"
                 # )
 
                 device = sk.device()
                 await device.publish(Connected(is_connected=connected))
-                await device.publish(GoodToGo(is_good_to_go=good_to_go))
+                await device.publish(BasicSafety(is_safe=is_safe))
 
             except Exception as e:
                 logger.warning(f"Failed to update TheSky weather status ({e})")
