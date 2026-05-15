@@ -94,7 +94,7 @@ class OttoProgram:
             logger.info(f"Loaded {len(self.state.whitelist)} objects from initial config")
 
         # Watch for live config changes
-        self.program.task_group.create_task(self._watch_config())
+        self.program.perpetual_group.create_task(self._watch_config())
 
         # Initialize list manager
         self.list_manager = ObjectListManager(self.state, self._save_state)

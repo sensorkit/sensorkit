@@ -62,6 +62,48 @@ async def _scoped_waiter(aw: Awaitable) -> AsyncGenerator[asyncio.Task]:
                 fut.exception()
 
 
+class PerpetualGroup:
+    """A TaskGroup wrapper for tasks that should be force-cancelled at shutdown.
+
+    Use this for perpetual background work — infinite-loop monitors, lifecycle
+    drivers, polling tasks — where exiting the ``async with`` block normally
+    must *not* wait for children to complete on their own (because they never
+    will). ``cancel_all()`` triggers cancellation; the underlying ``TaskGroup``
+    then drains the cancelled tasks via its normal ``__aexit__``.
+
+    Use ``asyncio.TaskGroup`` directly for tasks that represent bounded work
+    that should be politely awaited on shutdown.
+    """
+
+    def __init__(self):
+        self._tasks: set[asyncio.Task] = set()
+        self._tg = asyncio.TaskGroup()
+
+    async def __aenter__(self):
+        await self._tg.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return await self._tg.__aexit__(exc_type, exc_val, exc_tb)
+
+    def create_task(self, coro, *, name: str | None = None):
+        """Schedule *coro* in the group, tracking the task for cancel_all()."""
+        t = self._tg.create_task(coro, name=name)
+        self._tasks.add(t)
+        t.add_done_callback(self._tasks.discard)
+        return t
+
+    def cancel_all(self):
+        """Cancel every tracked task.
+
+        TaskGroup does not treat CancelledError as a failure, so after this
+        call the group's ``__aexit__`` will drain the cancelled tasks and
+        exit cleanly with no exception.
+        """
+        for t in list(self._tasks):
+            t.cancel()
+
+
 class AsyncValueLatch[T]:
     """Stores a value and stages pending changes."""
 

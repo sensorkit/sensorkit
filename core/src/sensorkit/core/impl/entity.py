@@ -32,12 +32,21 @@ class EntityImpl(EntityBase, EntityInterface):
             sensorkit=context.sensorkit(),
             entity=Entity.at(entity),
             task_group=context.task_group,
+            perpetual_group=context.perpetual_group,
         )
 
-    def __init__(self, sensorkit: SensorKit, entity: Entity, *, task_group: asyncio.TaskGroup):
+    def __init__(
+        self,
+        sensorkit: SensorKit,
+        entity: Entity,
+        *,
+        task_group: asyncio.TaskGroup,
+        perpetual_group,
+    ):
         super().__init__(sensorkit, entity)
         self._data_graph: DataGraph | None = None
         self._task_group = task_group
+        self._perpetual_group = perpetual_group
 
     async def init_impl(self):
         """Perform one-time initialization of this service binding."""
@@ -58,6 +67,11 @@ class EntityImpl(EntityBase, EntityInterface):
     @property
     def task_group(self):
         return self._task_group
+
+    @override
+    @property
+    def perpetual_group(self):
+        return self._perpetual_group
 
     @override
     async def emit_event(self, event: Event):
