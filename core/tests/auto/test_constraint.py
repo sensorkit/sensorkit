@@ -44,7 +44,9 @@ async def test_constraint_evaluator():
     ev = c.make_evaluator()
 
     assert not ev.ready.is_set()
-    assert not ev.active.is_set()
+    # Constraints fail-closed by default: active is set on init and only cleared
+    # once a positive observation confirms safe conditions.
+    assert ev.active.is_set()
 
     async with asyncio.TaskGroup() as tg:
         ev.start(task_group=tg)
@@ -257,7 +259,8 @@ def test_safety_constraint_model():
 
     ev = c.make_evaluator()
     assert not ev.ready.is_set()
-    assert not ev.active.is_set()
+    # Fail-closed default — see test_constraint_evaluator.
+    assert ev.active.is_set()
 
 
 def test_safety_constraint_custom_ttl():

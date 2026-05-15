@@ -50,7 +50,12 @@ class ConstraintEvaluator:
     def __init__(self, constraint: Constraint):
         self.constraint = constraint
         self.ready = asyncio.Event()
+        # Fail-closed default: a constraint starts active and is only cleared once positive,
+        # fresh data confirms the condition is safe. This way, a check_task that crashes
+        # before its first observation (or never gets one) leaves the controller constrained
+        # rather than free to operate.
         self.active = asyncio.Event()
+        self.active.set()
         self._task: asyncio.Task | None = None
         self._on_change: Callable[[ConstraintStatus], Awaitable[None]] | None = None
 
@@ -113,7 +118,10 @@ class WeatherConstraint(Constraint):
             return True, ", ".join(exceeded)
 
         # Clear only when ALL parameters are below their deadband-adjusted thresholds.
-        # If any parameter is in the deadband zone, stay in the current state.
+        # If any parameter is in the deadband zone, stay in the current state. The original
+        # version of this check used `or` instead of `and` — that would clear the constraint
+        # as soon as any single metric dropped below its deadband, even while another metric
+        # was still over its max. Don't reintroduce that.
         all_cleared = (
             weather.humidity < self.humidity_max - self.humidity_deadband
             and weather.wind_speed < self.wind_max - self.wind_deadband
@@ -149,13 +157,19 @@ class WeatherConstraint(Constraint):
             if hold_task is not None and not hold_task.done():
                 hold_task.cancel()
                 hold_task = None
-            if not active.is_set():
+                logger.info(f"Weather hold reset: conditions worsened again ({reason})")
+            was_clear = not active.is_set()
+            if was_clear:
                 logger.info(f"Setting weather constraint ({reason})")
                 await evaluator._notify(ConstraintStatus(
                     constraint_kind=self.kind, active=True, reason=reason, provider=self.provider,
                 ))
             active.set()
-            return hold_task, True
+            # Only flip from_data=True on a real clear→active transition. A confirming sample
+            # on an already-set constraint (fail-closed init, stale-cache replay, or repeated
+            # exceedance) must not poison the flag, or the next clear would be held back by
+            # hold_duration on data we never actually saw fall and rise.
+            return hold_task, True if was_clear else from_data
         elif is_active is False and active.is_set():
             if self.hold_duration > 0 and from_data:
                 if hold_task is None or hold_task.done():
@@ -174,9 +188,12 @@ class WeatherConstraint(Constraint):
         logger.debug("monitoring weather constraints")
 
         # Get a client to the configured weather provider and monitor the weather stream. An error
-        # here is fatal, so we propagate the exception to blow up the calling ThreadGroup.
+        # here is fatal, so we propagate the exception to blow up the calling ThreadGroup. The
+        # timeout bound below ensures we fail-fast on a hung provider rather than wait forever.
         provider = kit.entity(self.provider)
-        stream = await provider.monitor(BasicWeather)
+        stream = await asyncio.wait_for(
+            provider.monitor(BasicWeather), timeout=self.time_to_live
+        )
         hold_task: asyncio.Task | None = None
         from_data = False  # tracks whether active was set by a measurement vs. a disconnect
 
@@ -214,8 +231,23 @@ class WeatherConstraint(Constraint):
             #        is to build the observer/multiplexer functionality into telemetry streams like
             #        we already do for event streams. Then we can just get an `asyncio.Queue` from
             #        the API.
-            stream = await provider.monitor(BasicWeather)
-            await anext(stream)  # consume the first value, which is not necessarily fresh
+            # Each reopen call is bounded by time_to_live so a hung provider can't deadlock us.
+            # The constraint is already active from the timeout handler above, so we keep it
+            # active across reopen attempts.
+            while True:
+                try:
+                    stream = await asyncio.wait_for(
+                        provider.monitor(BasicWeather), timeout=self.time_to_live
+                    )
+                    # Consume the first value, which is not necessarily fresh.
+                    await asyncio.wait_for(anext(stream), timeout=self.time_to_live)
+                    break
+                except TimeoutError:
+                    logger.warning(
+                        f"weather provider '{self.provider}' unresponsive during reopen; "
+                        f"keeping constraint active and retrying"
+                    )
+                    await asyncio.sleep(min(self.time_to_live, 5.0))
 
 
 class SafetyConstraint(Constraint):
@@ -229,7 +261,11 @@ class SafetyConstraint(Constraint):
         logger.debug(f"monitoring safety constraint from {self.provider}")
 
         provider = kit.entity(self.provider)
-        stream = await provider.monitor(BasicSafety)
+        # Bounded initial open: fail-fast on a hung provider, propagating to the
+        # TaskGroup so the agent restarts rather than wedging forever.
+        stream = await asyncio.wait_for(
+            provider.monitor(BasicSafety), timeout=self.time_to_live
+        )
 
         while True:
             try:
@@ -262,8 +298,22 @@ class SafetyConstraint(Constraint):
                     ))
                 evaluator.active.set()
 
-            stream = await provider.monitor(BasicSafety)
-            await anext(stream)
+            # Bounded reopen — a hung provider shouldn't deadlock us. Constraint stays
+            # active across retries.
+            while True:
+                try:
+                    stream = await asyncio.wait_for(
+                        provider.monitor(BasicSafety), timeout=self.time_to_live
+                    )
+                    await asyncio.wait_for(anext(stream), timeout=self.time_to_live)
+                    break
+                except TimeoutError:
+                    logger.warning(
+                        f"safety provider '{self.provider}' unresponsive during reopen; "
+                        f"keeping constraint active and retrying"
+                    )
+                    await asyncio.sleep(min(self.time_to_live, 5.0))
+
 
 class GenericConstraint(Constraint):
     """Generic constraint driven by a Condition evaluated against any entity keyword."""
@@ -295,26 +345,42 @@ class GenericConstraint(Constraint):
         was_active: bool,
         label: str,
         hold_task: asyncio.Task | None,
-    ) -> tuple[object, bool, asyncio.Task | None]:
-        """Evaluate the condition and update the evaluator. Returns (current, was_active, hold_task)."""
+        from_data: bool,
+    ) -> tuple[object, bool, asyncio.Task | None, bool]:
+        """Evaluate the condition and update the evaluator.
+
+        Returns (current, was_active, hold_task, from_data). ``from_data`` tracks whether
+        the constraint's current active state was set by a real clear→active transition on
+        live data. The hold_duration only applies when from_data is True — that way the
+        fail-closed startup default and stale-cache replays don't hold the controller behind
+        a hold_duration timer for data we never actually saw fall and rise.
+        """
         _, is_active = self.condition.evaluate(current, previous, was_active)
 
         if is_active:
+            reason = f"{label} = {current}"
             # Cancel any pending hold timer
             if hold_task is not None and not hold_task.done():
                 hold_task.cancel()
                 hold_task = None
-            reason = f"{label} = {current}"
-            if not evaluator.active.is_set():
+                logger.info(
+                    f"Conditional hold reset on {label}: condition retriggered ({reason})"
+                )
+            was_clear = not evaluator.active.is_set()
+            if was_clear:
                 logger.info(f"Setting conditional constraint on {reason}")
                 await evaluator._notify(ConstraintStatus(
                     constraint_kind=self.kind, active=True, reason=reason, provider=self.entity,
                 ))
             evaluator.active.set()
+            # Only flip from_data on a real clear→active transition; see WeatherConstraint
+            # for the same reasoning.
+            if was_clear:
+                from_data = True
         else:
             if evaluator.active.is_set():
                 reason = f"{label} = {current}"
-                if self.hold_duration > 0:
+                if self.hold_duration > 0 and from_data:
                     if hold_task is None or hold_task.done():
                         logger.info(f"Conditional constraint cleared ({reason}), holding for {self.hold_duration}s")
                         hold_task = asyncio.create_task(self._hold_and_clear(evaluator, label))
@@ -324,8 +390,9 @@ class GenericConstraint(Constraint):
                         constraint_kind=self.kind, active=False, reason=reason, provider=self.entity,
                     ))
                     evaluator.active.clear()
+                    from_data = False
 
-        return current, is_active, hold_task
+        return current, is_active, hold_task, from_data
 
     @override
     async def check_task(self, evaluator: ConstraintEvaluator, kit: SensorKit):
@@ -339,12 +406,24 @@ class GenericConstraint(Constraint):
         was_active = False
         hold_task: asyncio.Task | None = None
         skip_replay = False
+        # Tracks whether the current active state was set by a live clear→active transition.
+        # The hold_duration only applies when this is True — protects against the fail-closed
+        # init and stale-cache replays holding the controller behind a hold_duration timer.
+        from_data = False
 
         if not self.activate_on_timeout:
+            # Optional-sensor mode: absence of data is NOT a reason to constrain. Opt out
+            # of the global fail-closed default (set in ConstraintEvaluator.__init__) so
+            # the controller can operate while we're still waiting for the first sample.
+            evaluator.active.clear()
             evaluator.ready.set()
 
         client = kit.entity(self.entity)
-        consumer = await client._stream.consume(include_latest=True)
+        # Bounded initial open: fail-fast on a hung backend so the TaskGroup can restart us
+        # instead of wedging forever.
+        consumer = await asyncio.wait_for(
+            client._stream.consume(include_latest=True), timeout=self.time_to_live
+        )
 
         while True:
             try:
@@ -365,12 +444,18 @@ class GenericConstraint(Constraint):
                                 skip_replay = False
                                 previous = current
                             else:
-                                previous, was_active, hold_task = await self._apply(
-                                    evaluator, current, previous, was_active, label, hold_task
+                                previous, was_active, hold_task, from_data = await self._apply(
+                                    evaluator, current, previous, was_active, label,
+                                    hold_task, from_data,
                                 )
                                 evaluator.ready.set()
                         else:
                             previous = current
+                            # First message: we don't evaluate the condition (most conditions
+                            # need a transition), but we *have* seen data, so the startup gate
+                            # can proceed. Without this, a stream that only ever produces one
+                            # value (e.g. a one-shot publish) would block startup forever.
+                            evaluator.ready.set()
 
                         timeout.reschedule(
                             asyncio.get_running_loop().time() + self.time_to_live
@@ -400,5 +485,22 @@ class GenericConstraint(Constraint):
                 # it would just undo whatever the timeout branch above just
                 # decided (flapping). Skip it regardless of activate_on_timeout.
                 skip_replay = True
+                # The (re)activation above came from a timeout, not from a measurement,
+                # so the next clear should NOT be held back by hold_duration.
+                from_data = False
 
-            consumer = await client._stream.consume(include_latest=True)
+            # Bounded reopen — a hung backend shouldn't deadlock us. We retain
+            # whatever active/clear state the timeout handler above just decided.
+            while True:
+                try:
+                    consumer = await asyncio.wait_for(
+                        client._stream.consume(include_latest=True),
+                        timeout=self.time_to_live,
+                    )
+                    break
+                except TimeoutError:
+                    logger.warning(
+                        f"entity '{self.entity}' stream reopen unresponsive; retrying "
+                        f"(constraint {'active' if evaluator.active.is_set() else 'clear'})"
+                    )
+                    await asyncio.sleep(min(self.time_to_live, 5.0))
