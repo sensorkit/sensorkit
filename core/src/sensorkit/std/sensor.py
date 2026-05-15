@@ -267,6 +267,11 @@ class SensorControl:
 
             logger.info(f"Acquiring frame #{frame_num}")
 
+            await sk.controller().update_task_context({
+                "frame_num": frame_num,
+                "frame_count": task.camera_params.frame_count,
+            })
+
             context = sk.controller().build_context(
                 task.get_context(),
                 **adhoc,

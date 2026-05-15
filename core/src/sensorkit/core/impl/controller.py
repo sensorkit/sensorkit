@@ -106,6 +106,42 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         await self.handle_request(abort_task_request, self._abort_request)
         await self.handle_request(execute_task_request, self._execute_request)
 
+    async def publish_clean_execution_state(self):
+        """Publish a TaskExecutionState reflecting no in-flight task.
+
+        Registered as a deinit callback so KV reflects truth after a clean
+        shutdown — even if a task was cancelled mid-flight and its own
+        ``finally`` block couldn't land a final state publish in time.
+        """
+        try:
+            await self._state.update(self, TaskExecutionState(task=None))
+        except Exception as e:
+            logger.warning(f"Couldn't publish clean execution state on detach: {e}")
+
+    async def update_task_context(self, context: dict):
+        """Publish progress context for the in-flight task.
+
+        Updates TaskExecutionState.context so observers can render live progress
+        info — current frame number, sub-step name, etc. — without having to introspect
+        the device-level keyword stream.
+
+        No-op if no task is currently executing. Replaces (not merges) the
+        published context dict; callers should pass a complete snapshot.
+        """
+        current = self._state.execution_state
+        if not current.executing or current.task is None:
+            return
+
+        await self._state.update(
+            self,
+            TaskExecutionState(
+                executing=current.executing,
+                aborting=current.aborting,
+                task=current.task,
+                context=context,
+            ),
+        )
+
     @override
     def use_device(self, name: str, *, subscribe: list[type] | None = None) -> DeviceClient:
         """Register a controlled device and return a client for it.
