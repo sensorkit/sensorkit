@@ -108,7 +108,8 @@ def device(obj=None) -> DeviceImpl | None:
 
 # Model imports.
 from sensorkit.std.mount import StandardMount  # noqa: F401 — registers the mount archetype
-from sensorkit.std.weather import BasicWeather
+from sensorkit.std.weather import BasicWeather, StandardWeather  # noqa: F401 — registers the weather archetype
+from sensorkit.models.safety import BasicSafety, StandardSafety  # noqa: F401 — registers the safety archetype
 from sensorkit.models.devices import (
     AxisTargetDistance,
     Binning,

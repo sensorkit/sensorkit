@@ -269,15 +269,28 @@ class DeclaredDevice(DeclaredEntity[DeviceImpl], DeviceDelegate):
 
     @override
     async def post_decl_init(self):
+        # Credit the device with publishing every keyword required by its declared
+        # traits/archetypes. We trust the device's opt-in here — runtime publish_keyword
+        # introspection is not yet implemented.
+        for trait in self._declared_traits:
+            for kw_id in trait.effective_keyword_ids():
+                self.impl.declare_published_keyword(kw_id)
+
         info = await self.impl.publish_entity_info()
 
         # Validate declared traits.
         for trait in self._declared_traits:
             if not trait.match(info.details):
-                missing = trait.effective_command_ids() - set(info.details.supported_commands)
+                missing_commands = (
+                    trait.effective_command_ids() - set(info.details.supported_commands)
+                )
+                missing_keywords = (
+                    trait.effective_keyword_ids() - set(info.details.published_keywords)
+                )
+                missing = sorted(missing_commands | missing_keywords)
                 raise DeclarationError(
-                    f"Device declares trait '{trait.name}' "
-                    f"but does not implement commands: {"".join(missing)}"
+                    f"Device declares trait '{trait.name}' but is missing: "
+                    f"{', '.join(missing)}"
                 )
 
     @override
@@ -308,6 +321,12 @@ class DeclaredController(DeclaredEntity[ControllerImpl], ControllerDelegate):
         # Insert subscription stop as the first deinit callback so it runs
         # before user-defined on_detach handlers.
         self._deinit_callbacks.insert(0, self.impl.stop_device_subscriptions)
+
+        # Append a clean execution-state publish so KV reflects "no task in
+        # flight" after every controller shutdown — even when an in-flight
+        # task was cancelled mid-execution and couldn't publish its own final
+        # state. Runs after any user-defined on_detach handlers.
+        self._deinit_callbacks.append(self.impl.publish_clean_execution_state)
 
         await self.impl.start_device_subscriptions()
 

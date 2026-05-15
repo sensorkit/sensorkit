@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Annotated, Literal
 
 from loguru import logger
-from pydantic import BaseModel, PlainSerializer, PlainValidator, ValidationError
+from pydantic import BaseModel, Field, PlainSerializer, PlainValidator, ValidationError
 
 from sensorkit.backend.base import Entity
 from sensorkit.backend.event import Event, EventMultiplexer, EventStreamConsumer
@@ -39,6 +39,14 @@ class DeviceDetails(BaseModel):
 
     supported_commands: set[str]
     """Identifiers of each command supported by this device."""
+
+    published_keywords: set[str] = Field(default_factory=set)
+    """Identifiers of each keyword this device declares it publishes.
+
+    Populated from trait/archetype declarations on the device (see ``declare_device``'s
+    ``type``/``traits`` parameters). Devices that don't claim a trait or archetype with
+    ``required_keywords`` will have this empty even if they publish at runtime.
+    """
 
     @functools.cached_property
     def archetype(self):
@@ -315,7 +323,15 @@ class EntityInterface(ABC):
     @property
     @abstractmethod
     def task_group(self) -> asyncio.TaskGroup:
-        """Return the TaskGroup used for background tasks on this entity."""
+        """Return the TaskGroup for bounded background work that should be politely
+        awaited on shutdown."""
+        ...
+
+    @property
+    @abstractmethod
+    def perpetual_group(self):
+        """Return the PerpetualGroup for perpetual background tasks (monitors,
+        infinite loops) that should be force-cancelled at shutdown."""
         ...
 
     @abstractmethod

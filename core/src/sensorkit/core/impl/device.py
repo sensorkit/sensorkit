@@ -37,6 +37,15 @@ class DeviceImpl(EntityImpl, DeviceInterface):
         self._enable_hooks: set[Callable[[], None]] = set()
         self._disable_hooks: set[Callable[[], None]] = set()
         self._handlers: dict[str, CommandHandlerCallback] = {}
+        self._published_keywords: set[str] = set()
+
+    def declare_published_keyword(self, keyword_id: str):
+        """Declare that this device publishes a keyword (by registered keyword key).
+
+        Used by the declarative layer to surface keyword publication for trait/archetype
+        matching. Idempotent.
+        """
+        self._published_keywords.add(keyword_id)
 
     @override
     def on_enable(self, func: Callable[[], None]):
@@ -148,7 +157,10 @@ class DeviceImpl(EntityImpl, DeviceInterface):
     async def publish_entity_info(self) -> EntityInfo:
         info = EntityInfo(
             entity_type="device",
-            details=DeviceDetails(supported_commands=set(self._handlers.keys())),
+            details=DeviceDetails(
+                supported_commands=set(self._handlers.keys()),
+                published_keywords=set(self._published_keywords),
+            ),
         )
         await self.kv_put_model(info)
         return info

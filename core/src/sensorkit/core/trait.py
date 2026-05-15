@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from sensorkit.core.device import DeviceCommand
@@ -26,20 +28,42 @@ _trait_registry: set[Trait] = set()
 _archetype_registry: set[Archetype] = set()
 
 
+def _keyword_id(keyword_type: type[BaseModel]) -> str:
+    """Return the registered keyword tag for a BaseModel keyword type."""
+    # Imported lazily to avoid a module-load cycle with common.keyword.
+    from sensorkit.common.keyword import get_keyword_info
+    info = get_keyword_info(keyword_type)
+    if info is None:
+        raise TypeError(
+            f"{keyword_type.__name__} is not a declared keyword "
+            f"(missing @declare_keyword?)"
+        )
+    return info.key
+
+
 @dataclass(frozen=True, eq=False)
 class Trait:
-    """A named set of required commands that a device may structurally satisfy."""
+    """A named set of required commands and/or keywords that a device may structurally satisfy."""
 
     name: str
-    required_commands: tuple[type[DeviceCommand], ...]
+    required_commands: tuple[type[DeviceCommand], ...] = ()
+    required_keywords: tuple[type[BaseModel], ...] = ()
 
     def effective_command_ids(self) -> frozenset[str]:
         """Return all command IDs required by this trait."""
         return frozenset(cmd.model_tag() for cmd in self.required_commands)
 
+    def effective_keyword_ids(self) -> frozenset[str]:
+        """Return all keyword IDs required by this trait."""
+        return frozenset(_keyword_id(kw) for kw in self.required_keywords)
+
     def match(self, details: DeviceDetails) -> bool:
-        """Return True if the given device details satisfy this trait."""
-        return self.effective_command_ids() <= details.supported_commands
+        """Return True if the given device details satisfy this trait's commands and keywords."""
+        if not (self.effective_command_ids() <= details.supported_commands):
+            return False
+        if not (self.effective_keyword_ids() <= details.published_keywords):
+            return False
+        return True
 
     def __hash__(self):
         return hash(self.name)
@@ -71,6 +95,15 @@ class Archetype(Trait):
             )
         )
 
+    def effective_keyword_ids(self) -> frozenset[str]:
+        """Return all keyword IDs required by this archetype and its required sub-traits."""
+        return frozenset(
+            itertools.chain(
+                (_keyword_id(kw) for kw in self.required_keywords),
+                *(sub_trait.effective_keyword_ids() for sub_trait in self.required_traits),
+            )
+        )
+
     def __repr__(self):
         return f"Archetype({self.name!r})"
 
@@ -79,9 +112,14 @@ def declare_trait(
     name: str,
     *,
     required_commands: tuple[type[DeviceCommand], ...] = (),
+    required_keywords: tuple[type[BaseModel], ...] = (),
 ) -> Trait:
     """Declare a device trait and add it to the global registry."""
-    trait = Trait(name=name, required_commands=required_commands)
+    trait = Trait(
+        name=name,
+        required_commands=required_commands,
+        required_keywords=required_keywords,
+    )
     _trait_registry.add(trait)
     return trait
 
@@ -90,6 +128,7 @@ def declare_archetype(
     name: str,
     *,
     required_commands: tuple[type[DeviceCommand], ...] = (),
+    required_keywords: tuple[type[BaseModel], ...] = (),
     required_traits: tuple[Trait, ...] = (),
     optional_commands: tuple[type[DeviceCommand], ...] = (),
 ) -> Archetype:
@@ -107,6 +146,7 @@ def declare_archetype(
     archetype = Archetype(
         name=name,
         required_commands=required_commands,
+        required_keywords=required_keywords,
         required_traits=required_traits,
         optional_commands=optional_commands,
     )
