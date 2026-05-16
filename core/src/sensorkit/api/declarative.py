@@ -322,12 +322,6 @@ class DeclaredController(DeclaredEntity[ControllerImpl], ControllerDelegate):
         # before user-defined on_detach handlers.
         self._deinit_callbacks.insert(0, self.impl.stop_device_subscriptions)
 
-        # Append a clean execution-state publish so KV reflects "no task in
-        # flight" after every controller shutdown — even when an in-flight
-        # task was cancelled mid-execution and couldn't publish its own final
-        # state. Runs after any user-defined on_detach handlers.
-        self._deinit_callbacks.append(self.impl.publish_clean_execution_state)
-
         await self.impl.start_device_subscriptions()
 
     @override

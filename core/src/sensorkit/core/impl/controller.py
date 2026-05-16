@@ -106,18 +106,6 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         await self.handle_request(abort_task_request, self._abort_request)
         await self.handle_request(execute_task_request, self._execute_request)
 
-    async def publish_clean_execution_state(self):
-        """Publish a TaskExecutionState reflecting no in-flight task.
-
-        Registered as a deinit callback so KV reflects truth after a clean
-        shutdown — even if a task was cancelled mid-flight and its own
-        ``finally`` block couldn't land a final state publish in time.
-        """
-        try:
-            await self._state.update(self, TaskExecutionState(task=None))
-        except Exception as e:
-            logger.warning(f"Couldn't publish clean execution state on detach: {e}")
-
     async def update_task_context(self, context: dict):
         """Publish progress context for the in-flight task.
 

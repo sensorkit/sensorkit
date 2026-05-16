@@ -91,7 +91,7 @@ class TheSkyDome(TheSkyDevice):
 
     @sk.command_handler
     async def dome_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to Dome")
+        logger.debug("connecting to dome")
 
         await self.execute(
             """
@@ -105,11 +105,11 @@ class TheSkyDome(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to Dome")
+        logger.debug("connected to dome")
 
     @sk.command_handler
     async def dome_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from Dome")
+        logger.debug("disconnecting from dome")
 
         await self.execute(
             """
@@ -123,7 +123,7 @@ class TheSkyDome(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from Dome")
+        logger.debug("disconnected from dome")
 
     @sk.command_handler
     async def dome_stop(self, cmd: sk.Stop):

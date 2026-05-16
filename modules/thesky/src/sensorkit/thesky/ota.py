@@ -62,7 +62,7 @@ class TheSkyOTA(TheSkyDevice):
 
     @sk.command_handler
     async def ota_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to OTA")
+        logger.debug("connecting to ota")
 
         await self.execute(
             """
@@ -76,11 +76,11 @@ class TheSkyOTA(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to OTA")
+        logger.debug("connected to ota")
 
     @sk.command_handler
     async def ota_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from OTA")
+        logger.debug("disconnecting from ota")
 
         await self.execute(
             """
@@ -94,7 +94,7 @@ class TheSkyOTA(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from OTA")
+        logger.debug("disconnected from ota")
 
     @sk.command_handler
     async def ota_open(self, cmd: OpenMirrorCover):

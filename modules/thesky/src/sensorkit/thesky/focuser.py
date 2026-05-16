@@ -68,7 +68,7 @@ class TheSkyFocuser(TheSkyDevice):
 
     @sk.command_handler
     async def focuser_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to Focuser")
+        logger.debug("connecting to focuser")
 
         await self.execute(
             """
@@ -83,11 +83,11 @@ class TheSkyFocuser(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to Focuser")
+        logger.debug("connected to focuser")
 
     @sk.command_handler
     async def focuser_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from Focuser")
+        logger.debug("disconnecting from focuser")
 
         await self.execute(
             """
@@ -101,7 +101,7 @@ class TheSkyFocuser(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from Focuser")
+        logger.debug("disconnected from focuser")
 
     @sk.command_handler
     async def focuser_change(self, cmd: ChangeFocusPosition):

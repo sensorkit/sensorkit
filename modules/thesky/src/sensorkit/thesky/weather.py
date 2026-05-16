@@ -60,7 +60,7 @@ class TheSkyWeather(TheSkyDevice):
 
     @sk.command_handler
     async def weather_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to Weather")
+        logger.debug("connecting to weather")
 
         await self.execute(
             """
@@ -77,11 +77,11 @@ class TheSkyWeather(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to Weather")
+        logger.debug("connected to weather")
 
     @sk.command_handler
     async def weather_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from Weather")
+        logger.debug("disconnecting from weather")
 
         await self.execute(
             """
@@ -95,7 +95,7 @@ class TheSkyWeather(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from Weather")
+        logger.debug("disconnected from weather")
 
     async def status_publish(self):
         while True:

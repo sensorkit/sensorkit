@@ -85,7 +85,7 @@ class TheSkyFilterWheel(TheSkyDevice):
 
     @sk.command_handler
     async def filter_wheel_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to FilterWheel")
+        logger.debug("connecting to filter wheel")
 
         await self.execute(
             """
@@ -100,11 +100,11 @@ class TheSkyFilterWheel(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to FilterWheel")
+        logger.debug("connected to filter wheel")
 
     @sk.command_handler
     async def filter_wheel_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from FilterWheel")
+        logger.debug("disconnecting from filter wheel")
 
         await self.execute(
             """
@@ -118,7 +118,7 @@ class TheSkyFilterWheel(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from FilterWheel")
+        logger.debug("disconnected from filter wheel")
 
     @sk.command_handler
     async def filter_wheel_set_filter(self, cmd: SetFilter):

@@ -68,7 +68,7 @@ class TheSkyRotator(TheSkyDevice):
 
     @sk.command_handler
     async def rotator_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to Rotator")
+        logger.debug("connecting to rotator")
 
         await self.execute(
             """
@@ -83,11 +83,11 @@ class TheSkyRotator(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to Rotator")
+        logger.debug("connected to rotator")
 
     @sk.command_handler
     async def rotator_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from Rotator")
+        logger.debug("disconnecting from rotator")
 
         await self.execute(
             """
@@ -101,7 +101,7 @@ class TheSkyRotator(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from Rotator")
+        logger.debug("disconnected from rotator")
 
     @sk.command_handler
     async def rotator_change(self, cmd: ChangeRotatorPosition):

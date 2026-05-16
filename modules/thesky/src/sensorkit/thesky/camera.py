@@ -116,7 +116,7 @@ class TheSkyCamera(TheSkyDevice):
 
     @sk.command_handler
     async def camera_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to Camera")
+        logger.debug("connecting to camera")
 
         await self.execute(
             """
@@ -132,11 +132,11 @@ class TheSkyCamera(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to Camera")
+        logger.debug("connected to camera")
 
     @sk.command_handler
     async def camera_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from Camera")
+        logger.debug("disconnecting from camera")
 
         await self.execute(
             """
@@ -150,7 +150,7 @@ class TheSkyCamera(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from Camera")
+        logger.debug("disconnected from camera")
 
     @sk.command_handler
     async def camera_stop(self, cmd: sk.Stop):
