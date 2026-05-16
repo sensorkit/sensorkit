@@ -51,7 +51,7 @@ iers.conf.auto_download = False
 from astropy.utils.iers import conf  # noqa: E402
 
 conf.auto_max_age = None
-LEO_SLEWING, LEO_SETTLING, LEO_TRACKING = 4, 5, 6
+LEO_WAITING, LEO_SLEWING, LEO_SETTLING, LEO_TRACKING = 3, 4, 5, 6
 
 
 @sk.declare_device
@@ -433,7 +433,7 @@ class TheSkyTelescope(TheSkyDevice):
                 logger.debug(f"TLE follow Find diagnostic for {designator}: {result}")
 
                 async with asyncio.timeout(self.config.timeout):
-                    await self.poll("""Raven3.trackLEOStatus;""", "6", interval=0.2)
+                    await self.poll("""Raven3.trackLEOStatus;""", str(LEO_TRACKING), interval=0.2)
                 self._start_fast_status()
 
                 logger.debug("tracking TLE follow")
