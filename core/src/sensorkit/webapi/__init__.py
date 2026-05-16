@@ -17,9 +17,7 @@ class WebAPIService:
             config = WebAPIConfig()
 
         self.webapi = WebAPI(entity.sensorkit(), config)
-        entity.perpetual_group.create_task(
-            self.webapi.serve(task_group=entity.perpetual_group)
-        )
+        entity.task_group.create_task(self.webapi.serve(task_group=entity.task_group))
 
     @sk.on_detach
     async def shutdown(self):

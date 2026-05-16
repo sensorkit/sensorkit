@@ -174,14 +174,13 @@ class ServiceContext(EntityImpl):
         return await instance.register_impl(instance, lease_ttl=cls.SERVICE_LEASE_TTL)
 
     def __init__(self, sensorkit: SensorKit, info: ServiceInfo):
-        # Perpetual background tasks (constraint monitors, lifecycle drivers, etc.) should be
-        # spawned on perpetual_group so they get force-cancelled at shutdown rather than blocking
-        # task_group.__aexit__ on their natural completion. See PerpetualGroup docstring.
+        # task_group is a PerpetualGroup: a TaskGroup wrapper that exposes cancel_all() so
+        # _service_task can force-cancel perpetual children at shutdown without blocking on
+        # their natural completion. See PerpetualGroup docstring for the rationale.
         super().__init__(
             sensorkit=sensorkit,
             entity=Entity.at(info.name),
-            task_group=asyncio.TaskGroup(),
-            perpetual_group=PerpetualGroup(),
+            task_group=PerpetualGroup(),
         )
 
         self.info = info
@@ -230,17 +229,16 @@ class ServiceContext(EntityImpl):
 
         try:
             async with self.task_group:
-                async with self.perpetual_group:
-                    # Signal the outer coroutine that the TaskGroup is active.
-                    ready.set()
+                # Signal the outer coroutine that the TaskGroup is active.
+                ready.set()
 
-                    try:
-                        # Start lease maintenance.
-                        await self._lease_group.refresh_loop()
-                    finally:
-                        # Force-cancel perpetual-group children so they don't hold up
-                        # task_group's __aexit__ draining bounded work.
-                        self.perpetual_group.cancel_all()
+                try:
+                    # Start lease maintenance.
+                    await self._lease_group.refresh_loop()
+                finally:
+                    # Force-cancel children so task_group's __aexit__ doesn't block
+                    # waiting for perpetual loops to complete naturally.
+                    self.task_group.cancel_all()
         except asyncio.CancelledError:
             logger.error(f"Service {self.info.name} abnormal shutdown (cancelled)")
             self._shutdown.cancel()

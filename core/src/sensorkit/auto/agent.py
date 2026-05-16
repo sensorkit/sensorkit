@@ -283,7 +283,7 @@ async def agent_service(service: sk.Service):
     await state.apply_to_operator(operator, config.controllers)
 
     # Start the virtual operator.
-    await operator.start(client=service.client, task_group=service.context.perpetual_group)
+    await operator.start(client=service.client, task_group=service.context.task_group)
 
     # Handle configuration requests.
     # FIXME: asyncio.Lock does not guarantee FIFO wakeup order, so this usage could result in

@@ -29,6 +29,7 @@ from sensorkit.core.trait import match_archetype, match_traits
 from sensorkit.data.graph import DataGraph
 
 if TYPE_CHECKING:
+    from sensorkit.common.aio import PerpetualGroup
     from sensorkit.core.client import SensorKit
 
 type EntityType = Literal["generic", "device", "controller", "program"]
@@ -322,16 +323,15 @@ class EntityInterface(ABC):
 
     @property
     @abstractmethod
-    def task_group(self) -> asyncio.TaskGroup:
-        """Return the TaskGroup for bounded background work that should be politely
-        awaited on shutdown."""
-        ...
+    def task_group(self) -> "PerpetualGroup":
+        """Return the service's task group.
 
-    @property
-    @abstractmethod
-    def perpetual_group(self):
-        """Return the PerpetualGroup for perpetual background tasks (monitors,
-        infinite loops) that should be force-cancelled at shutdown."""
+        A PerpetualGroup — i.e. a TaskGroup wrapper with cancel_all() — so that
+        perpetual children (monitors, infinite loops) can be force-cancelled at
+        service shutdown rather than blocking ``__aexit__`` on their natural
+        completion. From a caller's perspective it behaves like ``asyncio.TaskGroup``
+        (``create_task()`` with the same semantics).
+        """
         ...
 
     @abstractmethod

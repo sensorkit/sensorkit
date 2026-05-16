@@ -51,11 +51,6 @@ class EntityDelegate(EntityInterface):
         return self.delegate_target.task_group
 
     @override
-    @property
-    def perpetual_group(self):
-        return self.delegate_target.perpetual_group
-
-    @override
     async def emit_event(self, event: Event):
         return await self.delegate_target.emit_event(event)
 
