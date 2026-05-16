@@ -55,17 +55,17 @@ LEO_SLEWING, LEO_SETTLING, LEO_TRACKING = 4, 5, 6
 
 
 @sk.declare_device
-class TheSkyMount(TheSkyDevice):
-    """TheSky Mount implementation."""
+class TheSkyTelescope(TheSkyDevice):
+    """TheSky Telescope implementation."""
 
-    config: TheSkyMountConfig
-    device_name = "Mount"
+    config: TheSkyTelescopeConfig
+    device_name = "Telescope"
     _fast_status_task: asyncio.Task | None = None
 
-    # NOTE: For a TheSky mount, you have to home the mount before any commands at all, and you have to "Unpark" the
-    # mount (if in the "Park" position) before any motion. If you "Park" the mount and "Disconnect" it, note that it
-    # will not be in the software "Park" position upon a reconnection, even if it is actually in the hardware "Park"
-    # position.
+    # NOTE: For a TheSky telescope, you have to home it before any commands at all, and you have to "Unpark" it
+    # (if in the "Park" position) before any motion. If you "Park" the telescope and "Disconnect" it, note that
+    # it will not be in the software "Park" position upon a reconnection, even if it is actually in the hardware
+    # "Park" position.
 
     @sk.on_attach
     async def entity_init(self):
@@ -73,11 +73,11 @@ class TheSkyMount(TheSkyDevice):
 
         # Restore state
         try:
-            self.state = await device.kv_get_model(TheSkyMountState)
+            self.state = await device.kv_get_model(TheSkyTelescopeState)
             logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
-            self.state = TheSkyMountState()
+            self.state = TheSkyTelescopeState()
 
         # Get TheSky location
         resp = await self.execute(
@@ -122,45 +122,45 @@ class TheSkyMount(TheSkyDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the mount
-        await self.mount_deinit(sk.Deinit())
+        # Deinitialize the telescope
+        await self.telescope_deinit(sk.Deinit())
 
         # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
-        await self.mount_disconnect(sk.Disconnect())
+        await self.telescope_disconnect(sk.Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def mount_init(self, cmd: sk.Init):
+    async def telescope_init(self, cmd: sk.Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.mount_connect(sk.Connect())
+        self._reconnect = lambda: self.telescope_connect(sk.Connect())
 
-        await self.mount_connect(sk.Connect())
+        await self.telescope_connect(sk.Connect())
         self.start_status_loop(self.status_publish_slow())
 
         # Home, as needed
         if not self.state.has_been_homed:
-            await self.mount_home(sk.Home())
+            await self.telescope_home(sk.Home())
 
     @sk.command_handler
-    async def mount_deinit(self, cmd: sk.Deinit):
+    async def telescope_deinit(self, cmd: sk.Deinit):
         if not self.device_connected:
-            # Init may not have run, but mount may still be tracking from a failed run.
+            # Init may not have run, but telescope may still be tracking from a failed run.
             # Connect so we can ensure it's parked.
             try:
-                await self.mount_connect(sk.Connect())
+                await self.telescope_connect(sk.Connect())
             except Exception:
-                logger.warning("Unable to connect mount for Deinit park; skipping")
+                logger.warning("Unable to connect telescope for Deinit park; skipping")
                 return
 
         self._stop_fast_status()
-        await self.mount_stop(sk.Stop())
-        await self.mount_park(sk.MoveToPark())
+        await self.telescope_stop(sk.Stop())
+        await self.telescope_park(sk.MoveToPark())
 
     @sk.command_handler
-    async def mount_connect(self, cmd: sk.Connect):
-        logger.debug("connecting to Mount")
+    async def telescope_connect(self, cmd: sk.Connect):
+        logger.debug("connecting to telescope")
 
         await self.execute(
             """
@@ -175,11 +175,11 @@ class TheSkyMount(TheSkyDevice):
         self.device_connected = True
         await sk.device().publish(Connected(is_connected=True))
 
-        logger.debug("connected to Mount")
+        logger.debug("connected to telescope")
 
     @sk.command_handler
-    async def mount_disconnect(self, cmd: sk.Disconnect):
-        logger.debug("disconnecting from Mount")
+    async def telescope_disconnect(self, cmd: sk.Disconnect):
+        logger.debug("disconnecting from telescope")
 
         await self.execute(
             """
@@ -193,13 +193,13 @@ class TheSkyMount(TheSkyDevice):
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
 
-        logger.debug("disconnected from Mount")
+        logger.debug("disconnected from telescope")
 
     @sk.command_handler
-    async def mount_stop(self, cmd: sk.Stop):
+    async def telescope_stop(self, cmd: sk.Stop):
         self._stop_fast_status()
-        await self.mount_unpark()
-        logger.debug("stopping mount")
+        await self.telescope_unpark()
+        logger.debug("stopping telescope")
 
         await self.execute(
             """
@@ -212,13 +212,13 @@ class TheSkyMount(TheSkyDevice):
             await self.poll("""sky6RASCOMTele.IsTracking;""", "0", interval=0.2)
 
         self._stop_fast_status()
-        logger.debug("stopped mount")
+        logger.debug("stopped telescope")
 
     @sk.command_handler
-    async def mount_park(self, cmd: sk.MoveToPark):
+    async def telescope_park(self, cmd: sk.MoveToPark):
         self._stop_fast_status()
         await self.require_connected()
-        logger.debug("parking mount")
+        logger.debug("parking telescope")
 
         async with asyncio.timeout(self.config.timeout):
             while True:
@@ -231,10 +231,10 @@ class TheSkyMount(TheSkyDevice):
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6RASCOMTele.IsParked();""", "true")
 
-        logger.debug("parked mount")
+        logger.debug("parked telescope")
 
     @sk.command_handler
-    async def mount_set_park_position(self, cmd: SetParkPosition):
+    async def telescope_set_park_position(self, cmd: SetParkPosition):
         await self.require_connected()
         logger.debug("setting park position")
 
@@ -246,11 +246,11 @@ class TheSkyMount(TheSkyDevice):
 
         logger.debug("set park position")
 
-    async def mount_unpark(self):
-        # This is unique to TheSky. It requires you to unpark the mount before issuing any
+    async def telescope_unpark(self):
+        # This is unique to TheSky. It requires you to unpark the telescope before issuing any
         # other motion command.
         await self.require_connected()
-        logger.debug("unparking mount")
+        logger.debug("unparking telescope")
 
         await self.execute(
             """
@@ -265,13 +265,13 @@ class TheSkyMount(TheSkyDevice):
         async with asyncio.timeout(self.config.timeout):
             await self.poll("""sky6RASCOMTele.IsParked();""", "false", interval=0.2)
 
-        logger.debug("unparked mount")
+        logger.debug("unparked telescope")
 
     @sk.command_handler
-    async def mount_home(self, cmd: sk.Home):
+    async def telescope_home(self, cmd: sk.Home):
         self._stop_fast_status()
-        await self.mount_unpark()
-        logger.debug("homing mount")
+        await self.telescope_unpark()
+        logger.debug("homing telescope")
 
         async with asyncio.timeout(self.config.timeout):
             while True:
@@ -300,34 +300,33 @@ class TheSkyMount(TheSkyDevice):
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
 
-        logger.debug("homed mount")
+        logger.debug("homed telescope")
 
     @sk.command_handler
-    async def mount_follow_target(self, cmd: sk.FollowTarget):
+    async def telescope_follow_target(self, cmd: sk.FollowTarget):
         self._stop_fast_status()
-        await self.mount_unpark()
+        await self.telescope_unpark()
 
-        # target = await cmd.target.adapt(
-        #     ICRSTarget,
-        #     AltAzTarget,
-        #     (FrameTarget, ReferenceFrame.ICRF),
-        #     (FrameTarget, ReferenceFrame.ALTAZ),
-        #     TLETarget,
-        #     (RateTarget, ReferenceFrame.ICRF),
-        #     (EphemerisTarget, ReferenceFrame.ICRF),
-        #     observer=self._geodetic,
-        # )
-        target = cmd.target
+        target = await cmd.target.adapt(
+            ICRSTarget,
+            AltAzTarget,
+            (FrameTarget, ReferenceFrame.ICRF),
+            (FrameTarget, ReferenceFrame.ALTAZ),
+            TLETarget,
+            # (RateTarget, ReferenceFrame.ICRF),
+            # (EphemerisTarget, ReferenceFrame.ICRF),
+            observer=self._geodetic,
+        )
 
-        match cmd.target:
+        match target:
             case ICRSTarget():
                 logger.debug("executing RADec follow")
 
                 await self.execute(
                     f"""
                     sky6RASCOMTele.SlewToRaDec(
-                        {cmd.target.coords.ra:0.6f},
-                        {cmd.target.coords.dec:0.6f},
+                        {target.coords.ra:0.6f},
+                        {target.coords.dec:0.6f},
                         "object"
                     );
                     """
@@ -345,8 +344,8 @@ class TheSkyMount(TheSkyDevice):
                 await self.execute(
                     f"""
                     sky6RASCOMTele.SlewToAzAlt(
-                        {cmd.target.coords.az:0.6f},
-                        {cmd.target.coords.alt:0.6f},
+                        {target.coords.az:0.6f},
+                        {target.coords.alt:0.6f},
                         "object"
                     );
                     """
@@ -364,9 +363,9 @@ class TheSkyMount(TheSkyDevice):
                 # Update line0
                 # NOTE: TheSky requires this syntax, so we force it here.
                 tle = TLE(
-                    line0=f"0 {cmd.target.tle.line2.split()[1]}",
-                    line1=cmd.target.tle.line1,
-                    line2=cmd.target.tle.line2,
+                    line0=f"0 {target.tle.line2.split()[1]}",
+                    line1=target.tle.line1,
+                    line2=target.tle.line2,
                 )
 
                 # Update the TLE file
@@ -446,8 +445,8 @@ class TheSkyMount(TheSkyDevice):
                 await self.execute(
                     f"""
                     sky6RASCOMTele.SlewToRaDec(
-                        {cmd.target.initial_coords.ra:0.6f},
-                        {cmd.target.initial_coords.dec:0.6f},
+                        {target.initial_coords.ra:0.6f},
+                        {target.initial_coords.dec:0.6f},
                         "object"
                     );
                     """
@@ -457,8 +456,8 @@ class TheSkyMount(TheSkyDevice):
                     await self.poll("""sky6RASCOMTele.IsTracking;""", "1", interval=0.2)
 
                 # Apply custom offset rates (degrees/sec -> arcsec/sec)
-                ra_rate_arcsec = cmd.target.rates.ra * 3600
-                dec_rate_arcsec = cmd.target.rates.dec * 3600
+                ra_rate_arcsec = target.rates.ra * 3600
+                dec_rate_arcsec = target.rates.dec * 3600
                 await self.execute(
                     f"""
                     sky6RASCOMTele.SetTracking(1, 0, {ra_rate_arcsec}, {dec_rate_arcsec});
@@ -536,12 +535,12 @@ class TheSkyMount(TheSkyDevice):
 
     def _start_fast_status(self):
         if self._fast_status_task is None or self._fast_status_task.done():
-            logger.debug("starting fast mount status loop")
+            logger.debug("starting fast telescope status loop")
             self._fast_status_task = asyncio.create_task(self.status_publish_fast())
 
     def _stop_fast_status(self):
         if self._fast_status_task is not None and not self._fast_status_task.done():
-            logger.debug("stopping fast mount status loop")
+            logger.debug("stopping fast telescope status loop")
             self._fast_status_task.cancel()
             self._fast_status_task = None
 
@@ -549,7 +548,7 @@ class TheSkyMount(TheSkyDevice):
     def _fast_status_active(self) -> bool:
         return self._fast_status_task is not None and not self._fast_status_task.done()
 
-    async def _publish_mount_status(self):
+    async def _publish_telescope_status(self):
         resp = await self.execute(
             """
             var LeoStatus = -1;
@@ -637,18 +636,18 @@ class TheSkyMount(TheSkyDevice):
         while True:
             try:
                 if not self._fast_status_active:
-                    await self._publish_mount_status()
+                    await self._publish_telescope_status()
                 else:
                     await sk.device().publish(Connected(is_connected=self.device_connected))
 
                 # logger.debug(
-                #     f"TheSky mount status: connected={self.device_connected}"
+                #     f"TheSky telescope status: connected={self.device_connected}"
                 # )
             except ProcessAbortedError:
-                # TheSky returns 212 transiently after an `abort`; mount is fine
+                # TheSky returns 212 transiently after an `abort`; telescope is fine
                 pass
             except Exception as e:
-                logger.warning(f"Error in slow mount status_publish ({e})")
+                logger.warning(f"Error in slow telescope status_publish ({e})")
                 await asyncio.sleep(self.config.status_frequency_slow)
                 continue
 
@@ -657,9 +656,9 @@ class TheSkyMount(TheSkyDevice):
     async def status_publish_fast(self):
         while True:
             try:
-                await self._publish_mount_status()
+                await self._publish_telescope_status()
             except Exception as e:
-                logger.warning(f"Error in fast mount status_publish ({e})")
+                logger.warning(f"Error in fast telescope status_publish ({e})")
                 await asyncio.sleep(self.config.status_frequency_fast)
                 continue
 
@@ -728,21 +727,21 @@ class TheSkyMount(TheSkyDevice):
         return alt_rate_deg_per_sec, az_rate_deg_per_sec
 
 
-class TheSkyMountConfig(TheSkyDeviceConfig[TheSkyMount]):
-    """TheSky Mount configuration."""
+class TheSkyTelescopeConfig(TheSkyDeviceConfig[TheSkyTelescope]):
+    """TheSky Telescope configuration."""
 
-    device_type: Literal["mount"] = "mount"
+    device_type: Literal["telescope"] = "telescope"
     status_frequency_slow: float = 1.0
     status_frequency_fast: float = 0.1
     timeout: float = 300.0
 
     @override
     def create_device(self):
-        return TheSkyMount(self)
+        return TheSkyTelescope(self)
 
 
-class TheSkyMountState(TheSkyDeviceState):
-    """TheSky Mount state."""
+class TheSkyTelescopeState(TheSkyDeviceState):
+    """TheSky Telescope state."""
 
-    device_type: Literal["mount"] = "mount"
+    device_type: Literal["telescope"] = "telescope"
     has_been_homed: bool = False

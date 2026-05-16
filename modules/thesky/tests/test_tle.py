@@ -2,15 +2,15 @@ import pytest
 
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
-from sensorkit.thesky.mount import TheSkyMount, TheSkyMountConfig, TheSkyMountState
+from sensorkit.thesky.telescope import TheSkyTelescope, TheSkyTelescopeConfig, TheSkyTelescopeState
 
 import sensorkit.api as sk
 
 
 @pytest.fixture
-def mount(simulator):
+def telescope(simulator):
     host, port = simulator
-    config = TheSkyMountConfig(
+    config = TheSkyTelescopeConfig(
         device_type="mount",
         host=host,
         port=port,
@@ -19,7 +19,7 @@ def mount(simulator):
         status_frequency=0.1,
     )
     m = config.create_device()
-    m.state = TheSkyMountState()
+    m.state = TheSkyTelescopeState()
     return m
 
 
@@ -32,20 +32,20 @@ ISS_TLE = TLE(
 
 
 @pytest.mark.asyncio
-async def test_mount_follow_tle(mount):
-    await mount.mount_connect(sk.Connect())
-    await mount.mount_unpark()
+async def test_telescope_follow_tle(telescope):
+    await telescope.telescope_connect(sk.Connect())
+    await telescope.telescope_unpark()
 
     target = TLETarget(tle=ISS_TLE)
-    await mount.mount_follow_target(sk.FollowTarget(target=target))
+    await telescope.telescope_follow_target(sk.FollowTarget(target=target))
 
     # Verify Raven3 tracking status reached 6
-    resp = await mount.execute("Raven3.trackLEOStatus;")
+    resp = await telescope.execute("Raven3.trackLEOStatus;")
     assert resp.strip() == "6"
 
 
 @pytest.mark.asyncio
-async def test_tle_line0_reformatted(mount):
+async def test_tle_line0_reformatted(telescope):
     """TheSky requires line0 format '0 <sat_number>', verify write_tle reformats it."""
     tle = TLE(
         line0="0 ISS (ZARYA)",
@@ -53,7 +53,7 @@ async def test_tle_line0_reformatted(mount):
         line2="2 25544  51.6400 200.0000 0001234  90.0000 270.0000 15.49000000400000",
     )
 
-    # The mount reformats line0 to "0 <sat_number>" from line2
+    # The telescope reformats line0 to "0 <sat_number>" from line2
     reformatted = TLE(
         line0=f"0 {tle.line2.split()[1]}",
         line1=tle.line1,
@@ -63,9 +63,9 @@ async def test_tle_line0_reformatted(mount):
 
 
 @pytest.mark.asyncio
-async def test_write_tle(mount):
+async def test_write_tle(telescope):
     """Verify write_tle creates a file with the TLE content."""
-    tle_path = mount.write_tle(ISS_TLE)
+    tle_path = telescope.write_tle(ISS_TLE)
     assert tle_path is not None
 
     import pathlib

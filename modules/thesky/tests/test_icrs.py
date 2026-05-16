@@ -1,12 +1,12 @@
 import pytest
 
-from sensorkit.thesky.mount import TheSkyMount, TheSkyMountConfig, TheSkyMountState
+from sensorkit.thesky.telescope import TheSkyTelescope, TheSkyTelescopeConfig, TheSkyTelescopeState
 
 
 @pytest.fixture
-def mount(simulator):
+def telescope(simulator):
     host, port = simulator
-    config = TheSkyMountConfig(
+    config = TheSkyTelescopeConfig(
         device_type="mount",
         host=host,
         port=port,
@@ -15,21 +15,21 @@ def mount(simulator):
         status_frequency=0.1,
     )
     m = config.create_device()
-    m.state = TheSkyMountState()
+    m.state = TheSkyTelescopeState()
     return m
 
 
 @pytest.mark.asyncio
-async def test_mount_follow_icrs(mount):
+async def test_telescope_follow_icrs(telescope):
     import sensorkit.api as sk
     from sensorkit.astro.common import Equatorial
     from sensorkit.astro.target import ICRSTarget
 
-    await mount.mount_connect(sk.Connect())
-    await mount.mount_unpark()
-    await mount.mount_follow_target(
+    await telescope.telescope_connect(sk.Connect())
+    await telescope.telescope_unpark()
+    await telescope.telescope_follow_target(
         sk.FollowTarget(target=ICRSTarget(coords=Equatorial(ra=6.0, dec=20.0)))
     )
 
-    resp = await mount.execute("sky6RASCOMTele.IsTracking;")
+    resp = await telescope.execute("sky6RASCOMTele.IsTracking;")
     assert resp.strip() == "1"
