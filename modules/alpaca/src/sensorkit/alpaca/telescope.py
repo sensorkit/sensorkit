@@ -202,12 +202,12 @@ class AlpacaTelescope(AlpacaDevice):
     @sk.command_handler
     async def telescope_deinit(self, cmd: sk.Deinit):
         if not self.device_connected:
-            # Init may not have run, but mount may still be tracking from a failed run.
+            # Init may not have run, but telescope may still be tracking from a failed run.
             # Connect so we can ensure it's parked.
             try:
                 await self.telescope_connect(sk.Connect())
             except Exception:
-                logger.warning("Unable to connect mount for Deinit park; skipping")
+                logger.warning("Unable to connect telescope for Deinit park; skipping")
                 return
 
         self._stop_fast_status()
@@ -232,17 +232,17 @@ class AlpacaTelescope(AlpacaDevice):
     @sk.command_handler
     async def telescope_stop(self, cmd: sk.Stop):
         await self.require_connected()
-        logger.debug("stopping mount")
+        logger.debug("stopping telescope")
 
         await self.call(self.telescope, "AbortSlew")
         if self._can_set_tracking:
             await self.put(self.telescope, "Tracking", False)
             self._tracking = False
 
-        self._wait_for_mount()
+        self._wait_for_telescope()
 
         self._stop_fast_status()
-        logger.debug("stopped mount")
+        logger.debug("stopped telescope")
 
     @sk.command_handler
     async def telescope_home(self, cmd: sk.Home):
@@ -251,7 +251,7 @@ class AlpacaTelescope(AlpacaDevice):
             logger.warning("Cannot find home")
             return
 
-        logger.debug("homing mount")
+        logger.debug("homing telescope")
 
         await self.call(self.telescope, "FindHome")
         await asyncio.sleep(self.config.status_frequency_slow)
@@ -266,7 +266,7 @@ class AlpacaTelescope(AlpacaDevice):
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
 
-        logger.debug("homed mount")
+        logger.debug("homed telescope")
 
     @sk.command_handler
     async def telescope_park(self, cmd: sk.MoveToPark):
@@ -275,7 +275,7 @@ class AlpacaTelescope(AlpacaDevice):
             logger.warning("Cannot park")
             return
 
-        logger.debug("parking mount")
+        logger.debug("parking telescope")
 
         await self.call(self.telescope, "Park")
 
@@ -286,7 +286,7 @@ class AlpacaTelescope(AlpacaDevice):
                     break
                 await asyncio.sleep(0.2)
 
-        logger.debug("parked mount")
+        logger.debug("parked telescope")
 
     @sk.command_handler
     async def telescope_set_park_position(self, cmd: sk.SetParkPosition):
@@ -384,7 +384,7 @@ class AlpacaTelescope(AlpacaDevice):
                     await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
                 await asyncio.sleep(1)
 
-                await self._wait_for_mount(tracking=True)
+                await self._wait_for_telescope(tracking=True)
                 self._start_fast_status()
 
                 logger.debug("following RADec target")
@@ -401,7 +401,7 @@ class AlpacaTelescope(AlpacaDevice):
                     await asyncio.to_thread(self.telescope.SlewToAltAz, az_deg, alt_deg)
                 await asyncio.sleep(1)
 
-                await self._wait_for_mount()
+                await self._wait_for_telescope()
                 await self._start_fast_status()
 
                 logger.debug("following AltAz target")
@@ -424,7 +424,7 @@ class AlpacaTelescope(AlpacaDevice):
                     await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
                 await asyncio.sleep(1)
 
-                await self._wait_for_mount(tracking=True)
+                await self._wait_for_telescope(tracking=True)
 
                 if self._can_set_right_ascension_rate:
                     await self.put(self.telescope, "RightAscensionRate", ra_rate)
@@ -451,7 +451,7 @@ class AlpacaTelescope(AlpacaDevice):
                     await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
                 await asyncio.sleep(1)
 
-                await self._wait_for_mount(tracking=True)
+                await self._wait_for_telescope(tracking=True)
 
                 # Apply offset rates
                 # ASCOM RightAscensionRate: seconds of RA per sidereal second
@@ -493,7 +493,7 @@ class AlpacaTelescope(AlpacaDevice):
                 track_type = type(cmd.target).__name__
                 raise NotImplementedError(f"{track_type} tracking via Alpaca is not supported")
 
-    async def _wait_for_mount(
+    async def _wait_for_telescope(
         self,
         *,
         slewing: bool = False,

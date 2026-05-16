@@ -60,7 +60,7 @@ pwi4 = [
     "httpx",
 ]
 sky-transmission = [
-    "allclear @ git+ssh://git@github.com/zgazak/allclear.git@main",
+    "allclear @ git+https://github.com/zgazak/allclear.git@main",
     "alpyca>=3.1.0",
     "Pillow",
     "imageio[pyav]",
