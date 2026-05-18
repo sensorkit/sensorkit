@@ -36,7 +36,7 @@ class ReferenceFrame(StrEnum):
             case ReferenceFrame.ITRF:
                 return ac.ITRS
             case _:
-                return ac.frame_transform_graph.lookup_name(self.value())
+                return ac.frame_transform_graph.lookup_name(self.value)
 
 
 @dataclass(frozen=True, slots=True)
