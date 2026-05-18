@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import contextlib
+import os
 import signal
 import time
 from collections.abc import Callable, Coroutine, Mapping
@@ -14,6 +15,8 @@ from sensorkit.common.aio import scoped_waiter
 from sensorkit.common.importutil import obj_from_spec
 
 type ServiceEntrypointFunc = Callable[[Service], Coroutine[Any, Any, None]]
+
+FORCE_QUIT_INTERRUPTS = 3
 
 
 class ServiceEntrypoint:
@@ -94,13 +97,29 @@ async def run_services(
     **kwargs,
 ):
     """Run a set of service entrypoints."""
+    interrupt_count = 0
+
     # We have to use a `concurrent.futures.Future` here so it can be used by different event loops
     # running on different threads.
     shutdown = concurrent.futures.Future()
 
     def signal_shutdown(sig=None, _frame=None):
-        if sig:
-            logger.debug(f"Caught shutdown signal {sig}")
+        nonlocal interrupt_count
+
+        match sig:
+            case signal.SIGTERM:
+                logger.info("Shutting down all services")
+            case signal.SIGINT:
+                interrupt_count += 1
+                remaining = FORCE_QUIT_INTERRUPTS - interrupt_count
+
+                if interrupt_count == 1:
+                    logger.info("Shutting down all services due to interrupt")
+                elif remaining > 0:
+                    logger.warning(f"Press Ctrl-C {remaining} more time{'s' if remaining != 1 else ''} to force quit")
+                else:
+                    logger.error("Force quit")
+                    os._exit(130)
 
         if not shutdown.done():
             shutdown.set_exception(ShutdownSignal())
