@@ -20,10 +20,12 @@ StandardMount = sk.declare_archetype(
         Deinit,
         MoveToPark,
         SetParkPosition,
-        EnableAxis,
-        DisableAxis,
         Stop,
         Home,
         FollowTarget,
+    ),
+    optional_commands=(
+        EnableAxis,
+        DisableAxis,
     ),
 )
