@@ -68,6 +68,17 @@ class ServiceConfig(BaseModel):
     metavar="name:module[:entrypoint]",
     help="Service name and entrypoint spec",
 )
+@click.option(
+    "--shutdown-timeout",
+    type=float,
+    default=180.0,
+    help=(
+        "Max seconds per service for graceful shutdown. Bounds the entire deinit "
+        "phase (entity @sk.on_detach callbacks) plus backend teardown. Pick a value "
+        "that comfortably covers your slowest hardware deinit (e.g. dome close, "
+        "mount park)."
+    ),
+)
 async def go_command(
     daemon: bool,
     restart: bool,
@@ -76,6 +87,7 @@ async def go_command(
     log_file_append: bool,
     log_level: str,
     add_service: tuple[str],
+    shutdown_timeout: float,
 ):
     """Launch and manage services."""
     import yaml
@@ -165,6 +177,10 @@ async def go_command(
         return
 
     async def run():
-        await run_services(entrypoints, max_restarts=-1 if restart else 0)
+        await run_services(
+            entrypoints,
+            max_restarts=-1 if restart else 0,
+            shutdown_timeout=shutdown_timeout,
+        )
 
     await handle_errors(run)
