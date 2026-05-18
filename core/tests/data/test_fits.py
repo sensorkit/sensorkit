@@ -69,7 +69,7 @@ async def test_array_to_fits():
     process_task = asyncio.create_task(
         array_to_fits.process([incoming_edge], [outgoing_edge])
     )
-    width, height = 10, 10
+    width, height = 12, 8
     test_data = np.arange(width * height, dtype=np.uint16)
 
     context = Context()

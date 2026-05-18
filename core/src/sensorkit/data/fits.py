@@ -81,14 +81,10 @@ class ArrayToFITS(DataOp):
         # TODO: change this to ImageInfo and add bits-per-pixel, scale, color encoding, etc.
         context.set(ImageSize(width=image_ndarray.shape[1], height=image_ndarray.shape[0]))
 
-        # Build primary HDU.
+        # Build primary HDU. astropy populates SIMPLE, NAXIS, and NAXIS{n} from the
+        # array shape (NAXIS1 = fastest-varying axis = number of columns).
         primary_hdu = fits.PrimaryHDU(image_ndarray)
         header = primary_hdu.header
-        header["SIMPLE"] = True
-        header["NAXIS"] = image_ndarray.ndim
-
-        for i, dim in enumerate(image_ndarray.shape, 1):
-            header[f"NAXIS{i}"] = dim
 
         # Generate the desired FITS keywords by evaluating the input patterns against the context.
         for kw, expr in self.header.items():
