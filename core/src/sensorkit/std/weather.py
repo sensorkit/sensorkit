@@ -1,9 +1,9 @@
 from pydantic import BaseModel
 
-from sensorkit.common.keyword import declare_keyword
+import sensorkit.api as sk
 
 
-@declare_keyword
+@sk.declare_keyword
 class BasicWeather(BaseModel):
     """Ambient weather conditions keyword, with all fields optional."""
     temperature: float | None = None
@@ -14,3 +14,15 @@ class BasicWeather(BaseModel):
     rain_rate: float | None = None
     wind_direction: float | None = None
     wind_speed: float | None = None
+
+
+WeatherProvider = sk.declare_trait(
+    "WeatherProvider",
+    required_keywords=("BasicWeather",),
+)
+
+StandardWeather = sk.declare_archetype(
+    "weather",
+    required_traits=(WeatherProvider,),
+)
+"""Standard archetype for ambient weather telemetry providers."""
