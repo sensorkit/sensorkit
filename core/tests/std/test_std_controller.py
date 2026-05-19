@@ -14,7 +14,9 @@ import pytest
 
 from sensorkit.api.declarative import Service, command_handler, declare_device
 from sensorkit.core.task import InitTask, ShutdownTask
-from sensorkit.models.devices import Close, Deinit, Init, Open, SitePosition, Stop
+from sensorkit.models.devices import Deinit, Init, SitePosition, Stop
+from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
+from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 from sensorkit.std.sensor import SensorConfig, SensorControl, SensorDevices
 
 
@@ -111,11 +113,11 @@ async def test_std_init_with_optional_devices():
         pass
 
     @command_handler(dome)
-    async def handle_dome_open(cmd: Open):
+    async def handle_dome_open(cmd: OpenEnclosure):
         dome_open_called.set()
 
     @command_handler(dome)
-    async def handle_dome_close(cmd: Close):
+    async def handle_dome_close(cmd: CloseEnclosure):
         dome_close_called.set()
 
     @command_handler(dome)
@@ -123,11 +125,11 @@ async def test_std_init_with_optional_devices():
         pass
 
     @command_handler(mirror_cover)
-    async def handle_mirror_open(cmd: Open):
+    async def handle_mirror_open(cmd: OpenMirrorCover):
         mirror_open_called.set()
 
     @command_handler(mirror_cover)
-    async def handle_mirror_close(cmd: Close):
+    async def handle_mirror_close(cmd: CloseMirrorCover):
         mirror_close_called.set()
 
     @command_handler(mirror_cover)

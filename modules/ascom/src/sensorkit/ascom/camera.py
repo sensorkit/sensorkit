@@ -33,6 +33,7 @@ from sensorkit.ascom.commands import (
     SetROI as CmdSetROI,
 )
 from sensorkit.data.fits import ArrayInfo
+from sensorkit.std.instrument import ConfigureCameraCooler
 
 if TYPE_CHECKING:
     from sensorkit.ascom.service import CameraConfig
@@ -757,7 +758,7 @@ class CameraService:
             raise RuntimeError("Abort failed") from e
 
     @sk.command_handler
-    async def camera_set_temperature(self, cmd: sk.SetTemperature):
+    async def camera_set_temperature(self, cmd: ConfigureCameraCooler):
         """Set CCD temperature setpoint and ensure cooler is enabled if supported."""
         try:
             if not getattr(self.capabilities, "set_ccd_temperature", False):
@@ -771,9 +772,9 @@ class CameraService:
                 # Non-fatal if the driver doesn't allow toggling
                 logger.debug("CoolerOn toggle not supported or failed")
 
-            self.camera.SetCCDTemperature(cmd.temperature)
+            self.camera.SetCCDTemperature(cmd.setpoint.temperature)
             await sk.device().publish(
-                sk.Temperature(temperature=cmd.temperature, units=cmd.units)
+                sk.Temperature(temperature=cmd.setpoint.temperature, units=cmd.setpoint.units)
             )
         except NotConnectedException as e:
             raise RuntimeError("Device disconnected") from e

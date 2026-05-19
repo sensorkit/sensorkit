@@ -8,6 +8,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from sensorkit.std.enclosure import OpenEnclosure, CloseEnclosure
 
 
 def _safe_get(d: AscomDome, name: str, default=None):
@@ -244,7 +245,7 @@ class DomeService:
             raise RuntimeError("Disconnect failed") from e
 
     @sk.command_handler
-    async def dome_open(self, cmd: sk.Open):
+    async def dome_open(self, cmd: OpenEnclosure):
         try:
             if _safe_get(self.dome, "CanSetShutter", False) is False:
                 raise RuntimeError("Device does not support shutter control")
@@ -269,7 +270,7 @@ class DomeService:
             raise RuntimeError("Open failed") from e
 
     @sk.command_handler
-    async def dome_close(self, cmd: sk.Close):
+    async def dome_close(self, cmd: CloseEnclosure):
         try:
             if _safe_get(self.dome, "CanSetShutter", False) is False:
                 raise RuntimeError("Device does not support shutter control")

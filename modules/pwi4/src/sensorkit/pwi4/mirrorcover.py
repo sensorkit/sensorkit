@@ -6,6 +6,7 @@ from pydantic import BaseModel
 import sensorkit.api as sk
 from sensorkit.pwi4.api import PWI4, MirrorCoverAPI
 from sensorkit.pwi4.models import PWI4StatusModel
+from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 
 
 class Reset(sk.DeviceCommand):
@@ -85,15 +86,15 @@ class MirrorCoverDevice:
         await self.cover.disconnect()
 
     @sk.command_handler
-    async def open(self, cmd: sk.Open):
+    async def open(self, cmd: OpenMirrorCover):
         await self.cover.open()
 
     @sk.command_handler
-    async def close(self, cmd: sk.Close):
+    async def close(self, cmd: CloseMirrorCover):
         await self.cover.close()
 
     @sk.command_handler
-    async def stop(self, cmd: sk.Close):
+    async def stop(self, cmd: sk.Stop):
         await self.cover.stop()
 
     @sk.command_handler

@@ -20,19 +20,19 @@ from sensorkit.core.task import (
 )
 from sensorkit.models.devices import (
     CameraCapture,
-    Close,
     Connect,
     Deinit,
     FollowTarget,
     Init,
-    Open,
     RADecPointing,
-    SetBinning,
     SetFilter,
     SitePosition,
     Stop,
 )
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
+from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
+from sensorkit.std.instrument import ConfigureCameraSensor
+from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 from sensorkit.std.sensor import (
     Capabilities,
     Sensor,
@@ -282,7 +282,7 @@ async def test_sensor_init_dome_present():
     sensor = Sensor(impl, SensorDevices(mount="m", camera="c", dome="d"), SensorPolicies())
     await sensor.init_dome()
     cmd = sensor.dome.command.call_args[0][0]
-    assert isinstance(cmd, Open)
+    assert isinstance(cmd, OpenEnclosure)
 
 
 @pytest.mark.asyncio
@@ -298,7 +298,7 @@ async def test_sensor_deinit_dome_present():
     sensor = Sensor(impl, SensorDevices(mount="m", camera="c", dome="d"), SensorPolicies())
     await sensor.deinit_dome()
     cmd = sensor.dome.command.call_args[0][0]
-    assert isinstance(cmd, Close)
+    assert isinstance(cmd, CloseEnclosure)
 
 
 @pytest.mark.asyncio
@@ -314,7 +314,7 @@ async def test_sensor_init_mirror_cover_present():
     sensor = Sensor(impl, SensorDevices(mount="m", camera="c", mirror_cover="mc"), SensorPolicies())
     await sensor.init_mirror_cover()
     cmd = sensor.mirror_cover.command.call_args[0][0]
-    assert isinstance(cmd, Open)
+    assert isinstance(cmd, OpenMirrorCover)
 
 
 @pytest.mark.asyncio
@@ -330,7 +330,7 @@ async def test_sensor_deinit_mirror_cover_present():
     sensor = Sensor(impl, SensorDevices(mount="m", camera="c", mirror_cover="mc"), SensorPolicies())
     await sensor.deinit_mirror_cover()
     cmd = sensor.mirror_cover.command.call_args[0][0]
-    assert isinstance(cmd, Close)
+    assert isinstance(cmd, CloseMirrorCover)
 
 
 @pytest.mark.asyncio
@@ -574,11 +574,11 @@ async def test_sensor_control_shutdown_concurrent_dome():
         pass
 
     @command_handler(dome)
-    async def handle_dome_open(cmd: Open):
+    async def handle_dome_open(cmd: OpenEnclosure):
         pass
 
     @command_handler(dome)
-    async def handle_dome_close(cmd: Close):
+    async def handle_dome_close(cmd: CloseEnclosure):
         dome_close_called.set()
 
     @command_handler(dome)
@@ -769,9 +769,9 @@ async def test_sensor_control_collect_with_filter_and_binning():
         filter_called.set()
 
     @command_handler(camera)
-    async def handle_binning(cmd: SetBinning):
-        assert cmd.x == 2
-        assert cmd.y == 2
+    async def handle_binning(cmd: ConfigureCameraSensor):
+        assert cmd.binning.x == 2
+        assert cmd.binning.y == 2
         binning_called.set()
 
     @command_handler(camera)
