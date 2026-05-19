@@ -267,12 +267,12 @@ class ControllerInterface(EntityInterface):
         ...
 
     @abstractmethod
-    def build_context(
+    async def update_context(
         self,
         base: KeywordDict | None = None,
         **kwargs,
     ) -> Context:
-        """Build a Context from the current device keyword state, merging any provided base values."""
+        """Update the context of the currently executing task."""
         ...
 
     @abstractmethod

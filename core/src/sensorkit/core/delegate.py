@@ -117,8 +117,8 @@ class ControllerDelegate(EntityDelegate, ControllerInterface):
         return await self.delegate_target.stop_device_subscriptions()
 
     @override
-    def build_context(self, base: KeywordDict | None = None, **kwargs) -> Context:
-        return self.delegate_target.build_context(base=base, **kwargs)
+    async def update_context(self, base: KeywordDict | None = None, **kwargs) -> Context:
+        return await self.delegate_target.update_context(base=base, **kwargs)
 
     @override
     def task_handler(

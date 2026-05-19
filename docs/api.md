@@ -676,7 +676,7 @@ Server-side implementation of a controller. Adds task handler registration, devi
 **Key methods:**
 - `use_device(name: str, *, subscribe: list[type] | None = None)` — Declare a device dependency and optionally subscribe to keyword types.
 - `get_device(name: str) -> ControllerDevice` — Return the attached device and its cached keyword state.
-- `build_context(base=None, **kwargs) -> Context` — Build a keyword context from the current device state.
+- `update_context(base=None, **kwargs) -> Context` — Build and update task context from the current device state.
 - `add_offer(start, end)` / `publish_offers()` — Manage and publish program offer windows.
 
 `(sensorkit.core.impl.controller → sensorkit.api)`
@@ -1000,7 +1000,7 @@ Decorator that registers a Pydantic model as a keyword type, enabling it to be p
 class Context
 ```
 
-A named, typed container for keyword values collected from device state. Built by `ControllerImpl.build_context()` and passed along with tasks for use in data graph pipelines (e.g., populating FITS headers).
+A named, typed container for keyword values collected from device state. Built by `ControllerImpl.update_context()` and passed along with tasks for use in data graph pipelines (e.g., populating FITS headers).
 
 `(sensorkit.data.context → sensorkit.api)`
 

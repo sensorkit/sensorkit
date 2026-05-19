@@ -112,7 +112,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
         Registers a device that this controller interacts with. Optionally subscribes to
         specific keyword types published by the device. Subscribed keywords are automatically
-        cached and made available in contexts built via ``build_context()``.
+        cached and made available in contexts via ``update_context()``.
 
         Note:
             Subscriptions remain inactive until ``start_device_subscriptions()`` is called.
@@ -187,31 +187,67 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             await device.subscription.stop()
 
     @override
-    def build_context(
+    async def update_context(
         self,
         base: KeywordDict | None = None,
         **kwargs,
     ) -> Context:
-        """Build a Context from all device keyword subscriptions.
+        """Update the context of the currently executing task.
 
-        Merges cached keyword models from every subscription registered
-        via ``use_device(subscribe=...)`` with an optional *base* context
-        and additional key-value pairs.
+        Merges the base context with fresh snapshots from all device keyword
+        subscriptions and additional provided values. The updated context is
+        persisted to the execution state and returned.
+
+        This method allows task handlers to refresh their context mid-execution,
+        incorporating the latest device state.
 
         Args:
-            base: Optional base context (e.g. from a task) to include.
-            **kwargs: Additional literal key-value pairs to include.
+            base: Optional base context to merge. If not given, the current task
+                context is used as the base.
+            **kwargs: Additional literal key-value pairs to include in the context.
 
         Returns:
-            A new :class:`Context` containing (in precedence order,
-            highest-last): *base*, cached keyword models, and *kwargs*.
+            The newly updated `Context` containing (in precedence order,
+            highest-last): *base* or current task context, fresh device snapshots,
+            and *kwargs*.
+
+        Raises:
+            RuntimeError: If called when no task is currently executing.
+
+        Examples:
+            Update context with latest device data during task execution:
+
+            >>> async def my_task_handler(self, task):
+            ...     # ... some work ...
+            ...     ctx = await self.update_context()
+            ...     pointing = ctx.get(AltAzPointing)
+
+            Add custom values while updating:
+
+            >>> ctx = await self.update_context(iteration=5, timestamp=time.time())
         """
-        ctx = Context(base)
+        current = self._state.execution_state
+
+        if not current.executing or current.task is None:
+            raise RuntimeError("no task executing")
+
+        ctx = Context(base if base is not None else current.context)
 
         for device in self._devices.values():
             device.subscription.snapshot(into=ctx)
 
         ctx.update(kwargs)
+
+        await self._state.update(
+            self,
+            TaskExecutionState(
+                executing=current.executing,
+                aborting=current.aborting,
+                task=current.task,
+                context=ctx,
+            ),
+        )
+
         return ctx
 
     async def _set_enable_state(self, request: ControllerEnableStateRequest):

@@ -224,6 +224,11 @@ class SensorControl:
             task_id=task.task_id,
         )
 
+        await sk.controller().update_context(
+            task.get_context(),
+            **adhoc,
+        )
+
         match task.target:
             case ICRSTarget():
                 adhoc["track_mode"] = "sidereal"
@@ -266,12 +271,7 @@ class SensorControl:
                 await asyncio.sleep(0.1)
 
             logger.info(f"Acquiring frame #{frame_num}")
-
-            context = sk.controller().build_context(
-                task.get_context(),
-                **adhoc,
-                frame_num=frame_num,
-            )
+            context = await sk.controller().update_context(frame_num=frame_num)
             _add_compat_context(context)
 
             await self.sensor.camera.command(
