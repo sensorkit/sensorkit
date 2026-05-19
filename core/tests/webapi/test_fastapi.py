@@ -243,7 +243,9 @@ async def test_wait_for_current_task(webapi_setup):
     @controller.task_handler(InitTask)
     async def handle(_: InitTask):
         ready.set()
-        await can_finish.wait()
+
+        async with asyncio.timeout(1.0):
+            await can_finish.wait()
 
     exec_bg = asyncio.create_task(
         client.post(
@@ -255,14 +257,14 @@ async def test_wait_for_current_task(webapi_setup):
     async with asyncio.timeout(1.0):
         await ready.wait()
 
-    can_finish.set()
+        can_finish.set()
 
-    resp = await client.post("/controller/mycontroller/wait")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+        resp = await client.post("/controller/mycontroller/wait")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
 
-    with contextlib.suppress(Exception):
-        await exec_bg
+        with contextlib.suppress(Exception):
+            await exec_bg
 
 
 @pytest.mark.asyncio
@@ -275,7 +277,9 @@ async def test_wait_for_task_by_id(webapi_setup):
     @controller.task_handler(InitTask)
     async def handle(_: InitTask):
         ready.set()
-        await can_finish.wait()
+
+        async with asyncio.timeout(1.0):
+            await can_finish.wait()
 
     task_id = str(uuid.uuid7())
     exec_bg = asyncio.create_task(
@@ -288,14 +292,14 @@ async def test_wait_for_task_by_id(webapi_setup):
     async with asyncio.timeout(1.0):
         await ready.wait()
 
-    can_finish.set()
+        can_finish.set()
 
-    resp = await client.post(f"/controller/mycontroller/wait/{task_id}")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+        resp = await client.post(f"/controller/mycontroller/wait/{task_id}")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
 
-    with contextlib.suppress(Exception):
-        await exec_bg
+        with contextlib.suppress(Exception):
+            await exec_bg
 
 
 # ---------------------------------------------------------------------------
