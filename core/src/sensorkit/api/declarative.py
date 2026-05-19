@@ -22,6 +22,7 @@ from sensorkit.core.delegate import (
     ProgramDelegate,
 )
 from sensorkit.core.device import CommandHandlerCallback, DeviceCommand
+from sensorkit.core.entity import DeviceDetails
 from sensorkit.core.executor import TaskFactoryFunc
 from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.impl.device import DeviceImpl
@@ -269,15 +270,33 @@ class DeclaredDevice(DeclaredEntity[DeviceImpl], DeviceDelegate):
 
     @override
     async def post_decl_init(self):
+        # FIXME: For now we trust the device to publish the keywords required by its traits.
+        #        This should be removed in favor of API that allows the device implementation
+        #        to explicitly declare the keywords it publishes, which can then be used to
+        #        validate whether its traits are satisfied.
+        for trait in self._declared_traits:
+            for kw_id in trait.effective_keyword_ids():
+                self.impl.declare_published_keyword(kw_id)
+
         info = await self.impl.publish_entity_info()
+        details = info.details
+
+        if not isinstance(details, DeviceDetails):
+            raise RuntimeError("Device did not publish its details")
 
         # Validate declared traits.
         for trait in self._declared_traits:
             if not trait.match(info.details):
-                missing = trait.effective_command_ids() - set(info.details.supported_commands)
+                missing = []
+
+                if commands := trait.effective_command_ids() - details.supported_commands:
+                    missing.append(" does not implement " + ", ".join(sorted(commands)))
+
+                if keywords := trait.effective_keyword_ids() - info.details.published_keywords:
+                    missing.append(" does not publish " + ", ".join(sorted(keywords)))
+
                 raise DeclarationError(
-                    f"Device declares trait '{trait.name}' "
-                    f"but does not implement commands: {"".join(missing)}"
+                    f"Device declares trait '{trait.name}' but {'; '.join(missing)}"
                 )
 
     @override

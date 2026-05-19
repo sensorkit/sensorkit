@@ -37,8 +37,11 @@ type EntityType = Literal["generic", "device", "controller", "program"]
 class DeviceDetails(BaseModel):
     """Device info."""
 
-    supported_commands: set[str]
+    supported_commands: frozenset[str]
     """Identifiers of each command supported by this device."""
+
+    published_keywords: frozenset[str]
+    """Identifiers of each keyword this device declares it publishes."""
 
     @functools.cached_property
     def archetype(self):
