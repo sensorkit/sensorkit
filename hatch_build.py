@@ -1,11 +1,5 @@
 """
 Hatchling build hook — performs build-time assembly of module source trees.
-
-Wheel builds:    applies force_include for each module listed under
-                 plugin-modules in [tool.hatch.build.hooks.custom].
-Editable builds: returns immediately; dev-mode-dirs adds each module src
-                 tree to the .pth file so all plugin subpackages resolve
-                 live from their source directories.
 """
 
 from __future__ import annotations
@@ -19,7 +13,7 @@ class CustomBuildHook(BuildHookInterface):
     PLUGIN_NAME = "custom"
 
     def initialize(self, version: str, build_data: dict) -> None:
-        if self.target_name in ("editable", "sdist"):
+        if version != "standard":
             return
 
         for module in self.config.get("modules", []):
