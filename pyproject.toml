@@ -78,6 +78,10 @@ slack = [
     "python-dotenv",
 ]
 thesky = []
+webapi = [
+    "fastapi>=0.115.12",
+    "uvicorn>=0.34.0",
+]
 udl = [
     "udl-sdk",
     "httpx",
