@@ -55,6 +55,18 @@ class TaskQueue:
 
             return self.tasks[0] if self.tasks else None
 
+    async def flush_expired(self) -> int:
+        """Remove all expired tasks from the queue."""
+        async with self._lock:
+            now = datetime.now(UTC)
+            original_len = len(self.tasks)
+            self.tasks = [t for t in self.tasks if t.end_time and t.end_time > now]
+            removed = original_len - len(self.tasks)
+            if removed:
+                logger.debug(f"flushed {removed} expired tasks from queue")
+                await self._update_offers()
+            return removed
+
     async def remove_task(self, task_id: str) -> bool:
         """Remove a specific task by ID."""
         async with self._lock:

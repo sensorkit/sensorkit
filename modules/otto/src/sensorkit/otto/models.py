@@ -1,7 +1,7 @@
 import os
-from typing import List
+from typing import List, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class EnvResolvingModel(BaseModel):
@@ -30,6 +30,8 @@ class CollectConfig(BaseModel):
     track_mode: str
     dither: bool = False
     dither_amount_arcsec: float = 0.0
+    scan_mode: bool = False
+    scan_direction: Literal["eastward", "westward"] | None = None
     filters: List[str] = Field(default_factory=list)
     exposure_min: int = 1
     exposure_max: int = 10
@@ -64,13 +66,22 @@ class PublishConfig(EnvResolvingModel):
     udl: UDLPublishConfig | None = None
 
 
+UvicornLogLevel = Literal["critical", "error", "warning", "info", "debug", "trace"]
+
+
 class ServerConfig(BaseModel):
     host: str
     port: int = 8000
-    log_level: str | None = None
+    log_level: UvicornLogLevel | None = None
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _normalize_log_level(cls, v):
+        return v.lower() if isinstance(v, str) else v
 
 
 class OttoConfig(BaseModel):
+    entity: str
     controller: str
     task: TaskConfig
     collect: CollectConfig
