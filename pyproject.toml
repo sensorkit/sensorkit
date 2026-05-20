@@ -38,6 +38,9 @@ alpaca = [
     "alpyca>=3.1.1",
     "numpy>=1.24.0",
 ]
+indigo = [
+    "websockets>=14.0",
+]
 nina = [
     "httpx",
     "python-dotenv",
@@ -130,6 +133,7 @@ type = "layers"
 layers = [
     """
     sensorkit.alpaca |
+    sensorkit.indigo |
     sensorkit.nina |
     sensorkit.node_platform |
     sensorkit.otto |
@@ -161,6 +165,7 @@ packages = ["core/src/sensorkit"]
 dev-mode-dirs = [
     "core/src",
     "modules/alpaca/src",
+    "modules/indigo/src",
     "modules/nina/src",
     "modules/node_platform/src",
     "modules/otto/src",
@@ -175,6 +180,7 @@ dev-mode-dirs = [
 path = "hatch_build.py"
 modules = [
     "alpaca",
+    "indigo",
     "nina",
     "node_platform",
     "otto",
