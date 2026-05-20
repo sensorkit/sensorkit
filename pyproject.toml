@@ -38,6 +38,10 @@ alpaca = [
     "alpyca>=3.1.1",
     "numpy>=1.24.0",
 ]
+nina = [
+    "httpx",
+    "python-dotenv",
+]
 node-platform = [
     "ourskyai-node-platform-api>=1.4.61",
     "python-dotenv",
@@ -126,6 +130,7 @@ type = "layers"
 layers = [
     """
     sensorkit.alpaca |
+    sensorkit.nina |
     sensorkit.node_platform |
     sensorkit.otto |
     sensorkit.pwi4 |
@@ -156,6 +161,7 @@ packages = ["core/src/sensorkit"]
 dev-mode-dirs = [
     "core/src",
     "modules/alpaca/src",
+    "modules/nina/src",
     "modules/node_platform/src",
     "modules/otto/src",
     "modules/pwi4/src",
@@ -169,6 +175,7 @@ dev-mode-dirs = [
 path = "hatch_build.py"
 modules = [
     "alpaca",
+    "nina",
     "node_platform",
     "otto",
     "pwi4",
