@@ -72,6 +72,11 @@ sky-transmission = [
 senpai = [
     "senpai @ git+https://github.com/zgazak/senpai.git@big-optimize",
 ]
+slack = [
+    "slack-sdk",
+    "aiohttp",
+    "python-dotenv",
+]
 thesky = []
 udl = [
     "udl-sdk",
@@ -140,6 +145,7 @@ layers = [
     sensorkit.pwi4 |
     sensorkit.senpai |
     sensorkit.sky_transmission |
+    sensorkit.slack |
     sensorkit.thesky |
     sensorkit.udl
     """,
@@ -172,6 +178,7 @@ dev-mode-dirs = [
     "modules/pwi4/src",
     "modules/senpai/src",
     "modules/sky_transmission/src",
+    "modules/slack/src",
     "modules/thesky/src",
     "modules/udl/src",
 ]
@@ -187,6 +194,7 @@ modules = [
     "pwi4",
     "senpai",
     "sky_transmission",
+    "slack",
     "thesky",
     "udl",
 ]
