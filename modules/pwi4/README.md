@@ -1,33 +1,33 @@
 # PWI4 Module
 
-The PWI4 module provides integration with PlaneWave Instruments PWI4 mounts and accessories.
+The PWI4 module provides integration for PlaneWave Instruments devices via the PWI4 HTTP API.
 
-## Features
-- Mount control (slew, park, home, offsets)
-- Focuser, rotator, and mirror cover support
-- Custom path tracking and model management
+## Supported Devices
+- Cover (mirror cover)
+- Focuser
+- Mount
+- Rotator
 
 ## Example Config
 ```yaml
-entity: pwi_service
-key: Config
+entity: pwi4_service
+key: PWI4Config
 value:
   endpoints:
-    - host: pwihost-1
+    - host: localhost
       port: 8220
       devices:
-        - entity: pwi4mount-1
+        mount1:
           device_type: mount
-    - host: pwihost-2
-      port: 8220
-      devices:
-        - entity: pwi4mount-2
-          device_type: mount
+          disable_axis_on_deinit: false
+          status_frequency: 1
+          timeout: 120
+          wrap_autocenter: true
+          wrap_interval: 60
+          wrap_deadband_deg: 10.0
 ```
 
 ## Usage
-- Add the config above to your main configuration YAML.
-- Use the CLI to start the service:
-  ```sh
-  sensorkit service run -s sensorkit.pwi4.service -n pwi_service
-  ```
+```sh
+sensorkit service run pwi4_service sensorkit.pwi4.service
+```

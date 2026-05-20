@@ -49,7 +49,7 @@ otto = [
     "udl-sdk",
 ]
 pwi4 = [
-    "httpx<=0.28.0",
+    "httpx",
 ]
 thesky = []
 thesky-simulator = [
