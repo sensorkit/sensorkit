@@ -19,6 +19,11 @@ TEMPLATE_MARKER = b"//USER_SCRIPT"
 class SimulationState(TypedDict):
     ccdsoftCamera: dict[str, Any]
     sky6RASCOMTele: dict[str, Any]
+    sky6Dome: dict[str, Any]
+    OpticalTubeAssembly: dict[str, Any]
+    WeatherUtil: dict[str, Any]
+    sky6StarChart: dict[str, Any]
+    Raven3: dict[str, Any]
 
 
 class Simulation(TypedDict):
@@ -56,7 +61,15 @@ class TheSkySimulator:
     def __init__(self, host: str = "127.0.0.1", port: int = 3040):
         self.host = host
         self.port = port
-        self._state = SimulationState(ccdsoftCamera={}, sky6RASCOMTele={})
+        self._state = SimulationState(
+            ccdsoftCamera={},
+            sky6RASCOMTele={},
+            sky6Dome={},
+            OpticalTubeAssembly={},
+            WeatherUtil={},
+            sky6StarChart={},
+            Raven3={},
+        )
 
     @staticmethod
     def _simulate(js: bytes, state: SimulationState):
