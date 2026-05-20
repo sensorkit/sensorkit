@@ -66,6 +66,11 @@ senpai = [
     "senpai @ git+https://github.com/zgazak/senpai.git@big-optimize",
 ]
 thesky = []
+udl = [
+    "udl-sdk",
+    "httpx",
+    "python-dotenv",
+]
 thesky-simulator = [
     "click>=8.1.8",
     "dukpy>=0.5.0",
@@ -126,7 +131,8 @@ layers = [
     sensorkit.pwi4 |
     sensorkit.senpai |
     sensorkit.sky_transmission |
-    sensorkit.thesky
+    sensorkit.thesky |
+    sensorkit.udl
     """,
     "sensorkit.cli",
     "sensorkit.webapi",
@@ -156,6 +162,7 @@ dev-mode-dirs = [
     "modules/senpai/src",
     "modules/sky_transmission/src",
     "modules/thesky/src",
+    "modules/udl/src",
 ]
 
 [tool.hatch.build.hooks.custom]
@@ -168,6 +175,7 @@ modules = [
     "senpai",
     "sky_transmission",
     "thesky",
+    "udl",
 ]
 subpackage-path = "modules/{module}/src/sensorkit/{module}"
 
