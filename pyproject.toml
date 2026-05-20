@@ -39,7 +39,8 @@ alpaca = [
     "numpy>=1.24.0",
 ]
 node-platform = [
-    "ourskyai-node-platform-api<=1.3.9953",
+    "ourskyai-node-platform-api>=1.4.61",
+    "python-dotenv",
 ]
 otto = [
     "google-auth",

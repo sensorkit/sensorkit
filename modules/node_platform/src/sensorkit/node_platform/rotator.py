@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-from loguru import logger
-
 import ourskyai_node_platform_api as osapi
+from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected, RotatorPosition
@@ -14,23 +13,24 @@ from sensorkit.node_platform.device import (
     NodePlatformDeviceConfig,
     NodePlatformDeviceState,
 )
+from sensorkit.std.instrument import ChangeRotatorPosition
 
 
 @sk.declare_device
 class NodePlatformRotator(NodePlatformDevice):
     """Node Platform Rotator implementation."""
+
     config: NodePlatformRotatorConfig
     device_name = "Rotator"
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state and start status publishing."""
         device = sk.device()
 
-        # Restore last known state
+        # Restore state
         try:
             self.state = await device.kv_get_model(NodePlatformRotatorState)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformRotatorState()
@@ -38,19 +38,29 @@ class NodePlatformRotator(NodePlatformDevice):
         self.rotator_position: float | None = None
         self.rotator_moving: bool | None = None
 
-        # Start rotator status publishing
-        logger.debug("starting node_platform rotator status loop")
-        self._status_task = asyncio.create_task(self.status_publish())
+        # Initialize the rotator
+        await self.rotator_init(sk.Init())
+        self.start_status_loop(self.status_publish())
 
-        # Wait for initial position
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.rotator_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
+    @sk.on_detach
+    async def entity_deinit(self):
+        # Deinitialize the rotator
+        await self.rotator_deinit(sk.Deinit())
+
+        # Clean up
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.api.close()
+        await sk.device().kv_put_model(self.state)
+
     @sk.command_handler
     async def rotator_init(self, cmd: sk.Init):
-        """Enable or disable rotation compensation."""
-        self.require_connected()
+        # Toggle field derotation
         if self.config.derotate:
             await self.api.call("v1_enable_derotation_compensation")
         else:
@@ -58,36 +68,21 @@ class NodePlatformRotator(NodePlatformDevice):
 
     @sk.command_handler
     async def rotator_deinit(self, cmd: sk.Deinit):
-        """Disable rotation compensation and stop motion."""
-        self.require_connected()
-        await self.api.call("v1_disable_derotation_compensation")
+        await self.require_connected()
         await self.rotator_stop(sk.Stop())
-
-    @sk.on_detach
-    async def entity_deinit(self):
-        """Save current state and stop status publishing."""
-        logger.debug("stopping node_platform rotator status loop")
-        if hasattr(self, "_status_task"):
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
-
-        await sk.device().kv_put_model(self.state)
-        await self.api.close()
+        await self.api.call("v1_disable_derotation_compensation")
 
     @sk.command_handler
     async def rotator_stop(self, cmd: sk.Stop):
-        self.require_connected()
-        logger.debug("stopping node_platform rotator")
+        await self.require_connected()
+        logger.debug("stopping rotator")
         await self.api.call("v1_halt_rotator")
-        logger.debug("stopped node_platform rotator")
+        logger.debug("stopped rotator")
 
     @sk.command_handler
-    async def rotator_move(self, cmd: sk.ChangeRotatorPosition):
-        self.require_connected()
-        logger.debug(f"moving node_platform rotator to position {cmd.position}°")
+    async def rotator_change(self, cmd: ChangeRotatorPosition):
+        await self.require_connected()
+        logger.debug(f"changing rotator to position {cmd.position}°")
 
         req = osapi.V1GoToRotatorPositionRequest(
             position_degrees=cmd.position,
@@ -96,12 +91,14 @@ class NodePlatformRotator(NodePlatformDevice):
         await self.api.call("v1_go_to_rotator_position", req)
         await asyncio.sleep(0.1)
 
-        # Wait for the rotator move to complete
         async with asyncio.timeout(self.config.timeout):
-            while self.rotator_moving is None or self.rotator_moving:
-                await asyncio.sleep(self.config.status_frequency)
+            while True:
+                status: osapi.V1RotatorStatus = await self.api.call("v1_get_rotator_status")
+                if not status.moving:
+                    break
+                await asyncio.sleep(1)
 
-        logger.debug(f"moved node_platform rotator to position {cmd.position}°")
+        logger.debug(f"changed rotator to position {cmd.position}°")
 
     async def status_publish(self):
         while True:
@@ -132,6 +129,7 @@ class NodePlatformRotator(NodePlatformDevice):
 
             except Exception as e:
                 logger.warning(f"Failed to update Node Platform rotator status ({e})")
+                await asyncio.sleep(self.config.status_frequency)
                 continue
 
             await asyncio.sleep(self.config.status_frequency)
@@ -139,10 +137,11 @@ class NodePlatformRotator(NodePlatformDevice):
 
 class NodePlatformRotatorConfig(NodePlatformDeviceConfig[NodePlatformRotator]):
     """Node Platform Rotator configuration."""
+
     device_type: Literal["rotator"] = "rotator"
     derotate: bool = False
-    timeout: float = 60.0
     status_frequency: float = 1.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):
@@ -151,4 +150,5 @@ class NodePlatformRotatorConfig(NodePlatformDeviceConfig[NodePlatformRotator]):
 
 class NodePlatformRotatorState(NodePlatformDeviceState):
     """Node Platform Rotator state."""
+
     device_type: Literal["rotator"] = "rotator"

@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-from loguru import logger
-
 import ourskyai_node_platform_api as osapi
+from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Connected
@@ -19,63 +18,64 @@ from sensorkit.node_platform.device import (
 @sk.declare_device
 class NodePlatformM3(NodePlatformDevice):
     """Node Platform M3 (tertiary mirror) implementation."""
+
     config: NodePlatformM3Config
     device_name = "M3"
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state and start status publishing."""
         device = sk.device()
 
-        # Restore last known state
+        # Restore state
         try:
             self.state = await device.kv_get_model(NodePlatformM3State)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformM3State()
 
         self.m3_port: int | None = None
 
-        # Start M3 status publishing
-        logger.debug("starting node_platform m3 status loop")
-        self._status_task = asyncio.create_task(self.status_publish())
+        # Initialize the M3
+        await self.m3_init(sk.Init())
+        self.start_status_loop(self.status_publish())
+
+        # Ensure we have a position
+        async with asyncio.timeout(self.config.timeout):
+            while self.m3_port is None:
+                await asyncio.sleep(self.config.status_frequency)
+
+    @sk.on_detach
+    async def entity_deinit(self):
+        # Deinitialize the M3
+        await self.m3_deinit(sk.Deinit())
+
+        # Clean up
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.api.close()
+        await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def m3_init(self, cmd: sk.Init):
-        """Nothing to do."""
         pass
 
     @sk.command_handler
     async def m3_deinit(self, cmd: sk.Deinit):
-        """Nothing to do."""
-        pass
-
-    @sk.on_detach
-    async def entity_deinit(self):
-        """Save current state and stop status publishing."""
-        logger.debug("stopping node_platform m3 status loop")
-        if hasattr(self, "_status_task"):
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
-
-        await sk.device().kv_put_model(self.state)
-        await self.api.close()
+        await self.require_connected()
+        await self.m3_stop(sk.Stop())
 
     @sk.command_handler
     async def m3_stop(self, cmd: sk.Stop):
-        self.require_connected()
-        logger.debug("stopping node_platform m3")
+        await self.require_connected()
+        logger.debug("stopping m3")
         await self.api.call("v1_halt_optical_tube_m3")
-        logger.debug("stopped node_platform m3")
+        logger.debug("stopped m3")
 
     # @sk.command_handler
-    # async def m3_go_to_port(self, cmd: sk.ChangeM3Port):
+    # async def m3_change(self, cmd: sk.ChangeM3Port):
     #     self.require_connected()
-    #     logger.debug(f"moving node_platform m3 to port {cmd.port}")
+    #     logger.debug(f"changing m3 to port {cmd.port}")
     #
     #     req = osapi.V1GoToOpticalTubeM3PortRequest(port=cmd.port)
     #     await self.api.call("v1_go_to_optical_tube_m3_port", req)
@@ -86,7 +86,7 @@ class NodePlatformM3(NodePlatformDevice):
     #         while self.m3_port is None or self.m3_port != cmd.port:
     #             await asyncio.sleep(self.config.status_frequency)
     #
-    #     logger.debug(f"moved node_platform m3 to port {cmd.port}")
+    #     logger.debug(f"changed m3 to port {cmd.port}")
 
     async def status_publish(self):
         while True:
@@ -112,6 +112,7 @@ class NodePlatformM3(NodePlatformDevice):
 
             except Exception as e:
                 logger.warning(f"Failed to update Node Platform M3 status ({e})")
+                await asyncio.sleep(self.config.status_frequency)
                 continue
 
             await asyncio.sleep(self.config.status_frequency)
@@ -119,9 +120,10 @@ class NodePlatformM3(NodePlatformDevice):
 
 class NodePlatformM3Config(NodePlatformDeviceConfig[NodePlatformM3]):
     """Node Platform M3 configuration."""
+
     device_type: Literal["m3"] = "m3"
-    timeout: float = 30.0
     status_frequency: float = 1.0
+    timeout: float = 30.0
 
     @override
     def create_device(self):
@@ -130,4 +132,5 @@ class NodePlatformM3Config(NodePlatformDeviceConfig[NodePlatformM3]):
 
 class NodePlatformM3State(NodePlatformDeviceState):
     """Node Platform M3 state."""
+
     device_type: Literal["m3"] = "m3"
