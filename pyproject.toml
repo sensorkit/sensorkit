@@ -52,6 +52,16 @@ otto = [
 pwi4 = [
     "httpx",
 ]
+sky-transmission = [
+    "allclear @ git+https://github.com/zgazak/allclear.git@main",
+    "alpyca>=3.1.0",
+    "Pillow",
+    "imageio[pyav]",
+    "watchdog",
+    "fastapi>=0.115.12",
+    "uvicorn>=0.34.0",
+    "matplotlib",
+]
 senpai = [
     "senpai @ git+https://github.com/zgazak/senpai.git@big-optimize",
 ]
@@ -115,6 +125,7 @@ layers = [
     sensorkit.otto |
     sensorkit.pwi4 |
     sensorkit.senpai |
+    sensorkit.sky_transmission |
     sensorkit.thesky
     """,
     "sensorkit.cli",
@@ -143,6 +154,7 @@ dev-mode-dirs = [
     "modules/otto/src",
     "modules/pwi4/src",
     "modules/senpai/src",
+    "modules/sky_transmission/src",
     "modules/thesky/src",
 ]
 
@@ -154,6 +166,7 @@ modules = [
     "otto",
     "pwi4",
     "senpai",
+    "sky_transmission",
     "thesky",
 ]
 subpackage-path = "modules/{module}/src/sensorkit/{module}"
