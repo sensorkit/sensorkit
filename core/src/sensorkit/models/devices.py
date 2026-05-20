@@ -199,6 +199,21 @@ class AxisTargetDistance(BaseModel):
     rms_error_arcseconds: float | None = None
     axis: MountAxis
 
+
+@declare_keyword
+class Slewing(BaseModel):
+    """Indicates whether a mount is slewing."""
+
+    is_slewing: bool
+
+
+@declare_keyword
+class Tracking(BaseModel):
+    """Indicates whether a mount is tracking."""
+
+    is_tracking: bool
+
+
 @dataclass
 class AltAzArcseconds:
     """An angular offset expressed in altitude and azimuth arcseconds."""
