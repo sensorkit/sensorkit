@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import os
 from datetime import datetime
 from enum import StrEnum
 from typing import override
@@ -31,6 +33,10 @@ from sensorkit.common.aio import cleanup_future
 
 SUBJECT_PREFIX = "sensorkit"
 DELETE_OPS = (KV_DEL, KV_PURGE)
+
+logging.getLogger("nats").setLevel(
+    logging.WARNING if os.environ.get("SENSORKIT_DEBUG") else logging.CRITICAL
+)
 
 
 class Method(StrEnum):
