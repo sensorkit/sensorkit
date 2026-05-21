@@ -350,10 +350,10 @@ class ControllerImpl(EntityImpl, ControllerInterface):
                     )
 
             # Execute the task.
-            logger.info(f"Executing {task.task_type} task")
             start_time = datetime.now(UTC)
 
             with self.enter_context():
+                logger.info(f"Executing {task.task_type} task")
                 aio_task = asyncio.create_task(self._execute_task(task))
 
             self._task_asyncio = aio_task
@@ -366,14 +366,17 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
             end_time = datetime.now(UTC)
         except asyncio.CancelledError:
-            logger.warning(f"Execution of {task.task_type} task cancelled")
             await call.fail()
+            with self.enter_context():
+                logger.warning(f"Execution of {task.task_type} task cancelled")
         except Exception as e:
-            logger.error(f"Error executing {task.task_type} task")
-            logger.opt(exception=e).debug(f"{task.task_type} ({task.task_id}) failed")
             await call.fail()
+            with self.enter_context():
+                logger.error(f"Error executing {task.task_type} task")
+                logger.opt(exception=e).debug(f"{task.task_type} ({task.task_id}) failed")
         else:
-            logger.info(f"Finished {task.task_type} task")
+            with self.enter_context():
+                logger.info(f"Finished {task.task_type} task")
             await call.succeed(
                 result=TaskExecutionResult(
                     task_id=task.task_id,

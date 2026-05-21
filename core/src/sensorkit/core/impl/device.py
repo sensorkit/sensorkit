@@ -29,7 +29,7 @@ from sensorkit.core.impl.entity import EntityImpl
 class DeviceImpl(EntityImpl, DeviceInterface):
     """Helper for implementing server-side functionality of a Device."""
 
-    current: ClassVar[ContextVar[DeviceImpl | None]] = ContextVar("current_program", default=None)
+    current: ClassVar[ContextVar[DeviceImpl | None]] = ContextVar("current_device", default=None)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

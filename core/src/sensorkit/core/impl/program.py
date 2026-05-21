@@ -267,7 +267,8 @@ class ProgramImpl(EntityImpl, ProgramInterface):
         request: ProgramActiveStateRequest,
         call: CallContext[None, None],
     ):
-        logger.info(f"Requested to {request.action} the tasking loop")
+        with self.enter_context():
+            logger.info(f"Requested to {request.action} the tasking loop")
 
         if request.action == "start":
             # Cannot activate tasking if we aren't enabled with a target Controller configured.
@@ -293,7 +294,8 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             match request.action:
                 case "start":
                     # Start a new tasking loop.
-                    await self._start_loop(request.contexts)
+                    with self.enter_context():
+                        await self._start_loop(request.contexts)
                 case "stop":
                     # Stop the tasking loop gracefully.
                     # TODO: add backstop timeout reflecting maximum task time
@@ -304,9 +306,12 @@ class ProgramImpl(EntityImpl, ProgramInterface):
                     )
                 case "abort":
                     # Abort the tasking loop immediately.
-                    await self._stop_loop(timeout=0)
+                    with self.enter_context():
+                        await self._stop_loop(timeout=0)
         except Exception as e:
-            logger.exception("Error setting active state")
+            with self.enter_context():
+                logger.exception("Error setting active state")
+
             await call.fail(f"{type(e).__name__} setting active state ({e})")
         else:
             await call.succeed(result=None)

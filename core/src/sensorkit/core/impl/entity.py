@@ -49,10 +49,17 @@ class EntityImpl(EntityBase, EntityInterface):
         var = type(self).current
         token = var.set(self)
 
+        # Also set the base EntityImpl.current so sk.entity() resolves for all entity types.
+        base_var = EntityImpl.current
+        base_token = base_var.set(self) if var is not base_var else None
+
         try:
             yield
         finally:
             var.reset(token)
+
+            if base_token is not None:
+                base_var.reset(base_token)
 
     @override
     @property
