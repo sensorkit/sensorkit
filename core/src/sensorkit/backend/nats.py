@@ -94,9 +94,18 @@ class NATSBackendImpl(BackendImpl):
 
     @override
     @classmethod
-    async def create(cls, *args, **kwargs):
+    async def create(cls, servers: str | list[str] | None = None, **kwargs):
+        if servers is None:
+            servers = os.environ.get("NATS_URL", os.environ.get("SENSORKIT_BACKEND_ARG"))
+
+        if isinstance(servers, str):
+            servers = servers.split(",")
+
+        if servers is not None:
+            kwargs["servers"] = servers
+
         # Connect to the NATS broker.
-        nc = await nats.connect(*args, **kwargs)
+        nc = await nats.connect(**kwargs)
 
         # Create JetStream resources.
         js = nc.jetstream()

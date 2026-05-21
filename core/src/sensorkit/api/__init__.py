@@ -2,7 +2,7 @@ from importlib.metadata import version as _pkg_version
 
 VERSION = _pkg_version("sensorkit")
 
-from sensorkit.api.bootstrap import connect
+from sensorkit.api.bootstrap import connect, import_plugins
 from sensorkit.api.declarative import (
     DeclaredController,
     DeclaredDevice,
