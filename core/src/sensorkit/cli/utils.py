@@ -1,12 +1,14 @@
 import functools
-from typing import Any, Callable, TypeVar
+from contextlib import contextmanager
+from typing import Any, Callable
 
 import asyncclick as click
 from rich.console import Console
 
-T = TypeVar("T")
+from sensorkit.api.entrypoint import ShutdownSignal
 
 console = Console()
+
 
 def common_options(f: Callable[..., Any]) -> Callable[..., Any]:
     """Decorator to add common SensorKit options to a command."""
@@ -14,36 +16,48 @@ def common_options(f: Callable[..., Any]) -> Callable[..., Any]:
     # For now, we can just return f
     return f
 
+
 def entity_option(default: str | None = None, required: bool = False, help: str = "Entity name"):
     """Standardized entity option."""
     return click.option("-e", "--entity", default=default, required=required, help=help)
 
-async def handle_errors(coro: Callable[..., Any]):
-    """Wrapper to handle common SensorKit errors and display them using rich."""
-    from sensorkit.backend.base import KVError
+
+@contextmanager
+def report_errors():
+    from sensorkit.backend.base import BackendError, KVError
     from sensorkit.backend.lease import LeaseUnavailableError
-    
+
     try:
-        return await coro()
+        yield
+    except* ShutdownSignal:
+        # Fall through to normal shutdown.
+        pass
     except* KVError as eg:
-        console.print(f"[bold red]Error:[/bold red] Database or configuration error: {eg.exceptions[0]}")
-        raise click.Abort()
-    except* LeaseUnavailableError:
-        console.print("[bold red]Error:[/bold red] Resource is busy or already in use.")
-        raise click.Abort()
+        console.print(f"[red]Error:[/red] Configuration or state error: {eg.exceptions[0]}")
+        raise click.Abort() from eg
+    except* LeaseUnavailableError as eg:
+        console.print("[red]Error:[/red] Service or entity is already running!")
+        raise click.Abort() from eg
+    except* BackendError as eg:
+        console.print(f"[red]Error:[/red] Backend unavailable: {eg.exceptions[0]}")
+        raise click.Abort() from eg
     except* Exception as eg:
-        console.print(f"[bold red]Unexpected Error:[/bold red] {eg.exceptions[0]}")
-        raise click.Abort()
+        for e in eg.exceptions:
+            console.print(f"[red]Unexpected {type(e).__name__}[/red]")
+
+        console.print_exception()
+        raise click.Abort() from eg
+
 
 def with_kit(f: Callable[..., Any]) -> Callable[..., Any]:
     """Decorator that provides a 'kit' instance to the command and handles errors."""
+
     @functools.wraps(f)
     async def wrapper(*args, **kwargs):
         from sensorkit.api.bootstrap import connect
-        
-        async def run():
+
+        with report_errors():
             kit = await connect()
             return await f(kit, *args, **kwargs)
-            
-        return await handle_errors(run)
+
     return wrapper

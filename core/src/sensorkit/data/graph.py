@@ -265,7 +265,6 @@ class DataGraph(BaseModel):
 
     @model_validator(mode="before")
     def _validate(cls, values):
-        logger.debug(f"DataGraph validation {values=}")
         if simple := values.get("simple"):
             if "nodes" in values:
                 raise ValueError("Only one of 'nodes' or 'simple' can be defined")

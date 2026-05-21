@@ -1,12 +1,20 @@
 import asyncio
+import pathlib
 import textwrap
 
 import asyncclick as click
-from pydantic import BaseModel, Field, ValidationError
+import yaml
+from loguru import logger
+from pydantic import BaseModel, Field
 
-from sensorkit.cli.utils import handle_errors
+import sensorkit.api as sk
+from sensorkit.cli.config import config_load
+from sensorkit.cli.utils import report_errors
+from sensorkit.common.logging import add_debug_logger, configure_logging
+from sensorkit.config.parser import parse_config
 
 DEFAULT_CONFIG_FILE = "services.yaml"
+DEFAULT_UNIFIED_FILE = "sensorkit.yaml"
 
 
 class ServiceDefinition(BaseModel):
@@ -27,6 +35,116 @@ class ServiceConfig(BaseModel):
     """Collection of service definitions loaded from a YAML config file."""
     services: list[ServiceDefinition] = Field(default_factory=list)
 
+    @classmethod
+    def from_yaml_file(cls, config_file: pathlib.Path):
+        """Load service configuration from a YAML file.
+
+        Args:
+            config_file: Path to the config file, or None to use the default.
+
+        Returns:
+            ServiceConfig instance, or None if the file does not exist.
+
+        Raises:
+            ValidationError: If the input configuration is invalid.
+            YAMLError: If the config file cannot be parsed.
+            OSError: If the config file cannot be read.
+        """
+        try:
+            with config_file.open("r") as f:
+                return cls.model_validate(yaml.safe_load(f))
+        except FileNotFoundError:
+            return None
+
+
+def load_unified_config(config_file: pathlib.Path):
+    """Load service configuration from a YAML file."""
+    try:
+        with config_file.open("r") as f:
+            parsed = parse_config(yaml.safe_load(f))
+            config = ServiceConfig()
+
+            for svc in parsed.services:
+                if svc.python_module:
+                    config.services.append(
+                        ServiceDefinition.from_shorthand(f"{svc.id}:{svc.python_module}")
+                    )
+
+            return config
+    except FileNotFoundError:
+        return None
+
+
+async def read_config_file(config_file: str | None):
+    """Find the config file, if any."""
+    config: ServiceConfig | None = None
+    is_unified = False
+    errs = []
+
+    try:
+        file = config_file or DEFAULT_CONFIG_FILE
+        config = ServiceConfig.from_yaml_file(pathlib.Path(file))
+    except Exception as e:
+        errs.append(e)
+
+    if not config:
+        file = config_file or DEFAULT_UNIFIED_FILE
+
+        try:
+            # Try the unified config format.
+            sk.import_plugins()
+            config = load_unified_config(pathlib.Path(file))
+            is_unified = True
+        except Exception as e:
+            errs.append(e)
+
+    if not config and errs:
+        raise ExceptionGroup("could not load configuration", errs)
+
+    return config, is_unified
+
+
+def _logger_formatter(record):
+    color = record["extra"].get("entity_color", "magenta")
+    return (
+        "{extra[entity_type]} "
+        f" <{color}>{{extra[entity]}}</> "
+        " <level>{message}</level>\n"
+    )
+
+
+def _logger_patcher(record):
+    current = sk.entity()
+
+    if current:
+        entity = current.entity
+
+        if sk.device():
+            entity_type = "💠 "
+            entity_color = "fg 57"
+        elif sk.controller():
+            entity_type = "📡 "
+            entity_color = "fg 39"
+        elif sk.program():
+            entity_type = "⏭️ "
+            entity_color = "fg 36"
+        elif entity == "agent":
+            entity_type = "🤖 "
+            entity_color = "fg 84"
+        else:
+            entity_type = "🟣 "
+            entity_color = "fg 144"
+    else:
+        entity = ".".join(record["name"].split(".")[1:])
+        entity_type = "⚙️ "
+        entity_color = "dim"
+
+    record["extra"].update(
+        entity=entity,
+        entity_type=entity_type,
+        entity_color=entity_color,
+    )
+
 
 @click.command("go")
 @click.option(
@@ -36,20 +154,15 @@ class ServiceConfig(BaseModel):
     type=click.Path(exists=True),
 )
 @click.option(
-    "--daemon", "-d",
+    "--load-config", "-l",
     is_flag=True,
-    help="Run in daemon mode",
-)
-@click.option(
-    "--restart", "-r",
-    is_flag=True,
-    help="Automatically restart services on failure",
+    help="Automatically load configuration (unified config format only)",
 )
 @click.option(
     "--log-file",
     type=click.Path(dir_okay=False, writable=True, resolve_path=True),
     default=None,
-    help="If set, all log output (stdout/stderr, exceptions, and logger calls) also goes here.",
+    help="If set, debug log output goes here instead of the default location.",
 )
 @click.option(
     "--log-file-append",
@@ -60,7 +173,7 @@ class ServiceConfig(BaseModel):
 @click.option(
     "--log-level",
     default="INFO",
-    help="Log level for all log output (file and stdout/stderr)."
+    help="Log level for console output."
 )
 @click.option(
     "--add-service",
@@ -79,9 +192,10 @@ class ServiceConfig(BaseModel):
         "mount park)."
     ),
 )
+@click.pass_context
 async def go_command(
-    daemon: bool,
-    restart: bool,
+    ctx: click.Context,
+    load_config: bool,
     config_file: str | None,
     log_file: str | None,
     log_file_append: bool,
@@ -90,62 +204,31 @@ async def go_command(
     shutdown_timeout: float,
 ):
     """Launch and manage services."""
-    import yaml
-    from loguru import logger
-
     from sensorkit.api.entrypoint import ServiceEntrypoint, run_services
-    from sensorkit.common.logging import configure_logging
 
-    if daemon:
-        raise NotImplementedError("--daemon flag not yet implemented")
-
-    # Configure logging
-    configure_logging(
-        level=log_level,
-        log_file=log_file,
-        log_file_append=log_file_append,
-    )
-
-    # Load config.
-    config: ServiceConfig | None = None
-    validation_errors: list[ValidationError] = []
-
+    # Read service configuration from file.
     try:
-        with open(config_file or DEFAULT_CONFIG_FILE, "r") as f:
-            # Find the first valid configuration in the input YAML.
-            config_data = yaml.safe_load_all(f)
+        config, is_unified = await read_config_file(config_file)
+    except ExceptionGroup as e:
+        logger.opt(exception=e).debug("could not load either config format")
+        info = textwrap.indent(f"{e.exceptions}", prefix="  ")
+        click.secho(f"Could not read configuration:\n{info}", fg="red", err=True)
+        return
 
-            for data in config_data:
-                try:
-                    # Use the first valid configuration in the document.
-                    config = ServiceConfig.model_validate(data)
-                    break
-                except ValidationError as e:
-                    validation_errors.append(e)
-    except Exception as e:
-        # If this load was explicitly requested (not a default), we fail here.
-        if config_file is not None:
-            info = textwrap.indent(str(e), prefix="  ")
-            logger.opt(exception=e).debug("error loading config file")
-            click.secho(f"Could not load '{config_file}':\n{info}", fg="red", err=True)
-            return
-
-        # Otherwise, fall through.
-
-    if config is None:
-        if validation_errors:
-            info = f"\n".join(
-                "  {doc}: {msg} near '{loc[0]}'".format(
-                    doc=i,
-                    **details,
-                )
-                for i, error in enumerate(validation_errors, 1)
-                for details in error.errors()
-            )
-            click.secho(f"Configuration is invalid:\n{info}", fg="red", err=True)
-            return
-
+    if not config:
         config = ServiceConfig()
+    elif is_unified and load_config:
+        print()
+        print(" ▶️ Loading configuration...")
+        print()
+
+        # Run the 'config load' subcommand to load config.
+        try:
+            async with asyncio.timeout(5.0):
+                await ctx.invoke(config_load, file=config_file or DEFAULT_UNIFIED_FILE, verbose=1)
+        except Exception as e:
+            click.secho(f"{type(e).__name__} while loading configuration", fg="red", err=True)
+            return
 
     # Include additional services from command line args.
     for shorthand in add_service:
@@ -176,11 +259,15 @@ async def go_command(
         click.secho("No services defined!", fg="red", err=True)
         return
 
-    async def run():
-        await run_services(
-            entrypoints,
-            max_restarts=-1 if restart else 0,
-            shutdown_timeout=shutdown_timeout,
-        )
+    configure_logging(level=log_level, format=_logger_formatter)
+    logger.configure(patcher=_logger_patcher)
+    debug_log_dest = add_debug_logger(file=log_file, append=log_file_append)
 
-    await handle_errors(run)
+    print()
+    print(" ▶️ Logging to", debug_log_dest)
+    print()
+    print(" ▶️ Starting services...")
+    print()
+
+    with report_errors():
+        await run_services(entrypoints, max_restarts=None, shutdown_timeout=shutdown_timeout)
