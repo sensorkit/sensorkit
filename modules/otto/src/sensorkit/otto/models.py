@@ -3,6 +3,8 @@ from typing import List, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+import sensorkit.api as sk
+
 
 class EnvResolvingModel(BaseModel):
     @model_validator(mode="before")
@@ -87,3 +89,12 @@ class OttoConfig(BaseModel):
     collect: CollectConfig
     publish: PublishConfig
     server: ServerConfig
+
+
+sk.declare_config_section(
+    "otto",
+    list[OttoConfig],
+    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
+    model_mapper=iter,
+    service_path="sensorkit.otto.service",
+)

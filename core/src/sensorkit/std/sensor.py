@@ -388,6 +388,15 @@ class SensorConfig(BaseModel):
     policies: SensorPolicies = Field(default_factory=SensorPolicies)
 
 
+sk.declare_config_section(
+    "sensors",
+    list[SensorConfig],
+    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
+    model_mapper=iter,
+    service_path=__name__,
+)
+
+
 # TODO: Phase out when UI code is updated to use ControllerInfo and SensorConfig for this info.
 class Capabilities(BaseModel):
     """Deprecated controller capability descriptor for the sensor service."""

@@ -36,6 +36,15 @@ class PWI4Config(BaseModel):
     endpoints: list[PWI4ServerConfig] = []
 
 
+sk.declare_config_section(
+    "pwi4",
+    list[PWI4Config],
+    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
+    model_mapper=iter,
+    service_path=__name__,
+)
+
+
 @sk.service_entrypoint(version=sk.VERSION)
 async def pwi4_service(service: sk.Service):
     await service.register()

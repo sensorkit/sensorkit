@@ -51,6 +51,15 @@ class AlpacaConfig(BaseModel):
     endpoints: list[AlpacaServerConfig] = []
 
 
+sk.declare_config_section(
+    "alpaca",
+    list[AlpacaConfig],
+    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
+    model_mapper=iter,
+    service_path=__name__,
+)
+
+
 @sk.service_entrypoint(version=sk.VERSION)
 async def alpaca_service(service: sk.Service):
     await service.register()

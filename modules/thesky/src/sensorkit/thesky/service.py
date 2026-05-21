@@ -46,6 +46,14 @@ class TheSkyServerConfig(BaseModel):
 class TheSkyConfig(BaseModel):
     endpoints: list[TheSkyServerConfig] = []
 
+sk.declare_config_section(
+    "thesky",
+    list[TheSkyConfig],
+    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
+    model_mapper=iter,
+    service_path=__name__,
+)
+
 
 @sk.service_entrypoint(version=sk.VERSION)
 async def thesky_service(service: sk.Service):
