@@ -143,7 +143,7 @@ class DemandProc(ABC):
             case 1:
                 logger.debug(f"{self.demand.state} is stopping gracefully")
 
-                while self._aio_task.cancelled():
+                while self._aio_task.cancelling() > 0:
                     self._aio_task.uncancel()
 
                 # Gracefully stop awaitables and SK tasks.
@@ -160,7 +160,7 @@ class DemandProc(ABC):
             case 2:
                 logger.debug(f"{self.demand.state} procedure is aborting immediately")
 
-                while self._aio_task.cancelled():
+                while self._aio_task.cancelling() > 0:
                     self._aio_task.uncancel()
 
                 # Forcefully stop awaitables and SK tasks.
