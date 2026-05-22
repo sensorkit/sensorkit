@@ -1,20 +1,17 @@
 """Tests for Node Platform enclosure device."""
 
-import asyncio
-
 import ourskyai_node_platform_api as osapi
 import pytest
-from unittest.mock import MagicMock
+from conftest import MockNodePlatformAPI
 
-from conftest import MockNodePlatformAPI, make_enclosure_status
+import sensorkit.api as sk
+from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.enclosure import (
     NodePlatformEnclosure,
     NodePlatformEnclosureConfig,
     NodePlatformEnclosureState,
 )
-from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
-import sensorkit.api as sk
 
 
 @pytest.fixture

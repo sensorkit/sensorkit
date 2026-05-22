@@ -1,13 +1,13 @@
 """Test PWI4 rotator device."""
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-
 from conftest import MockPWI4Client
-from sensorkit.pwi4.rotator import PWI4Rotator, PWI4RotatorConfig, PWI4RotatorState
+
 from sensorkit.pwi4.device import DeviceConnectionError
+from sensorkit.pwi4.rotator import PWI4Rotator, PWI4RotatorConfig
 
 
 class TestPWI4RotatorConfig:

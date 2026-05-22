@@ -1,17 +1,16 @@
 """Tests for Node Platform rotator device."""
 
 import pytest
-from unittest.mock import MagicMock
+from conftest import MockNodePlatformAPI
 
-from conftest import MockNodePlatformAPI, make_rotator_status
+import sensorkit.api as sk
+from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.rotator import (
     NodePlatformRotator,
     NodePlatformRotatorConfig,
     NodePlatformRotatorState,
 )
-from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.std.instrument import ChangeRotatorPosition
-import sensorkit.api as sk
 
 
 @pytest.fixture

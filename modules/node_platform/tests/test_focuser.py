@@ -1,17 +1,16 @@
 """Tests for Node Platform focuser device."""
 
 import pytest
-from unittest.mock import MagicMock
+from conftest import MockNodePlatformAPI
 
-from conftest import MockNodePlatformAPI, make_focuser_status
+import sensorkit.api as sk
+from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.focuser import (
     NodePlatformFocuser,
     NodePlatformFocuserConfig,
     NodePlatformFocuserState,
 )
-from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.std.optics import ChangeFocusPosition
-import sensorkit.api as sk
 
 
 @pytest.fixture

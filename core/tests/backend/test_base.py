@@ -5,7 +5,6 @@ import asyncio
 import pytest
 
 from sensorkit.backend.base import (
-    Backend,
     Entity,
     KeyNotFound,
     RemoteRequestError,

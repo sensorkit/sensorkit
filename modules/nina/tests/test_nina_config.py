@@ -1,8 +1,5 @@
 """Tests for NINA service configuration models."""
 
-import pytest
-
-from sensorkit.nina.service import NinaConfig, NinaServerConfig
 from sensorkit.nina.camera import NinaCameraConfig
 from sensorkit.nina.dome import NinaDomeConfig
 from sensorkit.nina.filter_wheel import NinaFilterWheelConfig
@@ -11,6 +8,7 @@ from sensorkit.nina.guider import NinaGuiderConfig
 from sensorkit.nina.mount import NinaMountConfig
 from sensorkit.nina.rotator import NinaRotatorConfig
 from sensorkit.nina.safety_monitor import NinaSafetyMonitorConfig
+from sensorkit.nina.service import NinaConfig, NinaServerConfig
 from sensorkit.nina.switch import NinaSwitchConfig
 from sensorkit.nina.weather import NinaWeatherConfig
 

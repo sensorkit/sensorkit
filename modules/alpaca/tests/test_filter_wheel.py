@@ -1,10 +1,9 @@
 """Tests for Alpaca filter wheel device."""
 
 import pytest
-
 from conftest import MockAlpacaSDKDevice
+
 from sensorkit.alpaca.filter_wheel import (
-    AlpacaFilterWheel,
     AlpacaFilterWheelConfig,
     AlpacaFilterWheelState,
 )

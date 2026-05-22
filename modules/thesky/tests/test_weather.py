@@ -1,6 +1,6 @@
 import pytest
 
-from sensorkit.thesky.weather import TheSkyWeather, TheSkyWeatherConfig
+from sensorkit.thesky.weather import TheSkyWeatherConfig
 
 
 @pytest.fixture

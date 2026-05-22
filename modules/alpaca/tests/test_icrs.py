@@ -1,13 +1,11 @@
 """Tests for Alpaca telescope ICRS FollowTarget."""
 
-import pytest
-
 import astropy.units as u
+import pytest
 from astropy.coordinates import EarthLocation
-
 from conftest import MockAlpacaSDKDevice
+
 from sensorkit.alpaca.telescope import (
-    AlpacaTelescope,
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
 )

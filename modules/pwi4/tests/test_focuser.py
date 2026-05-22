@@ -1,13 +1,13 @@
 """Test PWI4 focuser device."""
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-
 from conftest import MockPWI4Client
-from sensorkit.pwi4.focuser import PWI4Focuser, PWI4FocuserConfig, PWI4FocuserState
+
 from sensorkit.pwi4.device import DeviceConnectionError
+from sensorkit.pwi4.focuser import PWI4Focuser, PWI4FocuserConfig
 
 
 class TestPWI4FocuserConfig:

@@ -18,7 +18,6 @@ from sensorkit.astro.target import (
     EphemerisTarget,
     ICRSTarget,
     ObserveWindow,
-    RateTarget,
     StateVectorTarget,
     Target,
     TLETarget,
@@ -29,7 +28,6 @@ from sensorkit.astro.target import (
     time_grid,
 )
 from sensorkit.astro.trajectory import TLETrajectory
-
 
 _ISS_TLE = TLE(
     line0="0 ISS (ZARYA)",

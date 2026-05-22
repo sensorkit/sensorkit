@@ -8,7 +8,6 @@ import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Buffer
 from typing import (
-    Annotated,
     Any,
     AsyncGenerator,
     Callable,

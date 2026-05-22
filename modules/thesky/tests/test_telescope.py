@@ -1,6 +1,6 @@
 import pytest
 
-from sensorkit.thesky.telescope import TheSkyTelescope, TheSkyTelescopeConfig, TheSkyTelescopeState
+from sensorkit.thesky.telescope import TheSkyTelescopeConfig, TheSkyTelescopeState
 
 
 @pytest.fixture

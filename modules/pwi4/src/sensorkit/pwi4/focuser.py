@@ -144,7 +144,7 @@ class PWI4Focuser(PWI4Device):
                     await device.publish(
                         Enabled(is_enabled=self.client.get_bool(st, "focuser.is_enabled"))
                     )
-                    await device.publish(sk.FocusPosition(position=self.focuser_position))
+                    await device.publish(FocusPosition(position=self.focuser_position))
 
                     # logger.debug(
                     #     f"PWI4 focuser status: connected={connected}, "

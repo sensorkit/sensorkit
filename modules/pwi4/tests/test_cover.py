@@ -1,12 +1,12 @@
 """Test PWI4 mirror cover device."""
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-
 from conftest import MockPWI4Client
-from sensorkit.pwi4.cover import PWI4Cover, PWI4CoverConfig, PWI4CoverState
+
+from sensorkit.pwi4.cover import PWI4Cover, PWI4CoverConfig
 from sensorkit.pwi4.device import DeviceConnectionError
 
 

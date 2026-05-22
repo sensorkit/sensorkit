@@ -1,14 +1,12 @@
 """Tests for Alpaca camera device."""
 
 import array
-import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-
 from conftest import MockAlpacaSDKDevice
+
 from sensorkit.alpaca.camera import (
-    AlpacaCamera,
     AlpacaCameraConfig,
     AlpacaCameraState,
     _array_typecode_to_dtype,
@@ -140,8 +138,8 @@ class TestCameraLifecycle:
 
     @pytest.mark.asyncio
     async def test_camera_set_temperature(self, camera):
-        from sensorkit.std.instrument import ConfigureCameraCooler, CameraSensorTemperature
         from sensorkit.models.devices import TemperatureUnit
+        from sensorkit.std.instrument import CameraSensorTemperature, ConfigureCameraCooler
 
         await camera.camera_set_temperature(
             ConfigureCameraCooler(

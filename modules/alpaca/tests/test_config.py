@@ -1,19 +1,16 @@
 """Tests for Alpaca service configuration models."""
 
-import pytest
-from pydantic import ValidationError
-
-from sensorkit.alpaca.service import AlpacaConfig, AlpacaServerConfig
 from sensorkit.alpaca.camera import AlpacaCameraConfig
-from sensorkit.alpaca.telescope import AlpacaTelescopeConfig
-from sensorkit.alpaca.dome import AlpacaDomeConfig
-from sensorkit.alpaca.focuser import AlpacaFocuserConfig
-from sensorkit.alpaca.filter_wheel import AlpacaFilterWheelConfig
-from sensorkit.alpaca.rotator import AlpacaRotatorConfig
 from sensorkit.alpaca.cover_calibrator import AlpacaCoverCalibratorConfig
+from sensorkit.alpaca.dome import AlpacaDomeConfig
+from sensorkit.alpaca.filter_wheel import AlpacaFilterWheelConfig
+from sensorkit.alpaca.focuser import AlpacaFocuserConfig
 from sensorkit.alpaca.observing_conditions import AlpacaObservingConditionsConfig
+from sensorkit.alpaca.rotator import AlpacaRotatorConfig
 from sensorkit.alpaca.safety_monitor import AlpacaSafetyMonitorConfig
+from sensorkit.alpaca.service import AlpacaConfig, AlpacaServerConfig
 from sensorkit.alpaca.switch import AlpacaSwitchConfig
+from sensorkit.alpaca.telescope import AlpacaTelescopeConfig
 
 
 class TestAlpacaServerConfig:

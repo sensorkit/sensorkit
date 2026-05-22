@@ -1,10 +1,9 @@
 """Tests for Alpaca rotator device."""
 
 import pytest
-
 from conftest import MockAlpacaSDKDevice
+
 from sensorkit.alpaca.rotator import (
-    AlpacaRotator,
     AlpacaRotatorConfig,
     AlpacaRotatorState,
 )

@@ -1,14 +1,14 @@
 """Test UDLProgram request handling and response logic."""
 
-import pytest
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from conftest import MockCollectRequest
 
 from sensorkit.udl.models import ResponseStatus, UDLAPIConfig, UDLConfig
 from sensorkit.udl.program import UDLProgram
 from sensorkit.udl.task_queue import TaskQueue
-
-from conftest import MockCollectRequest
 
 
 @pytest.fixture

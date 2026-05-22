@@ -1,9 +1,13 @@
 import pytest
 
-from sensorkit.thesky.camera import TheSkyCamera, TheSkyCameraConfig
-from sensorkit.thesky.device import send_thesky_script, parse_thesky_response
-from sensorkit.std.instrument import ConfigureCameraCooler, ConfigureCameraSensor, Binning, CameraSensorTemperature
 from sensorkit.models.devices import TemperatureUnit
+from sensorkit.std.instrument import (
+    Binning,
+    CameraSensorTemperature,
+    ConfigureCameraCooler,
+    ConfigureCameraSensor,
+)
+from sensorkit.thesky.camera import TheSkyCameraConfig
 
 
 @pytest.fixture
@@ -22,7 +26,6 @@ def camera(simulator):
 
 @pytest.mark.asyncio
 async def test_camera_connect(camera):
-    from sensorkit.models.devices import Connected
     import sensorkit.api as sk
 
     await camera.camera_connect(sk.Connect())

@@ -1,10 +1,9 @@
 """Tests for Alpaca telescope device (lifecycle only)."""
 
 import pytest
-
 from conftest import MockAlpacaSDKDevice
+
 from sensorkit.alpaca.telescope import (
-    AlpacaTelescope,
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
 )

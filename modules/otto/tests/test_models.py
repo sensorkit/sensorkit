@@ -1,15 +1,8 @@
 """Tests for Otto's data models."""
 
-import os
-
-import pytest
-
 from sensorkit.otto.models import (
     CollectConfig,
-    OttoConfig,
     TaskConfig,
-    PublishConfig,
-    ServerConfig,
 )
 from sensorkit.otto.program import OttoState, TLECache
 

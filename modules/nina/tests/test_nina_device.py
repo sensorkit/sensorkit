@@ -1,18 +1,16 @@
 """Tests for the NINA base device class."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from sensorkit.nina.device import (
+    DeviceConnectionError,
+    NinaAPIError,
     NinaClient,
     NinaDevice,
     NinaDeviceConfig,
     NinaDeviceState,
-    NinaError,
-    NinaAPIError,
-    DeviceConnectionError,
 )
 
 

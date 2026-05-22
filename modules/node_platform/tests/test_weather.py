@@ -1,22 +1,19 @@
 """Tests for Node Platform weather device."""
 
 from datetime import UTC, datetime
-
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
 from conftest import (
     MockNodePlatformAPI,
     make_weather_station_status,
-    make_safety_status,
-    make_operation_status,
 )
+
 from sensorkit.node_platform.weather import (
     NodePlatformWeather,
     NodePlatformWeatherConfig,
     NodePlatformWeatherState,
 )
-import sensorkit.api as sk
 
 
 @pytest.fixture

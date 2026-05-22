@@ -1,11 +1,10 @@
 import pytest
+from conftest import MockNinaClient
 
 import sensorkit.api as sk
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
-from sensorkit.nina.mount import NinaMount, NinaMountConfig, NinaMountState
-
-from conftest import MockNinaClient
+from sensorkit.nina.mount import NinaMountConfig, NinaMountState
 
 
 @pytest.fixture

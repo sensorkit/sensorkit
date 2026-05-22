@@ -1,14 +1,13 @@
 """Test SkyImagery metadata generation against the UDL schema."""
 
 import json
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from conftest import MockCollectRequest
 
 from sensorkit.udl.models import UDLAPIConfig, UDLConfig
 from sensorkit.udl.program import UDLProgram
-
-from conftest import MockCollectRequest
 
 
 @pytest.fixture
@@ -66,7 +65,8 @@ class TestSkyImageryMetadata:
         call_args = program.client.sky_imagery.upload_zip.call_args
         zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
 
-        import io, zipfile
+        import io
+        import zipfile
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             metadata_files = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
             assert len(metadata_files) == 1
@@ -101,7 +101,8 @@ class TestSkyImageryMetadata:
         call_args = program.client.sky_imagery.upload_zip.call_args
         zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
 
-        import io, zipfile
+        import io
+        import zipfile
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             metadata_files = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
             metadata = json.loads(zf.read(metadata_files[0]))
@@ -130,7 +131,8 @@ class TestSkyImageryMetadata:
         call_args = program.client.sky_imagery.upload_zip.call_args
         zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
 
-        import io, zipfile
+        import io
+        import zipfile
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             metadata_files = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
             metadata = json.loads(zf.read(metadata_files[0]))
@@ -159,7 +161,8 @@ class TestSkyImageryMetadata:
         call_args = program.client.sky_imagery.upload_zip.call_args
         zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
 
-        import io, zipfile
+        import io
+        import zipfile
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             metadata_files = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
             metadata = json.loads(zf.read(metadata_files[0]))
@@ -188,7 +191,8 @@ class TestSkyImageryMetadata:
         call_args = program.client.sky_imagery.upload_zip.call_args
         zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
 
-        import io, zipfile
+        import io
+        import zipfile
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             metadata_files = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
             metadata = json.loads(zf.read(metadata_files[0]))
@@ -217,7 +221,8 @@ class TestSkyImageryMetadata:
         call_args = program.client.sky_imagery.upload_zip.call_args
         zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
 
-        import io, zipfile
+        import io
+        import zipfile
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             metadata_files = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
             metadata = json.loads(zf.read(metadata_files[0]))
@@ -246,7 +251,8 @@ class TestSkyImageryMetadata:
         call_args = program.client.sky_imagery.upload_zip.call_args
         zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
 
-        import io, zipfile
+        import io
+        import zipfile
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             metadata_files = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
             metadata = json.loads(zf.read(metadata_files[0]))
@@ -287,7 +293,8 @@ class TestSkyImageryMetadata:
         call_args = program.client.sky_imagery.upload_zip.call_args
         zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
 
-        import io, zipfile
+        import io
+        import zipfile
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             metadata_files = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
             metadata = json.loads(zf.read(metadata_files[0]))

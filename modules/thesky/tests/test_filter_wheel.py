@@ -1,7 +1,7 @@
 import pytest
 
-from sensorkit.thesky.filter_wheel import TheSkyFilterWheel, TheSkyFilterWheelConfig
 from sensorkit.std.optics import SetFilter
+from sensorkit.thesky.filter_wheel import TheSkyFilterWheelConfig
 
 
 @pytest.fixture

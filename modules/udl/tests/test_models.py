@@ -1,5 +1,3 @@
-import pytest
-
 from sensorkit.udl.models import ResponseStatus, UDLAPIConfig, UDLConfig, UDLReferenceFrame
 
 

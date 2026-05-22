@@ -1,7 +1,7 @@
 import pytest
 
-from sensorkit.thesky.dome import TheSkyDome, TheSkyDomeConfig, TheSkyDomeState
-from sensorkit.std.enclosure import OpenEnclosure, CloseEnclosure
+from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
+from sensorkit.thesky.dome import TheSkyDomeConfig, TheSkyDomeState
 
 
 @pytest.fixture

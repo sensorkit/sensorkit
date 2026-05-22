@@ -1,10 +1,9 @@
 import pytest
+from conftest import MockNinaClient
 
 import sensorkit.api as sk
-from sensorkit.nina.focuser import NinaFocuser, NinaFocuserConfig, NinaFocuserState
+from sensorkit.nina.focuser import NinaFocuserConfig, NinaFocuserState
 from sensorkit.std.optics import ChangeFocusPosition
-
-from conftest import MockNinaClient
 
 
 @pytest.fixture

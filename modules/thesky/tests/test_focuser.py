@@ -1,7 +1,7 @@
 import pytest
 
-from sensorkit.thesky.focuser import TheSkyFocuser, TheSkyFocuserConfig
 from sensorkit.std.optics import ChangeFocusPosition
+from sensorkit.thesky.focuser import TheSkyFocuserConfig
 
 
 @pytest.fixture

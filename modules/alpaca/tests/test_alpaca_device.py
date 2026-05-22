@@ -1,7 +1,7 @@
 """Tests for the Alpaca base device class."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -9,7 +9,6 @@ from sensorkit.alpaca.device import (
     AlpacaDevice,
     AlpacaDeviceConfig,
     AlpacaDeviceState,
-    AlpacaError,
     DeviceConnectionError,
 )
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from _contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Self, override
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterable, Self, override
 
 from loguru import logger
 from pydantic import BaseModel, TypeAdapter

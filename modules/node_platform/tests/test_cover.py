@@ -1,9 +1,9 @@
 """Tests for Node Platform cover device."""
 
 import pytest
-from unittest.mock import MagicMock
-
 from conftest import MockNodePlatformAPI, make_cover_status
+
+import sensorkit.api as sk
 from sensorkit.node_platform.cover import (
     NodePlatformCover,
     NodePlatformCoverConfig,
@@ -11,7 +11,6 @@ from sensorkit.node_platform.cover import (
 )
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
-import sensorkit.api as sk
 
 
 @pytest.fixture

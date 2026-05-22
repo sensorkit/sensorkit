@@ -3,12 +3,10 @@ from __future__ import annotations
 import uuid
 from abc import abstractmethod
 from collections.abc import Coroutine, Iterable
-from dataclasses import dataclass
 from typing import Any, Callable, ClassVar
 
 from pydantic import BaseModel
 
-from sensorkit.backend.base import Entity
 from sensorkit.backend.event import Event
 from sensorkit.backend.request import Call, ExtendedResponse, Request
 from sensorkit.common.model import ModelRegistry, RegistryBaseModel

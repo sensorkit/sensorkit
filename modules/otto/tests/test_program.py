@@ -1,16 +1,14 @@
 """Tests for OttoProgram task factory."""
 
-import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from conftest import make_task
 
 from sensorkit.otto.program import OttoProgram, OttoState
 from sensorkit.otto.task_queue import TaskQueue
-
-from conftest import make_task
 
 
 @pytest.fixture

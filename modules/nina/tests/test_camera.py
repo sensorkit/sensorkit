@@ -1,11 +1,15 @@
 import pytest
+from conftest import MockNinaClient
 
 import sensorkit.api as sk
-from sensorkit.nina.camera import NinaCamera, NinaCameraConfig, NinaCameraState
-from sensorkit.std.instrument import ConfigureCameraCooler, ConfigureCameraSensor, Binning, CameraSensorTemperature
 from sensorkit.models.devices import TemperatureUnit
-
-from conftest import MockNinaClient
+from sensorkit.nina.camera import NinaCameraConfig, NinaCameraState
+from sensorkit.std.instrument import (
+    Binning,
+    CameraSensorTemperature,
+    ConfigureCameraCooler,
+    ConfigureCameraSensor,
+)
 
 
 @pytest.fixture

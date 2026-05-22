@@ -1,16 +1,17 @@
 """Tests for Node Platform mount device."""
 
-import pytest
 from unittest.mock import MagicMock
 
-from conftest import MockNodePlatformAPI, make_mount_status
+import pytest
+from conftest import MockNodePlatformAPI
+
+import sensorkit.api as sk
+from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.mount import (
     NodePlatformMount,
     NodePlatformMountConfig,
     NodePlatformMountState,
 )
-from sensorkit.node_platform.device import DeviceConnectionError
-import sensorkit.api as sk
 
 
 @pytest.fixture
@@ -123,8 +124,8 @@ class TestMountCommands:
 class TestMountFollowTarget:
     @pytest.mark.asyncio
     async def test_follow_tle(self, mount, api):
-        from sensorkit.astro.target import TLETarget
         from sensorkit.astro.common import TLE
+        from sensorkit.astro.target import TLETarget
 
         mount.mount_tracking = True
 

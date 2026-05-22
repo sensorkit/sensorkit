@@ -1,10 +1,9 @@
 import pytest
+from conftest import MockNinaClient
 
 import sensorkit.api as sk
-from sensorkit.nina.dome import NinaDome, NinaDomeConfig, NinaDomeState
-from sensorkit.std.enclosure import OpenEnclosure, CloseEnclosure
-
-from conftest import MockNinaClient
+from sensorkit.nina.dome import NinaDomeConfig, NinaDomeState
+from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 
 
 @pytest.fixture

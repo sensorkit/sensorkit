@@ -1,7 +1,7 @@
 import pytest
 
-from sensorkit.thesky.rotator import TheSkyRotator, TheSkyRotatorConfig
 from sensorkit.std.instrument import ChangeRotatorPosition
+from sensorkit.thesky.rotator import TheSkyRotatorConfig
 
 
 @pytest.fixture

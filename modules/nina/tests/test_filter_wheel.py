@@ -1,10 +1,9 @@
 import pytest
+from conftest import MockNinaClient
 
 import sensorkit.api as sk
-from sensorkit.nina.filter_wheel import NinaFilterWheel, NinaFilterWheelConfig, NinaFilterWheelState
+from sensorkit.nina.filter_wheel import NinaFilterWheelConfig, NinaFilterWheelState
 from sensorkit.std.optics import SetFilter
-
-from conftest import MockNinaClient
 
 
 @pytest.fixture

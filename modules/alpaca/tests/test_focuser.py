@@ -1,10 +1,9 @@
 """Tests for Alpaca focuser device."""
 
 import pytest
-
 from conftest import MockAlpacaSDKDevice
+
 from sensorkit.alpaca.focuser import (
-    AlpacaFocuser,
     AlpacaFocuserConfig,
     AlpacaFocuserState,
 )

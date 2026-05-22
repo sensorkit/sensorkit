@@ -19,7 +19,6 @@ from sensorkit.astro.target import (
     StateVectorTarget,
     TLETarget,
 )
-from sensorkit.core import task
 from sensorkit.models.devices import (
     AltAzPointing,
     AxisRates,
@@ -173,7 +172,7 @@ class SensorControl:
         logger.info(f"Sensor '{sk.controller().entity}' is ready to operate")
 
     @sk.task_handler
-    async def sensor_standby(self, task: task.StandbyTask):
+    async def sensor_standby(self, task: sk.StandbyTask):
         """Put the sensor in standby mode."""
         # FIXME: Presently this is a synonym for init. Semantics should be dictated by config.
         try:
@@ -285,7 +284,7 @@ class SensorControl:
         await self.sensor.mount.command(Stop())
 
     @sk.task_handler
-    async def sensor_recover(self, task: task.RecoverTask):
+    async def sensor_recover(self, task: sk.RecoverTask):
         """Reconnect to all devices and stop any in-progress motion."""
 
         def assert_success_or_unsupported(results: tuple[Any]):

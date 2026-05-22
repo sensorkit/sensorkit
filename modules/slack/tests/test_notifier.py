@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-import time as _time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from sensorkit.slack.models import (
-    ChannelConfig,
-    NotificationRule,
     SeverityLevel,
-    SlackConfig,
-    StateWatch,
 )
 from sensorkit.slack.notifier import SlackNotifier, _cache_key, _safe_durable_name
-from sensorkit.common.condition import BecomesCondition, ChangesCondition
 
 
 @pytest.fixture

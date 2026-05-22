@@ -1,14 +1,12 @@
-import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
-
+from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 
 ISS_TLE = TLE(
     line0="0 25544",

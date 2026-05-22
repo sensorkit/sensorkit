@@ -1,12 +1,10 @@
 import asyncio
-import json
-from collections.abc import Sequence
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
 
-from sensorkit.thesky.device import SCRIPT_HEADER, SCRIPT_FOOTER
+from sensorkit.thesky.device import SCRIPT_FOOTER, SCRIPT_HEADER
 from sensorkit.thesky.simulator import SimulationState, read_template, run_thesky_script
 
 

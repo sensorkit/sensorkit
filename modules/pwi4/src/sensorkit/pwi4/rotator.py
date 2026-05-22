@@ -144,7 +144,7 @@ class PWI4Rotator(PWI4Device):
                     await device.publish(
                         Enabled(is_enabled=self.client.get_bool(st, "rotator.is_enabled"))
                     )
-                    await device.publish(sk.RotatorPosition(position=self.rotator_position))
+                    await device.publish(RotatorPosition(position=self.rotator_position))
 
                     # logger.debug(
                     #     f"PWI4 rotator status: connected={connected}, "

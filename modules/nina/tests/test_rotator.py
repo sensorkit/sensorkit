@@ -1,10 +1,9 @@
 import pytest
+from conftest import MockNinaClient
 
 import sensorkit.api as sk
-from sensorkit.nina.rotator import NinaRotator, NinaRotatorConfig, NinaRotatorState
+from sensorkit.nina.rotator import NinaRotatorConfig, NinaRotatorState
 from sensorkit.std.instrument import ChangeRotatorPosition
-
-from conftest import MockNinaClient
 
 
 @pytest.fixture

@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-import pytest
-
+from sensorkit.common.condition import (
+    BecomesCondition,
+    ChangesCondition,
+    CrossesAboveCondition,
+)
 from sensorkit.slack.models import (
     ChannelConfig,
     NotificationRule,
     SeverityLevel,
     SlackConfig,
     StateWatch,
-)
-from sensorkit.common.condition import (
-    BecomesCondition,
-    ChangesCondition,
-    CrossesAboveCondition,
 )
 
 

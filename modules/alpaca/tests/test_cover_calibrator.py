@@ -1,14 +1,13 @@
 """Tests for Alpaca cover calibrator device."""
 
 import pytest
-
 from conftest import MockAlpacaSDKDevice
+
 from sensorkit.alpaca.cover_calibrator import (
-    AlpacaCoverCalibrator,
-    AlpacaCoverCalibratorConfig,
-    AlpacaCoverCalibratorState,
     _COVER_CLOSED,
     _COVER_OPEN,
+    AlpacaCoverCalibratorConfig,
+    AlpacaCoverCalibratorState,
 )
 
 

@@ -1,9 +1,9 @@
 """Tests for Alpaca dome device."""
 
 import pytest
-
 from conftest import MockAlpacaSDKDevice
-from sensorkit.alpaca.dome import AlpacaDome, AlpacaDomeConfig, AlpacaDomeState
+
+from sensorkit.alpaca.dome import AlpacaDomeConfig, AlpacaDomeState
 
 
 @pytest.fixture

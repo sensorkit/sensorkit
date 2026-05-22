@@ -1,7 +1,7 @@
 import pytest
 
-from sensorkit.thesky.ota import TheSkyOTA, TheSkyOTAConfig, TheSkyOTAState
-from sensorkit.std.optics import OpenMirrorCover, CloseMirrorCover
+from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
+from sensorkit.thesky.ota import TheSkyOTAConfig, TheSkyOTAState
 
 
 @pytest.fixture

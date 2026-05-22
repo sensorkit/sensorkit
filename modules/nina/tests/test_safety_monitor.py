@@ -1,9 +1,8 @@
 import pytest
+from conftest import MockNinaClient
 
 import sensorkit.api as sk
-from sensorkit.nina.safety_monitor import NinaSafetyMonitor, NinaSafetyMonitorConfig, NinaSafetyMonitorState
-
-from conftest import MockNinaClient
+from sensorkit.nina.safety_monitor import NinaSafetyMonitorConfig, NinaSafetyMonitorState
 
 
 @pytest.fixture
