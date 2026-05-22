@@ -11,6 +11,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from sensorkit.astro.observer import EarthObserver
+from sensorkit.auto.constraint import Constraint, ConstraintManager
 from sensorkit.auto.lifecycle import ControllerLifecycle
 from sensorkit.auto.mode import Mode, ModeList
 from sensorkit.auto.scheduler import ProgramConfig, Scheduler, debug_print_schedule
@@ -22,7 +23,6 @@ from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.task import TaskContexts
 from sensorkit.core.program import ControllerOffers, ProgramClient, ProgramDiscovery, ProgramState
 from sensorkit.models.devices import SitePosition
-from sensorkit.auto.constraint import AnyConstraint
 
 
 class ControllerConfig(BaseModel):
@@ -31,7 +31,7 @@ class ControllerConfig(BaseModel):
     estimated_startup_time: float = 0.0
     estimated_shutdown_time: float = 0.0
     modes: ModeList = Field(default_factory=list)
-    constraints: list[AnyConstraint] = Field(default_factory=list)
+    constraints: list[Constraint] = Field(default_factory=list)
     tasking: list[ProgramConfig] = Field(default_factory=list)
     contexts: TaskContexts = Field(default_factory=TaskContexts)
 
@@ -85,8 +85,8 @@ class ControllerDriver:
             program_configs=config.tasking,
         )
 
-        # Create constraint evaluators.
-        self.constraints = [constraint.make_evaluator() for constraint in config.constraints]
+        # Create constraint manager.
+        self.constraints = ConstraintManager(config.constraints)
 
         # Create the lifecycle object.
         self.lifecycle = ControllerLifecycle()
@@ -99,19 +99,15 @@ class ControllerDriver:
     ):
         """Start the lifecycle, constraints, offers monitor, and background tasks for this driver."""
         self.kit = kit
+        controller = kit.controller(self.config.name)
         logger.info(f"Driver for {self.config.name} starting")
 
         # Start the lifecycle loop. This won't result in commanding until the lifecycle is enabled
         # and a demand state is set.
-        self.lifecycle.start(kit.controller(self.config.name), task_group=task_group)
+        self.lifecycle.start(controller, task_group=task_group)
 
-        # Start constraint evaluators.
-        for constraint in self.constraints:
-            constraint.start(task_group=task_group, kit=kit)
-
-        # Wait for all constraints to become ready.
-        for constraint in self.constraints:
-            await constraint.ready.wait()
+        # Start checking the configured constraints.
+        await self.constraints.start(task_group=task_group, kit=kit)
 
         # Start monitoring associated Programs for offers.
         await self.controller_offers.start(task_group=task_group)
@@ -119,7 +115,7 @@ class ControllerDriver:
         # Query controller site position.
         while True:
             try:
-                site = await kit.controller(self.config.name).kv_get_model(SitePosition)
+                site = await controller.kv_get_model(SitePosition)
                 break
             except KeyNotFound:
                 logger.debug(f"waiting for {self.config.name} SitePosition")
@@ -173,17 +169,10 @@ class ControllerDriver:
         )
 
         # Check constraints.
-        constrained = False
-
-        for constraint in self.constraints:
-            if constraint.active.is_set():
-                constrained = True
-                break
-
         election.vote(
             "constraint",
             subject=self.config.name,
-            vote=False if constrained else None,
+            vote=False if self.constraints.is_constrained() else None,
         )
 
     def set_demand(self, operate: bool):

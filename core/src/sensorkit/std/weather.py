@@ -1,6 +1,13 @@
-from pydantic import BaseModel
+from __future__ import annotations
+
+import functools
+from typing import Any, Literal, override
+
+from pydantic import BaseModel, model_validator
 
 import sensorkit.api as sk
+from sensorkit.auto.constraint import Constraint, ConstraintEvaluator
+from sensorkit.core.client import SensorKit
 
 
 @sk.declare_keyword
@@ -26,3 +33,104 @@ StandardWeather = sk.declare_archetype(
     required_traits=(WeatherProvider,),
 )
 """Standard archetype for ambient weather telemetry providers."""
+
+
+class WeatherFieldEvaluator:
+
+    def __init__(self, name: str, threshold: float, deadband: float):
+        self.name = name
+        self.threshold = threshold
+        self.deadband = deadband
+        self._exceeded = False
+
+    def eval_threshold(self, weather: BasicWeather) -> float:
+        value: float | None = getattr(weather, self.name, None)
+
+        if value is None:
+            return float("inf")
+
+        over = value - self.threshold
+
+        if self._exceeded:
+            over += self.deadband
+
+        self._exceeded = over > 0
+        return over
+
+    def annotation(self, weather: BasicWeather) -> str:
+        if self.threshold is None:
+            return f"{self.name} unconfigured"
+
+        value: float | None = getattr(weather, self.name, None)
+
+        if value is None:
+            return f"{self.name} missing value"
+        else:
+            over = value - self.threshold
+            return (
+                f"{self.name} {over + self.deadband:.1f} too high"
+                if self._exceeded
+                else f"{self.name} {-over:.1f} to constraint"
+            )
+
+
+class WeatherConstraint(Constraint):
+    """Constraint that monitors a weather provider and activates when conditions exceed thresholds."""
+
+    kind: Literal["weather"] = "weather"
+    provider: str
+    humidity_max: float | None = None
+    humidity_deadband: float = 0.0
+    wind_max: float | None = None
+    wind_deadband: float = 0.0
+    rain_max: float | None = None
+    rain_deadband: float = 0.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _ttl_compat(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "time_to_live" in data:
+            data["ttl"] = data.pop("time_to_live")
+        return data
+
+    def _get_field_evaluators(self):
+        if self.humidity_max is not None:
+            yield WeatherFieldEvaluator("humidity", self.humidity_max, self.humidity_deadband)
+
+        if self.wind_max is not None:
+            yield WeatherFieldEvaluator("wind_speed", self.wind_max, self.wind_deadband)
+
+        if self.rain_max is not None:
+            yield WeatherFieldEvaluator("rain_rate", self.rain_max, self.rain_deadband)
+
+    @functools.cached_property
+    def _field_evaluators(self) -> tuple[WeatherFieldEvaluator, ...]:
+        return tuple(self._get_field_evaluators())
+
+    def check_weather(self, weather: BasicWeather) -> list[str]:
+        errors = []
+
+        for field in self._field_evaluators:
+            delta = field.eval_threshold(weather)
+
+            if delta == float("inf"):
+                errors.append(f"{field.name} data missing")
+            elif delta >= 0:
+                errors.append(f"{field.name} is {delta:.1f} too high")
+
+        return errors
+
+    @override
+    async def check_task(self, evaluator: ConstraintEvaluator, kit: SensorKit):
+        provider = kit.entity(self.provider)
+        stream = await provider.monitor(BasicWeather)
+
+        async for _, weather in stream:
+            errors = self.check_weather(weather)
+
+            if errors:
+                evaluator.constrain(", ".join(errors))
+            else:
+                evaluator.clear()
+
+            evaluator.ready()
