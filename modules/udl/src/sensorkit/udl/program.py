@@ -50,8 +50,7 @@ class UDLProgram:
     The base_url can be pointed at either endpoint.
     """
 
-    def __init__(self, config: UDLConfig):
-        self.config = config
+    def __init__(self):
         self.program: sk.ProgramImpl | None = None
 
         # SDK client (created in program_init)
@@ -96,6 +95,8 @@ class UDLProgram:
     async def program_init(self) -> None:
         """Restore state, create SDK client, start poller and image publisher."""
         self.program = sk.program()
+
+        self.config = await self.program.kv_get_model(UDLConfig)
 
         # Restore last known state
         await self._restore_state()

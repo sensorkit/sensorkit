@@ -76,7 +76,6 @@ class UDLAPIConfig(BaseModel):
 
 class UDLConfig(BaseModel):
     """Main configuration for UDL program."""
-    entity: str
     controller: str
     api: UDLAPIConfig
     poll_frequency: float = Field(default=10.0, description="Polling interval in seconds")

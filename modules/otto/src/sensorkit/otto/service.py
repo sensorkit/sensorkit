@@ -7,7 +7,5 @@ from sensorkit.otto.program import OttoProgram
 async def otto_service(service: sk.Service):
     await service.register()
 
-    config = await service.context.kv_get_model(OttoConfig)
-
-    service.include(OttoProgram(config), name=config.entity)
+    service.include(OttoProgram())
     await service.run()

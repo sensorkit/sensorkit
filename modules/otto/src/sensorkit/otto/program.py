@@ -40,8 +40,7 @@ class TLECache(BaseModel):
 
 @sk.declare_program
 class OttoProgram:
-    def __init__(self, config: OttoConfig):
-        self.config = config
+    def __init__(self):
         self.task_queue: TaskQueue | None = None
 
         self.tles: Dict[str, Dict[str, str]] = {}
@@ -80,6 +79,8 @@ class OttoProgram:
     async def program_init(self):
         """Load state, set up the controller, task queue, and optionally start task generation and image publishing."""
         self.program = sk.program()
+
+        self.config = await self.program.kv_get_model(OttoConfig)
 
         # Restore last known state
         try:
