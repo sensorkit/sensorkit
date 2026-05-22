@@ -198,7 +198,7 @@ class LeaseGroup:
         self._lease_added.set()
         return lease
 
-    async def refresh_loop(self, record_callback: Callable[[Lease], None] = None):
+    async def refresh_loop(self, record_callback: Callable[[Lease], None] | None = None):
         """Yield Leases as their scheduled refresh time becomes current.
 
         NOTE: This implementation requires that lease refreshes are performed serially. There are
@@ -209,7 +209,6 @@ class LeaseGroup:
               this happening, and TTLs can always be tuned longer. However, a callback-based
               implementation where refreshes can be performed concurrently could be considered.
         """
-        abandoned = []
         try:
             while True:
                 lease = self._schedule_pop()
@@ -225,7 +224,11 @@ class LeaseGroup:
                 # Wait for a lease to expire, a new lease to be added, or until our next scheduled
                 # refresh. If the return value is False, an expiration occurred.
                 if not await self._wait_for_event():
-                    abandoned = [lease for lease in self._lease_waiters if lease.expired and not lease.expire_called]
+                    abandoned = [
+                        lease
+                        for lease in self._lease_waiters
+                        if lease.expired and not lease.expire_called
+                    ]
                     break
         finally:
             # Expire all leases in the group on expiration of any lease or on error.

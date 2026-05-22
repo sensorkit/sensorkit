@@ -366,17 +366,28 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
             end_time = datetime.now(UTC)
         except asyncio.CancelledError:
-            await call.fail()
             with self.enter_context():
                 logger.warning(f"Execution of {task.task_type} task cancelled")
+
+            try:
+                await call.fail()
+            except Exception as e:
+                logger.warning(f"Error logging cancelled task event ({type(e).__name__})")
+
+            raise
         except Exception as e:
-            await call.fail()
             with self.enter_context():
                 logger.error(f"Error executing {task.task_type} task")
                 logger.opt(exception=e).debug(f"{task.task_type} ({task.task_id}) failed")
+
+            try:
+                await call.fail()
+            except Exception:
+                logger.warning(f"Error logging failed task event ({type(e).__name__})")
         else:
             with self.enter_context():
                 logger.info(f"Finished {task.task_type} task")
+
             await call.succeed(
                 result=TaskExecutionResult(
                     task_id=task.task_id,
@@ -397,7 +408,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
     async def _execute_task(self, task: ControllerTask):
         logger.debug(f"execution begun {task=}")
-        finish_info: TaskFinishInfo | None = None
+        finish_info = TaskFinishInfo(aborted=True)
 
         # Emit the execution start event.
         await self._state.update(
@@ -413,17 +424,12 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
             # Run the task handler.
             await handler(task)
-        except asyncio.CancelledError:
-            finish_info = TaskFinishInfo(aborted=True)
-            raise
         except Exception as e:
             finish_info = TaskFinishInfo(error=str(e))
             raise
         else:
             finish_info = TaskFinishInfo()
         finally:
-            assert finish_info is not None
-
             try:
                 await self._state.update(
                     self,
@@ -433,8 +439,8 @@ class ControllerImpl(EntityImpl, ControllerInterface):
                         target=None,
                     ),
                 )
-            except Exception:
-                logger.exception("Failed to update execution state after task completion")
+            except Exception as e:
+                logger.warning(f"Error logging final task execution state ({type(e).__name__})")
 
     @override
     def task_handler[T: ControllerTask](self, task_model: type[T]):

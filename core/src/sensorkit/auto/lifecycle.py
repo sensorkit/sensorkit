@@ -459,6 +459,8 @@ class ControllerLifecycle:
                 if error_kind is not None:
                     await asyncio.sleep(5.0)
             except asyncio.CancelledError:
+                logger.debug(f"{self.controller.entity} lifecycle loop cancelled")
+
                 if demand_proc:
                     # We were externally cancelled with our demand procedure potentially still
                     # running. Await successful cancellation of the task and re-raise.

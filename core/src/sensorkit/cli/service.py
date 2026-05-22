@@ -38,7 +38,7 @@ async def service_run(name, spec, restart):
         # Find and run the service entrypoint.
         await run_services(
             entrypoints,
-            max_restarts=-1 if restart else 0
+            max_restarts=None if restart else 0
         )
     except* KVError as eg:
         logger.opt(exception=eg.exceptions[0]).debug("service config error")

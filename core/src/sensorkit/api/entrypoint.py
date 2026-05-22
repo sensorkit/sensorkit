@@ -108,17 +108,18 @@ async def run_services(
 
         match sig:
             case signal.SIGTERM:
-                logger.info("Shutting down all services")
+                logger.info("Service process received shutdown signal")
             case signal.SIGINT:
                 interrupt_count += 1
                 remaining = FORCE_QUIT_INTERRUPTS - interrupt_count
 
                 if interrupt_count == 1:
-                    logger.info("Shutting down all services due to interrupt")
+                    logger.warning("Service process received interrupt signal")
                 elif remaining > 0:
-                    logger.warning(f"Press Ctrl-C {remaining} more time{'s' if remaining != 1 else ''} to force quit")
+                    times = "one more time" if remaining == 1 else f"{remaining} more times"
+                    logger.warning(f"Interrupt {times} to force exit")
                 else:
-                    logger.error("Force quit")
+                    logger.error("Forced exit")
                     os._exit(130)
 
         if not shutdown.done():
@@ -147,7 +148,7 @@ def _service_loop(
     name: str,
     entrypoint: ServiceEntrypoint,
     shutdown_signal: concurrent.futures.Future,
-    max_restarts: int = -1,
+    max_restarts: int | None = None,
     startup_failure_threshold: float = 30.0,
     restart_backoff_min: float = 5.0,
     restart_backoff_max: float = 300.0,
@@ -162,7 +163,7 @@ def _service_loop(
 
     try:
         # Loop while we have not had too many consecutive failed restarts.
-        while max_restarts == -1 or restarts <= max_restarts:
+        while max_restarts is None or restarts <= max_restarts:
             # Backoff if required, waking early if the shutdown signal fires.
             if backoff > 0.0 and not shutdown_signal.done():
                 logger.info(f"Waiting {backoff:1.0f} sec before restarting {name} ...")

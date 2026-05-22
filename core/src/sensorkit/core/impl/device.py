@@ -131,13 +131,16 @@ class DeviceImpl(EntityImpl, DeviceInterface):
             await call.succeed(result=CommandResult(data=task.result()))
         finally:
             # Emit the command end event.
-            await self.emit_event(
-                CommandDone(
-                    command_id=command_id,
-                    call_id=call.call_id,
-                    success=success,
+            try:
+                await self.emit_event(
+                    CommandDone(
+                        command_id=command_id,
+                        call_id=call.call_id,
+                        success=success,
+                    )
                 )
-            )
+            except Exception as e:
+                logger.warning(f"Error logging command done event ({type(e).__name__})")
 
     @override
     def command_handler(self, command_type: type[DeviceCommand]):

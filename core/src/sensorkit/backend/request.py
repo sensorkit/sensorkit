@@ -400,7 +400,7 @@ class ExtendedCallHandler[P: BaseModel | None, R: ExtendedResponse, V: BaseModel
 
         # Ensure exceptions raised in the handler are propagated.
         def call_handler_done(_):
-            if not context.finalized:
+            if not context.finalized and not handler_task.cancelled():
                 payload = None
 
                 if e := handler_task.exception():
