@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
+import sensorkit.api as sk
 from sensorkit.common.condition import AnyCondition, ChangesCondition
 
 
@@ -46,7 +47,14 @@ class ChannelConfig(BaseModel):
 class SlackConfig(BaseModel):
     """Root configuration for the Slack notification service."""
 
-    entity: str
     env_file: str = ".env"
     channels: dict[str, ChannelConfig]
     rules: list[NotificationRule] = []
+
+
+sk.declare_config_section(
+    "slack",
+    SlackConfig,
+    entity_mapper=lambda raw: raw.pop("id", "slack"),
+    service_path="sensorkit.slack.service",
+)

@@ -27,6 +27,6 @@ async def slack_service(service: sk.Service):
 
     client = SlackClient(token)
     notifier = SlackNotifier(config, client, service.client)
-    service.include(notifier, name=config.entity)
+    service.include(notifier)
 
     await service.run()
