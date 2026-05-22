@@ -177,10 +177,6 @@ class AlpacaCamera(AlpacaDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the camera
-        await self.camera_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.camera_disconnect(sk.Disconnect())
@@ -421,6 +417,8 @@ class AlpacaCamera(AlpacaDevice):
         )
 
         context["instrume"] = await self.get(self.camera, "SensorName", "")
+        context["readoutm"] = await self.get(self.camera, "ReadoutMode", None)
+        context["ccdtemp"] = await self.get(self.camera, "CCDTemperature", None)
         context["xbinning"] = await self.get(self.camera, "BinX", 1)
         context["ybinning"] = await self.get(self.camera, "BinY", 1)
 

@@ -43,10 +43,6 @@ class PWI4Rotator(PWI4Device):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the rotator
-        await self.rotator_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.rotator_disconnect(sk.Disconnect())

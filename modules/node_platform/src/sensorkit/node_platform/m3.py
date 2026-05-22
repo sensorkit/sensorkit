@@ -47,10 +47,6 @@ class NodePlatformM3(NodePlatformDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the M3
-        await self.m3_deinit(sk.Deinit())
-
-        # Clean up
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.api.close()

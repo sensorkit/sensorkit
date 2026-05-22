@@ -41,10 +41,6 @@ class TheSkyOTA(TheSkyDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialze the OTA
-        await self.ota_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.ota_disconnect(sk.Disconnect())

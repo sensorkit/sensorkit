@@ -46,10 +46,6 @@ class AlpacaSafetyMonitor(AlpacaDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the safety monitor
-        await self.safety_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.safety_disconnect(sk.Disconnect())

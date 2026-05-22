@@ -57,10 +57,6 @@ class AlpacaObservingConditions(AlpacaDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the observing conditions
-        await self.observing_conditions_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.observing_conditions_disconnect(sk.Disconnect())

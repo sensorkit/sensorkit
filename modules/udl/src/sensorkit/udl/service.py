@@ -9,5 +9,5 @@ async def udl_service(service: sk.Service):
 
     config = await service.context.kv_get_model(UDLConfig)
 
-    service.include(UDLProgram(config), name=config.entity)
+    service.include(UDLProgram(config))
     await service.run()

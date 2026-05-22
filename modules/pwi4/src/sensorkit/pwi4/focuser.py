@@ -43,10 +43,6 @@ class PWI4Focuser(PWI4Device):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the focuser
-        await self.focuser_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.focuser_disconnect(sk.Disconnect())

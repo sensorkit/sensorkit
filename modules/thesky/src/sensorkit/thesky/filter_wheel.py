@@ -52,10 +52,6 @@ class TheSkyFilterWheel(TheSkyDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the filter wheel
-        await self.filter_wheel_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.filter_wheel_disconnect(sk.Disconnect())

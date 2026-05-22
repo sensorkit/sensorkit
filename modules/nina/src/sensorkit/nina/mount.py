@@ -72,10 +72,6 @@ class NinaMount(NinaDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the mount
-        await self.mount_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
         await self.mount_disconnect(sk.Disconnect())

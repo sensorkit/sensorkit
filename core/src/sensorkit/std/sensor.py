@@ -223,11 +223,6 @@ class SensorControl:
             task_id=task.task_id,
         )
 
-        await sk.controller().update_context(
-            task.get_context(),
-            **adhoc,
-        )
-
         match task.target:
             case ICRSTarget():
                 adhoc["track_mode"] = "sidereal"
@@ -257,6 +252,11 @@ class SensorControl:
             case _:
                 adhoc["track_mode"] = "unknown"
                 adhoc["target_id"] = "unknown"
+
+        await sk.controller().update_context(
+            task.get_context(),
+            **adhoc,
+        )
 
         # Capture the requested frames.
         for frame_num in range(0, task.camera_params.frame_count):

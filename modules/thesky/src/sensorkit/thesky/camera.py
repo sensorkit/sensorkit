@@ -85,10 +85,6 @@ class TheSkyCamera(TheSkyDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the camera
-        await self.camera_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.camera_disconnect(sk.Disconnect())

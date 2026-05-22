@@ -40,10 +40,6 @@ class TheSkyWeather(TheSkyDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the weather
-        await self.weather_deinit(sk.Deinit())
-
-        # Clean up, do not disconnect, else the safety timer resets
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await sk.device().kv_put_model(self.state)

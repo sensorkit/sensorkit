@@ -120,10 +120,6 @@ class NodePlatformMount(NodePlatformDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the mount
-        await self.mount_deinit(sk.Deinit())
-
-        # Clean up
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
         await self.api.close()

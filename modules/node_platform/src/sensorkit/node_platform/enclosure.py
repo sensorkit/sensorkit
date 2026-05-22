@@ -78,10 +78,6 @@ class NodePlatformEnclosure(NodePlatformDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the enclosure
-        await self.enclosure_deinit(sk.Deinit())
-
-        # Clean up
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.api.close()

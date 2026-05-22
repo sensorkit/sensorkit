@@ -105,10 +105,6 @@ class AlpacaTelescope(AlpacaDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the telescope
-        await self.telescope_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
         await self.telescope_disconnect(sk.Disconnect())

@@ -49,10 +49,6 @@ class NodePlatformRotator(NodePlatformDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the rotator
-        await self.rotator_deinit(sk.Deinit())
-
-        # Clean up
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.api.close()

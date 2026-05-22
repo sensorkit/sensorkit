@@ -88,10 +88,6 @@ class AlpacaCoverCalibrator(AlpacaDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the cover calibrator
-        await self.cover_calibrator_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.cover_calibrator_disconnect(sk.Disconnect())

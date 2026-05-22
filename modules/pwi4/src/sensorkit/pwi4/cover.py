@@ -36,10 +36,6 @@ class PWI4Cover(PWI4Device):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the cover
-        await self.cover_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.cover_disconnect(sk.Disconnect())

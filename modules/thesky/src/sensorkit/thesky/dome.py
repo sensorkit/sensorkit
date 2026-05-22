@@ -56,10 +56,6 @@ class TheSkyDome(TheSkyDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the dome
-        await self.dome_deinit(sk.Deinit())
-
-        # Clean up, disconnect
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
         await self.dome_disconnect(sk.Disconnect())
