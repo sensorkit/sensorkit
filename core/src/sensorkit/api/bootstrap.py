@@ -3,7 +3,7 @@ import os
 import warnings
 from typing import Literal
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from sensorkit.backend.base import BackendImpl
 from sensorkit.common.importutil import obj_from_spec
@@ -23,7 +23,7 @@ def import_plugins(
     fail_policy: Literal["error", "warn", "ignore"] = "error",
     warn_stacklevel: int = 2,
 ):
-    load_dotenv()
+    load_dotenv(find_dotenv(usecwd=True))
 
     imports = [
         mod.strip() for mod in os.environ.get("SENSORKIT_BASE_IMPORTS", "").split(",") if mod
@@ -51,7 +51,7 @@ def import_plugins(
 
 async def connect():
     """Reads configuration to determine a backend and then creates a SensorKit client."""
-    load_dotenv()
+    load_dotenv(find_dotenv(usecwd=True))
 
     # Determine the backend based on user configuration.
     backend_module = os.environ.get("SENSORKIT_BACKEND", "sensorkit.backend.nats")
