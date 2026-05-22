@@ -55,6 +55,15 @@ class NodePlatformConfig(BaseModel):
     endpoints: list[NodePlatformServerConfig] = []
 
 
+sk.declare_config_section(
+    "node_platform",
+    list[NodePlatformConfig],
+    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
+    model_mapper=iter,
+    service_path=__name__,
+)
+
+
 @sk.service_entrypoint(version=sk.VERSION)
 async def node_platform_service(service: sk.Service):
     await service.register()
