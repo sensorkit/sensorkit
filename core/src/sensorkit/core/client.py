@@ -178,6 +178,7 @@ class ServiceContext(EntityImpl):
         self.info = info
         self._lease_group = LeaseGroup()
         self._shutdown = asyncio.get_running_loop().create_future()
+        self._shutdown_called = False
 
     async def register_impl[T: EntityImpl](
         self,
@@ -228,9 +229,17 @@ class ServiceContext(EntityImpl):
 
                 # Start lease maintenance.
                 await self._lease_group.refresh_loop()
+
+                # If we get here, we expired our leases. Raise an exception to force all tasks to
+                # shut down.
+                raise asyncio.CancelledError("Service shutdown")
         except asyncio.CancelledError:
-            logger.error(f"Service {self.info.name} abnormal shutdown (cancelled)")
-            self._shutdown.cancel()
+            if self._shutdown_called:
+                logger.debug(f"Service {self.info.name} normal shutdown")
+                self._shutdown.set_result(True)
+            else:
+                logger.error(f"Service {self.info.name} abnormal shutdown (cancelled)")
+                self._shutdown.cancel()
         except BaseExceptionGroup as eg:
             logger.error(f"Service {self.info.name} abnormal shutdown")
             errors = [e for e in eg.exceptions if not isinstance(e, asyncio.CancelledError)]
@@ -243,9 +252,6 @@ class ServiceContext(EntityImpl):
                 self._shutdown.set_exception(BaseExceptionGroup("ServiceContext errors", errors))
             else:
                 self._shutdown.cancel()
-        else:
-            logger.debug(f"Service {self.info.name} normal shutdown")
-            self._shutdown.set_result(True)
         finally:
             # Shut down request listeners.
             with contextlib.suppress(Exception):
@@ -254,6 +260,8 @@ class ServiceContext(EntityImpl):
 
     async def shutdown(self):
         """Shut down this service context, making it no longer usable."""
+        self._shutdown_called = True
+
         # Expire our leases to trigger shutdown.
         try:
             await self._lease_group.expire()
