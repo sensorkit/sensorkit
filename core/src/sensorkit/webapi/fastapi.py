@@ -24,7 +24,7 @@ from sensorkit.core.controller import ControllerState
 from sensorkit.core.device import DeviceState
 from sensorkit.core.entity import DeviceDetails, EntityInfo
 from sensorkit.core.program import ProgramState
-from sensorkit.webapi.forwarder import KeyValueForwarder, SKRecord, StreamForwarder
+from sensorkit.webapi.forwarder import SHUTDOWN, KeyValueForwarder, SKRecord, StreamForwarder
 from sensorkit.webapi.schema import add_sensorkit_schema
 
 
@@ -144,6 +144,8 @@ class WebAPI:
 
                 while True:
                     upd = await queue.get()
+                    if upd is SHUTDOWN:        # identity check — graceful exit
+                        break
                     yield ServerSentEvent(data=upd)
                     queue.task_done()
             except asyncio.CancelledError:
@@ -434,6 +436,12 @@ class WebAPI:
         await self.server.serve()
 
     async def shutdown(self):
+        # Unblock any parked firehose generators so uvicorn's graceful shutdown
+        # isn't stuck waiting on a never-ending SSE response. Snapshot the set
+        # because each generator removes its own queue on exit.
+        for queue in tuple(self.client_queues):
+            queue.put_nowait(SHUTDOWN)
+
         if self.server.started:
             await self.server.shutdown()
 

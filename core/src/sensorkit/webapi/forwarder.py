@@ -19,6 +19,12 @@ class SKRecord(NamedTuple):
     payload: dict[str, Any] | None
 
 
+# A unique SKRecord pushed onto a client queue to tell its firehose generator to
+# exit cleanly at shutdown. Compared by identity (`is`); the field values are
+# never read, so this stays a valid SKRecord and keeps queues strictly typed.
+SHUTDOWN = SKRecord(kind="state", time=datetime.min, subject=sk.Subject(), payload=None)
+
+
 class Forwarder(ABC):
 
     def __init__(self, kit: sk.SensorKit, *, targets: Collection[asyncio.Queue[SKRecord]]):
