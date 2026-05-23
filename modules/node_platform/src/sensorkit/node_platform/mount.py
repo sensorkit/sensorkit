@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import timedelta
+from collections.abc import Sequence
+from datetime import datetime
 from typing import Literal, override
 
 import astropy.units as u
 import numpy as np
 import ourskyai_node_platform_api as osapi
-from astropy.coordinates import ICRS, AltAz, EarthLocation, SkyCoord
+from astropy.coordinates import ICRS, AltAz, CartesianRepresentation, EarthLocation, SkyCoord
 from astropy.time import Time
 from loguru import logger
 from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
-from sensorkit.astro.common import Geodetic
+from sensorkit.astro.common import Coordinates, Equatorial, Geodetic, Horizontal
 from sensorkit.astro.target import (
     AltAzTarget,
     EphemerisTarget,
@@ -153,16 +154,22 @@ class NodePlatformMount(NodePlatformDevice):
     @sk.command_handler
     async def mount_enable(self, cmd: sk.Enable):
         await self.require_connected()
-        logger.debug("enabling mount motors")
-        await self.api.call("v1_enable_mount_motors")
-        logger.debug("enabled mount motors")
+
+        status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
+        if not status.motor_a.is_enabled:
+            logger.debug("enabling mount motors")
+            await self.api.call("v1_enable_mount_motors")
+            logger.debug("enabled mount motors")
 
     @sk.command_handler
     async def mount_disable(self, cmd: sk.Disable):
         await self.require_connected()
-        logger.debug("disabling mount motors")
-        await self.api.call("v1_disable_mount_motors")
-        logger.debug("disabled mount motors")
+
+        status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
+        if status.motor_a.is_enabled:
+            logger.debug("disabling mount motors")
+            await self.api.call("v1_disable_mount_motors")
+            logger.debug("disabled mount motors")
 
     @sk.command_handler
     async def mount_stop(self, cmd: sk.Stop):
@@ -276,27 +283,20 @@ class NodePlatformMount(NodePlatformDevice):
             case RateTarget():
                 logger.debug("executing Rate follow")
 
-                t0 = target.initial_time
-                p0 = target.initial_coords
-                duration = self._seconds_to_set_at_rate(
-                    p0.ra, p0.dec, target.rates.ra, target.rates.dec, t0
+                # Sample the constant-rate path as singularity-free ENU unit
+                # vectors so motion through the pole/zenith is handled correctly
+                # (see _enu_along_rate). The astropy transform is CPU-bound, so
+                # build the samples off the event loop.
+                samples = await asyncio.to_thread(
+                    self._rate_track_samples,
+                    target.initial_coords,
+                    target.rates,
+                    target.initial_frame,
+                    target.initial_time,
                 )
-                t1 = t0 + timedelta(seconds=duration)
-                samples = [
-                    osapi.V1MountTrackPathRaDecSample(
-                        julian_day=Time(t0).jd,
-                        ra_degrees=p0.ra,
-                        dec_degrees=p0.dec,
-                    ),
-                    osapi.V1MountTrackPathRaDecSample(
-                        julian_day=Time(t1).jd,
-                        ra_degrees=(p0.ra + target.rates.ra * duration) % 360,
-                        dec_degrees=max(-90.0, min(90.0, p0.dec + target.rates.dec * duration)),
-                    ),
-                ]
                 req = osapi.V1StartMountTrackPathRequest(
-                    frame=osapi.V1MountTrackPathFrame.APPARENT_RA_DEC,
-                    ra_dec_samples=samples,
+                    frame=osapi.V1MountTrackPathFrame.ENU_UNIT_VECTOR,
+                    enu_samples=samples,
                 )
                 await self.api.call("v1_start_mount_track_path", req)
                 await asyncio.sleep(1)
@@ -309,17 +309,28 @@ class NodePlatformMount(NodePlatformDevice):
             case EphemerisTarget():
                 logger.debug("executing Ephemeris follow")
 
+                # Resolve the precomputed points to singularity-free ENU unit
+                # vectors, so the controller interpolates smoothly through the
+                # pole and the RA=0 seam. CPU-bound astropy work runs off the event loop.
+                jds = np.asarray(target.jds, dtype=float)
+                east, north, up = await asyncio.to_thread(
+                    self._points_to_enu,
+                    target.points,
+                    target.frame,
+                    Time(jds, format="jd"),
+                )
                 samples = [
-                    osapi.V1MountTrackPathRaDecSample(
-                        julian_day=jd,
-                        ra_degrees=p.ra,
-                        dec_degrees=p.dec,
+                    osapi.V1MountTrackPathEnuSample(
+                        julian_day=float(jds[i]),
+                        east=float(east[i]),
+                        north=float(north[i]),
+                        up=float(up[i]),
                     )
-                    for jd, p in zip(target.jds, target.points)
+                    for i in range(len(jds))
                 ]
                 req = osapi.V1StartMountTrackPathRequest(
-                    frame=osapi.V1MountTrackPathFrame.J2000_RA_DEC,
-                    ra_dec_samples=samples,
+                    frame=osapi.V1MountTrackPathFrame.ENU_UNIT_VECTOR,
+                    enu_samples=samples,
                 )
                 await self.api.call("v1_start_mount_track_path", req)
                 await asyncio.sleep(1)
@@ -543,33 +554,150 @@ class NodePlatformMount(NodePlatformDevice):
 
             await asyncio.sleep(self.config.status_frequency_fast)
 
-    def _seconds_to_set_at_rate(
+    def _rate_track_samples(
         self,
-        ra0_deg: float,
-        dec0_deg: float,
-        ra_rate_deg_per_sec: float,
-        dec_rate_deg_per_sec: float,
-        t0,
-    ) -> float:
-        max_window = 24 * 3600.0
-        step = 60.0
+        coords: Coordinates,
+        rates: Coordinates,
+        frame: ReferenceFrame,
+        t0: datetime,
+        *,
+        step: float = 30.0,
+        max_window: float = 24 * 3600.0,
+        min_coverage: float = 60.0,
+    ) -> list[osapi.V1MountTrackPathEnuSample]:
+        """Sample a constant-rate target as topocentric ENU unit vectors.
+
+        The position is extrapolated linearly in the rate's native frame, embedded
+        as a 3-D unit vector (finite past 90 deg, so the pole/zenith folds to the
+        antipodal meridian instead of crashing or clamping), resolved to topocentric
+        East/North/Up, and trimmed at horizon-set. The edge controller renormalizes
+        the vectors, so they need only be finite and nonzero.
+
+        Raises ValueError if the target is below the horizon at t0 or stays up for
+        less than ``min_coverage`` seconds (the Node Platform rejects paths with
+        under 60 s of trackable coverage).
+        """
         times_s = np.arange(0.0, max_window + step, step)
-        ras = ra0_deg + ra_rate_deg_per_sec * times_s
-        decs = dec0_deg + dec_rate_deg_per_sec * times_s
         obstimes = Time(t0) + times_s * u.s
 
-        coords = SkyCoord(ra=ras * u.deg, dec=decs * u.deg, frame=ICRS())
-        alts = coords.transform_to(
-            AltAz(obstime=obstimes, location=self._location)
-        ).alt.deg
+        east, north, up = self._enu_along_rate(coords, rates, frame, obstimes, times_s)
 
-        above = alts >= 0.0
-        if not above[0]:
-            return max_window
-        below_after = ~above
-        if not below_after.any():
-            return max_window
-        return float(times_s[int(np.argmax(below_after))])
+        visible = up >= 0.0
+        if not visible[0]:
+            raise ValueError("rate target is below the horizon at t0; not trackable")
+        set_idx = len(times_s) if visible.all() else int(np.argmin(visible))
+        coverage = float(times_s[set_idx - 1])
+        if coverage < min_coverage:
+            raise ValueError(
+                f"rate target sets after {coverage:.0f}s, below the "
+                f"{min_coverage:.0f}s minimum track coverage"
+            )
+
+        jd = obstimes.jd
+        return [
+            osapi.V1MountTrackPathEnuSample(
+                julian_day=float(jd[i]),
+                east=float(east[i]),
+                north=float(north[i]),
+                up=float(up[i]),
+            )
+            for i in range(set_idx)
+        ]
+
+    @staticmethod
+    def _altaz_to_enu(
+        alt_rad: np.ndarray, az_rad: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Topocentric (East, North, Up) from alt/az in radians.
+
+        Azimuth is measured clockwise from north and Up is positive above the
+        horizon, matching the Node Platform ENU convention. Finite for any alt,
+        so a path crossing the zenith folds to the opposite azimuth rather than
+        diverging.
+        """
+        return (
+            np.cos(alt_rad) * np.sin(az_rad),
+            np.cos(alt_rad) * np.cos(az_rad),
+            np.sin(alt_rad),
+        )
+
+    def _radec_to_enu(
+        self,
+        ra_deg: np.ndarray,
+        dec_deg: np.ndarray,
+        frame: ReferenceFrame,
+        obstimes: Time,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Topocentric ENU from equatorial angles (degrees) in ``frame``.
+
+        The direction is built as a unit vector (finite for any dec, so motion
+        through the pole folds correctly) and rotated to topocentric by astropy.
+        """
+        ra = np.deg2rad(ra_deg)
+        dec = np.deg2rad(dec_deg)
+        vec = CartesianRepresentation(
+            np.cos(dec) * np.cos(ra),
+            np.cos(dec) * np.sin(ra),
+            np.sin(dec),
+        )
+        altaz = SkyCoord(vec, frame=frame.to_astropy(), obstime=obstimes).transform_to(
+            AltAz(obstime=obstimes, location=self._location)
+        )
+        return self._altaz_to_enu(altaz.alt.rad, altaz.az.rad)
+
+    def _enu_along_rate(
+        self,
+        coords: Coordinates,
+        rates: Coordinates,
+        frame: ReferenceFrame,
+        obstimes: Time,
+        times_s: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Extrapolate position at a constant rate in its native frame, as ENU."""
+        match coords, rates:
+            case Horizontal(alt=alt0, az=az0), Horizontal(alt=alt_rate, az=az_rate):
+                return self._altaz_to_enu(
+                    np.deg2rad(alt0 + alt_rate * times_s),
+                    np.deg2rad(az0 + az_rate * times_s),
+                )
+
+            case Equatorial(ra=ra0, dec=dec0), Equatorial(ra=ra_rate, dec=dec_rate):
+                return self._radec_to_enu(
+                    ra0 + ra_rate * times_s, dec0 + dec_rate * times_s, frame, obstimes
+                )
+
+            case _:
+                raise NotImplementedError(
+                    f"rate follow for {type(coords).__name__} position with "
+                    f"{type(rates).__name__} rates is not supported"
+                )
+
+    def _points_to_enu(
+        self,
+        points: Sequence[Coordinates],
+        frame: ReferenceFrame,
+        obstimes: Time,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Resolve a homogeneous sequence of ephemeris points to topocentric ENU."""
+        match points[0]:
+            case Horizontal():
+                return self._altaz_to_enu(
+                    np.deg2rad(np.fromiter((p.alt for p in points), float)),
+                    np.deg2rad(np.fromiter((p.az for p in points), float)),
+                )
+
+            case Equatorial():
+                return self._radec_to_enu(
+                    np.fromiter((p.ra for p in points), float),
+                    np.fromiter((p.dec for p in points), float),
+                    frame,
+                    obstimes,
+                )
+
+            case _:
+                raise NotImplementedError(
+                    f"ephemeris follow for {type(points[0]).__name__} points is not supported"
+                )
 
     def altaz_rates_to_radec_rates(
         self,
