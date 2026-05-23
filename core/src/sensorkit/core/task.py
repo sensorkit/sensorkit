@@ -35,10 +35,10 @@ class ControllerTask(RegistryBaseModel):
 
     def set_context(self, context: KeywordDict):
         """Associate context with the task."""
-        if self.context is not None:
-            raise RuntimeError("Context already set")
-
-        self.context = context
+        if self.context is None:
+            self.context = context
+        else:
+            self.context.update(context)
 
     def get_context(self):
         """Return the context associated with this task."""
