@@ -33,6 +33,15 @@ class IndigoConfig(BaseModel):
     endpoints: list[IndigoServerConfig] = []
 
 
+sk.declare_config_section(
+    "indigo",
+    list[IndigoConfig],
+    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
+    model_mapper=iter,
+    service_path=__name__,
+)
+
+
 @sk.service_entrypoint(version=sk.VERSION)
 async def indigo_service(service: sk.Service):
     await service.register()
