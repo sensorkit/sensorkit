@@ -56,6 +56,9 @@ class UDLProgram:
         # SDK client (created in program_init)
         self.client: AsyncUnifieddatalibrary | None = None
 
+        self._udl_username: str | None = None
+        self._udl_password: str | None = None
+
         # Task management
         self.queue: TaskQueue | None = None
         self.tasks: Dict[str, CollectRequestFull] = {}
@@ -123,6 +126,9 @@ class UDLProgram:
                     f"UDL_USERNAME and UDL_PASSWORD must be set in "
                     f"{self.config.api.env_file} or as environment variables"
                 )
+
+            self._udl_username = username
+            self._udl_password = password
 
             client_kwargs = {
                 "username": username,
@@ -265,8 +271,8 @@ class UDLProgram:
                 external_id=request.external_id,
                 id_sensor=self.config.api.id_sensor,
                 orig_sensor_id=self.config.api.id_sensor,
-                actual_start_time=actual_start_time,
-                actual_end_time=actual_end_time,
+                actual_start_time=_udl_ts(actual_start_time) if actual_start_time else None,
+                actual_end_time=_udl_ts(actual_end_time) if actual_end_time else None,
                 notes=notes,
             )
             logger.debug(f"sent {status.value} response for request {request.id}")
@@ -316,11 +322,17 @@ class UDLProgram:
         exp_start_time = datetime.fromisoformat(date_obs) if date_obs else datetime.now(UTC)
 
         exposure_time = context.get("exptime")
-        exp_end_time = exp_start_time + timedelta(seconds=float(exposure_time))
+        exp_end_time = (
+            exp_start_time + timedelta(seconds=float(exposure_time))
+            if exposure_time is not None
+            else exp_start_time
+        )
 
         # sequenceId must be >= 1 (UDL requirement)
         frame_num = context.get("frame_num", 0)
         sequence_id = frame_num + 1
+
+        image_set_length = request.num_frames or 1
 
         # Build SkyImagery metadata
         metadata = {
@@ -329,8 +341,7 @@ class UDLProgram:
             "satNo": request.sat_no,
             "expStartTime": _udl_ts(exp_start_time),
             "expEndTime": _udl_ts(exp_end_time),
-            "imageSetId": request.id,
-            "imageSetLength": request.num_frames or 1,
+            "imageSetLength": image_set_length,
             "sequenceId": sequence_id,
             "frameWidthPixels": context.get("image_width"),
             "frameHeightPixels": context.get("image_height"),
@@ -341,6 +352,12 @@ class UDLProgram:
             "dataMode": request.data_mode or "TEST",
             "imageType": context.get("image_type") or self.config.image_type,
         }
+
+        # imageSetId groups multiple frames of one collect into a set. Per UDL:
+        # a single-image set doesn't need an imageSetId, so only emit it when
+        # the set has more than one frame.
+        if image_set_length > 1:
+            metadata["imageSetId"] = request.id
 
         if self._site:
             metadata["senlat"] = self._site.latitude_degrees
@@ -376,10 +393,10 @@ class UDLProgram:
         zip_buffer.seek(0)
 
         try:
-            await self.client.sky_imagery.upload_zip(file=zip_buffer.getvalue())
+            await self._upload_skyimagery_zip(zip_buffer.getvalue())
             logger.debug(
                 f"task ({request.id}) uploaded skyimagery "
-                f"({sequence_id}/{metadata.get('imageSetLength', 1)})"
+                f"({sequence_id}/{image_set_length})"
             )
         except Exception as e:
             logger.warning(f"Task ({request.id}) failed to upload skyimagery: {e}")
@@ -405,6 +422,64 @@ class UDLProgram:
             logger.debug(f"task ({task_id}) saved archive to {zip_path}")
         except Exception as e:
             logger.warning(f"Task ({task_id}) failed to save archive locally: {e}")
+
+    def _imagery_filedrop_url(self) -> str | None:
+        """Resolve the SkyImagery filedrop URL.
+
+        UDL serves the imagery filedrop on a dedicated subdomain. The SDK's
+        sky_imagery.upload_zip() only targets it correctly for the production
+        default; when base_url is overridden (e.g. the test environment) it
+        POSTs to '{base_url}/filedrop/udl-skyimagery', which 404s. We therefore
+        derive the correct host and POST the ZIP ourselves.
+
+        Returns None for hosts we don't recognise (e.g. MACHINA), signalling
+        the caller to fall back to the SDK's upload_zip().
+        """
+        base = self.config.api.base_url
+        if not base:
+            # SDK default → production UDL
+            return "https://imagery.unifieddatalibrary.com/filedrop/udl-skyimagery"
+
+        host = base.rstrip("/").split("://", 1)[-1]
+        if host == "test.unifieddatalibrary.com":
+            return "https://imagery-test.unifieddatalibrary.com/filedrop/udl-skyimagery"
+        if host == "unifieddatalibrary.com":
+            return "https://imagery.unifieddatalibrary.com/filedrop/udl-skyimagery"
+        return None
+
+    async def _upload_skyimagery_zip(self, zip_bytes: bytes) -> None:
+        """Upload a SkyImagery ZIP to the UDL imagery filedrop.
+
+        POSTs the raw ZIP as application/zip with Basic auth (or client cert)
+        to the imagery subdomain — the approach proven against the live UDL
+        filedrop. Falls back to the SDK when the filedrop host can't be derived
+        (e.g. MACHINA's custom base_url).
+        """
+        url = self._imagery_filedrop_url()
+        if url is None:
+            await self.client.sky_imagery.upload_zip(file=zip_bytes)
+            return
+
+        if self.config.api.use_certs:
+            client_kwargs = {
+                "cert": (self.config.api.client_cert, self.config.api.client_key),
+                "verify": self.config.api.client_verify,
+            }
+        else:
+            client_kwargs = {"auth": (self._udl_username, self._udl_password)}
+
+        # Imagery uploads can be hundreds of MB — use a generous timeout rather
+        # than the lightweight per-request api.timeout used for the JSON API.
+        async with httpx.AsyncClient(timeout=300.0, **client_kwargs) as http:
+            resp = await http.post(
+                url,
+                content=zip_bytes,
+                headers={"Content-Type": "application/zip"},
+            )
+            if resp.status_code >= 300:
+                raise RuntimeError(
+                    f"SkyImagery upload to {url} failed: HTTP {resp.status_code} {resp.text}"
+                )
 
     # ── Task generation ──
 
@@ -448,9 +523,19 @@ class UDLProgram:
         logger.info(f"Task ({request.id}): starting execution with end_time={task.end_time}")
 
         try:
-            yield task
+            # The framework sends back a TaskExecutionResult on success; its
+            # start_time/end_time bracket the controller's task execution
+            # (before slew … after the mount stop), which we report as the
+            # CollectResponse's actual window. Per-exposure precision is carried
+            # separately by SkyImagery's expStartTime/expEndTime.
+            result = yield task
             logger.info(f"Task ({request.id}): finished execution successfully")
-            await self._send_response(request, ResponseStatus.COLLECTED)
+            await self._send_response(
+                request,
+                ResponseStatus.COLLECTED,
+                actual_start_time=result.start_time if result else None,
+                actual_end_time=result.end_time if result else None,
+            )
         except asyncio.CancelledError as e:
             logger.warning(f"Task ({request.id}): cancelled. {e=}")
             await self._send_response(

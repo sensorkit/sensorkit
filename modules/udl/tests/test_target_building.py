@@ -18,7 +18,9 @@ def program():
             source="TEST_SOURCE",
         ),
     )
-    return UDLProgram(config)
+    p = UDLProgram()
+    p.config = config
+    return p
 
 
 class TestBuildTargetTLE:

@@ -20,7 +20,8 @@ def program():
             source="TEST_SOURCE",
         ),
     )
-    p = UDLProgram(config)
+    p = UDLProgram()
+    p.config = config
     p.program = MagicMock()
     p.program.entity = "udl_program"
     # Mock site position
@@ -44,14 +45,13 @@ class TestSkyImageryMetadata:
 
         # Mock the SDK upload
         program.client = MagicMock()
-        program.client.sky_imagery = MagicMock()
-        program.client.sky_imagery.upload_zip = AsyncMock()
+        program._upload_skyimagery_zip = AsyncMock()
 
         context = {
             "task_id": "test-request-001",
             "frame_num": 0,
             "date_obs": "2026-03-21T07:18:47.082000",
-            "etime": 4.0,
+            "exptime": 4.0,
             "image_width": 8120,
             "image_height": 8120,
             "bits_per_pixel": 16,
@@ -62,8 +62,8 @@ class TestSkyImageryMetadata:
         await program._publish_imagery(context, data)
 
         # Extract the metadata from the ZIP that was uploaded
-        call_args = program.client.sky_imagery.upload_zip.call_args
-        zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
+        call_args = program._upload_skyimagery_zip.call_args
+        zip_bytes = call_args.args[0] if call_args.args else call_args.kwargs.get("zip_bytes")
 
         import io
         import zipfile
@@ -86,8 +86,7 @@ class TestSkyImageryMetadata:
         program.tasks["test-request-001"] = request
 
         program.client = MagicMock()
-        program.client.sky_imagery = MagicMock()
-        program.client.sky_imagery.upload_zip = AsyncMock()
+        program._upload_skyimagery_zip = AsyncMock()
 
         context = {
             "task_id": "test-request-001",
@@ -98,8 +97,8 @@ class TestSkyImageryMetadata:
 
         await program._publish_imagery(context, b"\x00" * 100)
 
-        call_args = program.client.sky_imagery.upload_zip.call_args
-        zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
+        call_args = program._upload_skyimagery_zip.call_args
+        zip_bytes = call_args.args[0] if call_args.args else call_args.kwargs.get("zip_bytes")
 
         import io
         import zipfile
@@ -116,8 +115,7 @@ class TestSkyImageryMetadata:
         program.tasks["test-request-001"] = request
 
         program.client = MagicMock()
-        program.client.sky_imagery = MagicMock()
-        program.client.sky_imagery.upload_zip = AsyncMock()
+        program._upload_skyimagery_zip = AsyncMock()
 
         context = {
             "task_id": "test-request-001",
@@ -128,8 +126,8 @@ class TestSkyImageryMetadata:
 
         await program._publish_imagery(context, b"\x00" * 100)
 
-        call_args = program.client.sky_imagery.upload_zip.call_args
-        zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
+        call_args = program._upload_skyimagery_zip.call_args
+        zip_bytes = call_args.args[0] if call_args.args else call_args.kwargs.get("zip_bytes")
 
         import io
         import zipfile
@@ -146,8 +144,7 @@ class TestSkyImageryMetadata:
         program.tasks["test-request-001"] = request
 
         program.client = MagicMock()
-        program.client.sky_imagery = MagicMock()
-        program.client.sky_imagery.upload_zip = AsyncMock()
+        program._upload_skyimagery_zip = AsyncMock()
 
         context = {
             "task_id": "test-request-001",
@@ -158,8 +155,8 @@ class TestSkyImageryMetadata:
 
         await program._publish_imagery(context, b"\x00" * 100)
 
-        call_args = program.client.sky_imagery.upload_zip.call_args
-        zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
+        call_args = program._upload_skyimagery_zip.call_args
+        zip_bytes = call_args.args[0] if call_args.args else call_args.kwargs.get("zip_bytes")
 
         import io
         import zipfile
@@ -176,8 +173,7 @@ class TestSkyImageryMetadata:
         program.tasks["test-request-001"] = request
 
         program.client = MagicMock()
-        program.client.sky_imagery = MagicMock()
-        program.client.sky_imagery.upload_zip = AsyncMock()
+        program._upload_skyimagery_zip = AsyncMock()
 
         context = {
             "task_id": "test-request-001",
@@ -188,8 +184,8 @@ class TestSkyImageryMetadata:
 
         await program._publish_imagery(context, b"\x00" * 100)
 
-        call_args = program.client.sky_imagery.upload_zip.call_args
-        zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
+        call_args = program._upload_skyimagery_zip.call_args
+        zip_bytes = call_args.args[0] if call_args.args else call_args.kwargs.get("zip_bytes")
 
         import io
         import zipfile
@@ -206,8 +202,7 @@ class TestSkyImageryMetadata:
         program.tasks["test-request-001"] = request
 
         program.client = MagicMock()
-        program.client.sky_imagery = MagicMock()
-        program.client.sky_imagery.upload_zip = AsyncMock()
+        program._upload_skyimagery_zip = AsyncMock()
 
         context = {
             "task_id": "test-request-001",
@@ -218,8 +213,8 @@ class TestSkyImageryMetadata:
 
         await program._publish_imagery(context, b"\x00" * 100)
 
-        call_args = program.client.sky_imagery.upload_zip.call_args
-        zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
+        call_args = program._upload_skyimagery_zip.call_args
+        zip_bytes = call_args.args[0] if call_args.args else call_args.kwargs.get("zip_bytes")
 
         import io
         import zipfile
@@ -236,8 +231,7 @@ class TestSkyImageryMetadata:
         program.tasks["test-request-001"] = request
 
         program.client = MagicMock()
-        program.client.sky_imagery = MagicMock()
-        program.client.sky_imagery.upload_zip = AsyncMock()
+        program._upload_skyimagery_zip = AsyncMock()
 
         context = {
             "task_id": "test-request-001",
@@ -248,8 +242,8 @@ class TestSkyImageryMetadata:
 
         await program._publish_imagery(context, b"\x00" * 100)
 
-        call_args = program.client.sky_imagery.upload_zip.call_args
-        zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
+        call_args = program._upload_skyimagery_zip.call_args
+        zip_bytes = call_args.args[0] if call_args.args else call_args.kwargs.get("zip_bytes")
 
         import io
         import zipfile
@@ -274,14 +268,13 @@ class TestSkyImageryMetadata:
         program.config.api.source = "TEST_SOURCE"
 
         program.client = MagicMock()
-        program.client.sky_imagery = MagicMock()
-        program.client.sky_imagery.upload_zip = AsyncMock()
+        program._upload_skyimagery_zip = AsyncMock()
 
         context = {
             "task_id": "test-request-001",
             "frame_num": 0,
             "date_obs": "2026-03-21T07:18:47.082000",
-            "etime": 5.344074,
+            "exptime": 5.344074,
             "image_width": 8120,
             "image_height": 8120,
             "bits_per_pixel": 16,
@@ -290,8 +283,8 @@ class TestSkyImageryMetadata:
 
         await program._publish_imagery(context, b"\x00" * 527480640)
 
-        call_args = program.client.sky_imagery.upload_zip.call_args
-        zip_bytes = call_args.kwargs.get("file") or call_args.args[0]
+        call_args = program._upload_skyimagery_zip.call_args
+        zip_bytes = call_args.args[0] if call_args.args else call_args.kwargs.get("zip_bytes")
 
         import io
         import zipfile
@@ -313,5 +306,99 @@ class TestSkyImageryMetadata:
         assert metadata["source"] == "TEST_SOURCE"
         assert metadata["dataMode"] == "REAL"
         assert metadata["imageType"] == "FITS"
+        # Multi-frame set (num_frames=3) → imageSetId associates the frames.
+        assert metadata["imageSetId"] == "test-request-001"
         assert "origSensorId" not in metadata
         assert "origObjectId" not in metadata
+
+    @pytest.mark.asyncio
+    async def test_imageset_id_omitted_for_single_image(self, program):
+        """Per UDL: a single-image set (num_frames=1) doesn't need an imageSetId."""
+        request = MockCollectRequest.with_tle(num_frames=1)
+        program.tasks["test-request-001"] = request
+
+        program.client = MagicMock()
+        program._upload_skyimagery_zip = AsyncMock()
+
+        context = {
+            "task_id": "test-request-001",
+            "frame_num": 0,
+            "date_obs": "2026-03-21T07:18:47.082000",
+            "file_name": "test.fits",
+        }
+
+        await program._publish_imagery(context, b"\x00" * 100)
+
+        call_args = program._upload_skyimagery_zip.call_args
+        zip_bytes = call_args.args[0] if call_args.args else call_args.kwargs.get("zip_bytes")
+
+        import io
+        import zipfile
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            metadata_files = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
+            metadata = json.loads(zf.read(metadata_files[0]))
+
+        assert metadata["imageSetLength"] == 1
+        assert "imageSetId" not in metadata
+
+    @pytest.mark.asyncio
+    async def test_imageset_id_present_for_multi_image(self, program):
+        """A multi-frame set keeps imageSetId so the frames can be grouped."""
+        request = MockCollectRequest.with_tle(num_frames=5)
+        program.tasks["test-request-001"] = request
+
+        program.client = MagicMock()
+        program._upload_skyimagery_zip = AsyncMock()
+
+        context = {
+            "task_id": "test-request-001",
+            "frame_num": 0,
+            "date_obs": "2026-03-21T07:18:47.082000",
+            "file_name": "test.fits",
+        }
+
+        await program._publish_imagery(context, b"\x00" * 100)
+
+        call_args = program._upload_skyimagery_zip.call_args
+        zip_bytes = call_args.args[0] if call_args.args else call_args.kwargs.get("zip_bytes")
+
+        import io
+        import zipfile
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            metadata_files = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
+            metadata = json.loads(zf.read(metadata_files[0]))
+
+        assert metadata["imageSetLength"] == 5
+        assert metadata["imageSetId"] == "test-request-001"
+
+
+class TestImageryFiledropURL:
+    """The SDK's upload_zip() targets the wrong host when base_url is
+    overridden; _imagery_filedrop_url() derives the dedicated imagery subdomain.
+    """
+
+    def test_default_base_url_uses_production_imagery(self, program):
+        program.config.api.base_url = None
+        assert (
+            program._imagery_filedrop_url()
+            == "https://imagery.unifieddatalibrary.com/filedrop/udl-skyimagery"
+        )
+
+    def test_test_base_url_uses_test_imagery(self, program):
+        program.config.api.base_url = "https://test.unifieddatalibrary.com"
+        assert (
+            program._imagery_filedrop_url()
+            == "https://imagery-test.unifieddatalibrary.com/filedrop/udl-skyimagery"
+        )
+
+    def test_explicit_prod_base_url_uses_production_imagery(self, program):
+        program.config.api.base_url = "https://unifieddatalibrary.com/"
+        assert (
+            program._imagery_filedrop_url()
+            == "https://imagery.unifieddatalibrary.com/filedrop/udl-skyimagery"
+        )
+
+    def test_unknown_host_returns_none(self, program):
+        """Unknown hosts (e.g. MACHINA) → fall back to the SDK."""
+        program.config.api.base_url = "https://machina.example.mil"
+        assert program._imagery_filedrop_url() is None

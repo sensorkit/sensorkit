@@ -1,11 +1,13 @@
 """Test UDLProgram request handling and response logic."""
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import MockCollectRequest
 
+from sensorkit.core.controller import TaskExecutionResult
 from sensorkit.udl.models import ResponseStatus, UDLAPIConfig, UDLConfig
 from sensorkit.udl.program import UDLProgram
 from sensorkit.udl.task_queue import TaskQueue
@@ -25,7 +27,8 @@ def config():
 
 @pytest.fixture
 def program(config):
-    p = UDLProgram(config)
+    p = UDLProgram()
+    p.config = config
     p.program = MagicMock()
     p.program.entity = "udl_program"
     p.program.kv_put_model = AsyncMock()
@@ -105,6 +108,36 @@ class TestSendResponse:
         assert call_kwargs["notes"] == "Something went wrong"
 
 
+class TestCollectedResponseActualTimes:
+    @pytest.mark.asyncio
+    async def test_collected_response_uses_task_execution_times(self, program):
+        """COLLECTED carries the TaskExecutionResult window (UDL-formatted, ...Z)."""
+        # task_id is a UUID on StandardCollectTask, so the request id must parse.
+        request_id = str(uuid.uuid4())
+        request = MockCollectRequest.with_tle(id=request_id)
+        await program.queue.push_task(request)
+
+        gen = program.generate()
+        task = await gen.asend(None)
+        assert task is not None
+
+        result = TaskExecutionResult(
+            task_id=uuid.UUID(request_id),
+            start_time=datetime(2026, 3, 21, 7, 18, 47, tzinfo=UTC),
+            end_time=datetime(2026, 3, 21, 7, 19, 12, tzinfo=UTC),
+        )
+
+        # Sending the result resumes past `result = yield task`; the generator
+        # sends COLLECTED and then completes (StopAsyncIteration).
+        with pytest.raises(StopAsyncIteration):
+            await gen.asend(result)
+
+        call_kwargs = program.client.collect_responses.create.call_args.kwargs
+        assert call_kwargs["status"] == "COLLECTED"
+        assert call_kwargs["actual_start_time"] == "2026-03-21T07:18:47.000000Z"
+        assert call_kwargs["actual_end_time"] == "2026-03-21T07:19:12.000000Z"
+
+
 class TestEnvVarFallback:
     def test_env_file_default(self):
         """env_file should default to .env."""
@@ -116,7 +149,8 @@ class TestEnvVarFallback:
                 source="TEST_SOURCE",
             ),
         )
-        p = UDLProgram(config)
+        p = UDLProgram()
+        p.config = config
         assert p.config.api.env_file == ".env"
 
     def test_env_file_custom(self):
@@ -130,5 +164,6 @@ class TestEnvVarFallback:
                 env_file="/opt/sk/.env.udl",
             ),
         )
-        p = UDLProgram(config)
+        p = UDLProgram()
+        p.config = config
         assert p.config.api.env_file == "/opt/sk/.env.udl"
