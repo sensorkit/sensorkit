@@ -282,6 +282,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             ):
                 # Don't support restart-with-different-context in a single request.
                 call.reject(response=None)
+                return
 
         call.accept(response=None)
 
