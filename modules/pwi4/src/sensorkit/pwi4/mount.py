@@ -349,6 +349,7 @@ class PWI4Mount(PWI4Device):
         )
 
         await self.client.request("/mount/park")
+        await asyncio.sleep(1)
 
         await self._wait_for_mount()
 
