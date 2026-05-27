@@ -24,7 +24,7 @@ class SlackClient:
         blocks: list[dict] | None = None,
         attachments: list[dict] | None = None,
         thread_ts: str | None = None,
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         """Post a message to a Slack channel.
 
         Returns (channel_id, ts) for threading and reactions, or (None, None) on failure.

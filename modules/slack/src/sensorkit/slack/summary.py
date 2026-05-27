@@ -42,7 +42,10 @@ class SummaryAccumulator:
             "completed": 0,
             "failed": 0,
         }
-        self._health_events: list[str] = []
+        # Chronological (time, entity, state) records, e.g.
+        # ("03:15:42", "dome1", "disconnected") or ("04:02:10", "weather", "unsafe").
+        # Recorded on every keyword update; collapsed to transitions at summary time.
+        self._health_events: list[tuple[str, str, str]] = []
 
         # Track current state for duration calculation
         self._current_state: str | None = None
@@ -121,7 +124,7 @@ class SummaryAccumulator:
             self._health_events,
         )
 
-        ts = await self._client.post_message(
+        _channel_id, ts = await self._client.post_message(
             channel=self._channel,
             text=fallback,
             blocks=blocks,
@@ -223,10 +226,8 @@ class SummaryAccumulator:
                         is_connected = data.get("is_connected", True)
 
                         now = datetime.now(self._tz).strftime("%H:%M:%S")
-                        if not is_connected:
-                            self._health_events.append(f"{now} {entity} disconnected")
-                        else:
-                            self._health_events.append(f"{now} {entity} connected")
+                        state = "disconnected" if not is_connected else "connected"
+                        self._health_events.append((now, entity, state))
 
                     except Exception as e:
                         logger.debug(f"Error parsing health event: {e}")
@@ -259,10 +260,10 @@ class SummaryAccumulator:
                         now = datetime.now(self._tz).strftime("%H:%M:%S")
 
                         if not is_safe:
-                            self._health_events.append(f"{now} weather unsafe")
+                            self._health_events.append((now, "weather", "unsafe"))
                             self._transition_state("weather_closed")
                         else:
-                            self._health_events.append(f"{now} weather safe")
+                            self._health_events.append((now, "weather", "safe"))
                             self._transition_state("idle")
 
                     except Exception as e:
