@@ -457,7 +457,7 @@ class NodePlatformMount(NodePlatformDevice):
                 headers={"Authorization": f"Bearer {self.api._configuration.access_token}"},
             )
             raw = json.loads(resp.read())
-            return raw.get("temperatureSensors", {}).get("statuses", [])
+            return (raw.get("temperatureSensors") or {}).get("statuses", [])
         except Exception as e:
             logger.warning(f"Failed to get OT temperatures ({e})")
             return []
