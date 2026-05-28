@@ -125,8 +125,13 @@ class DemandProc(ABC):
                 # Run the user logic. Initially this is the main state driving logic, but after
                 # an interrupt this is stop or abort logic.
                 await logic_coro
-            except asyncio.CancelledError as e:
-                prereq_coro, logic_coro = self._demand_proc_cancelled(e)
+            except asyncio.CancelledError:
+                if next_stage := self._demand_proc_cancelled():
+                    # Managed cancellation. Loop to the next stage.
+                    prereq_coro, logic_coro = next_stage
+                else:
+                    logger.debug(f"{self.demand.state} procedure exiting due to hard cancel")
+                    raise
             except BaseException as e:
                 logger.debug(f"{self.demand.state} procedure exiting due to error ({e})")
                 raise
@@ -134,7 +139,7 @@ class DemandProc(ABC):
                 logger.warning(f"{self.demand.state} procedure exiting without raising")
                 break
 
-    def _demand_proc_cancelled(self, err: asyncio.CancelledError):
+    def _demand_proc_cancelled(self) -> tuple[asyncio.Future, asyncio.Future] | None:
         if self._aio_task.cancelling() > self._interrupt_count:
             # This means the task was externally cancelled coincident with a stop or abort!
             # Fall through to a hard cancel.
@@ -178,8 +183,7 @@ class DemandProc(ABC):
                 # Run the user abort logic at the next iteration.
                 logic_coro = self.abort_logic()
             case _:
-                logger.debug(f"{self.demand.state} procedure exiting due to hard cancel")
-                raise err
+                return None
 
         self._interrupt_count = 0
         self._interrupt_level = 0
