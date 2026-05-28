@@ -240,8 +240,10 @@ class OttoProgram:
                 logger.info(f"task ({task.task_id}) finished execution successfully.")
             except asyncio.CancelledError as e:
                 logger.warning(f"Task ({task.task_id}) cancelled: {e}")
+                raise
             except Exception as e:
                 logger.exception(f"Task ({task.task_id}) failed with exception: {e}")
+                raise
         else:
             # Peek at next task to provide info
             if next_task := await self.task_queue.peek_task():

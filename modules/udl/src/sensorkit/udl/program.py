@@ -540,6 +540,7 @@ class UDLProgram:
                 ResponseStatus.CANCELLED,
                 notes=str(e),
             )
+            raise
         except Exception as e:
             logger.warning(f"Task ({request.id}): failed. {e=}")
             await self._send_response(
@@ -547,6 +548,7 @@ class UDLProgram:
                 ResponseStatus.FAILED,
                 notes=str(e),
             )
+            raise
         finally:
             await self.queue.remove_task(request.id)
             # Keep task reference for imagery publishing correlation
