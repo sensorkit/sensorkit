@@ -240,6 +240,8 @@ class ServiceContext(EntityImpl):
             else:
                 logger.error(f"Service {self.info.name} abnormal shutdown (cancelled)")
                 self._shutdown.cancel()
+
+            raise
         except BaseExceptionGroup as eg:
             logger.error(f"Service {self.info.name} abnormal shutdown")
             errors = [e for e in eg.exceptions if not isinstance(e, asyncio.CancelledError)]
@@ -280,6 +282,11 @@ class ServiceContext(EntityImpl):
 
         If the service exited abnormally, the exception that caused it to exit will be raised.
         """
+        with contextlib.suppress(asyncio.CancelledError):
+            # The task can only raise CancelledError (and nuclear BaseExceptions) due to exception
+            # handling in _service_task above.
+            await self._task
+
         await self._shutdown
 
     async def register_entity(self, entity: str):
