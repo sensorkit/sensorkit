@@ -39,9 +39,6 @@ class NodePlatformServerConfig(BaseModel):
         if isinstance(data, dict):
             if devices := data.get("devices"):
                 for device in devices.values():
-                    assert "host" not in device and "port" not in device
-                    assert "lineage_id" not in device
-                    assert "request_timeout" not in device
                     device["host"] = data.get("host")
                     device["port"] = data.get("port", 9080)
                     device["lineage_id"] = data.get("lineage_id")
