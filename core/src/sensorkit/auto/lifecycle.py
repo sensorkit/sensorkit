@@ -82,10 +82,11 @@ class ControllerStateMonitor:
 
 
 class DemandProcError(Exception):
-    """Raised by a DemandProc to signal a lifecycle error with a categorised origin."""
-    type Kind = Literal["program", "controller", "internal"]
+    """Raised by a DemandProc to signal a lifecycle error with a categorized origin."""
 
-    def __init__(self, *args, kind: Kind = "internal", **kwargs):
+    type ErrorKind = Literal["program", "controller", "internal"]
+
+    def __init__(self, *args, kind: ErrorKind = "internal", **kwargs):
         super().__init__(*args, **kwargs)
         self.kind = kind
 
@@ -428,7 +429,7 @@ class ControllerLifecycle:
                         except Exception as e:
                             active_error = e
 
-                error_kind: DemandProcError.Kind | None = None
+                error_kind: DemandProcError.ErrorKind | None = None
 
                 if self._monitor.in_error():
                     error_kind = "controller"

@@ -328,12 +328,12 @@ class KVEntry:
     value: bytes
     revision: int
 
-    DELETED: ClassVar[bytes] = b"DELETED"
+    DELETE_MARKER: ClassVar[bytes] = b"DELETED"
     """Sentinel value denoting a deleted KV entry."""
 
     def deleted(self):
         """Return True if this entry has been marked as deleted."""
-        return self.value is KVEntry.DELETED
+        return self.value is KVEntry.DELETE_MARKER
 
 
 class KVError(BackendError):

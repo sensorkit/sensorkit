@@ -84,7 +84,7 @@ def _subject_from_nats(method: Method, subject: str):
 def _kv_entry(entry: KeyValue.Entry, *, key: Subject = None):
     return KVEntry(
         key=key if key else _subject_from_nats(Method.KV, entry.key),
-        value=entry.value if entry.operation not in DELETE_OPS else KVEntry.DELETED,
+        value=entry.value if entry.operation not in DELETE_OPS else KVEntry.DELETE_MARKER,
         revision=entry.revision,
     )
 

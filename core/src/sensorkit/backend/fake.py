@@ -311,7 +311,7 @@ class FakeBackendImpl(BackendImpl):
         return _kv_monitor()
 
     def _kv_defined_not_deleted(self, key: tuple[str, ...]):
-        return self._kv.defined(key) and self._kv.element(key).history[-1].value != KVEntry.DELETED
+        return self._kv.defined(key) and not self._kv.element(key).history[-1].deleted()
 
     @override
     async def kv_get(self, target: Subject) -> KVEntry:
@@ -365,7 +365,7 @@ class FakeBackendImpl(BackendImpl):
                 if not t.cancelled():
                     t.exception()
 
-            if payload is not KVEntry.DELETED:
+            if payload is not KVEntry.DELETE_MARKER:
                 task = asyncio.create_task(_expire_ttl())
                 self._kv_expirers[target] = task
                 task.add_done_callback(_expire_cleanup)
@@ -405,4 +405,4 @@ class FakeBackendImpl(BackendImpl):
     @override
     async def kv_delete(self, target: Subject, revision: int | None = None):
         if self._kv_defined_not_deleted(target.full_path()):
-            self._kv_do_update(target, KVEntry.DELETED, revision)
+            self._kv_do_update(target, KVEntry.DELETE_MARKER, revision)
