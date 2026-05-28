@@ -381,15 +381,15 @@ class AlpacaCamera(AlpacaDevice):
         except asyncio.TimeoutError:
             logger.error("Exposure timed out; attempting abort")
             await self._try_abort()
-            return
+            raise
         except asyncio.CancelledError:
             logger.warning("Capture cancelled; attempting abort")
             await self._try_abort()
-            return
+            raise
 
         if not data:
-            logger.error("No data returned from camera")
-            return
+            logger.error("No data returned from camera!")
+            raise RuntimeError("Camera returned no data")
 
         # Build data context
         # ImageArrayRaw returns a flat array; dimensions come from ImageArrayInfo.
