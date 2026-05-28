@@ -241,7 +241,7 @@ class ConstraintManager:
 
         if state.active:
             if idx not in self._constrained_set:
-                logger.info(f"Constraint {state.kind} is active")
+                logger.info(f"Constraint {state.kind} is active (reason: {state.reason or "none"})")
 
             self._constrained_set.add(idx)
         else:

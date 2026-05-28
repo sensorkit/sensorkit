@@ -50,28 +50,10 @@ class WeatherFieldEvaluator:
             return float("inf")
 
         over = value - self.threshold
+        over_deadband = over + self.deadband
+        self._exceeded = (over_deadband if self._exceeded else over) > 0
 
-        if self._exceeded:
-            over += self.deadband
-
-        self._exceeded = over > 0
-        return over
-
-    def annotation(self, weather: BasicWeather) -> str:
-        if self.threshold is None:
-            return f"{self.name} unconfigured"
-
-        value: float | None = getattr(weather, self.name, None)
-
-        if value is None:
-            return f"{self.name} missing value"
-        else:
-            over = value - self.threshold
-            return (
-                f"{self.name} {over + self.deadband:.1f} too high"
-                if self._exceeded
-                else f"{self.name} {-over:.1f} to constraint"
-            )
+        return over_deadband if self._exceeded else over
 
 
 class WeatherConstraint(Constraint):
