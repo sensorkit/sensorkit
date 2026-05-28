@@ -4,7 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from sensorkit.astro.common import Coordinates, Equatorial, Geodetic, Horizontal, ReferenceFrame
+from sensorkit.astro.common import RADecPointing
+from sensorkit.astro.coords import Coordinates
 from sensorkit.astro.target import Target
 from sensorkit.common.keyword import declare_keyword
 from sensorkit.core.device import DeviceCommand
@@ -41,106 +42,12 @@ if COMPAT:
     BaseCommand = DeviceCommand
 
 
-
-# TODO: Phase out in favor of DeviceDetails
-class Capabilities(BaseModel):
-    """Deprecated device capability descriptor. Prefer ``DeviceDetails``."""
-    type: Literal["device"] = "device"
-    commands: list[str] = Field(default_factory=list)
-    device_type: str | None = None
-
-
 # TODO: Move to a device-specific state keyword.
 @declare_keyword
 class Opened(BaseModel):
     """Keyword reporting whether a device (e.g., dome, mirror cover) is currently open."""
     is_open: bool
 
-
-# TODO: Move / incorporate into sensorkit.astro.common
-@declare_keyword
-class SitePosition(BaseModel):
-    """Geographic location of the observing site in degrees and km."""
-    latitude_degrees: float
-    longitude_degrees: float
-    altitude_km: float
-
-    @classmethod
-    def from_coords(cls, coords: Geodetic):
-        """Create a SitePosition from a Geodetic coordinate object."""
-        return cls(
-            latitude_degrees=coords.lat,
-            longitude_degrees=coords.lon,
-            altitude_km=coords.elev / 1000,
-        )
-
-    def to_coords(self):
-        """Convert to a Geodetic coordinate object."""
-        return Geodetic(
-            lon=self.longitude_degrees,
-            lat=self.latitude_degrees,
-            elev=self.altitude_km * 1000,
-        )
-
-
-# TODO: Move / incorporate into sensorkit.astro.common
-@declare_keyword
-class AltAzPointing(BaseModel):
-    """Current telescope pointing in horizontal (altitude/azimuth) coordinates."""
-    altitude_degrees: float
-    azimuth_degrees: float
-
-    @classmethod
-    def from_coords(cls, coords: Horizontal):
-        """Create an AltAzPointing from a Horizontal coordinate object."""
-        return cls(altitude_degrees=coords.alt, azimuth_degrees=coords.az)
-
-
-# TODO: Move / incorporate into sensorkit.astro.common
-@declare_keyword
-class RADecPointing(BaseModel):
-    """Current telescope pointing in equatorial (RA/Dec) coordinates."""
-    right_ascension_hours: float
-    declination_degrees: float
-    reference_frame: ReferenceFrame = ReferenceFrame.ICRF
-
-    @classmethod
-    def from_coords(cls, coords: Equatorial):
-        """Create an RADecPointing from an Equatorial coordinate object."""
-        return cls(right_ascension_hours=coords.ra, declination_degrees=coords.dec)
-
-    def to_coords(self):
-        """Convert to an Equatorial coordinate object."""
-        return Equatorial(ra=self.right_ascension_hours * 15, dec=self.declination_degrees)
-
-    @property
-    def ra_hms(self):
-        """Right ascension formatted as hours, minutes, seconds."""
-        return self.to_coords().ra_hms
-
-    @property
-    def dec_dms(self):
-        """Declination formatted as degrees, minutes, seconds."""
-        return self.to_coords().dec_dms
-
-
-# FIXME: Change usages to ConfigureCameraCooler
-class SetTemperature(BaseCommand):
-    command_id: Literal["SetTemperature"] = "SetTemperature"
-    temperature: float
-    units: TemperatureUnit
-
-
-# FIXME: Change usages to ConfigureCameraSensor
-class SetBinning(BaseCommand, Binning):
-    command_id: Literal["SetBinning"] = "SetBinning"
-
-
-class Open(BaseCommand):
-    command_id: Literal["Open"] = "Open"
-
-class Close(BaseCommand):
-    command_id: Literal["Close"] = "Close"
 
 # TODO: Overhaul the remaining interfaces below and move to mount.py
 
@@ -255,9 +162,6 @@ class Stop(BaseCommand):
     command_id: Literal["Stop"] = "Stop"
 
 
-class SetSyncEnabled(BaseCommand, Enabled):
-    command_id: Literal["SetSyncEnabled"] = "SetSyncEnabled"
-
 @dataclass
 class AzimuthRange:
     """A range of azimuth values defining a wrap constraint."""
@@ -281,7 +185,7 @@ class ModelDeletePoint(BaseCommand):
     command_id: Literal["ModelDeletePoint"] = "ModelDeletePoint"
     indexes: list[int]
 
-class ModelEnablePoint(BaseCommand):
+class ModelEnablePoint(DeviceCommand):
     command_id: Literal["ModelEnablePoint"] = "ModelEnablePoint"
     indexes: list[int]
 
