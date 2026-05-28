@@ -23,11 +23,10 @@ from astropy.coordinates import (
 from astropy.coordinates import AltAz as AltAzFrame
 from astropy.time import Time
 from loguru import logger
-from pydantic import BaseModel, Discriminator, TypeAdapter
+from pydantic import BaseModel, Discriminator
 
 from sensorkit.astro.common import TLE, ReferenceFrame
 from sensorkit.astro.coords import (
-    Cartesian,
     Coordinates,
     Equatorial,
     Geodetic,
@@ -486,76 +485,3 @@ def is_observable(
     return np.all(mask)
 
 
-if __name__ == "__main__":
-    import asyncio
-
-    async def async_main():
-        location = Geodetic(lon=-115, lat=35, elev=0)
-        # location = Geodetic(lon=0, lat=0, elev=-6371)
-        altaz = TypeAdapter(Target).validate_python(
-            {
-                "target": "fixed",
-                "frame": "altaz",
-                "coords": {"az": 42, "alt": 75},
-            }
-        )
-        icrs = ICRSTarget(coords=Equatorial(180, 0))
-
-        # GOES 18
-        t = datetime(year=2025, month=11, day=13, tzinfo=UTC)
-        r = Cartesian(3.489446662633988E+03, -4.201628764024025E+04, -6.988491904127811E+00)
-        v = Cartesian(3.064392396997317E+00, 2.545262135853046E-01, -9.236202026854977E-03)
-
-        # Above is in km, we need meters.
-        r *= 1e3
-        v *= 1e3
-
-        # Create StateVectorTarget.
-        svt = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=StateVector(t, r, v))
-        test_adapt = True
-
-        if test_adapt:
-            for target in altaz, icrs, svt:
-                logger.debug(target.model_dump_json(indent=2))
-
-                adapted = await target.adapt(
-                    AltAzTarget,
-                    ICRSTarget,
-                    (EphemerisTarget, ReferenceFrame.CIRF),
-                    observer=location,
-                )
-
-                match adapted:
-                    case AltAzTarget():
-                        logger.info(f"Got {adapted=}")
-                    case ICRSTarget():
-                        logger.info(f"Got {adapted=}")
-                    case EphemerisTarget():
-                        logger.info(f"Got {adapted=}")
-                    case _:
-                        logger.error(f"Unexpected type {type(adapted)} returned by adapt()")
-        else:
-            start_time = datetime.now(UTC)
-            track_duration = 60
-            orbit = await svt.to_trajectory().propagate(
-                start_time + timedelta(seconds=track_duration)
-            )
-
-            for _ in range(track_duration):
-                now = datetime.now(UTC)
-                gcrs = orbit.sample()
-
-                # cirs = gcrs.transform_to(CIRS(obstime=gcrs.obstime, location=location.to_astropy()))
-                altaz = gcrs.transform_to(AltAz(obstime=gcrs.obstime, location=location.to_astropy()))
-
-                # icrs = altaz.transform_to(ICRS())
-                icrs = AltAz(alt=altaz.alt, az=altaz.az, obstime=gcrs.obstime, location=location.to_astropy()).transform_to(ICRS())
-
-                # icrs = CIRS(cirs.ra, cirs.dec, obstime=gcrs.obstime, location=location.to_astropy()).transform_to(ICRS())
-                delta = (datetime.now(UTC) - now).total_seconds()
-                # print(f"{cirs.obstime.to_datetime()}  {cirs.name}  {cirs.location}  {cirs.distance}  ra={cirs.ra:.3f}  dec={cirs.dec:.3f}")
-                # print(f"{altaz.obstime.to_datetime()}  {altaz.name}  {altaz.location}  {altaz.distance}  az={altaz.az:.3f}  alt={altaz.alt:.3f}")
-                print(f" ra={icrs.ra:.3f}  dec={icrs.dec:.3f}  {icrs.distance}  took {delta} seconds")
-                await asyncio.sleep(1.0)
-
-    asyncio.run(async_main())

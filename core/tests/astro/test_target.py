@@ -8,7 +8,7 @@ from sensorkit.astro.common import (
     TLE,
     ReferenceFrame,
 )
-from sensorkit.astro.coords import Equatorial, Geodetic, Cartesian, Horizontal, StateVector
+from sensorkit.astro.coords import Cartesian, Equatorial, Geodetic, Horizontal, StateVector
 from sensorkit.astro.target import (
     AltAzTarget,
     EphemerisTarget,
@@ -178,3 +178,69 @@ def test_is_observable_below_horizon():
     start = datetime(2024, 6, 21, 0, 0, 0, tzinfo=UTC)
     end = start + timedelta(hours=1)
     assert not is_observable(target, _NYC, start, end, min_altitude_deg=30.0)
+
+
+_OBSERVER = Geodetic(lon=-115.0, lat=35.0, elev=0.0)
+
+# GOES 18 GEO state vector (meters, GCRF, 2025-11-13 00:00 UTC)
+_GEO_SV = StateVector(
+    t=datetime(2025, 11, 13, tzinfo=UTC),
+    r=Cartesian(3_489_446.6, -42_016_287.6, -6_988.5),
+    v=Cartesian(3_064.4, 254.5, -9.2),
+)
+
+
+@pytest.mark.asyncio
+async def test_adapt_altaz_returns_self():
+    """AltAzTarget is returned unchanged when it appears in the accepts list."""
+    target = AltAzTarget(coords=Horizontal(az=90.0, alt=45.0))
+    result = await target.adapt(AltAzTarget, ICRSTarget)
+    assert result is target
+
+
+@pytest.mark.asyncio
+async def test_adapt_icrs_returns_self():
+    """ICRSTarget is returned unchanged when it appears in the accepts list."""
+    target = ICRSTarget(coords=Equatorial(ra=180.0, dec=45.0))
+    result = await target.adapt(AltAzTarget, ICRSTarget)
+    assert result is target
+
+
+@pytest.mark.asyncio
+async def test_adapt_with_matching_frame_constraint_returns_self():
+    """adapt() returns self when the (type, frame) tuple matches the target."""
+    target = AltAzTarget(coords=Horizontal(az=90.0, alt=45.0))
+    result = await target.adapt((AltAzTarget, ReferenceFrame.ALTAZ), ICRSTarget)
+    assert result is target
+
+
+@pytest.mark.asyncio
+async def test_adapt_raises_when_unsupported():
+    """adapt() raises RuntimeError when no accepted type can represent the target."""
+    target = AltAzTarget(coords=Horizontal(az=90.0, alt=45.0))
+    with pytest.raises(RuntimeError, match="Could not adapt"):
+        await target.adapt(ICRSTarget, observer=_OBSERVER)
+
+
+@pytest.mark.asyncio
+async def test_adapt_requires_observer_for_propagation():
+    """adapt() raises AssertionError when propagation is needed but observer is absent."""
+    target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
+    with pytest.raises(AssertionError):
+        await target.adapt((EphemerisTarget, ReferenceFrame.CIRF))
+
+
+@pytest.mark.asyncio
+async def test_adapt_state_vector_to_ephemeris():
+    """StateVectorTarget.adapt() propagates into an EphemerisTarget in the requested frame."""
+    target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
+    result = await target.adapt(
+        AltAzTarget,
+        ICRSTarget,
+        (EphemerisTarget, ReferenceFrame.CIRF),
+        observer=_OBSERVER,
+    )
+    assert isinstance(result, EphemerisTarget)
+    assert result.frame == ReferenceFrame.CIRF
+    assert len(result.jds) > 0
+    assert len(result.points) == len(result.jds)
