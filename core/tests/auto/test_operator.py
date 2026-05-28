@@ -34,7 +34,7 @@ async def test_operator_override_drives_operate(kit, service_context):
 
     # Create operator with one controller, no modes/constraints, one program reference.
     config = ControllerConfig(tasking=[ProgramConfig(program="prog1")])
-    config._name = "ctrl1"
+    config.name = "ctrl1"
     operator = VirtualOperator([config])
 
     async with asyncio.timeout(5.0):
@@ -88,7 +88,7 @@ async def test_operator_override_false_shuts_down(kit, service_context):
     shutdown_ran = asyncio.Event()
 
     config = ControllerConfig(tasking=[ProgramConfig(program="prog1")])
-    config._name = "ctrl1"
+    config.name = "ctrl1"
     operator = VirtualOperator([config])
 
     async with asyncio.timeout(5.0):
@@ -208,7 +208,7 @@ async def test_late_discovered_program_gets_enabled(kit, service_context):
             ProgramConfig(program="late_prog"),
         ],
     )
-    config._name = "ctrl1"
+    config.name = "ctrl1"
     operator = VirtualOperator([config])
 
     # Apply state that desires both programs enabled.
