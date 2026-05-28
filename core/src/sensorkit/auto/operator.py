@@ -50,9 +50,6 @@ class ControllerConfig(BaseModel):
     @name.setter
     def name(self, value: str):
         """Set the name of this controller."""
-        if self._name is not None:
-            raise RuntimeError("name already set")
-
         self._name = value
 
     def mode(self, name: str):
