@@ -540,7 +540,10 @@ class Service:
             logger.debug(f"service error propagated to declarative API: {type(e).__name__}: {e}")
             self.running.set_exception(e)
             self.shutdown.set_exception(e)
-            await self.context.shutdown()
+
+            if self.context is not None:
+                await self.context.shutdown()
+
             raise
 
         async def wait_for_shutdown():
