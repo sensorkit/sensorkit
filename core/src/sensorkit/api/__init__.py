@@ -1,3 +1,4 @@
+# ruff: noqa: F401 E402
 from importlib.metadata import version as _pkg_version
 
 VERSION = _pkg_version("sensorkit")
@@ -16,10 +17,10 @@ from sensorkit.api.declarative import (
     declare_entity,
     declare_program,
     entity_for_instance,
+    on_attach,
+    on_detach,
     on_disable,
     on_enable,
-    on_detach,
-    on_attach,
     task_factory,
     task_handler,
 )
@@ -39,8 +40,7 @@ from sensorkit.backend.request import CallContext, CallError, ExtendedResponse, 
 from sensorkit.common.keyword import Keyword, KeywordDict, declare_keyword
 from sensorkit.config import declare_config_section
 from sensorkit.core.client import SensorKit, ServiceContext, ServiceRecord, ServiceStatus
-from sensorkit.core.controller import ControllerClient, ControllerState, ControllerRef
-from sensorkit.core.impl.controller import ControllerImpl
+from sensorkit.core.controller import ControllerClient, ControllerRef, ControllerState
 from sensorkit.core.device import (
     Abort,
     CommandDone,
@@ -49,9 +49,18 @@ from sensorkit.core.device import (
     DeviceCommand,
     DeviceRef,
 )
-from sensorkit.core.impl.device import DeviceImpl
 from sensorkit.core.entity import EntityClient, EntityRef
+from sensorkit.core.impl.controller import ControllerImpl
+from sensorkit.core.impl.device import DeviceImpl
 from sensorkit.core.impl.entity import EntityImpl
+from sensorkit.core.impl.program import ProgramImpl, ProgramOffers
+from sensorkit.core.program import (
+    OfferInterval,
+    ProgramClient,
+    ProgramOffering,
+    ProgramRef,
+    ProgramState,
+)
 from sensorkit.core.state import EventSourcedState
 from sensorkit.core.task import (
     CalibrateTask,
@@ -63,14 +72,6 @@ from sensorkit.core.task import (
     StandbyTask,
 )
 from sensorkit.core.trait import Archetype, Trait, declare_archetype, declare_trait
-from sensorkit.core.program import (
-    OfferInterval,
-    ProgramClient,
-    ProgramOffering,
-    ProgramRef,
-    ProgramState,
-)
-from sensorkit.core.impl.program import ProgramOffers, ProgramImpl
 from sensorkit.data.context import Context, ContextSubscription
 from sensorkit.data.graph import DataGraph
 
@@ -105,45 +106,3 @@ def device(obj=None) -> DeviceImpl | None:
         return entity_for_instance(obj)
     else:
         return DeviceImpl.current.get()
-
-
-# Model imports.
-from sensorkit.std.weather import BasicWeather
-from sensorkit.models.devices import (
-    AxisTargetDistance,
-    Binning,
-    CameraCapture,
-    CameraSensorSize,
-    ChangeFocusPosition,
-    ChangeRotatorPosition,
-    Close,
-    Connect,
-    Connected,
-    Deinit,
-    Disable,
-    DisableAxis,
-    Disconnect,
-    Enable,
-    EnableAxis,
-    Enabled,
-    Filter,
-    FocusPosition,
-    FollowTarget,
-    Home,
-    Init,
-    MountAxis,
-    MoveToPark,
-    Open,
-    Opened,
-    RotatorPosition,
-    SetBinning,
-    SetFilter,
-    SetParkPosition,
-    SetSyncEnabled,
-    SetTemperature,
-    SitePosition,
-    Stop,
-    Target,
-    Temperature,
-    TemperatureUnit,
-)

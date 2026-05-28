@@ -8,7 +8,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
-from sensorkit.astro.common import ReferenceFrame
+from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
 from sensorkit.astro.target import (
     AltAzTarget,
     CatalogTarget,
@@ -20,20 +20,17 @@ from sensorkit.astro.target import (
     TLETarget,
 )
 from sensorkit.models.devices import (
-    AltAzPointing,
     AxisRates,
-    Connect,
     Deinit,
     FollowTarget,
     Init,
-    RADecPointing,
-    SitePosition,
     Stop,
 )
 from sensorkit.std.collect import StandardCollectTask
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.std.instrument import Binning, CameraCapture, ConfigureCameraSensor
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover, SetFilter
+from sensorkit.std.traits import Connect
 
 
 class Sensor:

@@ -6,13 +6,9 @@ from pydantic import TypeAdapter
 
 from sensorkit.astro.common import (
     TLE,
-    Cartesian,
-    Equatorial,
-    Geodetic,
-    Horizontal,
     ReferenceFrame,
-    StateVector,
 )
+from sensorkit.astro.coords import Equatorial, Geodetic, Cartesian, Horizontal, StateVector
 from sensorkit.astro.target import (
     AltAzTarget,
     EphemerisTarget,

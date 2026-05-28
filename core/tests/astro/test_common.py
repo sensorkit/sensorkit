@@ -4,15 +4,8 @@ import numpy as np
 import pytest
 from astropy.coordinates import CIRS, GCRS, ICRS, ITRS, EarthLocation, SkyCoord
 
-from sensorkit.astro.common import (
-    TLE,
-    Cartesian,
-    Equatorial,
-    Geodetic,
-    Horizontal,
-    ReferenceFrame,
-    StateVector,
-)
+from sensorkit.astro.common import TLE, ReferenceFrame
+from sensorkit.astro.coords import Cartesian, Equatorial, Geodetic, Horizontal, StateVector
 
 
 def test_reference_frame_to_astropy():

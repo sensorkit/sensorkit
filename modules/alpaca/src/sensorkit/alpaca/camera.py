@@ -19,16 +19,18 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceState,
 )
 from sensorkit.data.fits import ArrayInfo
-from sensorkit.models.devices import (
-    CameraSensorSize,
-    Connected,
-    TemperatureUnit,
-)
-from sensorkit.std.instrument import (
+from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.std import (
     Binning,
+    CameraCapture,
+    CameraSensorSize,
     CameraSensorTemperature,
     ConfigureCameraCooler,
     ConfigureCameraSensor,
+    Connect,
+    Connected,
+    Disconnect,
+    TemperatureUnit,
 )
 
 _array_typecode_to_dtype = {
@@ -172,22 +174,22 @@ class AlpacaCamera(AlpacaDevice):
             self.state = AlpacaCameraState()
 
         # Initialize the camera
-        await self.camera_init(sk.Init())
+        await self.camera_init(Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.camera_disconnect(sk.Disconnect())
+        await self.camera_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def camera_init(self, cmd: sk.Init):
+    async def camera_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.camera_connect(sk.Connect())
+        self._reconnect = lambda: self.camera_connect(Connect())
         self.camera = Camera(self.address, self.config.device_number, self.config.protocol)
-        await self.camera_connect(sk.Connect())
+        await self.camera_connect(Connect())
 
         self._data_tasks: set[asyncio.Task] = set()
         self._camera_x_size: int = 0
@@ -244,23 +246,23 @@ class AlpacaCamera(AlpacaDevice):
         )
 
     @sk.command_handler
-    async def camera_deinit(self, cmd: sk.Deinit):
+    async def camera_deinit(self, cmd: Deinit):
         await self.camera_abort(sk.Abort())
         if self._data_tasks:
             await asyncio.gather(*self._data_tasks, return_exceptions=True)
 
     @sk.command_handler
-    async def camera_connect(self, cmd: sk.Connect):
+    async def camera_connect(self, cmd: Connect):
         await self.connect(self.camera, timeout=self.config.timeout)
         await sk.device().publish(Connected(is_connected=True))
 
     @sk.command_handler
-    async def camera_disconnect(self, cmd: sk.Disconnect):
+    async def camera_disconnect(self, cmd: Disconnect):
         await self.disconnect(self.camera)
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
-    async def camera_stop(self, cmd: sk.Stop):
+    async def camera_stop(self, cmd: Stop):
         await self.camera_abort(sk.Abort())
 
     @sk.command_handler
@@ -343,7 +345,7 @@ class AlpacaCamera(AlpacaDevice):
         logger.debug(f"set camera binning to ({bin_x}, {bin_y})")
 
     @sk.command_handler
-    async def camera_capture(self, cmd: sk.CameraCapture):
+    async def camera_capture(self, cmd: CameraCapture):
         await self.require_connected()
         logger.info(f"Requesting {cmd.integration_time:.1f} sec capture from camera")
         logger.debug("starting camera capture")

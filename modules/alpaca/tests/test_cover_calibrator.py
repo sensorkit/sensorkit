@@ -9,6 +9,8 @@ from sensorkit.alpaca.cover_calibrator import (
     AlpacaCoverCalibratorConfig,
     AlpacaCoverCalibratorState,
 )
+from sensorkit.models.devices import Stop
+from sensorkit.std import Connect, Disconnect
 
 
 @pytest.fixture
@@ -35,19 +37,15 @@ def cover_calibrator():
 
 @pytest.mark.asyncio
 async def test_cover_calibrator_connect(cover_calibrator):
-    import sensorkit.api as sk
-
     cover_calibrator.device_connected = False
     cover_calibrator.cover_calibrator._properties["Connected"] = False
-    await cover_calibrator.cover_calibrator_connect(sk.Connect())
+    await cover_calibrator.cover_calibrator_connect(Connect())
     assert cover_calibrator.device_connected is True
 
 
 @pytest.mark.asyncio
 async def test_cover_calibrator_disconnect(cover_calibrator):
-    import sensorkit.api as sk
-
-    await cover_calibrator.cover_calibrator_disconnect(sk.Disconnect())
+    await cover_calibrator.cover_calibrator_disconnect(Disconnect())
     assert cover_calibrator.device_connected is False
 
 
@@ -71,6 +69,4 @@ async def test_cover_calibrator_close(cover_calibrator):
 
 @pytest.mark.asyncio
 async def test_cover_calibrator_stop(cover_calibrator):
-    import sensorkit.api as sk
-
-    await cover_calibrator.cover_calibrator_stop(sk.Stop())
+    await cover_calibrator.cover_calibrator_stop(Stop())

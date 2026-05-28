@@ -1,5 +1,6 @@
 import pytest
 
+from sensorkit.std import Connect, Disconnect
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 from sensorkit.thesky.ota import TheSkyOTAConfig, TheSkyOTAState
 
@@ -21,26 +22,20 @@ def ota(simulator):
 
 @pytest.mark.asyncio
 async def test_ota_connect(ota):
-    import sensorkit.api as sk
-
-    await ota.ota_connect(sk.Connect())
+    await ota.ota_connect(Connect())
     assert ota.device_connected is True
 
 
 @pytest.mark.asyncio
 async def test_ota_disconnect(ota):
-    import sensorkit.api as sk
-
-    await ota.ota_connect(sk.Connect())
-    await ota.ota_disconnect(sk.Disconnect())
+    await ota.ota_connect(Connect())
+    await ota.ota_disconnect(Disconnect())
     assert ota.device_connected is False
 
 
 @pytest.mark.asyncio
 async def test_ota_open(ota):
-    import sensorkit.api as sk
-
-    await ota.ota_connect(sk.Connect())
+    await ota.ota_connect(Connect())
     await ota.ota_open(OpenMirrorCover())
 
     resp = await ota.execute("OpticalTubeAssembly.mirrorCoverState;")
@@ -49,9 +44,7 @@ async def test_ota_open(ota):
 
 @pytest.mark.asyncio
 async def test_ota_close(ota):
-    import sensorkit.api as sk
-
-    await ota.ota_connect(sk.Connect())
+    await ota.ota_connect(Connect())
     # Open first, then close
     await ota.ota_open(OpenMirrorCover())
     await ota.ota_close(CloseMirrorCover())
@@ -63,9 +56,7 @@ async def test_ota_close(ota):
 @pytest.mark.asyncio
 async def test_ota_open_when_already_open(ota):
     """Opening when already open should succeed (idempotent)."""
-    import sensorkit.api as sk
-
-    await ota.ota_connect(sk.Connect())
+    await ota.ota_connect(Connect())
     await ota.ota_open(OpenMirrorCover())
     # Call again - should still succeed
     await ota.ota_open(OpenMirrorCover())
@@ -77,9 +68,7 @@ async def test_ota_open_when_already_open(ota):
 @pytest.mark.asyncio
 async def test_ota_close_when_already_closed(ota):
     """Closing when already closed should succeed (idempotent)."""
-    import sensorkit.api as sk
-
-    await ota.ota_connect(sk.Connect())
+    await ota.ota_connect(Connect())
     await ota.ota_close(CloseMirrorCover())
 
     resp = await ota.execute("OpticalTubeAssembly.mirrorCoverState;")

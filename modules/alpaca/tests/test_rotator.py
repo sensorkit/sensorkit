@@ -7,6 +7,7 @@ from sensorkit.alpaca.rotator import (
     AlpacaRotatorConfig,
     AlpacaRotatorState,
 )
+from sensorkit.std import Connect, Disconnect
 
 
 @pytest.fixture
@@ -35,19 +36,15 @@ def rotator():
 
 @pytest.mark.asyncio
 async def test_rotator_connect(rotator):
-    import sensorkit.api as sk
-
     rotator.device_connected = False
     rotator.rotator._properties["Connected"] = False
-    await rotator.rotator_connect(sk.Connect())
+    await rotator.rotator_connect(Connect())
     assert rotator.device_connected is True
 
 
 @pytest.mark.asyncio
 async def test_rotator_disconnect(rotator):
-    import sensorkit.api as sk
-
-    await rotator.rotator_disconnect(sk.Disconnect())
+    await rotator.rotator_disconnect(Disconnect())
     assert rotator.device_connected is False
 
 

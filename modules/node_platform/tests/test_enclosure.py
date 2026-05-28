@@ -4,7 +4,7 @@ import ourskyai_node_platform_api as osapi
 import pytest
 from conftest import MockNodePlatformAPI
 
-import sensorkit.api as sk
+from sensorkit.models.devices import Deinit, Init, Stop
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.enclosure import (
     NodePlatformEnclosure,
@@ -56,7 +56,7 @@ class TestEnclosureInit:
         api.set_response("v1_home_enclosure_shutters", None)
         enclosure.shutter_state = osapi.EnclosureShutterState.CLOSED
 
-        await enclosure.enclosure_init(sk.Init())
+        await enclosure.enclosure_init(Init())
 
         assert len(api.find_calls("v1_home_enclosure_shutters")) == 1
         assert len(api.find_calls("v1_sync_enclosure_rotator_with_mount")) == 1
@@ -66,7 +66,7 @@ class TestEnclosureInit:
     async def test_init_skips_home_if_already_homed(self, enclosure, api):
         enclosure.state.has_been_homed = True
 
-        await enclosure.enclosure_init(sk.Init())
+        await enclosure.enclosure_init(Init())
 
         assert len(api.find_calls("v1_home_enclosure_shutters")) == 0
 
@@ -74,7 +74,7 @@ class TestEnclosureInit:
     async def test_deinit_stops(self, enclosure, api):
         enclosure.shutter_state = osapi.EnclosureShutterState.CLOSED
 
-        await enclosure.enclosure_deinit(sk.Deinit())
+        await enclosure.enclosure_deinit(Deinit())
 
         assert len(api.find_calls("v1_halt_enclosure_shutters")) == 1
         assert len(api.find_calls("v1_halt_enclosure_window")) == 1
@@ -133,7 +133,7 @@ class TestEnclosureOpenClose:
 
     @pytest.mark.asyncio
     async def test_stop(self, enclosure, api):
-        await enclosure.enclosure_stop(sk.Stop())
+        await enclosure.enclosure_stop(Stop())
 
         assert len(api.find_calls("v1_halt_enclosure_shutters")) == 1
         assert len(api.find_calls("v1_halt_enclosure_window")) == 1

@@ -7,6 +7,7 @@ from sensorkit.alpaca.focuser import (
     AlpacaFocuserConfig,
     AlpacaFocuserState,
 )
+from sensorkit.std import Connect, Disconnect
 
 
 @pytest.fixture
@@ -41,19 +42,15 @@ def focuser():
 
 @pytest.mark.asyncio
 async def test_focuser_connect(focuser):
-    import sensorkit.api as sk
-
     focuser.device_connected = False
     focuser.focuser._properties["Connected"] = False
-    await focuser.focuser_connect(sk.Connect())
+    await focuser.focuser_connect(Connect())
     assert focuser.device_connected is True
 
 
 @pytest.mark.asyncio
 async def test_focuser_disconnect(focuser):
-    import sensorkit.api as sk
-
-    await focuser.focuser_disconnect(sk.Disconnect())
+    await focuser.focuser_disconnect(Disconnect())
     assert focuser.device_connected is False
 
 

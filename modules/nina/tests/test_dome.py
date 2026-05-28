@@ -2,7 +2,9 @@ import pytest
 from conftest import MockNinaClient
 
 import sensorkit.api as sk
+from sensorkit.models.devices import Home, Stop
 from sensorkit.nina.dome import NinaDomeConfig, NinaDomeState
+from sensorkit.std import Connect, Disconnect
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 
 
@@ -32,26 +34,26 @@ class TestDomeConnect:
     @pytest.mark.asyncio
     async def test_connect(self, client, dome):
         dome.device_connected = None
-        await dome.dome_connect(sk.Connect())
+        await dome.dome_connect(Connect())
         assert dome.device_connected is True
 
     @pytest.mark.asyncio
     async def test_disconnect(self, client, dome):
-        await dome.dome_disconnect(sk.Disconnect())
+        await dome.dome_disconnect(Disconnect())
         assert dome.device_connected is False
 
 
 class TestDomeCommands:
     @pytest.mark.asyncio
     async def test_home(self, client, dome):
-        await dome.dome_home(sk.Home())
+        await dome.dome_home(Home())
         reqs = client.find_requests("/equipment/dome/home")
         assert len(reqs) == 1
         assert dome.state.has_been_homed is True
 
     @pytest.mark.asyncio
     async def test_stop(self, client, dome):
-        await dome.dome_stop(sk.Stop())
+        await dome.dome_stop(Stop())
         reqs = client.find_requests("/equipment/dome/stop")
         assert len(reqs) == 1
 

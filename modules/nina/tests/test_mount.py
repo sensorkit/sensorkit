@@ -2,7 +2,9 @@ import pytest
 from conftest import MockNinaClient
 
 import sensorkit.api as sk
+from sensorkit.models.devices import Home, MoveToPark, Stop
 from sensorkit.nina.mount import NinaMountConfig, NinaMountState
+from sensorkit.std import Connect, Disconnect
 
 
 @pytest.fixture
@@ -45,14 +47,14 @@ class TestMountConnect:
     @pytest.mark.asyncio
     async def test_connect(self, client, mount):
         mount.device_connected = None
-        await mount.mount_connect(sk.Connect())
+        await mount.mount_connect(Connect())
         assert mount.device_connected is True
         reqs = client.find_requests("/equipment/mount/connect")
         assert len(reqs) == 1
 
     @pytest.mark.asyncio
     async def test_disconnect(self, client, mount):
-        await mount.mount_disconnect(sk.Disconnect())
+        await mount.mount_disconnect(Disconnect())
         assert mount.device_connected is False
         reqs = client.find_requests("/equipment/mount/disconnect")
         assert len(reqs) == 1
@@ -61,7 +63,7 @@ class TestMountConnect:
 class TestMountHome:
     @pytest.mark.asyncio
     async def test_home(self, client, mount):
-        await mount.mount_home(sk.Home())
+        await mount.mount_home(Home())
         reqs = client.find_requests("/equipment/mount/home")
         assert len(reqs) == 1
         assert mount.state.has_been_homed is True
@@ -70,7 +72,7 @@ class TestMountHome:
 class TestMountStop:
     @pytest.mark.asyncio
     async def test_stop(self, client, mount):
-        await mount.mount_stop(sk.Stop())
+        await mount.mount_stop(Stop())
         reqs = client.find_requests("/equipment/mount/slew/stop")
         assert len(reqs) == 1
         reqs = client.find_requests("/equipment/mount/tracking")
@@ -81,6 +83,6 @@ class TestMountPark:
     @pytest.mark.asyncio
     async def test_park(self, client, mount):
         client.set_info(AtPark=True)
-        await mount.mount_park(sk.MoveToPark())
+        await mount.mount_park(MoveToPark())
         reqs = client.find_requests("/equipment/mount/park")
         assert len(reqs) == 1

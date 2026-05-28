@@ -12,7 +12,7 @@ from watchdog.events import FileCreatedEvent, FileMovedEvent, FileSystemEventHan
 from watchdog.observers import Observer
 
 import sensorkit.api as sk
-from sensorkit.models.devices import AltAzPointing, SitePosition
+from sensorkit.astro.common import SitePosition, AltAzPointing
 from sensorkit.sky_transmission.models import (
     SkyTransmissionConfig,
     FrameState,

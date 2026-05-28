@@ -10,7 +10,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from sensorkit.api.declarative import Service, command_handler, declare_device
-from sensorkit.astro.common import Equatorial, Horizontal
+from sensorkit.astro.common import RADecPointing, SitePosition
+from sensorkit.astro.coords import Equatorial, Horizontal
 from sensorkit.astro.target import AltAzTarget, ICRSTarget
 from sensorkit.core.task import (
     InitTask,
@@ -19,27 +20,28 @@ from sensorkit.core.task import (
     StandbyTask,
 )
 from sensorkit.models.devices import (
-    CameraCapture,
-    Connect,
     Deinit,
     FollowTarget,
     Init,
-    RADecPointing,
-    SetFilter,
-    SitePosition,
     Stop,
 )
-from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
-from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
-from sensorkit.std.instrument import ConfigureCameraSensor
-from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
-from sensorkit.std.sensor import (
+from sensorkit.std import (
+    CameraCapture,
+    CameraParameterSet,
     Capabilities,
+    CloseEnclosure,
+    CloseMirrorCover,
+    ConfigureCameraSensor,
+    Connect,
+    OpenEnclosure,
+    OpenMirrorCover,
     Sensor,
     SensorConfig,
     SensorControl,
     SensorDevices,
     SensorPolicies,
+    SetFilter,
+    StandardCollectTask,
 )
 
 

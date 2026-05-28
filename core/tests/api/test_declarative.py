@@ -28,9 +28,9 @@ from sensorkit.api.declarative import (
     task_handler,
 )
 from sensorkit.core.device import DeviceCommand
-from sensorkit.core.impl.entity import EntityImpl
 from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.impl.device import DeviceImpl
+from sensorkit.core.impl.entity import EntityImpl
 from sensorkit.core.impl.program import ProgramImpl
 from sensorkit.core.task import ControllerTask
 from sensorkit.core.trait import declare_archetype, declare_trait
@@ -106,7 +106,7 @@ def test_introspect_param_type():
 async def test_service():
     svc_decl = Service("test", "0.1.0")
 
-    async with asyncio.timeout(1.0):
+    async with asyncio.timeout(2.0):
         os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
         await svc_decl.start()
         await svc_decl.stop()

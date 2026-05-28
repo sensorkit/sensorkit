@@ -2,8 +2,9 @@ import pytest
 from conftest import MockNinaClient
 
 import sensorkit.api as sk
-from sensorkit.astro.common import Equatorial
+from sensorkit.astro.coords import Equatorial
 from sensorkit.astro.target import ICRSTarget
+from sensorkit.models.devices import FollowTarget
 from sensorkit.nina.mount import NinaMountConfig, NinaMountState
 
 
@@ -43,7 +44,7 @@ def mount(client):
 @pytest.mark.asyncio
 async def test_mount_follow_icrs(client, mount):
     target = ICRSTarget(coords=Equatorial(ra=90.0, dec=20.0))
-    await mount.mount_follow_target(sk.FollowTarget(target=target))
+    await mount.mount_follow_target(FollowTarget(target=target))
 
     # Should enable tracking
     tracking_reqs = client.find_requests("/equipment/mount/tracking")

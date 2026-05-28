@@ -2,7 +2,9 @@ import pytest
 from conftest import MockNinaClient
 
 import sensorkit.api as sk
+from sensorkit.models.devices import Stop
 from sensorkit.nina.focuser import NinaFocuserConfig, NinaFocuserState
+from sensorkit.std import Connect, Disconnect
 from sensorkit.std.optics import ChangeFocusPosition
 
 
@@ -33,12 +35,12 @@ class TestFocuserConnect:
     @pytest.mark.asyncio
     async def test_connect(self, client, focuser):
         focuser.device_connected = None
-        await focuser.focuser_connect(sk.Connect())
+        await focuser.focuser_connect(Connect())
         assert focuser.device_connected is True
 
     @pytest.mark.asyncio
     async def test_disconnect(self, client, focuser):
-        await focuser.focuser_disconnect(sk.Disconnect())
+        await focuser.focuser_disconnect(Disconnect())
         assert focuser.device_connected is False
 
 
@@ -52,6 +54,6 @@ class TestFocuserCommands:
 
     @pytest.mark.asyncio
     async def test_stop(self, client, focuser):
-        await focuser.focuser_stop(sk.Stop())
+        await focuser.focuser_stop(Stop())
         reqs = client.find_requests("/equipment/focuser/stop-move")
         assert len(reqs) == 1

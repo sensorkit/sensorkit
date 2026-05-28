@@ -13,7 +13,8 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected
+from sensorkit.models.devices import Deinit, Init
+from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 
 
@@ -68,32 +69,32 @@ class NinaGuider(NinaDevice):
             self.state = NinaGuiderState()
 
         # Initialize the guider
-        await self.guider_init(sk.Init())
+        await self.guider_init(Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.guider_disconnect(sk.Disconnect())
+        await self.guider_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def guider_init(self, cmd: sk.Init):
-        self._reconnect = lambda: self.guider_connect(sk.Connect())
-        await self.guider_connect(sk.Connect())
+    async def guider_init(self, cmd: Init):
+        self._reconnect = lambda: self.guider_connect(Connect())
+        await self.guider_connect(Connect())
 
     @sk.command_handler
-    async def guider_deinit(self, cmd: sk.Deinit):
+    async def guider_deinit(self, cmd: Deinit):
         await self.client.get("/equipment/guider/stop")
 
     @sk.command_handler
-    async def guider_connect(self, cmd: sk.Connect):
+    async def guider_connect(self, cmd: Connect):
         await self.connect("guider")
         await sk.device().publish(Connected(is_connected=True))
 
     @sk.command_handler
-    async def guider_disconnect(self, cmd: sk.Disconnect):
+    async def guider_disconnect(self, cmd: Disconnect):
         await self.disconnect("guider")
         await sk.device().publish(Connected(is_connected=False))
 

@@ -3,7 +3,7 @@
 import pytest
 from conftest import MockNodePlatformAPI
 
-import sensorkit.api as sk
+from sensorkit.models.devices import Stop
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.focuser import (
     NodePlatformFocuser,
@@ -53,7 +53,7 @@ class TestFocuserCommands:
 
     @pytest.mark.asyncio
     async def test_stop(self, focuser, api):
-        await focuser.focuser_stop(sk.Stop())
+        await focuser.focuser_stop(Stop())
 
         assert len(api.find_calls("v1_halt_focuser")) == 1
 

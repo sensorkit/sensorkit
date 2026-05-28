@@ -7,7 +7,8 @@ import ourskyai_node_platform_api as osapi
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected, RotatorPosition
+from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.std import Connected, RotatorPosition
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
@@ -39,7 +40,7 @@ class NodePlatformRotator(NodePlatformDevice):
         self.rotator_moving: bool | None = None
 
         # Initialize the rotator
-        await self.rotator_init(sk.Init())
+        await self.rotator_init(Init())
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -55,7 +56,7 @@ class NodePlatformRotator(NodePlatformDevice):
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def rotator_init(self, cmd: sk.Init):
+    async def rotator_init(self, cmd: Init):
         # Toggle field derotation
         if self.config.derotate:
             await self.api.call("v1_enable_derotation_compensation")
@@ -63,13 +64,13 @@ class NodePlatformRotator(NodePlatformDevice):
             await self.api.call("v1_disable_derotation_compensation")
 
     @sk.command_handler
-    async def rotator_deinit(self, cmd: sk.Deinit):
+    async def rotator_deinit(self, cmd: Deinit):
         await self.require_connected()
-        await self.rotator_stop(sk.Stop())
+        await self.rotator_stop(Stop())
         await self.api.call("v1_disable_derotation_compensation")
 
     @sk.command_handler
-    async def rotator_stop(self, cmd: sk.Stop):
+    async def rotator_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping rotator")
         await self.api.call("v1_halt_rotator")

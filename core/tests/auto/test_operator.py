@@ -22,7 +22,7 @@ from sensorkit.auto.scheduler import ProgramConfig
 from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.program import ProgramDiscovery, ProgramState
 from sensorkit.core.task import InitTask, ShutdownTask
-from sensorkit.models.devices import SitePosition
+from sensorkit.astro.common import SitePosition
 
 _test_position = SitePosition(latitude_degrees=42.0, longitude_degrees=123.0, altitude_km=3.0)
 

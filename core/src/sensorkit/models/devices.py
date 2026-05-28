@@ -10,37 +10,6 @@ from sensorkit.astro.target import Target
 from sensorkit.common.keyword import declare_keyword
 from sensorkit.core.device import DeviceCommand
 
-COMPAT = True
-
-if COMPAT:
-    # Re-exports for compat.
-    from sensorkit.std.traits import (
-        Connect,
-        Connected,
-        Disable,
-        Disconnect,
-        Enable,
-        Enabled,
-        Temperature,
-        TemperatureUnit,
-    )
-    from sensorkit.std.instrument import (
-        Binning,
-        CameraCapture,
-        CameraSensorSize,
-        ChangeRotatorPosition,
-        ConfigureCameraCooler,
-        RotatorPosition,
-    )
-    from sensorkit.std.optics import (
-        ChangeFocusPosition,
-        Filter,
-        Filters,
-        FocusPosition,
-        SetFilter,
-    )
-    BaseCommand = DeviceCommand
-
 
 # TODO: Move to a device-specific state keyword.
 @declare_keyword
@@ -58,11 +27,11 @@ class MountAxis(enum.StrEnum):
     RIGHT_ASCENSION="right_ascension"
     DECLINATION="declination"
 
-class EnableAxis(BaseCommand):
+class EnableAxis(DeviceCommand):
     command_id: Literal["EnableAxis"] = "EnableAxis"
     axis: MountAxis
 
-class DisableAxis(BaseCommand):
+class DisableAxis(DeviceCommand):
     command_id: Literal["DisableAxis"] = "DisableAxis"
     axis: MountAxis
 
@@ -133,32 +102,32 @@ class RADecArcseconds:
     right_ascension_arcseconds: float
     declination_arcseconds: float
 
-class ApplyOffset(BaseCommand):
+class ApplyOffset(DeviceCommand):
     command_id: Literal["ApplyOffset"] = "ApplyOffset"
     offset: AltAzArcseconds | RADecArcseconds
 
-class FollowTarget(BaseCommand):
+class FollowTarget(DeviceCommand):
     command_id: Literal["FollowTarget"] = "FollowTarget"
     target: Target
 
-class SetParkPosition(BaseCommand):
+class SetParkPosition(DeviceCommand):
     command_id: Literal["SetParkPosition"] = "SetParkPosition"
     position: Coordinates
 
-class MoveToPark(BaseCommand):
+class MoveToPark(DeviceCommand):
     command_id: Literal["MoveToPark"] = "MoveToPark"
 
 
-class Init(BaseCommand):
+class Init(DeviceCommand):
     command_id: Literal["Init"] = "Init"
 
-class Deinit(BaseCommand):
+class Deinit(DeviceCommand):
     command_id: Literal["Deinit"] = "Deinit"
 
-class Home(BaseCommand):
+class Home(DeviceCommand):
     command_id: Literal["Home"] = "Home"
 
-class Stop(BaseCommand):
+class Stop(DeviceCommand):
     command_id: Literal["Stop"] = "Stop"
 
 
@@ -173,15 +142,15 @@ class AzimuthWrapRange(AzimuthRange):
     """Keyword reporting the configured azimuth wrap range for the mount."""
     ...
 
-class SetAzimuthWrapRangeMin(BaseCommand, AzimuthWrapRange):
+class SetAzimuthWrapRangeMin(DeviceCommand, AzimuthWrapRange):
     command_id: Literal["SetAzimuthWrapRangeMin"] = "SetAzimuthWrapRangeMin"
 
 # Model Commands
-class ModelAddPoint(BaseCommand):
+class ModelAddPoint(DeviceCommand):
     command_id: Literal["ModelAddPoint"] = "ModelAddPoint"
     point: RADecPointing
 
-class ModelDeletePoint(BaseCommand):
+class ModelDeletePoint(DeviceCommand):
     command_id: Literal["ModelDeletePoint"] = "ModelDeletePoint"
     indexes: list[int]
 
@@ -189,20 +158,20 @@ class ModelEnablePoint(DeviceCommand):
     command_id: Literal["ModelEnablePoint"] = "ModelEnablePoint"
     indexes: list[int]
 
-class ModelDisablePoint(BaseCommand):
+class ModelDisablePoint(DeviceCommand):
     command_id: Literal["ModelDisablePoint"] = "ModelDisablePoint"
     indexes: list[int]
 
-class ModelClearPoints(BaseCommand):
+class ModelClearPoints(DeviceCommand):
     command_id: Literal["ModelClearPoints"] = "ModelClearPoints"
 
-class ModelSaveAsDefault(BaseCommand):
+class ModelSaveAsDefault(DeviceCommand):
     command_id: Literal["ModelSaveAsDefault"] = "ModelSaveAsDefault"
 
-class ModelSave(BaseCommand):
+class ModelSave(DeviceCommand):
     command_id: Literal["ModelSave"] = "ModelSave"
     filename: str
 
-class ModelLoad(BaseCommand):
+class ModelLoad(DeviceCommand):
     command_id: Literal["ModelLoad"] = "ModelLoad"
     filename: str

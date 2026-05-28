@@ -159,9 +159,9 @@ layers = [
     """,
     "sensorkit.cli",
     "sensorkit.webapi",
-    "sensorkit.auto",
     "sensorkit.std",
-    #"sensorkit.astro", # FIXME: Temporary model imports in sensorkit.api break this check.
+    "sensorkit.auto",
+    "sensorkit.astro",
     "sensorkit.api",
     "sensorkit.core : sensorkit.data",
     "sensorkit.backend",

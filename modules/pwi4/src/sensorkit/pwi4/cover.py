@@ -6,7 +6,8 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected, Opened
+from sensorkit.models.devices import Deinit, Init, Opened, Stop
+from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.pwi4.device import PWI4Client, PWI4Device, PWI4DeviceConfig, PWI4DeviceState
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 
@@ -31,29 +32,29 @@ class PWI4Cover(PWI4Device):
             self.state = PWI4CoverState()
 
         # Initialize the cover
-        await self.cover_init(sk.Init())
+        await self.cover_init(Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.cover_disconnect(sk.Disconnect())
+        await self.cover_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def cover_init(self, cmd: sk.Init):
+    async def cover_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.cover_connect(sk.Connect())
-        await self.cover_connect(sk.Connect())
+        self._reconnect = lambda: self.cover_connect(Connect())
+        await self.cover_connect(Connect())
 
     @sk.command_handler
-    async def cover_deinit(self, cmd: sk.Deinit):
-        await self.cover_stop(sk.Stop())
+    async def cover_deinit(self, cmd: Deinit):
+        await self.cover_stop(Stop())
         await self.cover_close(CloseMirrorCover())
 
     @sk.command_handler
-    async def cover_connect(self, cmd: sk.Connect):
+    async def cover_connect(self, cmd: Connect):
         logger.debug("connecting to mirror cover")
 
         await self.client.request("/mirrorcover/connect")
@@ -71,7 +72,7 @@ class PWI4Cover(PWI4Device):
         logger.debug("connected to mirror cover")
 
     @sk.command_handler
-    async def cover_disconnect(self, cmd: sk.Disconnect):
+    async def cover_disconnect(self, cmd: Disconnect):
         logger.debug("disconnecting from mirror cover")
 
         await self.client.request("/mirrorcover/disconnect")
@@ -89,7 +90,7 @@ class PWI4Cover(PWI4Device):
         logger.debug("disconnected from mirror cover")
 
     @sk.command_handler
-    async def cover_stop(self, cmd: sk.Stop):
+    async def cover_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping mirror cover")
         await self.client.request("/mirrorcover/stop")

@@ -2,8 +2,9 @@ import pytest
 from conftest import MockNinaClient
 
 import sensorkit.api as sk
-from sensorkit.astro.common import Horizontal
+from sensorkit.astro.coords import Horizontal
 from sensorkit.astro.target import AltAzTarget
+from sensorkit.models.devices import FollowTarget
 from sensorkit.nina.mount import NinaMountConfig, NinaMountState
 
 
@@ -40,7 +41,7 @@ def mount(client):
 @pytest.mark.asyncio
 async def test_mount_follow_altaz(client, mount):
     target = AltAzTarget(coords=Horizontal(alt=60.0, az=200.0))
-    await mount.mount_follow_target(sk.FollowTarget(target=target))
+    await mount.mount_follow_target(FollowTarget(target=target))
 
     slew_reqs = client.find_requests("/equipment/mount/slew-altaz")
     assert len(slew_reqs) == 1

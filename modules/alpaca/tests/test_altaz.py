@@ -9,6 +9,7 @@ from sensorkit.alpaca.telescope import (
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
 )
+from sensorkit.models.devices import FollowTarget
 
 
 @pytest.fixture
@@ -90,12 +91,11 @@ def telescope():
 
 @pytest.mark.asyncio
 async def test_telescope_follow_altaz(telescope):
-    import sensorkit.api as sk
-    from sensorkit.astro.common import Horizontal
+    from sensorkit.astro.coords import Horizontal
     from sensorkit.astro.target import AltAzTarget
 
     await telescope.telescope_follow_target(
-        sk.FollowTarget(target=AltAzTarget(coords=Horizontal(az=180.0, alt=45.0)))
+        FollowTarget(target=AltAzTarget(coords=Horizontal(az=180.0, alt=45.0)))
     )
 
     # AltAz slews do not enable tracking

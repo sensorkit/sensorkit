@@ -112,7 +112,8 @@ class TestPWI4Cover:
             mock_device.publish = AsyncMock()
             mock_sk.device.return_value = mock_device
 
-            from sensorkit.models.devices import Connected, Opened
+            from sensorkit.models.devices import Opened
+            from sensorkit.std import Connected
             mock_sk.Connected = Connected
             mock_sk.Opened = Opened
 

@@ -7,7 +7,8 @@ import ourskyai_node_platform_api as osapi
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected, FocusPosition
+from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.std import Connected, FocusPosition
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
@@ -39,7 +40,7 @@ class NodePlatformFocuser(NodePlatformDevice):
         self.focuser_moving: bool | None = None
 
         # Initialize the focuser
-        await self.focuser_init(sk.Init())
+        await self.focuser_init(Init())
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -55,16 +56,16 @@ class NodePlatformFocuser(NodePlatformDevice):
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def focuser_init(self, cmd: sk.Init):
+    async def focuser_init(self, cmd: Init):
         pass
 
     @sk.command_handler
-    async def focuser_deinit(self, cmd: sk.Deinit):
+    async def focuser_deinit(self, cmd: Deinit):
         await self.require_connected()
-        await self.focuser_stop(sk.Stop())
+        await self.focuser_stop(Stop())
 
     @sk.command_handler
-    async def focuser_stop(self, cmd: sk.Stop):
+    async def focuser_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping focuser")
         await self.api.call("v1_halt_focuser")

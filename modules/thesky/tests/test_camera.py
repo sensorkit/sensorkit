@@ -1,6 +1,6 @@
 import pytest
 
-from sensorkit.models.devices import TemperatureUnit
+from sensorkit.std import Connect, Disconnect, TemperatureUnit
 from sensorkit.std.instrument import (
     Binning,
     CameraSensorTemperature,
@@ -26,26 +26,20 @@ def camera(simulator):
 
 @pytest.mark.asyncio
 async def test_camera_connect(camera):
-    import sensorkit.api as sk
-
-    await camera.camera_connect(sk.Connect())
+    await camera.camera_connect(Connect())
     assert camera.device_connected is True
 
 
 @pytest.mark.asyncio
 async def test_camera_disconnect(camera):
-    import sensorkit.api as sk
-
-    await camera.camera_connect(sk.Connect())
-    await camera.camera_disconnect(sk.Disconnect())
+    await camera.camera_connect(Connect())
+    await camera.camera_disconnect(Disconnect())
     assert camera.device_connected is False
 
 
 @pytest.mark.asyncio
 async def test_set_temperature(camera):
-    import sensorkit.api as sk
-
-    await camera.camera_connect(sk.Connect())
+    await camera.camera_connect(Connect())
     await camera.camera_set_temperature(
         ConfigureCameraCooler(
             enable=True,
@@ -59,9 +53,7 @@ async def test_set_temperature(camera):
 
 @pytest.mark.asyncio
 async def test_set_binning(camera):
-    import sensorkit.api as sk
-
-    await camera.camera_connect(sk.Connect())
+    await camera.camera_connect(Connect())
     await camera.camera_set_binning(
         ConfigureCameraSensor(binning=Binning(x=2, y=2))
     )
@@ -79,7 +71,5 @@ async def test_set_binning(camera):
 @pytest.mark.asyncio
 async def test_set_binning_none(camera):
     """ConfigureCameraSensor with no binning should be a no-op."""
-    import sensorkit.api as sk
-
-    await camera.camera_connect(sk.Connect())
+    await camera.camera_connect(Connect())
     await camera.camera_set_binning(ConfigureCameraSensor())

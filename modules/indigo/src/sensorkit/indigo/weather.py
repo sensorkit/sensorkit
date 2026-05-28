@@ -13,7 +13,8 @@ from sensorkit.indigo.device import (
     IndigoDeviceState,
     IndigoProperty,
 )
-from sensorkit.models.devices import Connected
+from sensorkit.models.devices import Deinit, Init
+from sensorkit.std import Connected
 from sensorkit.std.weather import BasicWeather, StandardWeather
 
 
@@ -113,12 +114,12 @@ class IndigoWeather(IndigoDevice):
             self.state = IndigoWeatherState()
 
         # Initialize the weather
-        await self.weather_init(sk.Init())
+        await self.weather_init(Init())
 
     @sk.on_detach
     async def entity_deinit(self):
         # Deinitialize the weather
-        await self.weather_deinit(sk.Deinit())
+        await self.weather_deinit(Deinit())
 
         # Clean up, disconnect
         await self.disconnect_from_server()
@@ -126,7 +127,7 @@ class IndigoWeather(IndigoDevice):
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def weather_init(self, cmd: sk.Init):
+    async def weather_init(self, cmd: Init):
         # Connect WebSocket to INDIGO server
         await self.connect_to_server()
 
@@ -156,7 +157,7 @@ class IndigoWeather(IndigoDevice):
             )
 
     @sk.command_handler
-    async def weather_deinit(self, cmd: sk.Deinit):
+    async def weather_deinit(self, cmd: Deinit):
         pass
 
     async def _on_connection_update(self, prop: IndigoProperty, msg_type: str):

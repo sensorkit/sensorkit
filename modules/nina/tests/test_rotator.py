@@ -2,7 +2,9 @@ import pytest
 from conftest import MockNinaClient
 
 import sensorkit.api as sk
+from sensorkit.models.devices import Stop
 from sensorkit.nina.rotator import NinaRotatorConfig, NinaRotatorState
+from sensorkit.std import Connect, Disconnect
 from sensorkit.std.instrument import ChangeRotatorPosition
 
 
@@ -32,12 +34,12 @@ class TestRotatorConnect:
     @pytest.mark.asyncio
     async def test_connect(self, client, rotator):
         rotator.device_connected = None
-        await rotator.rotator_connect(sk.Connect())
+        await rotator.rotator_connect(Connect())
         assert rotator.device_connected is True
 
     @pytest.mark.asyncio
     async def test_disconnect(self, client, rotator):
-        await rotator.rotator_disconnect(sk.Disconnect())
+        await rotator.rotator_disconnect(Disconnect())
         assert rotator.device_connected is False
 
 
@@ -51,6 +53,6 @@ class TestRotatorCommands:
 
     @pytest.mark.asyncio
     async def test_stop(self, client, rotator):
-        await rotator.rotator_stop(sk.Stop())
+        await rotator.rotator_stop(Stop())
         reqs = client.find_requests("/equipment/rotator/stop-move")
         assert len(reqs) == 1

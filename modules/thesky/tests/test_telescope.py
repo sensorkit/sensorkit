@@ -1,5 +1,7 @@
 import pytest
 
+from sensorkit.models.devices import Home, MoveToPark, Stop
+from sensorkit.std import Connect, Disconnect
 from sensorkit.thesky.telescope import TheSkyTelescopeConfig, TheSkyTelescopeState
 
 
@@ -21,36 +23,28 @@ def telescope(simulator):
 
 @pytest.mark.asyncio
 async def test_telescope_connect(telescope):
-    import sensorkit.api as sk
-
-    await telescope.telescope_connect(sk.Connect())
+    await telescope.telescope_connect(Connect())
     assert telescope.device_connected is True
 
 
 @pytest.mark.asyncio
 async def test_telescope_disconnect(telescope):
-    import sensorkit.api as sk
-
-    await telescope.telescope_connect(sk.Connect())
-    await telescope.telescope_disconnect(sk.Disconnect())
+    await telescope.telescope_connect(Connect())
+    await telescope.telescope_disconnect(Disconnect())
     assert telescope.device_connected is False
 
 
 @pytest.mark.asyncio
 async def test_telescope_park(telescope):
-    import sensorkit.api as sk
-
-    await telescope.telescope_connect(sk.Connect())
+    await telescope.telescope_connect(Connect())
     # Must unpark first before we can park
     await telescope.telescope_unpark()
-    await telescope.telescope_park(sk.MoveToPark())
+    await telescope.telescope_park(MoveToPark())
 
 
 @pytest.mark.asyncio
 async def test_telescope_unpark(telescope):
-    import sensorkit.api as sk
-
-    await telescope.telescope_connect(sk.Connect())
+    await telescope.telescope_connect(Connect())
     await telescope.telescope_unpark()
 
     resp = await telescope.execute("sky6RASCOMTele.IsParked();")
@@ -59,20 +53,16 @@ async def test_telescope_unpark(telescope):
 
 @pytest.mark.asyncio
 async def test_telescope_home(telescope):
-    import sensorkit.api as sk
-
-    await telescope.telescope_connect(sk.Connect())
+    await telescope.telescope_connect(Connect())
     await telescope.telescope_unpark()
-    await telescope.telescope_home(sk.Home())
+    await telescope.telescope_home(Home())
 
 
 @pytest.mark.asyncio
 async def test_telescope_stop(telescope):
-    import sensorkit.api as sk
-
-    await telescope.telescope_connect(sk.Connect())
+    await telescope.telescope_connect(Connect())
     await telescope.telescope_unpark()
-    await telescope.telescope_stop(sk.Stop())
+    await telescope.telescope_stop(Stop())
 
     resp = await telescope.execute("sky6RASCOMTele.IsTracking;")
     assert resp.strip() == "0"

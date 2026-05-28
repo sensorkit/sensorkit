@@ -15,7 +15,8 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
-from sensorkit.astro.common import Coordinates, Equatorial, Geodetic, Horizontal
+from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame
+from sensorkit.astro.coords import Coordinates, Equatorial, Geodetic, Horizontal
 from sensorkit.astro.target import (
     AltAzTarget,
     EphemerisTarget,
@@ -25,14 +26,16 @@ from sensorkit.astro.target import (
     TLETarget,
 )
 from sensorkit.models.devices import (
-    AltAzPointing,
     AxisRate,
     AxisRates,
-    Connected,
+    Deinit,
+    FollowTarget,
+    Home,
+    Init,
     MountAxis,
-    RADecPointing,
-    ReferenceFrame,
+    MoveToPark,
     Slewing,
+    Stop,
     Tracking,
 )
 from sensorkit.node_platform.device import (
@@ -40,6 +43,7 @@ from sensorkit.node_platform.device import (
     NodePlatformDeviceConfig,
     NodePlatformDeviceState,
 )
+from sensorkit.std import Connected
 
 
 @sk.declare_keyword
@@ -127,7 +131,7 @@ class NodePlatformMount(NodePlatformDevice):
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def mount_init(self, cmd: sk.Init):
+    async def mount_init(self, cmd: Init):
         await self.require_connected()
 
         # Enable the motors
@@ -135,19 +139,19 @@ class NodePlatformMount(NodePlatformDevice):
 
         # Home, as needed
         if not self.state.has_been_homed:
-            await self.mount_home(sk.Home())
+            await self.mount_home(Home())
 
         # Go to park position for cover opening
-        await self.mount_park(sk.MoveToPark())
+        await self.mount_park(MoveToPark())
 
         # Initialize the optical tube
         await self.init_ot()
 
     @sk.command_handler
-    async def mount_deinit(self, cmd: sk.Deinit):
+    async def mount_deinit(self, cmd: Deinit):
         self._stop_fast_status()
-        await self.mount_stop(sk.Stop())
-        await self.mount_park(sk.MoveToPark())
+        await self.mount_stop(Stop())
+        await self.mount_park(MoveToPark())
         await self.mount_disable(sk.Disable())
         await self.deinit_ot()
 
@@ -172,7 +176,7 @@ class NodePlatformMount(NodePlatformDevice):
             logger.debug("disabled mount motors")
 
     @sk.command_handler
-    async def mount_stop(self, cmd: sk.Stop):
+    async def mount_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping mount")
 
@@ -185,7 +189,7 @@ class NodePlatformMount(NodePlatformDevice):
         logger.debug("stopped mount")
 
     @sk.command_handler
-    async def mount_home(self, cmd: sk.Home):
+    async def mount_home(self, cmd: Home):
         await self.require_connected()
         logger.debug("homing mount")
 
@@ -200,7 +204,7 @@ class NodePlatformMount(NodePlatformDevice):
         logger.debug("homed mount")
 
     @sk.command_handler
-    async def mount_park(self, cmd: sk.MoveToPark):
+    async def mount_park(self, cmd: MoveToPark):
         await self.require_connected()
         logger.debug("parking mount")
 
@@ -220,7 +224,7 @@ class NodePlatformMount(NodePlatformDevice):
         logger.debug("set park position")
 
     @sk.command_handler
-    async def mount_follow_target(self, cmd: sk.FollowTarget):
+    async def mount_follow_target(self, cmd: FollowTarget):
         await self.require_connected()
 
         target = await cmd.target.adapt(

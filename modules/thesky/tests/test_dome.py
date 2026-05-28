@@ -1,5 +1,7 @@
 import pytest
 
+from sensorkit.models.devices import Home, MoveToPark, Stop
+from sensorkit.std import Connect, Disconnect
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.thesky.dome import TheSkyDomeConfig, TheSkyDomeState
 
@@ -22,59 +24,45 @@ def dome(simulator):
 
 @pytest.mark.asyncio
 async def test_dome_connect(dome):
-    import sensorkit.api as sk
-
-    await dome.dome_connect(sk.Connect())
+    await dome.dome_connect(Connect())
     assert dome.device_connected is True
 
 
 @pytest.mark.asyncio
 async def test_dome_disconnect(dome):
-    import sensorkit.api as sk
-
-    await dome.dome_connect(sk.Connect())
-    await dome.dome_disconnect(sk.Disconnect())
+    await dome.dome_connect(Connect())
+    await dome.dome_disconnect(Disconnect())
     assert dome.device_connected is False
 
 
 @pytest.mark.asyncio
 async def test_dome_park(dome):
-    import sensorkit.api as sk
-
-    await dome.dome_connect(sk.Connect())
-    await dome.dome_park(sk.MoveToPark())
+    await dome.dome_connect(Connect())
+    await dome.dome_park(MoveToPark())
 
 
 @pytest.mark.asyncio
 async def test_dome_home(dome):
-    import sensorkit.api as sk
-
-    await dome.dome_connect(sk.Connect())
-    await dome.dome_home(sk.Home())
+    await dome.dome_connect(Connect())
+    await dome.dome_home(Home())
     assert dome.state.has_been_homed is True
 
 
 @pytest.mark.asyncio
 async def test_dome_open(dome):
-    import sensorkit.api as sk
-
     dome.state = TheSkyDomeState()
-    await dome.dome_connect(sk.Connect())
+    await dome.dome_connect(Connect())
     await dome.dome_open(OpenEnclosure())
 
 
 @pytest.mark.asyncio
 async def test_dome_close(dome):
-    import sensorkit.api as sk
-
     dome.state = TheSkyDomeState()
-    await dome.dome_connect(sk.Connect())
+    await dome.dome_connect(Connect())
     await dome.dome_close(CloseEnclosure())
 
 
 @pytest.mark.asyncio
 async def test_dome_stop(dome):
-    import sensorkit.api as sk
-
-    await dome.dome_connect(sk.Connect())
-    await dome.dome_stop(sk.Stop())
+    await dome.dome_connect(Connect())
+    await dome.dome_stop(Stop())

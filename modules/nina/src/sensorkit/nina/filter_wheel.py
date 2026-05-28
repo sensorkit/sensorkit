@@ -6,7 +6,8 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected
+from sensorkit.models.devices import Deinit, Init
+from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std.optics import Filter, Filters, SetFilter
 
@@ -33,7 +34,7 @@ class NinaFilterWheel(NinaDevice):
         self.filter_wheel_position: int | None = None
 
         # Initialize the filter wheel
-        await self.filter_wheel_init(sk.Init())
+        await self.filter_wheel_init(Init())
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -45,14 +46,14 @@ class NinaFilterWheel(NinaDevice):
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.filter_wheel_disconnect(sk.Disconnect())
+        await self.filter_wheel_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def filter_wheel_init(self, cmd: sk.Init):
+    async def filter_wheel_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.filter_wheel_connect(sk.Connect())
-        await self.filter_wheel_connect(sk.Connect())
+        self._reconnect = lambda: self.filter_wheel_connect(Connect())
+        await self.filter_wheel_connect(Connect())
 
         self._filter_names: list[str] = []
 
@@ -73,16 +74,16 @@ class NinaFilterWheel(NinaDevice):
         )
 
     @sk.command_handler
-    async def filter_wheel_deinit(self, cmd: sk.Deinit):
+    async def filter_wheel_deinit(self, cmd: Deinit):
         pass
 
     @sk.command_handler
-    async def filter_wheel_connect(self, cmd: sk.Connect):
+    async def filter_wheel_connect(self, cmd: Connect):
         await self.connect("filterwheel")
         await sk.device().publish(Connected(is_connected=True))
 
     @sk.command_handler
-    async def filter_wheel_disconnect(self, cmd: sk.Disconnect):
+    async def filter_wheel_disconnect(self, cmd: Disconnect):
         await self.disconnect("filterwheel")
         await sk.device().publish(Connected(is_connected=False))
 

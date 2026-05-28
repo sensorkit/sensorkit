@@ -13,7 +13,8 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Connected
+from sensorkit.models.devices import Deinit, Init
+from sensorkit.std import Connect, Connected, Disconnect
 
 
 @sk.declare_keyword
@@ -60,37 +61,37 @@ class AlpacaSwitch(AlpacaDevice):
         self._max_switch: int = 0
 
         # Initialize the switch
-        await self.switch_init(sk.Init())
+        await self.switch_init(Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.switch_disconnect(sk.Disconnect())
+        await self.switch_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def switch_init(self, cmd: sk.Init):
+    async def switch_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.switch_connect(sk.Connect())
+        self._reconnect = lambda: self.switch_connect(Connect())
         self.switch = Switch(self.address, self.config.device_number, self.config.protocol)
-        await self.switch_connect(sk.Connect())
+        await self.switch_connect(Connect())
 
         # Read capabilities
         self._max_switch = await self.get(self.switch, "MaxSwitch", 0)
 
     @sk.command_handler
-    async def switch_deinit(self, cmd: sk.Deinit):
+    async def switch_deinit(self, cmd: Deinit):
         await self.stop_status_loop()
 
     @sk.command_handler
-    async def switch_connect(self, cmd: sk.Connect):
+    async def switch_connect(self, cmd: Connect):
         await self.connect(self.switch, timeout=self.config.timeout)
         await sk.device().publish(Connected(is_connected=True))
 
     @sk.command_handler
-    async def switch_disconnect(self, cmd: sk.Disconnect):
+    async def switch_disconnect(self, cmd: Disconnect):
         await self.disconnect(self.switch)
         await sk.device().publish(Connected(is_connected=False))
 

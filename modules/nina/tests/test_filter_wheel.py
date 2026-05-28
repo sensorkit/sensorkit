@@ -2,7 +2,9 @@ import pytest
 from conftest import MockNinaClient
 
 import sensorkit.api as sk
+from sensorkit.models.devices import Deinit, Init
 from sensorkit.nina.filter_wheel import NinaFilterWheelConfig, NinaFilterWheelState
+from sensorkit.std import Connect, Disconnect
 from sensorkit.std.optics import SetFilter
 
 
@@ -37,12 +39,12 @@ class TestFilterWheelConnect:
     @pytest.mark.asyncio
     async def test_connect(self, client, filter_wheel):
         filter_wheel.device_connected = None
-        await filter_wheel.filter_wheel_connect(sk.Connect())
+        await filter_wheel.filter_wheel_connect(Connect())
         assert filter_wheel.device_connected is True
 
     @pytest.mark.asyncio
     async def test_disconnect(self, client, filter_wheel):
-        await filter_wheel.filter_wheel_disconnect(sk.Disconnect())
+        await filter_wheel.filter_wheel_disconnect(Disconnect())
         assert filter_wheel.device_connected is False
 
 

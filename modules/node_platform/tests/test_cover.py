@@ -3,7 +3,7 @@
 import pytest
 from conftest import MockNodePlatformAPI, make_cover_status
 
-import sensorkit.api as sk
+from sensorkit.models.devices import Stop
 from sensorkit.node_platform.cover import (
     NodePlatformCover,
     NodePlatformCoverConfig,
@@ -59,7 +59,7 @@ class TestCoverOpenClose:
 
     @pytest.mark.asyncio
     async def test_stop(self, cover, api):
-        await cover.cover_stop(sk.Stop())
+        await cover.cover_stop(Stop())
 
         assert len(api.find_calls("v1_halt_optical_tube_cover")) == 1
 

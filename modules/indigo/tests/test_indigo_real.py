@@ -48,7 +48,7 @@ class TestIndigoWeatherReal:
     @pytest.mark.asyncio
     async def test_device_is_connected(self, device):
         """Verify the weather device is online and reporting Connected."""
-        from sensorkit.models.devices import Connected
+        from sensorkit.std import Connected
 
         monitor = await device.monitor(Connected)
         async for _, value in monitor:

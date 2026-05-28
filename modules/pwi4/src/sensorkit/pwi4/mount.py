@@ -11,7 +11,8 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.astro.common import Geodetic
+from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
+from sensorkit.astro.coords import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
     EphemerisTarget,
@@ -22,13 +23,18 @@ from sensorkit.astro.target import (
 )
 from sensorkit.models.devices import (
     AltAzArcseconds,
-    AltAzPointing,
     ApplyOffset,
     AxisEnabled,
     AxisRate,
     AxisRates,
+    AxisTargetDistance,
     AzimuthWrapRange,
-    Connected,
+    Deinit,
+    DisableAxis,
+    EnableAxis,
+    FollowTarget,
+    Home,
+    Init,
     ModelAddPoint,
     ModelClearPoints,
     ModelDeletePoint,
@@ -37,11 +43,12 @@ from sensorkit.models.devices import (
     ModelLoad,
     ModelSave,
     MountAxis,
+    MoveToPark,
     RADecArcseconds,
-    RADecPointing,
-    ReferenceFrame,
     SetAzimuthWrapRangeMin,
+    SetParkPosition,
     Slewing,
+    Stop,
     Tracking,
 )
 from sensorkit.pwi4.device import (
@@ -50,6 +57,7 @@ from sensorkit.pwi4.device import (
     PWI4DeviceConfig,
     PWI4DeviceState,
 )
+from sensorkit.std import Connect, Connected, Disconnect
 
 
 @sk.declare_keyword
@@ -59,7 +67,7 @@ class MountAxisEnabled(BaseModel):
 
 @sk.declare_keyword
 class MountTargetDistance(BaseModel):
-    axis: list[sk.AxisTargetDistance]
+    axis: list[AxisTargetDistance]
 
 
 async def wrap_autocenter_loop(
@@ -179,28 +187,28 @@ class PWI4Mount(PWI4Device):
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
-        await self.mount_disconnect(sk.Disconnect())
+        await self.mount_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def mount_init(self, cmd: sk.Init):
+    async def mount_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.mount_connect(sk.Connect())
+        self._reconnect = lambda: self.mount_connect(Connect())
 
-        await self.mount_connect(sk.Connect())
+        await self.mount_connect(Connect())
         self.start_status_loop(self.status_publish_slow())
 
         # Enable the motors
         await asyncio.gather(
-            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.AZIMUTH)),
-            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.ALTITUDE)),
+            self.mount_enable_axis(EnableAxis(axis=MountAxis.AZIMUTH)),
+            self.mount_enable_axis(EnableAxis(axis=MountAxis.ALTITUDE)),
         )
 
         # Home, as needed
-        await self.mount_home(sk.Home())
+        await self.mount_home(Home())
 
         # Go to park position for cover opening
-        await self.mount_park(sk.MoveToPark())
+        await self.mount_park(MoveToPark())
 
         # Initialize the optical tube
         await self.init_ot()
@@ -216,18 +224,18 @@ class PWI4Mount(PWI4Device):
             )
 
     @sk.command_handler
-    async def mount_deinit(self, cmd: sk.Deinit):
+    async def mount_deinit(self, cmd: Deinit):
         if not self.device_connected:
             # Init may not have run, but mount may still be tracking from a failed run.
             # Connect so we can ensure it's parked.
             try:
-                await self.mount_connect(sk.Connect())
+                await self.mount_connect(Connect())
             except Exception:
                 logger.warning("Unable to connect mount for Deinit park; skipping")
                 return
 
         self._stop_fast_status()
-        await self.mount_stop(sk.Stop())
+        await self.mount_stop(Stop())
 
         if self._wrap_task is not None:
             self._wrap_task.cancel()
@@ -236,15 +244,15 @@ class PWI4Mount(PWI4Device):
             except asyncio.CancelledError:
                 pass
 
-        await self.mount_park(sk.MoveToPark())
+        await self.mount_park(MoveToPark())
         await asyncio.gather(
-            self.mount_disable_axis(sk.DisableAxis(axis=MountAxis.AZIMUTH)),
-            self.mount_disable_axis(sk.DisableAxis(axis=MountAxis.ALTITUDE)),
+            self.mount_disable_axis(DisableAxis(axis=MountAxis.AZIMUTH)),
+            self.mount_disable_axis(DisableAxis(axis=MountAxis.ALTITUDE)),
         )
         await self.deinit_ot()
 
     @sk.command_handler
-    async def mount_connect(self, cmd: sk.Connect):
+    async def mount_connect(self, cmd: Connect):
         logger.debug("connecting to mount")
         await self.client.request("/mount/connect")
 
@@ -259,7 +267,7 @@ class PWI4Mount(PWI4Device):
         logger.debug("connected to mount")
 
     @sk.command_handler
-    async def mount_disconnect(self, cmd: sk.Disconnect):
+    async def mount_disconnect(self, cmd: Disconnect):
         logger.debug("disconnecting from mount")
         await self.client.request("/mount/disconnect")
 
@@ -274,7 +282,7 @@ class PWI4Mount(PWI4Device):
         logger.debug("disconnected from mount")
 
     @sk.command_handler
-    async def mount_enable_axis(self, cmd: sk.EnableAxis):
+    async def mount_enable_axis(self, cmd: EnableAxis):
         await self.require_connected()
         axis = 0 if cmd.axis == MountAxis.AZIMUTH else 1
         logger.debug(f"enabling axis {axis}")
@@ -282,7 +290,7 @@ class PWI4Mount(PWI4Device):
         logger.debug(f"enabled axis {axis}")
 
     @sk.command_handler
-    async def mount_disable_axis(self, cmd: sk.DisableAxis):
+    async def mount_disable_axis(self, cmd: DisableAxis):
         await self.require_connected()
         axis = 0 if cmd.axis == MountAxis.AZIMUTH else 1
         logger.debug(f"disabling axis {axis}")
@@ -290,7 +298,7 @@ class PWI4Mount(PWI4Device):
         logger.debug(f"disabled axis {axis}")
 
     @sk.command_handler
-    async def mount_stop(self, cmd: sk.Stop):
+    async def mount_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping mount")
 
@@ -302,7 +310,7 @@ class PWI4Mount(PWI4Device):
         logger.debug("stopped mount")
 
     @sk.command_handler
-    async def mount_home(self, cmd: sk.Home):
+    async def mount_home(self, cmd: Home):
         await self.require_connected()
 
         # Check if mount has already homed
@@ -313,8 +321,8 @@ class PWI4Mount(PWI4Device):
             return
 
         await asyncio.gather(
-            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.AZIMUTH)),
-            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.ALTITUDE)),
+            self.mount_enable_axis(EnableAxis(axis=MountAxis.AZIMUTH)),
+            self.mount_enable_axis(EnableAxis(axis=MountAxis.ALTITUDE)),
         )
 
         logger.debug("homing mount")
@@ -331,13 +339,13 @@ class PWI4Mount(PWI4Device):
         logger.debug("homed mount")
 
     @sk.command_handler
-    async def mount_park(self, cmd: sk.MoveToPark):
+    async def mount_park(self, cmd: MoveToPark):
         await self.require_connected()
         logger.debug("parking mount")
 
         await asyncio.gather(
-            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.AZIMUTH)),
-            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.ALTITUDE)),
+            self.mount_enable_axis(EnableAxis(axis=MountAxis.AZIMUTH)),
+            self.mount_enable_axis(EnableAxis(axis=MountAxis.ALTITUDE)),
         )
 
         await self.client.request("/mount/park")
@@ -347,14 +355,14 @@ class PWI4Mount(PWI4Device):
         logger.debug("parked mount")
 
     @sk.command_handler
-    async def mount_set_park_position(self, cmd: sk.SetParkPosition):
+    async def mount_set_park_position(self, cmd: SetParkPosition):
         await self.require_connected()
         logger.debug("setting park position")
         await self.client.request("/mount/set_park_here")
         logger.debug("set park position")
 
     @sk.command_handler
-    async def mount_follow_target(self, cmd: sk.FollowTarget):
+    async def mount_follow_target(self, cmd: FollowTarget):
         await self.require_connected()
 
         target = await cmd.target.adapt(
@@ -369,8 +377,8 @@ class PWI4Mount(PWI4Device):
         )
 
         await asyncio.gather(
-            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.AZIMUTH)),
-            self.mount_enable_axis(sk.EnableAxis(axis=MountAxis.ALTITUDE)),
+            self.mount_enable_axis(EnableAxis(axis=MountAxis.AZIMUTH)),
+            self.mount_enable_axis(EnableAxis(axis=MountAxis.ALTITUDE)),
         )
 
         match target:
@@ -721,7 +729,7 @@ class PWI4Mount(PWI4Device):
         await device.publish(
             MountTargetDistance(
                 axis=[
-                    sk.AxisTargetDistance(
+                    AxisTargetDistance(
                         distance_arcseconds=self.client.get_float(
                             st, "mount.axis0.dist_to_target_arcsec"
                         ),
@@ -730,7 +738,7 @@ class PWI4Mount(PWI4Device):
                         ),
                         axis=MountAxis.AZIMUTH,
                     ),
-                    sk.AxisTargetDistance(
+                    AxisTargetDistance(
                         distance_arcseconds=self.client.get_float(
                             st, "mount.axis1.dist_to_target_arcsec"
                         ),
@@ -760,7 +768,7 @@ class PWI4Mount(PWI4Device):
 
         if self._geodetic is not None:
             await device.publish(
-                sk.SitePosition(
+                SitePosition(
                     latitude_degrees=self._geodetic.lat,
                     longitude_degrees=self._geodetic.lon,
                     altitude_km=self._geodetic.elev,

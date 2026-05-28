@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from conftest import MockNodePlatformAPI
 
-import sensorkit.api as sk
+from sensorkit.models.devices import Deinit, FollowTarget, Home, Init, MoveToPark, Stop
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.mount import (
     NodePlatformMount,
@@ -57,7 +57,7 @@ class TestMountInit:
         mount.state.has_been_homed = False
         mount.mount_slewing = False
 
-        await mount.mount_init(sk.Init())
+        await mount.mount_init(Init())
 
         assert len(api.find_calls("v1_mount_go_to_home")) == 1
 
@@ -65,7 +65,7 @@ class TestMountInit:
     async def test_init_skips_home_if_already_homed(self, mount, api):
         mount.state.has_been_homed = True
 
-        await mount.mount_init(sk.Init())
+        await mount.mount_init(Init())
 
         assert len(api.find_calls("v1_mount_go_to_home")) == 0
 
@@ -73,7 +73,7 @@ class TestMountInit:
     async def test_deinit_stops_and_parks(self, mount, api):
         mount.mount_slewing = False
 
-        await mount.mount_deinit(sk.Deinit())
+        await mount.mount_deinit(Deinit())
 
         assert len(api.find_calls("v1_halt_mount")) == 1
         assert len(api.find_calls("v1_park_mount")) == 1
@@ -84,7 +84,7 @@ class TestMountCommands:
     async def test_home(self, mount, api):
         mount.mount_slewing = False
 
-        await mount.mount_home(sk.Home())
+        await mount.mount_home(Home())
 
         assert len(api.find_calls("v1_mount_go_to_home")) == 1
         assert mount.state.has_been_homed is True
@@ -93,7 +93,7 @@ class TestMountCommands:
     async def test_park(self, mount, api):
         mount.mount_slewing = False
 
-        await mount.mount_park(sk.MoveToPark())
+        await mount.mount_park(MoveToPark())
 
         assert len(api.find_calls("v1_park_mount")) == 1
 
@@ -101,7 +101,7 @@ class TestMountCommands:
     async def test_stop(self, mount, api):
         mount.mount_slewing = False
 
-        await mount.mount_stop(sk.Stop())
+        await mount.mount_stop(Stop())
 
         assert len(api.find_calls("v1_halt_mount")) == 1
 
@@ -110,7 +110,7 @@ class TestMountCommands:
         mount.device_connected = False
 
         with pytest.raises(DeviceConnectionError):
-            await mount.mount_home(sk.Home())
+            await mount.mount_home(Home())
 
     @pytest.mark.asyncio
     async def test_follow_target_requires_connected(self, mount):
@@ -134,7 +134,7 @@ class TestMountFollowTarget:
             line1="1 25544U 98067A   21275.52628565  .00001453  00000-0  35296-4 0  9991",
             line2="2 25544  51.6447 218.1320 0001432  95.8011  15.1138 15.48920210306114",
         )
-        cmd = sk.FollowTarget(target=TLETarget(tle=tle))
+        cmd = FollowTarget(target=TLETarget(tle=tle))
         await mount.mount_follow_target(cmd)
 
         calls = api.find_calls("v1_mount_follow_tle")

@@ -7,7 +7,8 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected
+from sensorkit.models.devices import Deinit, Init
+from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 
 
@@ -43,32 +44,32 @@ class NinaSwitch(NinaDevice):
             self.state = NinaSwitchDeviceState()
 
         # Initialize the switch
-        await self.switch_init(sk.Init())
+        await self.switch_init(Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.switch_disconnect(sk.Disconnect())
+        await self.switch_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def switch_init(self, cmd: sk.Init):
-        self._reconnect = lambda: self.switch_connect(sk.Connect())
-        await self.switch_connect(sk.Connect())
+    async def switch_init(self, cmd: Init):
+        self._reconnect = lambda: self.switch_connect(Connect())
+        await self.switch_connect(Connect())
 
     @sk.command_handler
-    async def switch_deinit(self, cmd: sk.Deinit):
+    async def switch_deinit(self, cmd: Deinit):
         pass
 
     @sk.command_handler
-    async def switch_connect(self, cmd: sk.Connect):
+    async def switch_connect(self, cmd: Connect):
         await self.connect("switch")
         await sk.device().publish(Connected(is_connected=True))
 
     @sk.command_handler
-    async def switch_disconnect(self, cmd: sk.Disconnect):
+    async def switch_disconnect(self, cmd: Disconnect):
         await self.disconnect("switch")
         await sk.device().publish(Connected(is_connected=False))
 

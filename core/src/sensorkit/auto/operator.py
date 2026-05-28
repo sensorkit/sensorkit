@@ -20,9 +20,9 @@ from sensorkit.common.aio import AsyncObserver
 from sensorkit.common.graph import StateElection
 from sensorkit.core.client import SensorKit
 from sensorkit.core.controller import InternalControllerState
-from sensorkit.core.task import TaskContexts
 from sensorkit.core.program import ControllerOffers, ProgramClient, ProgramDiscovery, ProgramState
-from sensorkit.models.devices import SitePosition
+from sensorkit.core.task import TaskContexts
+from sensorkit.astro.common import SitePosition
 
 
 class ControllerConfig(BaseModel):

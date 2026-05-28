@@ -1,5 +1,6 @@
 import pytest
 
+from sensorkit.std import Connect, Disconnect
 from sensorkit.std.optics import SetFilter
 from sensorkit.thesky.filter_wheel import TheSkyFilterWheelConfig
 
@@ -23,26 +24,20 @@ def filter_wheel(simulator):
 
 @pytest.mark.asyncio
 async def test_filter_wheel_connect(filter_wheel):
-    import sensorkit.api as sk
-
-    await filter_wheel.filter_wheel_connect(sk.Connect())
+    await filter_wheel.filter_wheel_connect(Connect())
     assert filter_wheel.device_connected is True
 
 
 @pytest.mark.asyncio
 async def test_filter_wheel_disconnect(filter_wheel):
-    import sensorkit.api as sk
-
-    await filter_wheel.filter_wheel_connect(sk.Connect())
-    await filter_wheel.filter_wheel_disconnect(sk.Disconnect())
+    await filter_wheel.filter_wheel_connect(Connect())
+    await filter_wheel.filter_wheel_disconnect(Disconnect())
     assert filter_wheel.device_connected is False
 
 
 @pytest.mark.asyncio
 async def test_set_filter_by_name(filter_wheel):
-    import sensorkit.api as sk
-
-    await filter_wheel.filter_wheel_connect(sk.Connect())
+    await filter_wheel.filter_wheel_connect(Connect())
     await filter_wheel.filter_wheel_set_filter(SetFilter(filter="G"))
 
     resp = await filter_wheel.execute("ccdsoftCamera.FilterIndexZeroBased;")
@@ -51,9 +46,7 @@ async def test_set_filter_by_name(filter_wheel):
 
 @pytest.mark.asyncio
 async def test_set_filter_by_index(filter_wheel):
-    import sensorkit.api as sk
-
-    await filter_wheel.filter_wheel_connect(sk.Connect())
+    await filter_wheel.filter_wheel_connect(Connect())
     await filter_wheel.filter_wheel_set_filter(SetFilter(filter=2))
 
     resp = await filter_wheel.execute("ccdsoftCamera.FilterIndexZeroBased;")
@@ -62,17 +55,13 @@ async def test_set_filter_by_index(filter_wheel):
 
 @pytest.mark.asyncio
 async def test_set_filter_invalid_name(filter_wheel):
-    import sensorkit.api as sk
-
-    await filter_wheel.filter_wheel_connect(sk.Connect())
+    await filter_wheel.filter_wheel_connect(Connect())
     with pytest.raises(RuntimeError, match="unavailable"):
         await filter_wheel.filter_wheel_set_filter(SetFilter(filter="X"))
 
 
 @pytest.mark.asyncio
 async def test_set_filter_invalid_index(filter_wheel):
-    import sensorkit.api as sk
-
-    await filter_wheel.filter_wheel_connect(sk.Connect())
+    await filter_wheel.filter_wheel_connect(Connect())
     with pytest.raises(RuntimeError, match="unavailable"):
         await filter_wheel.filter_wheel_set_filter(SetFilter(filter=99))

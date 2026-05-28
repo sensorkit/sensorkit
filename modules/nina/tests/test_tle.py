@@ -4,6 +4,7 @@ from conftest import MockNinaClient
 import sensorkit.api as sk
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
+from sensorkit.models.devices import FollowTarget
 from sensorkit.nina.mount import NinaMountConfig, NinaMountState
 
 
@@ -48,7 +49,7 @@ ISS_TLE = TLE(
 @pytest.mark.asyncio
 async def test_mount_follow_tle(client, mount):
     target = TLETarget(tle=ISS_TLE)
-    await mount.mount_follow_target(sk.FollowTarget(target=target))
+    await mount.mount_follow_target(FollowTarget(target=target))
 
     # Should have slewed to adapted ICRS position
     slew_reqs = client.find_requests("/equipment/mount/slew-radec")

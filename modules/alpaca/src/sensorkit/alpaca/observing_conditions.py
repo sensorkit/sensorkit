@@ -13,7 +13,8 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Connected
+from sensorkit.models.devices import Deinit, Init
+from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.weather import BasicWeather, StandardWeather
 
 
@@ -52,24 +53,24 @@ class AlpacaObservingConditions(AlpacaDevice):
             self.state = AlpacaObservingConditionsState()
 
         # Initialize the observing conditions
-        await self.observing_conditions_init(sk.Init())
+        await self.observing_conditions_init(Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.observing_conditions_disconnect(sk.Disconnect())
+        await self.observing_conditions_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def observing_conditions_init(self, cmd: sk.Init):
+    async def observing_conditions_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.observing_conditions_connect(sk.Connect())
+        self._reconnect = lambda: self.observing_conditions_connect(Connect())
         self.oc = ObservingConditions(
             self.address, self.config.device_number, self.config.protocol
         )
-        await self.observing_conditions_connect(sk.Connect())
+        await self.observing_conditions_connect(Connect())
 
         # Set the average period
         if self.config.average_period is not None:
@@ -79,16 +80,16 @@ class AlpacaObservingConditions(AlpacaDevice):
                 logger.warning("Unable to set AveragePeriod")
 
     @sk.command_handler
-    async def observing_conditions_deinit(self, cmd: sk.Deinit):
+    async def observing_conditions_deinit(self, cmd: Deinit):
         pass
 
     @sk.command_handler
-    async def observing_conditions_connect(self, cmd: sk.Connect):
+    async def observing_conditions_connect(self, cmd: Connect):
         await self.connect(self.oc, timeout=self.config.timeout)
         await sk.device().publish(Connected(is_connected=True))
 
     @sk.command_handler
-    async def observing_conditions_disconnect(self, cmd: sk.Disconnect):
+    async def observing_conditions_disconnect(self, cmd: Disconnect):
         await self.disconnect(self.oc)
         await sk.device().publish(Connected(is_connected=False))
 

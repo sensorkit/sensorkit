@@ -7,7 +7,8 @@ import ourskyai_node_platform_api as osapi
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected, Opened
+from sensorkit.models.devices import Deinit, Init, Opened, Stop
+from sensorkit.std import Connected
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
@@ -40,7 +41,7 @@ class NodePlatformCover(NodePlatformDevice):
         async with asyncio.timeout(self.config.timeout):
             while self.device_connected is None:
                 await asyncio.sleep(self.config.status_frequency)
-        await self.cover_init(sk.Init())
+        await self.cover_init(Init())
 
     @sk.on_detach
     async def entity_deinit(self):
@@ -50,17 +51,17 @@ class NodePlatformCover(NodePlatformDevice):
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def cover_init(self, cmd: sk.Init):
+    async def cover_init(self, cmd: Init):
         pass
 
     @sk.command_handler
-    async def cover_deinit(self, cmd: sk.Deinit):
+    async def cover_deinit(self, cmd: Deinit):
         await self.require_connected()
-        await self.cover_stop(sk.Stop())
+        await self.cover_stop(Stop())
         await self.cover_close(CloseMirrorCover())
 
     @sk.command_handler
-    async def cover_stop(self, cmd: sk.Stop):
+    async def cover_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping mirror cover")
         await self.api.call("v1_halt_optical_tube_cover")

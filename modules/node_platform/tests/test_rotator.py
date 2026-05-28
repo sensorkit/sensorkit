@@ -3,7 +3,7 @@
 import pytest
 from conftest import MockNodePlatformAPI
 
-import sensorkit.api as sk
+from sensorkit.models.devices import Deinit, Init, Stop
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.rotator import (
     NodePlatformRotator,
@@ -49,19 +49,19 @@ class TestRotatorInit:
         rotator.config = NodePlatformRotatorConfig(
             device_type="rotator", host="localhost", derotate=True,
         )
-        await rotator.rotator_init(sk.Init())
+        await rotator.rotator_init(Init())
 
         assert len(api.find_calls("v1_enable_derotation_compensation")) == 1
 
     @pytest.mark.asyncio
     async def test_init_disables_derotation(self, rotator, api):
-        await rotator.rotator_init(sk.Init())
+        await rotator.rotator_init(Init())
 
         assert len(api.find_calls("v1_disable_derotation_compensation")) == 1
 
     @pytest.mark.asyncio
     async def test_deinit_disables_and_stops(self, rotator, api):
-        await rotator.rotator_deinit(sk.Deinit())
+        await rotator.rotator_deinit(Deinit())
 
         assert len(api.find_calls("v1_disable_derotation_compensation")) == 1
         assert len(api.find_calls("v1_halt_rotator")) == 1
@@ -79,7 +79,7 @@ class TestRotatorCommands:
 
     @pytest.mark.asyncio
     async def test_stop(self, rotator, api):
-        await rotator.rotator_stop(sk.Stop())
+        await rotator.rotator_stop(Stop())
 
         assert len(api.find_calls("v1_halt_rotator")) == 1
 

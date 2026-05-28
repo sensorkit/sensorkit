@@ -10,16 +10,18 @@ from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.data.fits import ArrayInfo
-from sensorkit.models.devices import (
-    CameraSensorSize,
-    Connected,
-    TemperatureUnit,
-)
-from sensorkit.std.instrument import (
+from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.std import (
     Binning,
+    CameraCapture,
+    CameraSensorSize,
     CameraSensorTemperature,
     ConfigureCameraCooler,
     ConfigureCameraSensor,
+    Connect,
+    Connected,
+    Disconnect,
+    TemperatureUnit,
 )
 from sensorkit.thesky.device import (
     ProcessAbortedError,
@@ -80,21 +82,21 @@ class TheSkyCamera(TheSkyDevice):
             self.state = TheSkyCameraState()
 
         # Initialize the camera
-        await self.camera_init(sk.Init())
+        await self.camera_init(Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.camera_disconnect(sk.Disconnect())
+        await self.camera_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def camera_init(self, cmd: sk.Init):
+    async def camera_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.camera_connect(sk.Connect())
-        await self.camera_connect(sk.Connect())
+        self._reconnect = lambda: self.camera_connect(Connect())
+        await self.camera_connect(Connect())
 
         # Set the camera temperature
         await self.camera_set_temperature(
@@ -107,11 +109,11 @@ class TheSkyCamera(TheSkyDevice):
         )
 
     @sk.command_handler
-    async def camera_deinit(self, cmd: sk.Deinit):
+    async def camera_deinit(self, cmd: Deinit):
         await self.camera_abort(sk.Abort())
 
     @sk.command_handler
-    async def camera_connect(self, cmd: sk.Connect):
+    async def camera_connect(self, cmd: Connect):
         logger.debug("connecting to camera")
 
         await self.execute(
@@ -131,7 +133,7 @@ class TheSkyCamera(TheSkyDevice):
         logger.debug("connected to camera")
 
     @sk.command_handler
-    async def camera_disconnect(self, cmd: sk.Disconnect):
+    async def camera_disconnect(self, cmd: Disconnect):
         logger.debug("disconnecting from camera")
 
         await self.execute(
@@ -149,7 +151,7 @@ class TheSkyCamera(TheSkyDevice):
         logger.debug("disconnected from camera")
 
     @sk.command_handler
-    async def camera_stop(self, cmd: sk.Stop):
+    async def camera_stop(self, cmd: Stop):
         await self.camera_abort(sk.Abort())
 
     @sk.command_handler
@@ -226,7 +228,7 @@ class TheSkyCamera(TheSkyDevice):
             logger.debug(f"set camera binning to ({actual_x}, {actual_y})")
 
     @sk.command_handler
-    async def camera_capture(self, cmd: sk.CameraCapture):
+    async def camera_capture(self, cmd: CameraCapture):
         await self.require_connected()
         logger.info(f"Requesting {cmd.integration_time:.1f} sec capture from camera")
         logger.debug("starting camera capture")

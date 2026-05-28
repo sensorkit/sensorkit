@@ -9,6 +9,7 @@ from sensorkit.alpaca.telescope import (
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
 )
+from sensorkit.models.devices import FollowTarget
 
 
 @pytest.fixture
@@ -91,14 +92,13 @@ def telescope():
 
 @pytest.mark.asyncio
 async def test_telescope_follow_icrs(telescope):
-    import sensorkit.api as sk
-    from sensorkit.astro.common import Equatorial
+    from sensorkit.astro.coords import Equatorial
     from sensorkit.astro.target import ICRSTarget
 
     # The mock SlewToCoordinatesAsync is a no-op, Slewing is already False,
     # so the wait loop exits immediately.
     await telescope.telescope_follow_target(
-        sk.FollowTarget(target=ICRSTarget(coords=Equatorial(ra=90.0, dec=20.0)))
+        FollowTarget(target=ICRSTarget(coords=Equatorial(ra=90.0, dec=20.0)))
     )
 
     # Tracking should be enabled for ICRS targets

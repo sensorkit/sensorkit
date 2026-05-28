@@ -10,8 +10,7 @@ from sensorkit.common.importutil import obj_from_spec
 from sensorkit.core.client import SensorKit
 
 DEFAULT_BASE_IMPORTS = (
-    "sensorkit.std.sensor",
-    "sensorkit.std.collect",
+    "sensorkit.std",
     "sensorkit.data.filesys",
     "sensorkit.data.fits",
     "sensorkit.data.local",

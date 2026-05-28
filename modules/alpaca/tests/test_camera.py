@@ -13,6 +13,8 @@ from sensorkit.alpaca.camera import (
     _dtype_to_bitpix,
     _dtype_to_bzero,
 )
+from sensorkit.models.devices import Stop
+from sensorkit.std import Connect, Disconnect
 
 
 class TestCameraCapture:
@@ -122,23 +124,19 @@ def camera():
 class TestCameraLifecycle:
     @pytest.mark.asyncio
     async def test_camera_connect(self, camera):
-        import sensorkit.api as sk
-
         camera.device_connected = False
         camera.camera._properties["Connected"] = False
-        await camera.camera_connect(sk.Connect())
+        await camera.camera_connect(Connect())
         assert camera.device_connected is True
 
     @pytest.mark.asyncio
     async def test_camera_disconnect(self, camera):
-        import sensorkit.api as sk
-
-        await camera.camera_disconnect(sk.Disconnect())
+        await camera.camera_disconnect(Disconnect())
         assert camera.device_connected is False
 
     @pytest.mark.asyncio
     async def test_camera_set_temperature(self, camera):
-        from sensorkit.models.devices import TemperatureUnit
+        from sensorkit.std import TemperatureUnit
         from sensorkit.std.instrument import CameraSensorTemperature, ConfigureCameraCooler
 
         await camera.camera_set_temperature(
@@ -165,9 +163,7 @@ class TestCameraLifecycle:
 
     @pytest.mark.asyncio
     async def test_camera_stop(self, camera):
-        import sensorkit.api as sk
-
-        await camera.camera_stop(sk.Stop())
+        await camera.camera_stop(Stop())
 
     @pytest.mark.asyncio
     async def test_camera_abort(self, camera):

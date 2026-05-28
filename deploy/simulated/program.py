@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import sensorkit.api as sk
-from sensorkit.astro.common import Horizontal
+from sensorkit.astro.coords import Horizontal
 from sensorkit.astro.target import AltAzTarget
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 

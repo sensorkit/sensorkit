@@ -1,5 +1,6 @@
 import pytest
 
+from sensorkit.std import Connect
 from sensorkit.std.instrument import ChangeRotatorPosition
 from sensorkit.thesky.rotator import TheSkyRotatorConfig
 
@@ -23,26 +24,20 @@ def rotator(simulator):
 
 @pytest.mark.asyncio
 async def test_rotator_connect(rotator):
-    import sensorkit.api as sk
-
-    await rotator.rotator_connect(sk.Connect())
+    await rotator.rotator_connect(Connect())
     assert rotator.device_connected is True
 
 
 @pytest.mark.asyncio
 async def test_rotator_disconnect(rotator):
-    import sensorkit.api as sk
-
-    await rotator.rotator_connect(sk.Connect())
-    await rotator.rotator_disconnect(sk.Disconnect())
+    await rotator.rotator_connect(Connect())
+    await rotator.rotator_disconnect(Disconnect())
     assert rotator.device_connected is False
 
 
 @pytest.mark.asyncio
 async def test_rotator_move(rotator):
-    import sensorkit.api as sk
-
-    await rotator.rotator_connect(sk.Connect())
+    await rotator.rotator_connect(Connect())
     # Directly command and verify via execute (avoids float format mismatch in poll)
     await rotator.execute("ccdsoftCamera.rotatorGotoPositionAngle(45.0);")
     resp = await rotator.execute("ccdsoftCamera.rotatorPositionAngle;")
@@ -51,8 +46,6 @@ async def test_rotator_move(rotator):
 
 @pytest.mark.asyncio
 async def test_rotator_move_exceeds_limits(rotator):
-    import sensorkit.api as sk
-
-    await rotator.rotator_connect(sk.Connect())
+    await rotator.rotator_connect(Connect())
     with pytest.raises(RuntimeError, match="outside limits"):
         await rotator.rotator_move(ChangeRotatorPosition(position=200.0))

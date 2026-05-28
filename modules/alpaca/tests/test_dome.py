@@ -4,6 +4,8 @@ import pytest
 from conftest import MockAlpacaSDKDevice
 
 from sensorkit.alpaca.dome import AlpacaDomeConfig, AlpacaDomeState
+from sensorkit.models.devices import Home, MoveToPark, Stop
+from sensorkit.std import Connect, Disconnect
 
 
 @pytest.fixture
@@ -43,44 +45,34 @@ def dome():
 
 @pytest.mark.asyncio
 async def test_dome_connect(dome):
-    import sensorkit.api as sk
-
     dome.device_connected = False
     dome.dome._properties["Connected"] = False
-    await dome.dome_connect(sk.Connect())
+    await dome.dome_connect(Connect())
     assert dome.device_connected is True
 
 
 @pytest.mark.asyncio
 async def test_dome_disconnect(dome):
-    import sensorkit.api as sk
-
-    await dome.dome_disconnect(sk.Disconnect())
+    await dome.dome_disconnect(Disconnect())
     assert dome.device_connected is False
 
 
 @pytest.mark.asyncio
 async def test_dome_home(dome):
-    import sensorkit.api as sk
-
     dome.dome._properties["AtHome"] = True
-    await dome.dome_home(sk.Home())
+    await dome.dome_home(Home())
     assert dome.state.has_been_homed is True
 
 
 @pytest.mark.asyncio
 async def test_dome_park(dome):
-    import sensorkit.api as sk
-
     dome.dome._properties["AtPark"] = True
-    await dome.dome_park(sk.MoveToPark())
+    await dome.dome_park(MoveToPark())
 
 
 @pytest.mark.asyncio
 async def test_dome_stop(dome):
-    import sensorkit.api as sk
-
-    await dome.dome_stop(sk.Stop())
+    await dome.dome_stop(Stop())
 
 
 @pytest.mark.asyncio

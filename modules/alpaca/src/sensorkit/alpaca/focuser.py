@@ -13,9 +13,9 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Connected
+from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.std import Connect, Connected, Disconnect, Temperature, TemperatureUnit
 from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
-from sensorkit.std.traits import Temperature, TemperatureUnit
 
 
 @sk.declare_keyword
@@ -55,7 +55,7 @@ class AlpacaFocuser(AlpacaDevice):
         self.focuser_position: float | None = None
 
         # Initialize the focuser
-        await self.focuser_init(sk.Init())
+        await self.focuser_init(Init())
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -67,15 +67,15 @@ class AlpacaFocuser(AlpacaDevice):
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.focuser_disconnect(sk.Disconnect())
+        await self.focuser_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def focuser_init(self, cmd: sk.Init):
+    async def focuser_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.focuser_connect(sk.Connect())
+        self._reconnect = lambda: self.focuser_connect(Connect())
         self.focuser = Focuser(self.address, self.config.device_number, self.config.protocol)
-        await self.focuser_connect(sk.Connect())
+        await self.focuser_connect(Connect())
 
         f = self.focuser
 
@@ -87,21 +87,21 @@ class AlpacaFocuser(AlpacaDevice):
         self._temp_comp_available = await self.get(f, "TempCompAvailable", False)
 
     @sk.command_handler
-    async def focuser_deinit(self, cmd: sk.Deinit):
-        await self.focuser_stop(sk.Stop())
+    async def focuser_deinit(self, cmd: Deinit):
+        await self.focuser_stop(Stop())
 
     @sk.command_handler
-    async def focuser_connect(self, cmd: sk.Connect):
+    async def focuser_connect(self, cmd: Connect):
         await self.connect(self.focuser, timeout=self.config.timeout)
         await sk.device().publish(Connected(is_connected=True))
 
     @sk.command_handler
-    async def focuser_disconnect(self, cmd: sk.Disconnect):
+    async def focuser_disconnect(self, cmd: Disconnect):
         await self.disconnect(self.focuser)
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
-    async def focuser_stop(self, cmd: sk.Stop):
+    async def focuser_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping focuser")
         await self.call(self.focuser, "Halt")

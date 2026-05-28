@@ -1,8 +1,9 @@
 import pytest
 
-import sensorkit.api as sk
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
+from sensorkit.models.devices import FollowTarget
+from sensorkit.std import Connect
 from sensorkit.thesky.telescope import TheSkyTelescopeConfig, TheSkyTelescopeState
 
 
@@ -32,11 +33,11 @@ ISS_TLE = TLE(
 
 @pytest.mark.asyncio
 async def test_telescope_follow_tle(telescope):
-    await telescope.telescope_connect(sk.Connect())
+    await telescope.telescope_connect(Connect())
     await telescope.telescope_unpark()
 
     target = TLETarget(tle=ISS_TLE)
-    await telescope.telescope_follow_target(sk.FollowTarget(target=target))
+    await telescope.telescope_follow_target(FollowTarget(target=target))
 
     # Verify Raven3 tracking status reached 6
     resp = await telescope.execute("Raven3.trackLEOStatus;")

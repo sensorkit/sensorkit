@@ -1,8 +1,9 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import sensorkit.api as sk
+from sensorkit.models.devices import DisableAxis, EnableAxis, Home, MountAxis, MoveToPark, Stop
 from sensorkit.pwi4.mount import PWI4Mount, PWI4MountConfig, PWI4MountState
+from sensorkit.std import Connect, Disconnect
 
 from conftest import MockPWI4Client
 
@@ -31,7 +32,7 @@ class TestMountConnect:
             mock_device.publish = AsyncMock()
             mock_sk.device.return_value = mock_device
 
-            await mount.mount_connect(sk.Connect())
+            await mount.mount_connect(Connect())
 
         reqs = client.find_requests("/mount/connect")
         assert len(reqs) == 1
@@ -46,7 +47,7 @@ class TestMountConnect:
             mock_device.publish = AsyncMock()
             mock_sk.device.return_value = mock_device
 
-            await mount.mount_disconnect(sk.Disconnect())
+            await mount.mount_disconnect(Disconnect())
 
         reqs = client.find_requests("/mount/disconnect")
         assert len(reqs) == 1
@@ -56,7 +57,7 @@ class TestMountConnect:
 class TestMountHome:
     @pytest.mark.asyncio
     async def test_home_skips_when_initialized(self, client, mount):
-        await mount.mount_home(sk.Home())
+        await mount.mount_home(Home())
 
         reqs = client.find_requests("/mount/find_home")
         assert len(reqs) == 0
@@ -69,7 +70,7 @@ class TestMountHome:
                 "mount.axis1.is_position_initialized": "false",
             }
         )
-        await mount.mount_home(sk.Home())
+        await mount.mount_home(Home())
 
         reqs = client.find_requests("/mount/find_home")
         assert len(reqs) == 1
@@ -81,7 +82,7 @@ class TestMountStop:
         client.set_status(
             **{"mount.is_slewing": "false", "mount.is_tracking": "false"}
         )
-        await mount.mount_stop(sk.Stop())
+        await mount.mount_stop(Stop())
 
         reqs = client.find_requests("/mount/stop")
         assert len(reqs) == 1
@@ -90,7 +91,7 @@ class TestMountStop:
 class TestMountPark:
     @pytest.mark.asyncio
     async def test_park_default(self, client, mount):
-        await mount.mount_park(sk.MoveToPark())
+        await mount.mount_park(MoveToPark())
 
         reqs = client.find_requests("/mount/park")
         assert len(reqs) == 1
@@ -101,7 +102,7 @@ class TestMountPark:
         client.set_status(
             **{"mount.is_slewing": "false", "mount.is_tracking": "false"}
         )
-        await mount.mount_park(sk.MoveToPark())
+        await mount.mount_park(MoveToPark())
 
         reqs = client.find_requests("/mount/park")
         assert len(reqs) == 1
@@ -110,7 +111,7 @@ class TestMountPark:
 class TestMountEnableDisableAxis:
     @pytest.mark.asyncio
     async def test_enable_azimuth(self, client, mount):
-        await mount.mount_enable_axis(sk.EnableAxis(axis=sk.MountAxis.AZIMUTH))
+        await mount.mount_enable_axis(EnableAxis(axis=MountAxis.AZIMUTH))
 
         reqs = client.find_requests("/mount/enable")
         assert len(reqs) == 1
@@ -118,7 +119,7 @@ class TestMountEnableDisableAxis:
 
     @pytest.mark.asyncio
     async def test_enable_altitude(self, client, mount):
-        await mount.mount_enable_axis(sk.EnableAxis(axis=sk.MountAxis.ALTITUDE))
+        await mount.mount_enable_axis(EnableAxis(axis=MountAxis.ALTITUDE))
 
         reqs = client.find_requests("/mount/enable")
         assert len(reqs) == 1
@@ -126,7 +127,7 @@ class TestMountEnableDisableAxis:
 
     @pytest.mark.asyncio
     async def test_disable_azimuth(self, client, mount):
-        await mount.mount_disable_axis(sk.DisableAxis(axis=sk.MountAxis.AZIMUTH))
+        await mount.mount_disable_axis(DisableAxis(axis=MountAxis.AZIMUTH))
 
         reqs = client.find_requests("/mount/disable")
         assert len(reqs) == 1

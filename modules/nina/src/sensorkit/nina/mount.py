@@ -9,25 +9,30 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.astro.common import Geodetic
+from sensorkit.astro.common import SitePosition, AltAzPointing, RADecPointing
+from sensorkit.astro.coords import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
     FrameTarget,
     ICRSTarget,
     TLETarget,
 )
+from sensorkit.astro.common import ReferenceFrame
 from sensorkit.models.devices import (
-    AltAzPointing,
     AxisRate,
     AxisRates,
-    Connected,
+    Deinit,
+    FollowTarget,
+    Home,
+    Init,
+    MoveToPark,
     MountAxis,
-    RADecPointing,
-    ReferenceFrame,
-    SitePosition,
+    SetParkPosition,
     Slewing,
+    Stop,
     Tracking,
 )
+from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import (
     NinaDevice,
     NinaDeviceConfig,
@@ -74,14 +79,14 @@ class NinaMount(NinaDevice):
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
-        await self.mount_disconnect(sk.Disconnect())
+        await self.mount_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def mount_init(self, cmd: sk.Init):
+    async def mount_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.mount_connect(sk.Connect())
-        await self.mount_connect(sk.Connect())
+        self._reconnect = lambda: self.mount_connect(Connect())
+        await self.mount_connect(Connect())
         self.start_status_loop(self.status_publish_slow())
 
         # Wait for initial status
@@ -119,35 +124,35 @@ class NinaMount(NinaDevice):
 
         # Home as needed
         if not self.state.has_been_homed:
-            await self.mount_home(sk.Home())
+            await self.mount_home(Home())
 
     @sk.command_handler
-    async def mount_deinit(self, cmd: sk.Deinit):
+    async def mount_deinit(self, cmd: Deinit):
         if not self.device_connected:
             # Init may not have run, but mount may still be tracking from a failed run.
             # Connect so we can ensure it's parked.
             try:
-                await self.mount_connect(sk.Connect())
+                await self.mount_connect(Connect())
             except Exception:
                 logger.warning("Unable to connect mount for Deinit park; skipping")
                 return
 
         self._stop_fast_status()
-        await self.mount_stop(sk.Stop())
-        await self.mount_park(sk.MoveToPark())
+        await self.mount_stop(Stop())
+        await self.mount_park(MoveToPark())
 
     @sk.command_handler
-    async def mount_connect(self, cmd: sk.Connect):
+    async def mount_connect(self, cmd: Connect):
         await self.connect("mount")
         await sk.device().publish(Connected(is_connected=True))
 
     @sk.command_handler
-    async def mount_disconnect(self, cmd: sk.Disconnect):
+    async def mount_disconnect(self, cmd: Disconnect):
         await self.disconnect("mount")
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
-    async def mount_stop(self, cmd: sk.Stop):
+    async def mount_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping mount")
 
@@ -160,7 +165,7 @@ class NinaMount(NinaDevice):
         logger.debug("stopped mount")
 
     @sk.command_handler
-    async def mount_home(self, cmd: sk.Home):
+    async def mount_home(self, cmd: Home):
         await self.require_connected()
         await self.mount_unpark()
         logger.debug("homing mount")
@@ -186,7 +191,7 @@ class NinaMount(NinaDevice):
         logger.debug("homed mount")
 
     @sk.command_handler
-    async def mount_park(self, cmd: sk.MoveToPark):
+    async def mount_park(self, cmd: MoveToPark):
         await self.require_connected()
         logger.debug("parking mount")
 
@@ -202,7 +207,7 @@ class NinaMount(NinaDevice):
         logger.debug("parked mount")
 
     @sk.command_handler
-    async def mount_set_park_position(self, cmd: sk.SetParkPosition):
+    async def mount_set_park_position(self, cmd: SetParkPosition):
         await self.require_connected()
         logger.debug("setting park position")
         await self.client.get("/equipment/mount/set-park-position")
@@ -219,7 +224,7 @@ class NinaMount(NinaDevice):
         logger.debug("unparked mount")
 
     @sk.command_handler
-    async def mount_follow_target(self, cmd: sk.FollowTarget):
+    async def mount_follow_target(self, cmd: FollowTarget):
         await self.require_connected()
         await self.mount_unpark()
 
@@ -284,7 +289,7 @@ class NinaMount(NinaDevice):
 
                 observer = None
                 if self._site_lat is not None and self._site_lon is not None:
-                    from sensorkit.astro.common import Geodetic
+                    from sensorkit.astro.coords import Geodetic
 
                     observer = Geodetic(
                         lon=self._site_lon,

@@ -6,7 +6,8 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected, Enabled
+from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.std import Connect, Connected, Disconnect, Enabled
 from sensorkit.pwi4.device import PWI4Client, PWI4Device, PWI4DeviceConfig, PWI4DeviceState
 from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
 
@@ -33,7 +34,7 @@ class PWI4Rotator(PWI4Device):
         self.rotator_position: float | None = None
 
         # Initialize the rotator
-        await self.rotator_init(sk.Init())
+        await self.rotator_init(Init())
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -45,23 +46,23 @@ class PWI4Rotator(PWI4Device):
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.rotator_disconnect(sk.Disconnect())
+        await self.rotator_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def rotator_init(self, cmd: sk.Init):
+    async def rotator_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.rotator_connect(sk.Connect())
-        await self.rotator_connect(sk.Connect())
+        self._reconnect = lambda: self.rotator_connect(Connect())
+        await self.rotator_connect(Connect())
         await self.rotator_enable(sk.Enable())
 
     @sk.command_handler
-    async def rotator_deinit(self, cmd: sk.Deinit):
-        await self.rotator_stop(sk.Stop())
+    async def rotator_deinit(self, cmd: Deinit):
+        await self.rotator_stop(Stop())
         await self.rotator_disable(sk.Disable())
 
     @sk.command_handler
-    async def rotator_connect(self, cmd: sk.Connect):
+    async def rotator_connect(self, cmd: Connect):
         logger.debug("connecting to rotator")
         await self.client.request("/rotator/connect")
 
@@ -76,7 +77,7 @@ class PWI4Rotator(PWI4Device):
         logger.debug("connected to rotator")
 
     @sk.command_handler
-    async def rotator_disconnect(self, cmd: sk.Disconnect):
+    async def rotator_disconnect(self, cmd: Disconnect):
         logger.debug("disconnecting from rotator")
         await self.client.request("/rotator/disconnect")
 
@@ -105,7 +106,7 @@ class PWI4Rotator(PWI4Device):
         logger.debug("disabled rotator")
 
     @sk.command_handler
-    async def rotator_stop(self, cmd: sk.Stop):
+    async def rotator_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping rotator")
         await self.client.request("/rotator/stop")

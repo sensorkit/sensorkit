@@ -6,8 +6,9 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected
-from sensorkit.models.safety import BasicSafety, StandardSafety
+from sensorkit.models.devices import Deinit, Init
+from sensorkit.std import Connect, Connected, Disconnect
+from sensorkit.std.safety import BasicSafety, StandardSafety
 from sensorkit.thesky.device import (
     TheSkyDevice,
     TheSkyDeviceConfig,
@@ -35,7 +36,7 @@ class TheSkyWeather(TheSkyDevice):
             self.state = TheSkyWeatherState()
 
         # Initialize the weather
-        await self.weather_init(sk.Init())
+        await self.weather_init(Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -45,17 +46,17 @@ class TheSkyWeather(TheSkyDevice):
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def weather_init(self, cmd: sk.Init):
+    async def weather_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.weather_connect(sk.Connect())
-        await self.weather_connect(sk.Connect())
+        self._reconnect = lambda: self.weather_connect(Connect())
+        await self.weather_connect(Connect())
 
     @sk.command_handler
-    async def weather_deinit(self, cmd: sk.Deinit):
+    async def weather_deinit(self, cmd: Deinit):
         pass
 
     @sk.command_handler
-    async def weather_connect(self, cmd: sk.Connect):
+    async def weather_connect(self, cmd: Connect):
         logger.debug("connecting to weather")
 
         await self.execute(
@@ -76,7 +77,7 @@ class TheSkyWeather(TheSkyDevice):
         logger.debug("connected to weather")
 
     @sk.command_handler
-    async def weather_disconnect(self, cmd: sk.Disconnect):
+    async def weather_disconnect(self, cmd: Disconnect):
         logger.debug("disconnecting from weather")
 
         await self.execute(

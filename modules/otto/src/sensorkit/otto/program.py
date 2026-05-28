@@ -8,9 +8,8 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
-from sensorkit.astro.common import TLE
+from sensorkit.astro.common import TLE, SitePosition
 from sensorkit.astro.target import TLETarget
-from sensorkit.models.devices import SitePosition
 from sensorkit.otto.models import OttoConfig
 from sensorkit.otto.task_queue import TaskQueue, start_fastapi
 from sensorkit.otto.utils import (

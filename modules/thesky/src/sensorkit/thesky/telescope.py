@@ -15,7 +15,8 @@ from astropy.utils import iers
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.astro.common import TLE, Geodetic
+from sensorkit.astro.common import TLE, AltAzPointing, RADecPointing
+from sensorkit.astro.coords import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
     EphemerisTarget,
@@ -25,18 +26,22 @@ from sensorkit.astro.target import (
     StateVectorTarget,
     TLETarget,
 )
+from sensorkit.astro.common import ReferenceFrame
 from sensorkit.models.devices import (
-    AltAzPointing,
     AxisRate,
     AxisRates,
-    Connected,
+    Deinit,
+    FollowTarget,
+    Home,
+    Init,
+    MoveToPark,
     MountAxis,
-    RADecPointing,
-    ReferenceFrame,
     SetParkPosition,
     Slewing,
+    Stop,
     Tracking,
 )
+from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.thesky.device import (
     MountCommandInProgressError,
     ProcessAbortedError,
@@ -124,38 +129,38 @@ class TheSkyTelescope(TheSkyDevice):
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
-        await self.telescope_disconnect(sk.Disconnect())
+        await self.telescope_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def telescope_init(self, cmd: sk.Init):
+    async def telescope_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.telescope_connect(sk.Connect())
+        self._reconnect = lambda: self.telescope_connect(Connect())
 
-        await self.telescope_connect(sk.Connect())
+        await self.telescope_connect(Connect())
         self.start_status_loop(self.status_publish_slow())
 
         # Home, as needed
         if not self.state.has_been_homed:
-            await self.telescope_home(sk.Home())
+            await self.telescope_home(Home())
 
     @sk.command_handler
-    async def telescope_deinit(self, cmd: sk.Deinit):
+    async def telescope_deinit(self, cmd: Deinit):
         if not self.device_connected:
             # Init may not have run, but telescope may still be tracking from a failed run.
             # Connect so we can ensure it's parked.
             try:
-                await self.telescope_connect(sk.Connect())
+                await self.telescope_connect(Connect())
             except Exception:
                 logger.warning("Unable to connect telescope for Deinit park; skipping")
                 return
 
         self._stop_fast_status()
-        await self.telescope_stop(sk.Stop())
-        await self.telescope_park(sk.MoveToPark())
+        await self.telescope_stop(Stop())
+        await self.telescope_park(MoveToPark())
 
     @sk.command_handler
-    async def telescope_connect(self, cmd: sk.Connect):
+    async def telescope_connect(self, cmd: Connect):
         logger.debug("connecting to telescope")
 
         await self.execute(
@@ -174,7 +179,7 @@ class TheSkyTelescope(TheSkyDevice):
         logger.debug("connected to telescope")
 
     @sk.command_handler
-    async def telescope_disconnect(self, cmd: sk.Disconnect):
+    async def telescope_disconnect(self, cmd: Disconnect):
         logger.debug("disconnecting from telescope")
 
         await self.execute(
@@ -192,7 +197,7 @@ class TheSkyTelescope(TheSkyDevice):
         logger.debug("disconnected from telescope")
 
     @sk.command_handler
-    async def telescope_stop(self, cmd: sk.Stop):
+    async def telescope_stop(self, cmd: Stop):
         self._stop_fast_status()
         await self.telescope_unpark()
         logger.debug("stopping telescope")
@@ -211,7 +216,7 @@ class TheSkyTelescope(TheSkyDevice):
         logger.debug("stopped telescope")
 
     @sk.command_handler
-    async def telescope_park(self, cmd: sk.MoveToPark):
+    async def telescope_park(self, cmd: MoveToPark):
         self._stop_fast_status()
         await self.require_connected()
         logger.debug("parking telescope")
@@ -264,7 +269,7 @@ class TheSkyTelescope(TheSkyDevice):
         logger.debug("unparked telescope")
 
     @sk.command_handler
-    async def telescope_home(self, cmd: sk.Home):
+    async def telescope_home(self, cmd: Home):
         self._stop_fast_status()
         await self.telescope_unpark()
         logger.debug("homing telescope")
@@ -299,7 +304,7 @@ class TheSkyTelescope(TheSkyDevice):
         logger.debug("homed telescope")
 
     @sk.command_handler
-    async def telescope_follow_target(self, cmd: sk.FollowTarget):
+    async def telescope_follow_target(self, cmd: FollowTarget):
         self._stop_fast_status()
         await self.telescope_unpark()
 

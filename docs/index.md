@@ -106,9 +106,10 @@ Similarly, open [http://localhost:30000](http://localhost:30000) in a browser to
 
 ```python
 import sensorkit.api as sk
-from sensorkit.astro.common import Horizontal
+from sensorkit.astro.coords import Horizontal
 from sensorkit.astro.target import AltAzTarget
-from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
+from sensorkit.std import CameraParameterSet, StandardCollectTask
+
 
 @sk.declare_program
 class SimProgram:
@@ -131,6 +132,7 @@ class SimProgram:
             ),
             end_time=datetime.now(UTC) + timedelta(minutes=2),
         )
+
 
 @sk.service_entrypoint(version="1.0")
 async def main(service: sk.Service):

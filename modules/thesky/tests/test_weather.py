@@ -1,5 +1,6 @@
 import pytest
 
+from sensorkit.std import Connect, Disconnect
 from sensorkit.thesky.weather import TheSkyWeatherConfig
 
 
@@ -18,27 +19,21 @@ def weather(simulator):
 
 @pytest.mark.asyncio
 async def test_weather_connect(weather):
-    import sensorkit.api as sk
-
-    await weather.weather_connect(sk.Connect())
+    await weather.weather_connect(Connect())
     assert weather.device_connected is True
 
 
 @pytest.mark.asyncio
 async def test_weather_disconnect(weather):
-    import sensorkit.api as sk
-
-    await weather.weather_connect(sk.Connect())
-    await weather.weather_disconnect(sk.Disconnect())
+    await weather.weather_connect(Connect())
+    await weather.weather_disconnect(Disconnect())
     assert weather.device_connected is False
 
 
 @pytest.mark.asyncio
 async def test_weather_connect_sets_flags(weather):
     """Verify that connect sets autoStartup, autoShutdown, and scriptedObjectsNoGoAware."""
-    import sensorkit.api as sk
-
-    await weather.weather_connect(sk.Connect())
+    await weather.weather_connect(Connect())
 
     resp = await weather.execute(
         """

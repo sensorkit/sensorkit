@@ -6,7 +6,8 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected, Opened
+from sensorkit.models.devices import Deinit, Init, Opened
+from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 from sensorkit.thesky.device import (
     OTACommandInProgressError,
@@ -36,28 +37,28 @@ class TheSkyOTA(TheSkyDevice):
             self.state = TheSkyOTAState()
 
         # Initialize the OTA
-        await self.ota_init(sk.Init())
+        await self.ota_init(Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.ota_disconnect(sk.Disconnect())
+        await self.ota_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def ota_init(self, cmd: sk.Init):
+    async def ota_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.ota_connect(sk.Connect())
-        await self.ota_connect(sk.Connect())
+        self._reconnect = lambda: self.ota_connect(Connect())
+        await self.ota_connect(Connect())
 
     @sk.command_handler
-    async def ota_deinit(self, cmd: sk.Deinit):
+    async def ota_deinit(self, cmd: Deinit):
         await self.ota_close(CloseMirrorCover())
 
     @sk.command_handler
-    async def ota_connect(self, cmd: sk.Connect):
+    async def ota_connect(self, cmd: Connect):
         logger.debug("connecting to ota")
 
         await self.execute(
@@ -75,7 +76,7 @@ class TheSkyOTA(TheSkyDevice):
         logger.debug("connected to ota")
 
     @sk.command_handler
-    async def ota_disconnect(self, cmd: sk.Disconnect):
+    async def ota_disconnect(self, cmd: Disconnect):
         logger.debug("disconnecting from ota")
 
         await self.execute(

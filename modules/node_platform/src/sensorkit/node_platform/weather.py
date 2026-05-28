@@ -9,16 +9,17 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected
-from sensorkit.models.safety import BasicSafety, StandardSafety
+from sensorkit.models.devices import Deinit, Init
+from sensorkit.std import Connected
+from sensorkit.std.safety import BasicSafety, StandardSafety
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
     NodePlatformDeviceState,
 )
-from sensorkit.std.weather import StandardWeather
+from sensorkit.std.weather import BasicWeather, StandardWeather
 
-# Map Node Platform system metric names to sk.BasicWeather() field names.
+# Map Node Platform system metric names to BasicWeather() field names.
 _METRIC_FIELD_MAP: dict[str, str] = {
     "node_controller.weather_monitor.air_temperature": "temperature",
     "node_controller.weather_monitor.air_humidity": "humidity",
@@ -68,7 +69,7 @@ class NodePlatformWeather(NodePlatformDevice):
             self.state = NodePlatformWeatherState()
 
         # Initialize the weather
-        await self.weather_init(sk.Init())
+        await self.weather_init(Init())
         self.start_status_loop(self.status_publish())
 
         async with asyncio.timeout(self.config.timeout):
@@ -83,7 +84,7 @@ class NodePlatformWeather(NodePlatformDevice):
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def weather_init(self, cmd: sk.Init):
+    async def weather_init(self, cmd: Init):
         # Discover which weather metric names are available on this node
         self._weather_metric_names: list[str] = []
         try:
@@ -112,7 +113,7 @@ class NodePlatformWeather(NodePlatformDevice):
             logger.debug("set Node Platform to MANUAL mode")
 
     @sk.command_handler
-    async def weather_deinit(self, cmd: sk.Deinit):
+    async def weather_deinit(self, cmd: Deinit):
         pass
 
     async def status_publish(self):
@@ -239,7 +240,7 @@ class NodePlatformWeather(NodePlatformDevice):
         logger.debug(f"NodePlatform weather status: {', '.join(status_parts)}")
 
         try:
-            return sk.BasicWeather(**fields), basic_safety_kw, safety_kw
+            return BasicWeather(**fields), basic_safety_kw, safety_kw
         except Exception as e:
             logger.warning(f"Failed to build BasicWeather model: {e}")
             return None, basic_safety_kw, safety_kw

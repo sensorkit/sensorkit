@@ -6,8 +6,9 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected
-from sensorkit.models.safety import BasicSafety
+from sensorkit.models.devices import Deinit, Init
+from sensorkit.std import Connect, Connected, Disconnect
+from sensorkit.std.safety import BasicSafety
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 
 
@@ -31,32 +32,32 @@ class NinaSafetyMonitor(NinaDevice):
             self.state = NinaSafetyMonitorState()
 
         # Initialize the safety monitor
-        await self.safety_init(sk.Init())
+        await self.safety_init(Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.safety_disconnect(sk.Disconnect())
+        await self.safety_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def safety_init(self, cmd: sk.Init):
-        self._reconnect = lambda: self.safety_connect(sk.Connect())
-        await self.safety_connect(sk.Connect())
+    async def safety_init(self, cmd: Init):
+        self._reconnect = lambda: self.safety_connect(Connect())
+        await self.safety_connect(Connect())
 
     @sk.command_handler
-    async def safety_deinit(self, cmd: sk.Deinit):
+    async def safety_deinit(self, cmd: Deinit):
         pass
 
     @sk.command_handler
-    async def safety_connect(self, cmd: sk.Connect):
+    async def safety_connect(self, cmd: Connect):
         await self.connect("safetymonitor")
         await sk.device().publish(Connected(is_connected=True))
 
     @sk.command_handler
-    async def safety_disconnect(self, cmd: sk.Disconnect):
+    async def safety_disconnect(self, cmd: Disconnect):
         await self.disconnect("safetymonitor")
         await sk.device().publish(Connected(is_connected=False))
 

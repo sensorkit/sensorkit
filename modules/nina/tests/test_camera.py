@@ -2,8 +2,9 @@ import pytest
 from conftest import MockNinaClient
 
 import sensorkit.api as sk
-from sensorkit.models.devices import TemperatureUnit
+from sensorkit.models.devices import Deinit, Init, Stop
 from sensorkit.nina.camera import NinaCameraConfig, NinaCameraState
+from sensorkit.std import Connect, Disconnect, TemperatureUnit
 from sensorkit.std.instrument import (
     Binning,
     CameraSensorTemperature,
@@ -38,14 +39,14 @@ class TestCameraConnect:
     @pytest.mark.asyncio
     async def test_connect(self, client, camera):
         camera.device_connected = None
-        await camera.camera_connect(sk.Connect())
+        await camera.camera_connect(Connect())
         assert camera.device_connected is True
         reqs = client.find_requests("/equipment/camera/connect")
         assert len(reqs) == 1
 
     @pytest.mark.asyncio
     async def test_disconnect(self, client, camera):
-        await camera.camera_disconnect(sk.Disconnect())
+        await camera.camera_disconnect(Disconnect())
         assert camera.device_connected is False
         reqs = client.find_requests("/equipment/camera/disconnect")
         assert len(reqs) == 1

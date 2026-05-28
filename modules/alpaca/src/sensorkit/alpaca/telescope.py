@@ -19,7 +19,8 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.astro.common import Geodetic
+from sensorkit.astro.common import SitePosition, AltAzPointing, RADecPointing
+from sensorkit.astro.coords import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
     FrameTarget,
@@ -27,18 +28,22 @@ from sensorkit.astro.target import (
     RateTarget,
     TLETarget,
 )
+from sensorkit.astro.common import ReferenceFrame
 from sensorkit.models.devices import (
-    AltAzPointing,
     AxisRate,
     AxisRates,
-    Connected,
+    Deinit,
+    FollowTarget,
+    Home,
+    Init,
+    MoveToPark,
     MountAxis,
-    RADecPointing,
-    ReferenceFrame,
-    SitePosition,
+    SetParkPosition,
     Slewing,
+    Stop,
     Tracking,
 )
+from sensorkit.std import Connect, Connected, Disconnect
 
 iers.conf.auto_download = False
 # Suppress the warning that results from the above decision
@@ -107,15 +112,15 @@ class AlpacaTelescope(AlpacaDevice):
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency_slow)
         await self.stop_status_loop()
-        await self.telescope_disconnect(sk.Disconnect())
+        await self.telescope_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def telescope_init(self, cmd: sk.Init):
+    async def telescope_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.telescope_connect(sk.Connect())
+        self._reconnect = lambda: self.telescope_connect(Connect())
         self.telescope = Telescope(self.address, self.config.device_number, self.config.protocol)
-        await self.telescope_connect(sk.Connect())
+        await self.telescope_connect(Connect())
 
         t = self.telescope
 
@@ -180,7 +185,7 @@ class AlpacaTelescope(AlpacaDevice):
 
         # Home, as needed
         if not self.state.has_been_homed:
-            self.telescope_home(sk.Home())
+            self.telescope_home(Home())
 
     async def _check_can_move_axis(self, axis: int) -> bool:
         try:
@@ -196,37 +201,37 @@ class AlpacaTelescope(AlpacaDevice):
         return mapping.get(val, f"Unknown({val})")
 
     @sk.command_handler
-    async def telescope_deinit(self, cmd: sk.Deinit):
+    async def telescope_deinit(self, cmd: Deinit):
         if not self.device_connected:
             # Init may not have run, but telescope may still be tracking from a failed run.
             # Connect so we can ensure it's parked.
             try:
-                await self.telescope_connect(sk.Connect())
+                await self.telescope_connect(Connect())
             except Exception:
                 logger.warning("Unable to connect telescope for Deinit park; skipping")
                 return
 
         self._stop_fast_status()
-        await self.telescope_stop(sk.Stop())
+        await self.telescope_stop(Stop())
 
         if self._can_set_tracking:
             await self.put(self.telescope, "Tracking", False)
             self._tracking = False
         if self._can_park:
-            await self.telescope_park(sk.MoveToPark())
+            await self.telescope_park(MoveToPark())
 
     @sk.command_handler
-    async def telescope_connect(self, cmd: sk.Connect):
+    async def telescope_connect(self, cmd: Connect):
         await self.connect(self.telescope, timeout=self.config.timeout)
         await sk.device().publish(Connected(is_connected=True))
 
     @sk.command_handler
-    async def telescope_disconnect(self, cmd: sk.Disconnect):
+    async def telescope_disconnect(self, cmd: Disconnect):
         await self.disconnect(self.telescope)
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
-    async def telescope_stop(self, cmd: sk.Stop):
+    async def telescope_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping telescope")
 
@@ -241,7 +246,7 @@ class AlpacaTelescope(AlpacaDevice):
         logger.debug("stopped telescope")
 
     @sk.command_handler
-    async def telescope_home(self, cmd: sk.Home):
+    async def telescope_home(self, cmd: Home):
         await self.require_connected()
         if not self._can_find_home:
             logger.warning("Cannot find home")
@@ -265,7 +270,7 @@ class AlpacaTelescope(AlpacaDevice):
         logger.debug("homed telescope")
 
     @sk.command_handler
-    async def telescope_park(self, cmd: sk.MoveToPark):
+    async def telescope_park(self, cmd: MoveToPark):
         await self.require_connected()
         if not self._can_park:
             logger.warning("Cannot park")
@@ -285,7 +290,7 @@ class AlpacaTelescope(AlpacaDevice):
         logger.debug("parked telescope")
 
     @sk.command_handler
-    async def telescope_set_park_position(self, cmd: sk.SetParkPosition):
+    async def telescope_set_park_position(self, cmd: SetParkPosition):
         await self.require_connected()
         if not self._can_set_park:
             logger.warning("Cannot set park")
@@ -341,7 +346,7 @@ class AlpacaTelescope(AlpacaDevice):
         return ra_hours, dec_deg, ra_rate_ascom, dec_rate_ascom
 
     @sk.command_handler
-    async def telescope_follow_target(self, cmd: sk.FollowTarget):
+    async def telescope_follow_target(self, cmd: FollowTarget):
         await self.require_connected()
 
         # target = await cmd.target.adapt(

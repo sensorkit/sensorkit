@@ -7,6 +7,7 @@ from sensorkit.alpaca.filter_wheel import (
     AlpacaFilterWheelConfig,
     AlpacaFilterWheelState,
 )
+from sensorkit.std import Connect, Disconnect
 
 
 @pytest.fixture
@@ -31,19 +32,15 @@ def filter_wheel():
 
 @pytest.mark.asyncio
 async def test_filter_wheel_connect(filter_wheel):
-    import sensorkit.api as sk
-
     filter_wheel.device_connected = False
     filter_wheel.filter_wheel._properties["Connected"] = False
-    await filter_wheel.filter_wheel_connect(sk.Connect())
+    await filter_wheel.filter_wheel_connect(Connect())
     assert filter_wheel.device_connected is True
 
 
 @pytest.mark.asyncio
 async def test_filter_wheel_disconnect(filter_wheel):
-    import sensorkit.api as sk
-
-    await filter_wheel.filter_wheel_disconnect(sk.Disconnect())
+    await filter_wheel.filter_wheel_disconnect(Disconnect())
     assert filter_wheel.device_connected is False
 
 

@@ -3,6 +3,7 @@ from conftest import MockNinaClient
 
 import sensorkit.api as sk
 from sensorkit.nina.safety_monitor import NinaSafetyMonitorConfig, NinaSafetyMonitorState
+from sensorkit.std import Connect, Disconnect
 
 
 @pytest.fixture
@@ -27,10 +28,10 @@ class TestSafetyMonitorConnect:
     @pytest.mark.asyncio
     async def test_connect(self, client, safety_monitor):
         safety_monitor.device_connected = None
-        await safety_monitor.safety_connect(sk.Connect())
+        await safety_monitor.safety_connect(Connect())
         assert safety_monitor.device_connected is True
 
     @pytest.mark.asyncio
     async def test_disconnect(self, client, safety_monitor):
-        await safety_monitor.safety_disconnect(sk.Disconnect())
+        await safety_monitor.safety_disconnect(Disconnect())
         assert safety_monitor.device_connected is False

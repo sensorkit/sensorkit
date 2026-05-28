@@ -20,12 +20,11 @@ from sensorkit.core.trait import (
     match_traits,
 )
 from sensorkit.models.devices import (
-    Connect,
-    Disconnect,
     FollowTarget,
     Init,
     Stop,
 )
+from sensorkit.std import Connect, Disconnect
 
 
 @pytest.fixture(autouse=True)

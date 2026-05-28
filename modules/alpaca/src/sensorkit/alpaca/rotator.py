@@ -13,7 +13,8 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Connected
+from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
 
 
@@ -52,7 +53,7 @@ class AlpacaRotator(AlpacaDevice):
         self.rotator_position: float | None = None
 
         # Initialize the rotator
-        await self.rotator_init(sk.Init())
+        await self.rotator_init(Init())
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -64,31 +65,31 @@ class AlpacaRotator(AlpacaDevice):
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.rotator_disconnect(sk.Disconnect())
+        await self.rotator_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def rotator_init(self, cmd: sk.Init):
+    async def rotator_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.rotator_connect(sk.Connect())
+        self._reconnect = lambda: self.rotator_connect(Connect())
         self.rotator = Rotator(self.address, self.config.device_number, self.config.protocol)
-        await self.rotator_connect(sk.Connect())
+        await self.rotator_connect(Connect())
 
         # Read capabilities
         self._can_reverse = await self.get(self.rotator, "CanReverse", False)
         self._step_size = await self.get(self.rotator, "StepSize", None)
 
     @sk.command_handler
-    async def rotator_deinit(self, cmd: sk.Deinit):
-        await self.rotator_stop(sk.Stop())
+    async def rotator_deinit(self, cmd: Deinit):
+        await self.rotator_stop(Stop())
 
     @sk.command_handler
-    async def rotator_connect(self, cmd: sk.Connect):
+    async def rotator_connect(self, cmd: Connect):
         await self.connect(self.rotator, timeout=self.config.timeout)
         await sk.device().publish(Connected(is_connected=True))
 
     @sk.command_handler
-    async def rotator_disconnect(self, cmd: sk.Disconnect):
+    async def rotator_disconnect(self, cmd: Disconnect):
         await self.disconnect(self.rotator)
         await sk.device().publish(Connected(is_connected=False))
 
@@ -111,7 +112,7 @@ class AlpacaRotator(AlpacaDevice):
         logger.debug(f"changed rotator position to {self.rotator_position:.2f}°")
 
     @sk.command_handler
-    async def rotator_stop(self, cmd: sk.Stop):
+    async def rotator_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping rotator")
         await self.call(self.rotator, "Halt")

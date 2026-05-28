@@ -13,7 +13,8 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Connected, Opened
+from sensorkit.models.devices import Deinit, Init, Opened, Stop
+from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 
 # CoverStatus enum (ICoverCalibratorV2)
@@ -83,45 +84,45 @@ class AlpacaCoverCalibrator(AlpacaDevice):
             self.state = AlpacaCoverCalibratorState()
 
         # Initialize the cover calibrator
-        await self.cover_calibrator_init(sk.Init())
+        await self.cover_calibrator_init(Init())
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
-        await self.cover_calibrator_disconnect(sk.Disconnect())
+        await self.cover_calibrator_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def cover_calibrator_init(self, cmd: sk.Init):
+    async def cover_calibrator_init(self, cmd: Init):
         # Connect to the hardware
-        self._reconnect = lambda: self.cover_calibrator_connect(sk.Connect())
+        self._reconnect = lambda: self.cover_calibrator_connect(Connect())
         self.cover_calibrator = CoverCalibrator(
             self.address, self.config.device_number, self.config.protocol
         )
-        await self.cover_calibrator_connect(sk.Connect())
+        await self.cover_calibrator_connect(Connect())
 
         # Read capabilities
         self._max_brightness = await self.get(self.cover_calibrator, "MaxBrightness", None)
 
     @sk.command_handler
-    async def cover_calibrator_deinit(self, cmd: sk.Deinit):
-        await self.cover_calibrator_stop(sk.Stop())
+    async def cover_calibrator_deinit(self, cmd: Deinit):
+        await self.cover_calibrator_stop(Stop())
         await self.cover_calibrator_close(CloseMirrorCover())
 
     @sk.command_handler
-    async def cover_calibrator_connect(self, cmd: sk.Connect):
+    async def cover_calibrator_connect(self, cmd: Connect):
         await self.connect(self.cover_calibrator, timeout=self.config.timeout)
         await sk.device().publish(Connected(is_connected=True))
 
     @sk.command_handler
-    async def cover_calibrator_disconnect(self, cmd: sk.Disconnect):
+    async def cover_calibrator_disconnect(self, cmd: Disconnect):
         await self.disconnect(self.cover_calibrator)
         await sk.device().publish(Connected(is_connected=False))
 
     @sk.command_handler
-    async def cover_calibrator_stop(self, cmd: sk.Stop):
+    async def cover_calibrator_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping cover calibrator")
         await self.call(self.cover_calibrator, "HaltCover")
