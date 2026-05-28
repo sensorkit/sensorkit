@@ -140,8 +140,7 @@ async def test_data_graph_cycle():
     )
 
     with pytest.raises(DataGraphCycleError):
-        async with asyncio.timeout(1):
-            graph.start()
+        graph.start()
 
 
 @pytest.mark.asyncio
@@ -150,8 +149,7 @@ async def test_data_graph_sources():
     graph = DataGraph(nodes={})
 
     with pytest.raises(DataGraphSourceError):
-        async with asyncio.timeout(1):
-            graph.start()
+        graph.start()
 
     # Multiple sources.
     graph = DataGraph(
@@ -162,8 +160,7 @@ async def test_data_graph_sources():
     )
 
     with pytest.raises(DataGraphSourceError):
-        async with asyncio.timeout(1):
-            graph.start()
+        graph.start()
 
 
 @pytest.mark.asyncio
