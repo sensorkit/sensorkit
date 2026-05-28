@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -198,8 +199,6 @@ class SummaryAccumulator:
                     except Exception as e:
                         logger.debug(f"Error parsing task event: {e}")
 
-            except asyncio.CancelledError:
-                raise
             except Exception as e:
                 logger.warning(f"Error in summary task watcher: {e}")
                 await asyncio.sleep(5)
@@ -232,8 +231,6 @@ class SummaryAccumulator:
                     except Exception as e:
                         logger.debug(f"Error parsing health event: {e}")
 
-            except asyncio.CancelledError:
-                raise
             except Exception as e:
                 logger.warning(f"Error in summary health watcher: {e}")
                 await asyncio.sleep(5)
@@ -269,8 +266,6 @@ class SummaryAccumulator:
                     except Exception as e:
                         logger.debug(f"Error parsing safety event: {e}")
 
-            except asyncio.CancelledError:
-                raise
             except Exception as e:
                 logger.warning(f"Error in summary safety watcher: {e}")
                 await asyncio.sleep(5)
@@ -280,8 +275,8 @@ class SummaryAccumulator:
 
         for task in self._tasks:
             task.cancel()
-            try:
+
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
+
         self._tasks.clear()

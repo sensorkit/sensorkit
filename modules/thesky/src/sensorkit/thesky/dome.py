@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Literal, override
 
 from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from sensorkit.astro.common import AltAzPointing
 from sensorkit.models.devices import Deinit, Home, Init, MoveToPark, Opened, Stop
 from sensorkit.std import Connect, Connected, Disconnect
-from sensorkit.astro.common import AltAzPointing
 from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
 from sensorkit.thesky.device import (
     CommandFailedError,
@@ -79,10 +80,9 @@ class TheSkyDome(TheSkyDevice):
 
         if self._home_task is not None:
             self._home_task.cancel()
-            try:
+
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._home_task
-            except asyncio.CancelledError:
-                pass
 
         await self.dome_close(CloseEnclosure())
         await self.dome_park(MoveToPark())

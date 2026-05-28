@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import os
@@ -185,10 +186,9 @@ class UDLProgram:
         for task in [self._poller, self._publisher]:
             if task and not task.done():
                 task.cancel()
-                try:
+
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
         await self._save_state()
 
@@ -203,8 +203,6 @@ class UDLProgram:
         while True:
             try:
                 await self._poll_collect_requests()
-            except asyncio.CancelledError:
-                raise
             except Exception as e:
                 logger.exception(f"Error in poll loop: {e}")
 
@@ -293,8 +291,6 @@ class UDLProgram:
         async for context, data in sink.consume():
             try:
                 await self._publish_imagery(context, data)
-            except asyncio.CancelledError:
-                raise
             except Exception as e:
                 logger.warning(f"Error in publish loop: {e}")
 

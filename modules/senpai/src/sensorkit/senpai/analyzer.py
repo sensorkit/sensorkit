@@ -69,11 +69,7 @@ class SenpaiAnalyzer:
 
                     # Publish results back to SensorKit
                     await self._entity.publish(result)
-                except asyncio.CancelledError:
-                    raise
                 except Exception:
                     logger.exception("Frame processing error")
-        except asyncio.CancelledError:
-            raise
         except Exception:
             logger.exception("DataGraph consumer failed")

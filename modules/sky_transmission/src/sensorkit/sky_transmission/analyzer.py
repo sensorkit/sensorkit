@@ -94,8 +94,6 @@ class SkyTransmissionAnalyzer:
                     pointing.azimuth_degrees,
                     pointing.altitude_degrees,
                 )
-        except asyncio.CancelledError:
-            raise
         except Exception:
             logger.warning(f"pointing monitor failed for {mount}")
 
@@ -131,8 +129,6 @@ class SkyTransmissionAnalyzer:
                     continue
                 try:
                     await self._process_frame(image_path=str(path))
-                except asyncio.CancelledError:
-                    raise
                 except Exception:
                     logger.exception(f"frame processing error for {path}")
         finally:
@@ -203,8 +199,6 @@ class SkyTransmissionAnalyzer:
                     if sleep_time > 0:
                         await asyncio.sleep(sleep_time)
 
-            except asyncio.CancelledError:
-                raise
             except Exception:
                 logger.warning(
                     f"Alpaca acquisition error; retrying in {backoff:.0f}s"

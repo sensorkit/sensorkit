@@ -218,8 +218,6 @@ class SlackNotifier:
                     )
                     await self._route_message(severity, blocks, fallback)
 
-            except asyncio.CancelledError:
-                raise
             except Exception as e:
                 logger.warning(f"Error in dedup flush: {e}")
 
@@ -259,8 +257,6 @@ class SlackNotifier:
                 else:
                     await self._watch_events_all(rule)
                 return
-            except asyncio.CancelledError:
-                raise
             except Exception as e:
                 logger.warning(f"Error in event watcher for rule '{rule.name}': {e}")
                 await asyncio.sleep(5)
@@ -321,8 +317,6 @@ class SlackNotifier:
                 else:
                     await self._watch_state_all(rule)
                 return
-            except asyncio.CancelledError:
-                raise
             except Exception as e:
                 logger.warning(f"Error in state watcher for rule '{rule.name}': {e}")
                 await asyncio.sleep(5)

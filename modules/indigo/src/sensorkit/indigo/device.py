@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal
@@ -120,10 +121,10 @@ class IndigoClient:
         self._connected = False
         if self._recv_task is not None:
             self._recv_task.cancel()
-            try:
+
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._recv_task
-            except asyncio.CancelledError:
-                pass
+
             self._recv_task = None
 
         if self._ws is not None:
@@ -197,8 +198,6 @@ class IndigoClient:
                 except json.JSONDecodeError:
                     continue
                 await self._handle_message(msg)
-        except asyncio.CancelledError:
-            raise
         except websockets.exceptions.ConnectionClosed:
             logger.warning("INDIGO WebSocket connection closed by server")
             self._connected = False

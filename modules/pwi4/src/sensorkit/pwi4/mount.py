@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Literal, override
 
 from astropy import units as u
@@ -239,10 +240,9 @@ class PWI4Mount(PWI4Device):
 
         if self._wrap_task is not None:
             self._wrap_task.cancel()
-            try:
+
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._wrap_task
-            except asyncio.CancelledError:
-                pass
 
         await self.mount_park(MoveToPark())
         await asyncio.gather(

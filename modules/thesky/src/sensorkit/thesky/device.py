@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import ClassVar, Literal
@@ -119,10 +120,10 @@ class TheSkyDevice:
 
         if self._status_task is not None:
             self._status_task.cancel()
-            try:
+
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._status_task
-            except asyncio.CancelledError:
-                pass
+
             self._status_task = None
 
     async def poll(self, script: str, expected: str, delay: float = 0.1, interval: float = 1.0):

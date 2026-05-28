@@ -295,8 +295,6 @@ class FileAsyncWriter:
                 # Set the drained signal as appropriate.
                 if self._queue.empty():
                     self._drained.set()
-        except asyncio.CancelledError:
-            pass
         except Exception:
             logger.exception("error writing to file")
         finally:
