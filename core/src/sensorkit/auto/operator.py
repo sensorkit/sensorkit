@@ -42,7 +42,18 @@ class ControllerConfig(BaseModel):
     @property
     def name(self):
         """The name of this controller, set by the parent ControllerConfigMap validator."""
+        if self._name is None:
+            raise RuntimeError("name not set")
+
         return self._name
+
+    @name.setter
+    def name(self, value: str):
+        """Set the name of this controller."""
+        if self._name is not None:
+            raise RuntimeError("name already set")
+
+        self._name = value
 
     def mode(self, name: str):
         """Return the Mode configuration with the given name."""

@@ -56,7 +56,7 @@ class ControllerOverrideState(BaseModel):
 
 def _set_controller_config_names(configs: dict[str, ControllerConfig]):
     for name, config in configs.items():
-        config._name = name
+        config.name = name
 
     return configs
 
