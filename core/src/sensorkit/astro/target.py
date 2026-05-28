@@ -5,10 +5,11 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, Literal, override
+from typing import TYPE_CHECKING, Annotated, Any, Literal, override
 
 import astropy.units as u
 import numpy as np
+import satkit
 from astropy.coordinates import (
     CIRS,
     ICRS,
@@ -23,21 +24,21 @@ from astropy.coordinates import AltAz as AltAzFrame
 from astropy.time import Time
 from loguru import logger
 from pydantic import BaseModel, Discriminator, TypeAdapter
-import satkit
 
-from sensorkit.astro.common import (
-    TLE,
+from sensorkit.astro.common import TLE, ReferenceFrame
+from sensorkit.astro.coords import (
     Cartesian,
     Coordinates,
     Equatorial,
     Geodetic,
     Horizontal,
-    ReferenceFrame,
     StateVector,
 )
-from sensorkit.astro.observer import EarthObserver
 from sensorkit.astro.trajectory import OrbitalTrajectory, TLETrajectory, Trajectory
-from sensorkit.std.weather import BasicWeather
+
+if TYPE_CHECKING:
+    from sensorkit.astro.observer import EarthObserver
+    from sensorkit.std.weather import BasicWeather
 
 
 class BaseTarget(BaseModel, ABC):
