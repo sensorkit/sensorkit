@@ -148,10 +148,6 @@ class WebAPI:
                         break
                     yield ServerSentEvent(data=upd)
                     queue.task_done()
-            except asyncio.CancelledError:
-                # Client disconnected while streaming; log and swallow to avoid noisy traces
-                host = request.client.host if request.client else "unknown"
-                logger.debug(f"SSE client disconnected: {host}")
             finally:
                 self.client_queues.remove(queue)
 
