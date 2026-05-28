@@ -2,6 +2,7 @@ import asyncio
 import pathlib
 import tempfile
 
+import aiofile
 import pytest
 from loguru import logger
 
@@ -90,10 +91,10 @@ async def test_write_file_no_outgoing():
 
         # Verify the file was created with the correct content
         file_path = pathlib.Path(temp_dir) / "test_file_no_outgoing.txt"
-        assert file_path.exists()
+        assert await asyncio.to_thread(file_path.exists)
 
-        with open(file_path, "rb") as f:
-            content = f.read()
+        async with aiofile.async_open(file_path, "rb") as f:
+            content = await f.read()
             assert content == test_data
 
 
@@ -118,10 +119,10 @@ async def test_write_file_dynamic_directory():
 
         # Verify the subdirectory was created and file written there.
         expected = pathlib.Path(temp_dir) / "survey_north" / "image.fits"
-        assert expected.exists()
+        assert await asyncio.to_thread(expected.exists)
 
-        with open(expected, "rb") as f:
-            assert f.read() == test_data
+        async with aiofile.async_open(expected, "rb") as f:
+            assert await f.read() == test_data
 
         assert context["file_path"] == expected
 
@@ -136,8 +137,8 @@ async def test_read_file():
         file_path = pathlib.Path(temp_dir) / file_name
 
         # Write test data to the file
-        with open(file_path, "wb") as f:
-            f.write(test_data)
+        async with aiofile.async_open(file_path, "wb") as f:
+            await f.write(test_data)
 
         # Create a ReadFile node
         read_file = ReadFile(wait_for_file=False)
@@ -227,8 +228,8 @@ async def test_read_file_wait_exists():
         # Create the file after a short delay
         async def create_delayed_file():
             await asyncio.sleep(0.5)  # Short delay
-            with open(file_path, "wb") as f:
-                f.write(test_data)
+            async with aiofile.async_open(file_path, "wb") as f:
+                await f.write(test_data)
 
         create_file_task = asyncio.create_task(create_delayed_file())
 
@@ -254,8 +255,8 @@ async def test_watch_directory():
 
         await asyncio.sleep(0.5)
 
-        with open(test_file, "wb") as f:
-            f.write(test_data)
+        async with aiofile.async_open(test_file, "wb") as f:
+            await f.write(test_data)
 
         async with asyncio.timeout(1.0):
             async for context, data in sink.consume():

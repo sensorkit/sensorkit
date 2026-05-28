@@ -41,7 +41,7 @@ class WatchDirectory(SourceOp):
 
     async def graph_source(self) -> AsyncGenerator[None, DataFlow]:
         logger.debug(f"starting WatchDirectory source at {self.directory}")
-        pathlib.Path(self.directory).mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(pathlib.Path(self.directory).mkdir, parents=True, exist_ok=True)
         queue: asyncio.Queue[pathlib.Path] = asyncio.Queue()
         handler = FileAppearedHandler(queue)
         observer = Observer()
@@ -91,7 +91,7 @@ class WriteFile(DataOp):
 
         # Resolve the output directory against context values (e.g. "{program_name}").
         directory = pathlib.Path(_resolve_template(self.directory, context))
-        directory.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
         file_name = _resolve_template(context["file_name"], context)
         context["file_path"] = directory / file_name
 
@@ -198,7 +198,7 @@ class FileAppearedHandler(FileSystemEventHandler):
 
 async def wait_file_exists(path: pathlib.Path):
     """Suspend until the given path exists, using a filesystem watcher to avoid polling."""
-    if not os.path.exists(path):
+    if not await asyncio.to_thread(os.path.exists, path):
         logger.debug(f"waiting for {path} to exist...")
         queue = asyncio.Queue()
         handler = FileAppearedHandler(queue, match_suffix=path.name)
@@ -207,7 +207,7 @@ async def wait_file_exists(path: pathlib.Path):
         observer.start()
 
         try:
-            if not os.path.exists(path):
+            if not await asyncio.to_thread(os.path.exists, path):
                 await queue.get()
                 queue.task_done()
         finally:

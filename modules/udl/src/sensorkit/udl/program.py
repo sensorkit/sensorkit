@@ -377,7 +377,8 @@ class UDLProgram:
 
         # Save locally if configured
         if self.config.skyimagery_save_path:
-            await self._save_archive_locally(
+            await asyncio.to_thread(
+                self._save_archive_locally_sync,
                 request.id,
                 filename,
                 data,
@@ -401,7 +402,7 @@ class UDLProgram:
         except Exception as e:
             logger.warning(f"Task ({request.id}) failed to upload skyimagery: {e}")
 
-    async def _save_archive_locally(
+    def _save_archive_locally_sync(
         self,
         task_id: str,
         data_fname: str,

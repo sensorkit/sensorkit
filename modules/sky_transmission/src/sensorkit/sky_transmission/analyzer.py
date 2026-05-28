@@ -108,7 +108,7 @@ class SkyTransmissionAnalyzer:
             else [acquisition.watch_pattern]
         )
 
-        watch_path.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(watch_path.mkdir, parents=True, exist_ok=True)
 
         queue: asyncio.Queue[pathlib.Path] = asyncio.Queue()
         handler = _FileHandler(queue, asyncio.get_running_loop())
@@ -313,9 +313,9 @@ class SkyTransmissionAnalyzer:
                 self.config.output.movie_lookback_hours,
             )
 
-        await self._prune_old_frames()
+        await asyncio.to_thread(self._prune_old_frames_sync)
 
-    async def _prune_old_frames(self):
+    def _prune_old_frames_sync(self):
         cutoff = time.time() - self.config.output.retention_hours * 3600
 
         out_dir = pathlib.Path(self.config.output.directory)

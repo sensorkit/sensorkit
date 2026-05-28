@@ -2,6 +2,7 @@ import asyncio
 import pathlib
 import textwrap
 
+import aiofile
 import asyncclick as click
 import yaml
 from loguru import logger
@@ -36,7 +37,7 @@ class ServiceConfig(BaseModel):
     services: list[ServiceDefinition] = Field(default_factory=list)
 
     @classmethod
-    def from_yaml_file(cls, config_file: pathlib.Path):
+    async def from_yaml_file(cls, config_file: pathlib.Path):
         """Load service configuration from a YAML file.
 
         Args:
@@ -51,17 +52,17 @@ class ServiceConfig(BaseModel):
             OSError: If the config file cannot be read.
         """
         try:
-            with config_file.open("r") as f:
-                return cls.model_validate(yaml.safe_load(f))
+            async with aiofile.async_open(config_file, "r") as f:
+                return cls.model_validate(yaml.safe_load(await f.read()))
         except FileNotFoundError:
             return None
 
 
-def load_unified_config(config_file: pathlib.Path):
+async def load_unified_config(config_file: pathlib.Path):
     """Load service configuration from a YAML file."""
     try:
-        with config_file.open("r") as f:
-            parsed = parse_config(yaml.safe_load(f))
+        async with aiofile.async_open(config_file, "r") as f:
+            parsed = parse_config(yaml.safe_load(await f.read()))
             config = ServiceConfig()
 
             for svc in parsed.services:
@@ -83,7 +84,7 @@ async def read_config_file(config_file: str | None):
 
     try:
         file = config_file or DEFAULT_CONFIG_FILE
-        config = ServiceConfig.from_yaml_file(pathlib.Path(file))
+        config = await ServiceConfig.from_yaml_file(pathlib.Path(file))
     except Exception as e:
         errs.append(e)
 
@@ -93,7 +94,7 @@ async def read_config_file(config_file: str | None):
         try:
             # Try the unified config format.
             sk.import_plugins()
-            config = load_unified_config(pathlib.Path(file))
+            config = await load_unified_config(pathlib.Path(file))
             is_unified = True
         except Exception as e:
             errs.append(e)

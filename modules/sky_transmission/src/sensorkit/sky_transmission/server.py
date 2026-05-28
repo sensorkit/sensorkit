@@ -25,7 +25,7 @@ async def start_image_server(host: str, port: int, state: FrameState):
     @app.get("/latest.mp4")
     async def latest_mp4():
         mp4_path = pathlib.Path(state.output_dir) / "latest.mp4"
-        if not mp4_path.exists():
+        if not await asyncio.to_thread(mp4_path.exists):
             return Response(status_code=204)
         return FileResponse(str(mp4_path), media_type="video/mp4")
 

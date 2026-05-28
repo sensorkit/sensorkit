@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+import aiofile
 import asyncclick as click
 import yaml
 from pydantic import BaseModel, ValidationError
@@ -87,8 +88,8 @@ def print_ekv(
 async def config_load(kit, *, file: str, force: bool, dry_run: bool, verbose: int):
     """Load a SensorKit unified configuration file."""
     try:
-        with open(file) as f:
-            raw = yaml.safe_load(f)
+        async with aiofile.async_open(file) as f:
+            raw = yaml.safe_load(await f.read())
     except FileNotFoundError:
         console.print(f"[bold red]ERROR: file not found: {file}[/bold red]")
         return

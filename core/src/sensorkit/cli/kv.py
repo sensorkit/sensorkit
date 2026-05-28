@@ -1,7 +1,10 @@
 import glob
+import io
 import json
 import sys
 from typing import Any, TextIO
+
+import aiofile
 
 import asyncclick as click
 from pydantic import BaseModel, ValidationError
@@ -214,9 +217,9 @@ async def load_kv_command(kit, entity: str | None, no_clobber: bool, files: tupl
         configurations = []
         for path in expand_files(files):
             try:
-                with open(path, "r") as f:
+                async with aiofile.async_open(path, "r") as f:
                     configurations.extend(
-                        load_kv_records(f)
+                        load_kv_records(io.StringIO(await f.read()))
                     )
             except FileNotFoundError:
                 console.print(f"[bold red]ERROR: file not found {path}[/bold red]")
