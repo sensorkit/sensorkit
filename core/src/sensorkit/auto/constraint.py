@@ -226,14 +226,40 @@ class ConstraintManager:
     def is_constrained(self) -> bool:
         return len(self._constrained_set) > 0
 
-    async def start(self, *, task_group: asyncio.TaskGroup, **kwargs) -> None:
+    async def start(
+        self,
+        *,
+        task_group: asyncio.TaskGroup,
+        ready_timeout: float | None = None,
+        **kwargs,
+    ) -> bool:
+        """Start all constraint monitoring tasks.
+
+        Creates supervisor tasks for each constraint that will monitor and update
+        their states continuously. Waits for all constraints to become ready or
+        until the ready_timeout expires.
+
+        Args:
+            task_group: The asyncio.TaskGroup to create constraint supervisor tasks in.
+            ready_timeout: Maximum time in seconds to wait for all constraints to become ready.
+                          If None, waits indefinitely.
+            **kwargs: Additional keyword arguments passed to each constraint's check_task method.
+
+        Returns:
+            bool: True if all constraints became ready within the timeout, False if one or more
+                  constraints remain unready.
+        """
         logger.debug(f"ConstraintManager starting with {len(self._constraints)} constraints")
 
         # Start a supervisor task to manage each constraint's evaluation loop.
         for i, constraint in enumerate(self._constraints):
             task_group.create_task(self._constraint_supervisor(i, constraint, **kwargs))
 
-        await self._ready_event.wait()
+        try:
+            async with asyncio.timeout(ready_timeout):
+                await self._ready_event.wait()
+        except asyncio.TimeoutError:
+            return False
 
     def _set_state(self, idx: int, state: ConstraintState):
         self._entries[idx] = state

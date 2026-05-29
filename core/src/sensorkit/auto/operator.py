@@ -115,7 +115,7 @@ class ControllerDriver:
         self.lifecycle.start(controller, task_group=task_group)
 
         # Start checking the configured constraints.
-        await self.constraints.start(task_group=task_group, kit=kit)
+        await self.constraints.start(task_group=task_group, ready_timeout=10.0, kit=kit)
 
         # Start monitoring associated Programs for offers.
         await self.controller_offers.start(task_group=task_group)
