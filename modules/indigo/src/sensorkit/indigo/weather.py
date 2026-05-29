@@ -118,10 +118,6 @@ class IndigoWeather(IndigoDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        # Deinitialize the weather
-        await self.weather_deinit(Deinit())
-
-        # Clean up, disconnect
         await self.disconnect_from_server()
         await sk.device().publish(Connected(is_connected=False))
         await sk.device().kv_put_model(self.state)
