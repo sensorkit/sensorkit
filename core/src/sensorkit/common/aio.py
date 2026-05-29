@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import weakref
 from collections.abc import AsyncGenerator, Awaitable
-from typing import AsyncContextManager, ClassVar
+from typing import AsyncContextManager, ClassVar, overload
 
 
 def scoped_waiter[T](aw: Awaitable[T]) -> AsyncContextManager[asyncio.Future[T]]:
@@ -29,21 +29,22 @@ def scoped_waiter[T](aw: Awaitable[T]) -> AsyncContextManager[asyncio.Future[T]]
     return _scoped_waiter(aw)
 
 
-def cleanup_future(fut: asyncio.Future | asyncio.Task):
-    """Safely clean up a completed future by checking for cancellation or exception.
+@overload
+def cleanup_future(fut: asyncio.Task): ...
 
-    This function is intended to be called on futures that have already completed.
-    If the future was cancelled, this function returns immediately without further
-    action. Any exceptions raised during cleanup are silently suppressed.
+@overload
+def cleanup_future(fut: asyncio.Future): ...
+
+def cleanup_future(fut: asyncio.Future | asyncio.Task):
+    """Safely clean up a Future or an already-completed Task.
 
     Args:
         fut: The asyncio.Future to clean up.
     """
-    if not fut.cancelled():
-        try:
-            fut.exception()
-        except BaseException:
-            pass
+    if not fut.done():
+        fut.cancel()
+    elif not fut.cancelled():
+        fut.exception()
 
 
 @contextlib.asynccontextmanager
