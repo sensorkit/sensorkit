@@ -38,21 +38,6 @@ class ServiceEntrypoint:
         task = asyncio.create_task(self._func(service))
 
         try:
-            # Make sure the entrypoint function is proper and actually starts the service.
-            await asyncio.wait(
-                [service.started, task],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            if not service.started.done():
-                if e := task.exception():
-                    logger.debug(f"Service '{name}' failed to start: {type(e).__name__}: {e}")
-                    raise e
-                else:
-                    raise RuntimeError(f"Entrypoint '{self._func.__name__}' did not start the service!")
-
-            await service.started
-
             # Wait for the service to start up or for the task to fail.
             await asyncio.wait(
                 [service.running, task],
@@ -60,8 +45,13 @@ class ServiceEntrypoint:
             )
 
             if not service.running.done():
-                raise task.exception() or RuntimeError("Task ended before service inited")
+                if e := task.exception():
+                    logger.debug(f"Service '{name}' failed to start: {type(e).__name__}: {e}")
+                    raise e
+                else:
+                    raise RuntimeError(f"Entrypoint '{self._func.__name__}' did not start the service!")
 
+            # If the service raised, propagate the exception.
             await service.running
 
             return service, task

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import functools
 import inspect
 import warnings
@@ -388,9 +387,8 @@ class Service:
         self._delegate_entity: DeclaredEntity | None = None
         self._register_lock = asyncio.Lock()
         self._deinit_tasks: tuple[asyncio.Task, ...] = ()
-
+        self._started = False
         loop = asyncio.get_running_loop()
-        self.started = loop.create_future()
         self.running = loop.create_future()
         self.shutdown = loop.create_future()
 
@@ -523,15 +521,10 @@ class Service:
 
     async def start(self):
         """Start the service."""
-        try:
-            if self.started.done():
-                raise RuntimeError("Service was already started")
+        if self._started:
+            raise RuntimeError("Service was already started")
 
-            self.started.set_result(True)
-        except BaseException as e:
-            self.started.set_exception(e)
-            self.shutdown.set_exception(e)
-            raise
+        self._started = True
 
         try:
             # Register as a service.
