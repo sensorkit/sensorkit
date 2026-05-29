@@ -217,22 +217,34 @@ class DeclaredEntity[T: EntityImpl = EntityImpl](EntityDelegate):
         await self.post_decl_init()
 
         async def run_deinit_callbacks():
-            # Wait for the service task to end. We defer propagation of any exceptions until after
-            # our deinit callbacks have been run.
-            with contextlib.suppress(BaseException):
+            try:
+                # Wait for the service task to end.
                 await self.service.join()
+            except asyncio.CancelledError:
+                # Propagate only direct cancellation.
+                if asyncio.current_task().cancelling():
+                    raise
+            except Exception:
+                # Defer propagation of exceptions until after our deinit callbacks have been run.
+                pass
 
-                # Run deinit callbacks.
-                with self.impl.enter_context():
-                    for deinit_callback in self._deinit_callbacks:
-                        try:
-                            aw = deinit_callback()
+            # Run deinit callbacks.
+            with self.impl.enter_context():
+                for deinit_callback in self._deinit_callbacks:
+                    try:
+                        aw = deinit_callback()
 
-                            if asyncio.iscoroutine(aw):
-                                await aw
-                        except Exception as e:
-                            logger.warning(f"Error cleaning up {self.name} ({type(e).__name__})")
-                            logger.opt(exception=e).debug("deinit callback raised")
+                        if asyncio.iscoroutine(aw):
+                            await aw
+                    except asyncio.CancelledError:
+                        # Propagate only direct cancellation.
+                        if asyncio.current_task().cancelling():
+                            raise
+
+                        logger.warning(f"Cancelled during cleanup of {self.name}")
+                    except Exception as e:
+                        logger.warning(f"Error cleaning up {self.name} ({type(e).__name__})")
+                        logger.opt(exception=e).debug("deinit callback raised")
 
             # Propagate exception, if any.
             await self.service.join()
