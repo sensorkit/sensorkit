@@ -11,7 +11,7 @@ from typing import Any
 from loguru import logger
 
 from sensorkit.api.declarative import Service
-from sensorkit.common.aio import scoped_waiter
+from sensorkit.common.aio import cleanup_future, scoped_waiter
 from sensorkit.common.importutil import obj_from_spec
 
 type ServiceEntrypointFunc = Callable[[Service], Coroutine[Any, Any, None]]
@@ -60,8 +60,13 @@ class ServiceEntrypoint:
 
             try:
                 await task
+            except asyncio.CancelledError:
+                pass
             except Exception as e:
                 logger.opt(exception=e).debug("exception during service shutdown")
+
+            for fut in (service.running, service.shutdown):
+                cleanup_future(fut)
 
             raise
 
