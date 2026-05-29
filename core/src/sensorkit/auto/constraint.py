@@ -157,7 +157,7 @@ class ConstraintEvaluator:
         """
         self._timeout.reschedule(asyncio.get_event_loop().time() + self.constraint.ttl)
 
-        if self.constraint.hold > 0 and self._active.is_set():
+        if self.constraint.hold > 0 and self._active.is_set() and self._ready.is_set():
             self._begin_hold(reason, details)
             return False
 
@@ -184,15 +184,14 @@ class ConstraintEvaluator:
         return changed
 
     async def _hold_and_clear(self, reason: str, details: ConstraintDetails | None):
+        logger.debug(f"holding {self.constraint.kind} constraint for {self.constraint.hold}s")
         await asyncio.sleep(self.constraint.hold)
-        logger.debug(f"hold expired for {self.constraint.kind} constraint")
+        logger.debug(f"clearing {self.constraint.kind} constraint after hold")
         self._clear(reason, details)
 
     def _begin_hold(self, reason: str, details: ConstraintDetails | None):
-        if self._hold_task is not None and not self._hold_task.done():
-            self._hold_task.cancel()
-
-        self._hold_task = asyncio.create_task(self._hold_and_clear(reason, details))
+        if self._hold_task is None or self._hold_task.done():
+            self._hold_task = asyncio.create_task(self._hold_and_clear(reason, details))
 
     def _cancel_hold(self) -> asyncio.Task | None:
         if self._hold_task is not None and not self._hold_task.done():
@@ -272,7 +271,7 @@ class ConstraintManager:
             ConstraintState(
                 kind=constraint.kind,
                 active=True,
-                reason="Constraint awaiting initial state",
+                reason="awaiting initial state",
                 ready=False,
             ),
         )
@@ -294,7 +293,7 @@ class ConstraintManager:
                     ConstraintState(
                         kind=constraint.kind,
                         active=True,
-                        reason="Constraint evaluation error",
+                        reason="evaluation error",
                         ready=False,
                     ),
                 )
