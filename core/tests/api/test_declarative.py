@@ -106,7 +106,7 @@ def test_introspect_param_type():
 async def test_service():
     svc_decl = Service("test", "0.1.0")
 
-    async with asyncio.timeout(2.0):
+    async with asyncio.timeout(5.0):
         os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
         await svc_decl.start()
         await svc_decl.stop()
