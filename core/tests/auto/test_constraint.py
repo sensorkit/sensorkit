@@ -68,6 +68,9 @@ async def test_evaluator_hold_defers_clear(ev_timeout):
 
     assert ev.is_active
 
+    # hold only triggers once ready
+    ev.ready()
+
     # clear() returns False (deferred) and does not immediately change state
     changed = ev.clear("conditions improved")
     assert changed is False
@@ -87,6 +90,9 @@ async def test_evaluator_hold_cancelled_on_constrain(ev_timeout):
     ev = ConstraintEvaluator(c, timeout=ev_timeout)
 
     assert ev.is_active
+
+    # hold only triggers once ready
+    ev.ready()
 
     # Begin a hold
     ev.clear("brief improvement")
