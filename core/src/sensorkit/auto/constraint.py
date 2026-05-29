@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal, override
 
 from loguru import logger
 from pydantic import model_validator
 
+from sensorkit.common.aio import cleanup_future
 from sensorkit.common.condition import AnyCondition, resolve_field
 from sensorkit.common.model import ModelRegistry, RegistryBaseModel
 from sensorkit.core.client import SensorKit
@@ -25,6 +26,7 @@ class Constraint(RegistryBaseModel, ABC):
     kind: str
     ttl: float = 30.0
     hold: float = 0.0
+    optional: bool = False
 
     @classmethod
     def model_registry(cls):
@@ -37,9 +39,13 @@ class Constraint(RegistryBaseModel, ABC):
 
     @model_validator(mode="before")
     @classmethod
-    def _hold_compat(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "hold_duration" in data:
-            data["hold"] = data.pop("hold_duration")
+    def _compat(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "hold_duration" in data:
+                data["hold"] = data.pop("hold_duration")
+            if "activate_on_timeout" in data:
+                data["optional"] = not data.pop("activate_on_timeout")
+
         return data
 
 
@@ -58,10 +64,9 @@ class ConstraintState:
     """Per-constraint state."""
 
     kind: str
-    active: bool = True
+    state: Literal["not_ready", "clear", "holding", "active"] = "not_ready"
     reason: str = ""
     details: ConstraintDetails | None = None
-    ready: bool = False
 
 
 class ConstraintEvaluator:
@@ -72,35 +77,37 @@ class ConstraintEvaluator:
     def __init__(self, constraint: Constraint, *, timeout: asyncio.Timeout):
         self.constraint = constraint
         self._timeout = timeout
-        self._active = asyncio.Event()
         self._ready = asyncio.Event()
-        self._queue: asyncio.Queue[ConstraintState] = asyncio.Queue(maxsize=self._QUEUE_MAXSIZE)
         self._hold_task: asyncio.Task | None = None
 
-        # Constraint starts active. The implementation must call `clear()` prior to `ready()` if
-        # the constraint is initially inactive.
-        self._active.set()
+        if self.constraint.optional:
+            self.intended_state = ConstraintState(
+                kind=constraint.kind, state="clear", reason="optional constraint"
+            )
+            self._ready.set()
+        else:
+            self.intended_state = ConstraintState(
+                kind=constraint.kind, state="not_ready", reason="awaiting data"
+            )
+
+        self.actual_state = self.intended_state
+        self._state_updated = asyncio.Event()
 
     @property
     def is_active(self) -> bool:
-        return self._active.is_set()
+        return self.actual_state.state != "clear"
 
     @property
     def is_ready(self) -> bool:
         return self._ready.is_set()
 
-    async def wait_ready(self) -> None:
+    async def wait_ready(self):
         await self._ready.wait()
 
     async def next_update(self) -> ConstraintState:
-        state = await self._queue.get()
-
-        while not self._queue.empty():
-            state = self._queue.get_nowait()
-
-        if state.active != self._active.is_set():
-            raise RuntimeError(f"Constraint {self.constraint.kind} state mismatch")
-
+        await self._state_updated.wait()
+        state = self.actual_state
+        self._state_updated.clear()
         return state
 
     def ready(self):
@@ -108,18 +115,10 @@ class ConstraintEvaluator:
         self._timeout.reschedule(asyncio.get_event_loop().time() + self.constraint.ttl)
 
         if not self._ready.is_set():
-            self._queue.put_nowait(
-                ConstraintState(
-                    kind=self.constraint.kind,
-                    active=self._active.is_set(),
-                    reason="Constraint ready",
-                    details=None,
-                    ready=True,
-                )
-            )
             self._ready.set()
+            self._update_state()
 
-    def constrain(self, reason: str, *, details: ConstraintDetails | None = None) -> bool:
+    def constrain(self, reason: str, *, details: ConstraintDetails | None = None):
         """Set constraint active.
 
         Returns:
@@ -128,78 +127,68 @@ class ConstraintEvaluator:
         Raises:
             QueueFull: if the status queue is full
         """
-        changed = not self._active.is_set()
-
         self._timeout.reschedule(asyncio.get_event_loop().time() + self.constraint.ttl)
         self._cancel_hold()
-        self._active.set()
-        self._queue.put_nowait(
-            ConstraintState(
-                kind=self.constraint.kind,
-                active=True,
-                reason=reason,
-                details=details,
-                ready=self._ready.is_set(),
-            )
+        self.intended_state = ConstraintState(
+            kind=self.constraint.kind,
+            state="active",
+            reason=reason,
+            details=details,
         )
+        self._update_state()
 
-        return changed
-
-    def clear(self, reason: str = "", *, details: ConstraintDetails | None = None) -> bool:
+    def clear(self, reason: str = "", *, details: ConstraintDetails | None = None):
         """Set constraint inactive. If hold_duration > 0, defers the clear until the hold expires.
-
-        Returns:
-            bool: True if state changed immediately (active → clear). False if deferred via hold
-            or already inactive.
 
         Raises:
             QueueFull: if the status queue is full
         """
         self._timeout.reschedule(asyncio.get_event_loop().time() + self.constraint.ttl)
 
-        if self.constraint.hold > 0 and self._active.is_set() and self._ready.is_set():
-            self._begin_hold(reason, details)
-            return False
+        if self.constraint.hold > 0 and self.intended_state.state == "active":
+            self._begin_hold()
 
-        return self._clear(reason, details)
-
-    async def cancel(self):
-        """Cancel any pending hold."""
-        if t := self._cancel_hold():
-            with contextlib.suppress(asyncio.CancelledError):
-                await t
-
-    def _clear(self, reason: str = "", details: ConstraintDetails | None = None) -> bool:
-        changed = self._active.is_set()
-        self._queue.put_nowait(
-            ConstraintState(
-                kind=self.constraint.kind,
-                active=False,
-                reason=reason,
-                details=details,
-                ready=self._ready.is_set(),
-            )
+        self.intended_state = ConstraintState(
+            kind=self.constraint.kind,
+            state="clear",
+            reason=reason,
+            details=details,
         )
-        self._active.clear()
-        return changed
+        self._update_state()
 
-    async def _hold_and_clear(self, reason: str, details: ConstraintDetails | None):
-        logger.debug(f"holding {self.constraint.kind} constraint for {self.constraint.hold}s")
-        await asyncio.sleep(self.constraint.hold)
-        logger.debug(f"clearing {self.constraint.kind} constraint after hold")
-        self._clear(reason, details)
+    async def cleanup(self):
+        """Cancel any pending hold task."""
+        self._cancel_hold()
 
-    def _begin_hold(self, reason: str, details: ConstraintDetails | None):
+    def _update_state(self):
+        if not self._ready.is_set():
+            state = ConstraintState(kind=self.constraint.kind, state="not_ready")
+        elif self._hold_task is not None and not self._hold_task.done():
+            state = ConstraintState(kind=self.constraint.kind, state="holding")
+        else:
+            state = self.intended_state
+
+        self.actual_state = state
+        self._state_updated.set()
+
+    async def _do_hold(self, wait_secs: float):
+        logger.debug(f"holding {self.constraint.kind} constraint for {wait_secs}s")
+        await asyncio.sleep(wait_secs)
+
+        # It's safe to clear `_hold_task` early here since there are no further awaits.
+        self._hold_task = None
+        self._update_state()
+
+    def _begin_hold(self):
         if self._hold_task is None or self._hold_task.done():
-            self._hold_task = asyncio.create_task(self._hold_and_clear(reason, details))
+            self._hold_task = asyncio.create_task(self._do_hold(self.constraint.hold))
+            self._hold_task.add_done_callback(cleanup_future)
 
-    def _cancel_hold(self) -> asyncio.Task | None:
+    def _cancel_hold(self):
         if self._hold_task is not None and not self._hold_task.done():
             self._hold_task.cancel()
 
-        hold_task = self._hold_task
         self._hold_task = None
-        return hold_task
 
 
 class ConstraintManager:
@@ -261,30 +250,27 @@ class ConstraintManager:
         except asyncio.TimeoutError:
             return False
 
-    def _set_state(self, idx: int, state: ConstraintState):
-        self._entries[idx] = state
+        return True
 
-        if state.active:
-            if idx not in self._constrained_set:
-                logger.info(f"Constraint {state.kind} is active (reason: {state.reason or "none"})")
+    def _set_state(self, idx: int, current: ConstraintState):
+        prev = self._entries[idx]
+        self._entries[idx] = current
 
+        if current.state != prev.state:
+            state_str = current.state.replace("_", " ")
+            reason = f"(reason: {current.reason})" if current.reason else ""
+            logger.info(f"{current.kind.capitalize()} constraint is {state_str} {reason}")
+
+        if current.state == "not_ready":
+            self._ready_set.discard(idx)
             self._constrained_set.add(idx)
         else:
-            if idx in self._constrained_set:
-                logger.info(f"Constraint {state.kind} is inactive")
-
-            self._constrained_set.discard(idx)
-
-        if state.ready:
-            if idx not in self._ready_set:
-                logger.debug(f"constraint {state.kind} is ready")
-
             self._ready_set.add(idx)
-        else:
-            if idx in self._ready_set:
-                logger.debug(f"constraint {state.kind} is not ready")
 
-            self._ready_set.discard(idx)
+            if current.state == "clear":
+                self._constrained_set.discard(idx)
+            else:
+                self._constrained_set.add(idx)
 
         if len(self._ready_set) == len(self._entries):
             self._ready_event.set()
@@ -292,50 +278,58 @@ class ConstraintManager:
             self._ready_event.clear()
 
     async def _constraint_supervisor(self, idx: int, constraint: Constraint, **kwargs):
-        self._set_state(
-            idx,
-            ConstraintState(
-                kind=constraint.kind,
-                active=True,
-                reason="awaiting initial state",
-                ready=False,
-            ),
-        )
+        restarting = False
 
         while True:
-            logger.debug(f"starting {constraint.kind} constraint check task")
-
             try:
-                initial_timeout = self.CONSTRAINT_RESTART_GRACE + constraint.ttl
-
-                async with asyncio.timeout(initial_timeout) as timeout:
-                    await self._constraint_task(idx, constraint, timeout, **kwargs)
-            except Exception:
-                logger.exception(f"error in {constraint.kind} constraint evaluation")
-            finally:
-                # Reset to fail-closed before restart.
-                self._set_state(
-                    idx,
-                    ConstraintState(
-                        kind=constraint.kind,
-                        active=True,
-                        reason="evaluation error",
-                        ready=False,
-                    ),
+                initial_timeout = (
+                    None
+                    if constraint.ttl is None
+                    else self.CONSTRAINT_RESTART_GRACE + constraint.ttl
                 )
 
-            logger.debug(f"restarting {constraint.kind} constraint after delay")
-            await asyncio.sleep(self.CONSTRAINT_RESTART_DELAY)
+                async with asyncio.timeout(initial_timeout) as timeout:
+                    # Create a constraint evaluator and set the initial state.
+                    evaluator = ConstraintEvaluator(constraint, timeout=timeout)
+                    self._set_state(idx, evaluator.actual_state)
+
+                    # Sleep if this was a restart.
+                    if restarting:
+                        timeout.reschedule(
+                            None
+                            if (when := timeout.when()) is None
+                            else when + self.CONSTRAINT_RESTART_DELAY
+                        )
+                        await asyncio.sleep(self.CONSTRAINT_RESTART_DELAY)
+
+                    # Run the constraint and process updates.
+                    await self._constraint_task(idx, constraint, evaluator, **kwargs)
+            except asyncio.CancelledError:
+                # Propagate only direct cancellation.
+                if asyncio.current_task().cancelling():
+                    raise
+
+                logger.error(f"{constraint.kind.capitalize()} constraint cancelled unexpectedly")
+            except asyncio.TimeoutError:
+                # Only log timeouts for non-optional constraints.
+                if not constraint.optional:
+                    logger.error(f"{constraint.kind.capitalize()} constraint timed out")
+            except Exception:
+                logger.exception(f"{constraint.kind.capitalize()} constraint error")
+
+            restarting = True
 
     async def _constraint_task(
         self,
         idx: int,
         constraint: Constraint,
-        timeout: asyncio.Timeout,
+        evaluator: ConstraintEvaluator,
         **kwargs,
     ):
-        # Create an evaluator and start the check task.
-        evaluator = ConstraintEvaluator(constraint, timeout=timeout)
+        if not constraint.optional:
+            logger.debug(f"starting {constraint.kind} constraint check")
+
+        # Start the constraint check task.
         check_task = asyncio.create_task(constraint.check_task(evaluator, **kwargs))
         update_task: asyncio.Task | None = None
 
@@ -345,7 +339,7 @@ class ConstraintManager:
 
             # Read events emitted by the check task.
             while True:
-                update_task: asyncio.Task = asyncio.ensure_future(evaluator.next_update())
+                update_task: asyncio.Task = asyncio.create_task(evaluator.next_update())
                 done, _ = await asyncio.wait(
                     {update_task, check_task},
                     return_when=asyncio.FIRST_COMPLETED,
@@ -360,7 +354,7 @@ class ConstraintManager:
                     check_task.result()
                     break
         finally:
-            aws = [evaluator.cancel(), check_task]
+            aws = [evaluator.cleanup(), check_task]
             check_task.cancel()
 
             if update_task:
