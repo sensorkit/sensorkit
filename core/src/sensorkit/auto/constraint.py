@@ -5,7 +5,6 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Literal, override
 
 from loguru import logger
@@ -41,6 +40,8 @@ class Constraint(RegistryBaseModel, ABC):
     @classmethod
     def _compat(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            if "time_to_live" in data:
+                data["ttl"] = data.pop("time_to_live")
             if "hold_duration" in data:
                 data["hold"] = data.pop("hold_duration")
             if "activate_on_timeout" in data:
@@ -372,35 +373,6 @@ class GenericConstraint(Constraint):
     keyword: str
     field: str | None = None
     condition: AnyCondition
-    time_to_live: float = 30.0
-    activate_on_timeout: bool = True
-    """If True (default), activate the constraint when no data arrives within time_to_live.
-    If False, the constraint stays inactive when data is absent — useful for optional sensors."""
-
-    def _apply(
-        self,
-        evaluator: ConstraintEvaluator,
-        current: object,
-        previous: object,
-        was_active: bool,
-        label: str,
-    ) -> tuple[object, bool]:
-        """Evaluate the condition and update the evaluator."""
-        _, is_active = self.condition.evaluate(current, previous, was_active)
-
-        if is_active:
-            reason = f"{label} = {current}"
-            changed = evaluator.constrain(reason)
-
-            if changed:
-                logger.info(f"Setting conditional constraint on {reason}")
-        else:
-            if evaluator.is_active:
-                reason = f"{label} = {current}"
-                logger.info(f"Clearing conditional constraint on {reason}")
-                evaluator.clear(reason)
-
-        return current, is_active
 
     @override
     async def check_task(self, evaluator: ConstraintEvaluator, kit: SensorKit):
@@ -409,81 +381,31 @@ class GenericConstraint(Constraint):
             label += f".{self.field}"
         logger.debug(f"monitoring conditional constraint on {label}")
 
-        _UNSET = object()
-        previous: object = _UNSET
+        _NONE_YET = object()
+        previous = _NONE_YET
         was_active = False
-        skip_replay = False
-
-        if not self.activate_on_timeout:
-            # Optional-sensor mode: absence of data is NOT a reason to constrain. Opt out
-            # of the global fail-closed default (set in ConstraintEvaluator.__init__) so
-            # the controller can operate while we're still waiting for the first sample.
-            evaluator.clear("optional sensor: no data yet")
-            evaluator.ready()
 
         client = kit.entity(self.entity)
-        consumer = await asyncio.wait_for(
-            client._stream.consume(include_latest=True), timeout=self.time_to_live
-        )
+        consumer = await client._stream.consume(self.keyword)
 
-        while True:
+        async for msg in consumer:
             try:
-                async with asyncio.timeout(self.time_to_live) as timeout:
-                    async for msg in consumer:
-                        if msg.subject.prop != self.keyword:
-                            continue
+                data = json.loads(msg.data)
+            except Exception:
+                continue
 
-                        try:
-                            data = json.loads(msg.data)
-                        except Exception:
-                            continue
+            current = resolve_field(data, self.field) if self.field else data
 
-                        current = resolve_field(data, self.field) if self.field else data
+            if previous is not _NONE_YET:
+                _, is_active = self.condition.evaluate(current, previous, was_active)
+                reason = f"{label} = {current}"
 
-                        if previous is not _UNSET:
-                            if skip_replay:
-                                skip_replay = False
-                                previous = current
-                            else:
-                                previous, was_active = self._apply(
-                                    evaluator,
-                                    current,
-                                    previous,
-                                    was_active,
-                                    label,
-                                )
-                                evaluator.ready()
-                        else:
-                            # First message: the condition can't be evaluated yet (most
-                            # conditions need a transition). Signal the current fail-closed
-                            # state so the manager knows we're alive, then mark ready.
-                            evaluator.constrain("startup: awaiting first transition")
-                            previous = current
-                            evaluator.ready()
-
-                        timeout.reschedule(
-                            asyncio.get_running_loop().time() + self.time_to_live
-                        )
-
-            except TimeoutError:
-                reason = f"{label} (no data for {self.time_to_live}s)"
-                if self.activate_on_timeout:
-                    changed = evaluator.constrain(reason)
-                    if changed:
-                        logger.info(f"Setting conditional constraint on {reason}")
+                if is_active:
+                    evaluator.constrain(reason)
                 else:
-                    if evaluator.is_active:
-                        logger.info(f"Clearing conditional constraint on {reason}")
-                        evaluator.clear(reason)
+                    evaluator.clear(reason)
+
                 evaluator.ready()
+                was_active = is_active
 
-                # The next consumer reopen with include_latest=True will replay the cached
-                # pre-timeout value. That value was already processed before the silence
-                # window, so re-evaluating it would just undo whatever the timeout branch
-                # above just decided (flapping). Skip it regardless of activate_on_timeout.
-                skip_replay = True
-
-            consumer = await asyncio.wait_for(
-                client._stream.consume(include_latest=True),
-                timeout=self.time_to_live,
-            )
+            previous = current

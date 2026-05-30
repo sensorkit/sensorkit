@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import functools
-from typing import Any, Literal, override
+from typing import Literal, override
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.auto.constraint import Constraint, ConstraintEvaluator
+from sensorkit.common.keyword import validate_keyword_json
 from sensorkit.core.client import SensorKit
 
 
@@ -68,13 +69,6 @@ class WeatherConstraint(Constraint):
     rain_max: float | None = None
     rain_deadband: float = 0.0
 
-    @model_validator(mode="before")
-    @classmethod
-    def _ttl_compat(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "time_to_live" in data:
-            data["ttl"] = data.pop("time_to_live")
-        return data
-
     def _get_field_evaluators(self):
         if self.humidity_max is not None:
             yield WeatherFieldEvaluator("humidity", self.humidity_max, self.humidity_deadband)
@@ -105,9 +99,14 @@ class WeatherConstraint(Constraint):
     @override
     async def check_task(self, evaluator: ConstraintEvaluator, kit: SensorKit):
         provider = kit.entity(self.provider)
-        stream = await provider.monitor(BasicWeather)
+        consumer = await provider._stream.consume("BasicWeather")
 
-        async for _, weather in stream:
+        async for msg in consumer:
+            try:
+                weather = validate_keyword_json("BasicWeather", msg.data)
+            except Exception:
+                continue
+
             errors = self.check_weather(weather)
 
             if errors:

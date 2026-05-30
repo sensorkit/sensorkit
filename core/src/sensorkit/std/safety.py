@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Literal, override
 
-from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.auto.constraint import Constraint, ConstraintEvaluator
+from sensorkit.common.keyword import validate_keyword_json
 from sensorkit.core.client import SensorKit
 
 
@@ -34,25 +33,21 @@ class SafetyConstraint(Constraint):
 
     kind: Literal["safety"] = "safety"
     provider: str
-    time_to_live: float = 30.0
 
     @override
     async def check_task(self, evaluator: ConstraintEvaluator, kit: SensorKit):
-        logger.debug(f"monitoring safety constraint from {self.provider}")
+        provider = kit.entity(self.provider)
+        consumer = await provider._stream.consume("BasicSafety")
 
-        async with asyncio.timeout(self.time_to_live) as timeout:
-            provider = kit.entity(self.provider)
-            stream = await provider.monitor(BasicSafety)
+        async for msg in consumer:
+            try:
+                safety = validate_keyword_json("BasicSafety", msg.data)
+            except Exception:
+                continue
 
-            async for _, safety in stream:
-                if not safety.is_safe:
-                    changed = evaluator.constrain("unsafe")
-                    if changed:
-                        logger.info(f"Setting safety constraint from {self.provider}")
-                else:
-                    if evaluator.is_active:
-                        logger.info(f"Clearing safety constraint from {self.provider}")
-                        evaluator.clear("safe")
+            if not safety.is_safe:
+                evaluator.constrain("unsafe")
+            else:
+                evaluator.clear("safe")
 
-                evaluator.ready()
-                timeout.reschedule(asyncio.get_running_loop().time() + self.time_to_live)
+            evaluator.ready()
