@@ -267,7 +267,10 @@ class SensorControl:
                 await asyncio.sleep(0.1)
 
             logger.info(f"Acquiring frame #{frame_num}")
-            context = await sk.controller().update_context(frame_num=frame_num)
+            context = await sk.controller().update_context(
+                frame_num=frame_num,
+                track_mode=adhoc["track_mode"]
+            )
             _add_compat_context(context)
 
             await self.sensor.camera.command(
