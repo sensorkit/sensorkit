@@ -277,12 +277,13 @@ class TheSkyCamera(TheSkyDevice):
             Out = [
                 ccdsoftCameraImage.JulianDay,
                 ccdsoftCameraImage.FITSKeyword("BITPIX"),
+                ccdsoftCameraImage.Temperature,
                 ccdsoftCamera.BinX,
                 ccdsoftCamera.BinY                                
             ];
             """
         )
-        jd, bpp, binx, biny = [float(x) for x in resp.split(",")]
+        jd, bpp, temp, binx, biny = [float(x) for x in resp.split(",")]
         cmd.context["date_obs"] = Time(jd, format="jd", scale="utc").isot
         cmd.context["exptime"] = cmd.integration_time
         cmd.context["bitpix"] = _dtype_to_bitpix.get(dtype, int(bpp))
@@ -302,6 +303,7 @@ class TheSkyCamera(TheSkyDevice):
 
             instrume = await self.execute("""SelectedHardware.cameraModel;""")
             cmd.context["instrume"] = instrume
+            cmd.context["ccdtemp"] = temp
             cmd.context["xbinning"] = int(binx)
             cmd.context["ybinning"] = int(biny)
 
