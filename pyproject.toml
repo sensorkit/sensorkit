@@ -13,6 +13,7 @@ dependencies = [
     "aiofile>=3.9.0",
     "astropy>=7.1.0",
     "asyncclick==8.1.8",
+    "fastapi>=0.115.12",
     "intervaltree>=3.1.0",
     "loguru~=0.7",
     "nats-py~=2.13",
@@ -28,15 +29,15 @@ dependencies = [
     "systemd-python==235; sys_platform == 'linux'",
     "tzdata>=2025.2",
     "uuid-utils>=0.11.0",
+    "uvicorn>=0.34.0",
+    "watchdog>=6.0.0",
 ]
 
 [project.scripts]
 sensorkit = "sensorkit.cli.__main__:root"
 
 [project.optional-dependencies]
-filesys = [
-    "watchdog>=6.0.0",
-]
+filesys = []
 alpaca = [
     "alpyca>=3.1.1",
     "numpy>=1.24.0",
@@ -63,11 +64,7 @@ pwi4 = [
 sky-transmission = [
     "allclear @ git+https://github.com/zgazak/allclear.git@main",
     "alpyca>=3.1.0",
-    "Pillow",
     "imageio[pyav]",
-    "watchdog",
-    "fastapi>=0.115.12",
-    "uvicorn>=0.34.0",
     "matplotlib",
 ]
 senpai = [
@@ -78,22 +75,19 @@ slack = [
     "aiohttp",
 ]
 thesky = []
-webapi = [
-    "fastapi>=0.115.12",
-    "uvicorn>=0.34.0",
+thesky-simulator = [
+    "dukpy>=0.5.0",
 ]
+webapi = []
 udl = [
     "udl-sdk",
     "httpx",
-]
-thesky-simulator = [
-    "click>=8.1.8",
-    "dukpy>=0.5.0",
 ]
 
 [dependency-groups]
 dev = [
     "coverage>=7.8.0",
+    "httpx>=0.28.0",
     "import-linter>=2.1",
     "pygtrie>=2.5.0",
     "pytest-asyncio>=0.25.2",
@@ -103,6 +97,7 @@ dev = [
     "pytest-timeout>=2.4.0",
     "pytest>=8.3.4",
     "ruff~=0.9",
+    "sensorkit[thesky-simulator]",
     "testcontainers[nats]>=4.9.0",
     "zensical>=0.0.1",
 ]

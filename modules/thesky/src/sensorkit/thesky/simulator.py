@@ -6,7 +6,7 @@ import time
 from collections.abc import Sequence
 from typing import Any, TypedDict, cast
 
-import click
+import asyncclick as click
 import dukpy
 from loguru import logger
 
@@ -152,9 +152,9 @@ class TheSkySimulator:
 @click.command()
 @click.option("--host", default="127.0.0.1", help="Host address to bind to")
 @click.option("--port", default=3040, help="Port to listen on", type=int)
-def main(host, port):
+async def main(host, port):
     simulator = TheSkySimulator(host=host, port=port)
-    asyncio.run(simulator.run())
+    await simulator.run()
 
 
 if __name__ == "__main__":

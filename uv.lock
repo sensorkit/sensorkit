@@ -10,6 +10,12 @@ resolution-markers = [
     "python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
+[manifest]
+
+[[manifest.dependency-metadata]]
+name = "systemd-python"
+version = "235"
+
 [[package]]
 name = "aiofile"
 version = "3.9.0"
@@ -2479,20 +2485,27 @@ dependencies = [
 name = "sensorkit"
 source = { editable = "." }
 dependencies = [
+    { name = "aiofile" },
     { name = "astropy" },
     { name = "asyncclick" },
+    { name = "fastapi" },
     { name = "intervaltree" },
     { name = "loguru" },
     { name = "nats-py" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "python-dateutil" },
+    { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "rich" },
     { name = "satkit" },
     { name = "scipy" },
     { name = "skyfield" },
+    { name = "systemd-python", marker = "sys_platform == 'linux'" },
     { name = "tzdata" },
     { name = "uuid-utils" },
+    { name = "uvicorn" },
+    { name = "watchdog" },
 ]
 
 [package.optional-dependencies]
@@ -2500,20 +2513,14 @@ alpaca = [
     { name = "alpyca" },
     { name = "numpy" },
 ]
-filesys = [
-    { name = "aiofile" },
-    { name = "watchdog" },
-]
 indigo = [
     { name = "websockets" },
 ]
 nina = [
     { name = "httpx" },
-    { name = "python-dotenv" },
 ]
 node-platform = [
     { name = "ourskyai-node-platform-api" },
-    { name = "python-dotenv" },
 ]
 otto = [
     { name = "dropbox" },
@@ -2531,35 +2538,25 @@ senpai = [
 sky-transmission = [
     { name = "allclear" },
     { name = "alpyca" },
-    { name = "fastapi" },
     { name = "imageio", extra = ["pyav"] },
     { name = "matplotlib" },
-    { name = "pillow" },
-    { name = "uvicorn" },
-    { name = "watchdog" },
 ]
 slack = [
     { name = "aiohttp" },
-    { name = "python-dotenv" },
     { name = "slack-sdk" },
 ]
 thesky-simulator = [
-    { name = "click" },
     { name = "dukpy" },
 ]
 udl = [
     { name = "httpx" },
-    { name = "python-dotenv" },
     { name = "udl-sdk" },
-]
-webapi = [
-    { name = "fastapi" },
-    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "coverage" },
+    { name = "httpx" },
     { name = "import-linter" },
     { name = "pygtrie" },
     { name = "pytest" },
@@ -2569,24 +2566,23 @@ dev = [
     { name = "pytest-mock" },
     { name = "pytest-timeout" },
     { name = "ruff" },
+    { name = "sensorkit", extra = ["thesky-simulator"] },
     { name = "testcontainers", extra = ["nats"] },
     { name = "zensical" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "aiofile", marker = "extra == 'filesys'", specifier = ">=3.9.0" },
+    { name = "aiofile", specifier = ">=3.9.0" },
     { name = "aiohttp", marker = "extra == 'slack'" },
     { name = "allclear", marker = "extra == 'sky-transmission'", git = "https://github.com/zgazak/allclear.git?rev=main" },
     { name = "alpyca", marker = "extra == 'alpaca'", specifier = ">=3.1.1" },
     { name = "alpyca", marker = "extra == 'sky-transmission'", specifier = ">=3.1.0" },
     { name = "astropy", specifier = ">=7.1.0" },
     { name = "asyncclick", specifier = "==8.1.8" },
-    { name = "click", marker = "extra == 'thesky-simulator'", specifier = ">=8.1.8" },
     { name = "dropbox", marker = "extra == 'otto'" },
     { name = "dukpy", marker = "extra == 'thesky-simulator'", specifier = ">=0.5.0" },
-    { name = "fastapi", marker = "extra == 'sky-transmission'", specifier = ">=0.115.12" },
-    { name = "fastapi", marker = "extra == 'webapi'", specifier = ">=0.115.12" },
+    { name = "fastapi", specifier = ">=0.115.12" },
     { name = "google-api-python-client", marker = "extra == 'otto'" },
     { name = "google-auth", marker = "extra == 'otto'" },
     { name = "google-auth-oauthlib", marker = "extra == 'otto'" },
@@ -2601,27 +2597,23 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'alpaca'", specifier = ">=1.24.0" },
     { name = "ourskyai-node-platform-api", marker = "extra == 'node-platform'", specifier = ">=1.4.61" },
     { name = "pillow", specifier = ">=12.0.0" },
-    { name = "pillow", marker = "extra == 'sky-transmission'" },
     { name = "pydantic", specifier = "~=2.11" },
     { name = "python-dateutil", specifier = ">=2.9.0.post0" },
-    { name = "python-dotenv", marker = "extra == 'nina'" },
-    { name = "python-dotenv", marker = "extra == 'node-platform'" },
-    { name = "python-dotenv", marker = "extra == 'slack'" },
-    { name = "python-dotenv", marker = "extra == 'udl'" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rich", specifier = ">=14.0.0" },
     { name = "satkit", specifier = ">=0.8.3" },
     { name = "scipy", specifier = ">=1.16.3" },
     { name = "senpai", marker = "extra == 'senpai'", git = "https://github.com/zgazak/senpai.git?rev=big-optimize" },
     { name = "skyfield", specifier = ">=1.53" },
     { name = "slack-sdk", marker = "extra == 'slack'" },
+    { name = "systemd-python", marker = "sys_platform == 'linux'", specifier = "==235" },
     { name = "tzdata", specifier = ">=2025.2" },
     { name = "udl-sdk", marker = "extra == 'otto'" },
     { name = "udl-sdk", marker = "extra == 'udl'" },
     { name = "uuid-utils", specifier = ">=0.11.0" },
-    { name = "uvicorn", marker = "extra == 'sky-transmission'", specifier = ">=0.34.0" },
-    { name = "uvicorn", marker = "extra == 'webapi'", specifier = ">=0.34.0" },
-    { name = "watchdog", marker = "extra == 'filesys'", specifier = ">=6.0.0" },
-    { name = "watchdog", marker = "extra == 'sky-transmission'" },
+    { name = "uvicorn", specifier = ">=0.34.0" },
+    { name = "watchdog", specifier = ">=6.0.0" },
     { name = "websockets", marker = "extra == 'indigo'", specifier = ">=14.0" },
 ]
 provides-extras = ["alpaca", "filesys", "indigo", "nina", "node-platform", "otto", "pwi4", "senpai", "sky-transmission", "slack", "thesky", "thesky-simulator", "udl", "webapi"]
@@ -2629,6 +2621,7 @@ provides-extras = ["alpaca", "filesys", "indigo", "nina", "node-platform", "otto
 [package.metadata.requires-dev]
 dev = [
     { name = "coverage", specifier = ">=7.8.0" },
+    { name = "httpx", specifier = ">=0.28.0" },
     { name = "import-linter", specifier = ">=2.1" },
     { name = "pygtrie", specifier = ">=2.5.0" },
     { name = "pytest", specifier = ">=8.3.4" },
@@ -2638,6 +2631,7 @@ dev = [
     { name = "pytest-mock", specifier = ">=3.14.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "ruff", specifier = "~=0.9" },
+    { name = "sensorkit", extras = ["thesky-simulator"] },
     { name = "testcontainers", extras = ["nats"], specifier = ">=4.9.0" },
     { name = "zensical", specifier = ">=0.0.1" },
 ]
@@ -2742,6 +2736,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/99/6f/ef25bbc1aefeb9c90
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5c/92/d0c83f63d3518e5f0b8a311937c31347349ec9a47b209ddc17f7566f58fc/stone-3.3.1-py3-none-any.whl", hash = "sha256:e15866fad249c11a963cce3bdbed37758f2e88c8ff4898616bc0caeb1e216047", size = 162257, upload-time = "2022-01-25T21:32:15.155Z" },
 ]
+
+[[package]]
+name = "systemd-python"
+version = "235"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/10/9e/ab4458e00367223bda2dd7ccf0849a72235ee3e29b36dce732685d9b7ad9/systemd-python-235.tar.gz", hash = "sha256:4e57f39797fd5d9e2d22b8806a252d7c0106c936039d1e71c8c6b8008e695c0a", size = 61677, upload-time = "2023-02-11T13:42:16.588Z" }
 
 [[package]]
 name = "testcontainers"

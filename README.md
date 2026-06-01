@@ -59,20 +59,27 @@ uv run zensical serve
 pip install sensorkit
 ```
 
-Hardware modules are optional extras:
+Modules are optional extras:
 
-| Extra           | Hardware                                                                    |
-|-----------------|-----------------------------------------------------------------------------|
-| `ascom`         | ASCOM Alpaca (camera, mount, dome, focuser, rotator, filter wheel, weather) |
-| `pwi4`          | PlaneWave PWI4 (mount, focuser, rotator, mirror cover)                      |
-| `thesky`        | Software Bisque TheSky / SkyX                                               |
-| `node-platform` | Node Platform observatory controller                                        |
-| `otto`          | *TBD*                                                                       |
+| Extra              | Import                       | Feature                                |
+|--------------------|------------------------------|----------------------------------------|
+| `alpaca`           | `sensorkit.alpaca`           | ASCOM Alpaca devices                   |
+| `indi`             | `sensorkit.indi`             | INDI devices                           |
+| `indigo`           | `sensorkit.indigo`           | INDIGO devices                         |
+| `nina`             | `sensorkit.nina`             | NINA devices                           |
+| `node-platform`    | `sensorkit.node_platform`    | Node Platform devices                  |
+| `otto`             | `sensorkit.otto`             | Otto observing program                 |
+| `pwi4`             | `sensorkit.pwi4`             | PlaneWave PWI4 devices                 |
+| `senpai`           | `sensorkit.senpai`           | Astrometry and photometry analysis     |
+| `sky-transmission` | `sensorkit.sky_transmission` | All sky camera data analysis           |
+| `slack`            | `sensorkit.slack`            | Slack integration                      |
+| `thesky`           | `sensorkit.thesky`           | Software Bisque TheSky devices         |
+| `udl`              | `sensorkit.udl`              | Unified Data Library observing program |
 
 Install one or more:
 
 ```bash
-pip install "sensorkit[ascom,pwi4]"
+pip install "sensorkit[alpaca,pwi4]"
 ```
 
 SensorKit requires a running NATS server with JetStream enabled. The simplest way to run one is:
@@ -86,6 +93,12 @@ Point SensorKit at it:
 ```bash
 export NATS_URL=nats://localhost:4222
 ```
+
+## Configuration
+
+1. Configure site imports. These are the modules that will be loaded by each service. This should correspond to the extras you installed, shown in the table above. Presently this is done by setting a comma-delimited list in the `SENSORKIT_IMPORTS` environment variable.
+2. Configure sensors, devices, data flow, and other services. See `deploy/simulated/sensorkit.yaml` for an example.
+3. Configure your execution environment. You can use `sensorkit go` for testing and evaluation. Docker/podman or systemd services are recommended for production.
 
 ## Development
 
