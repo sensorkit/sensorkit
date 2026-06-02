@@ -22,36 +22,34 @@ The `deploy/simulated` directory contains a complete Docker Compose stack with s
 
 **Prerequisites:** Docker Compose and Git.
 
-### 1. Clone and build
+### 1. Clone
 
 ```bash
 git clone <sensorkit-repo-url>
 cd sensorkit/deploy/simulated
-docker compose build
 ```
-
-The build step compiles the SensorKit image and pulls the simulator images. This takes a few minutes the first time as
-it builds not only the SensorKit image but also a PWi4 mount simulator and the ASCOM Alpaca simulators.
 
 ### 2. Start the stack
 
 ```bash
-docker compose up
+docker compose up --build
 ```
 
-The services start in dependency order:
+The `--build` flag compiles the SensorKit image and pulls the simulator images on first run (takes a few minutes). The services start in dependency order:
 
 | Service         | What it does                                                                          |
 |-----------------|---------------------------------------------------------------------------------------|
 | `nats`          | NATS JetStream message bus                                                            |
 | `planewave-sim` | PWI4 mount simulator with a browser-accessible noVNC UI                               |
-| `alpaca-sim`    | ASCOM Alpaca simulators for camera, dome, filter wheel, focuser, rotator, and weather |
-| `sk-bootstrap`  | Loads all config files into the NATS KV store, then exits                             |
-| `sk-planewave`  | SensorKit PWI4 service — connects to the mount simulator                              |
-| `sk-ascom`      | SensorKit ASCOM service — connects to the Alpaca simulators                           |
-| `sk-controller` | Sensor controller — orchestrates all devices as a single sensor                       |
-| `sk-agent`      | Automation agent — manages the controller and schedules the program                   |
-| `sk-program`    | Demo observing program — generates collect tasks with random alt/az targets           |
+| `ascom-sim`     | ASCOM Alpaca simulators for camera, dome, filter wheel, focuser, rotator, and weather |
+| `reload-config` | Loads all config from `sensorkit.yaml` into the NATS KV store, then exits            |
+| `sensor`        | SensorKit sensor controller — connects and coordinates all devices                    |
+| `planewave`     | SensorKit PWI4 service — connects to the mount simulator                              |
+| `alpaca`        | SensorKit ASCOM Alpaca service — connects to the Alpaca simulators                    |
+| `agent`         | Automation agent — manages the controller and schedules the program                   |
+| `program`       | Demo observing program — generates collect tasks with random alt/az targets           |
+| `otto`          | Otto observing program service                                                        |
+| `webapi`        | SensorKit web API                                                                     |
 
 ### 3. Run the SensorKit CLI
 

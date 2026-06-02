@@ -1,3 +1,13 @@
+x-common-environment: &common-env
+  NATS_URL: nats://nats:4222
+  SENSORKIT_DEBUG: 1
+  SENSORKIT_IMPORTS: >-
+    sensorkit.alpaca.service,
+    sensorkit.pwi4.service,
+    sensorkit.otto.models,
+    sensorkit.node_platform.service,
+    sensorkit.slack.models
+
 services:
   nats:
     image: nats:2.12-alpine
@@ -26,7 +36,7 @@ services:
       retries: 3
       start_period: 20s
 
-  alpaca-sim:
+  ascom-sim:
     build: ascom
     image: ascom-sim
     ports:
@@ -34,7 +44,7 @@ services:
     command: "dotnet ascom.alpaca.simulators.dll"
     restart: unless-stopped
 
-  sk-bootstrap:
+  reload-config:
     build:
       context: ../..
       dockerfile: docker/Dockerfile
@@ -42,82 +52,100 @@ services:
     depends_on:
       nats:
         condition: service_healthy
-#      planewave-sim:
-#        condition: service_healthy
-      alpaca-sim:
+      planewave-sim:
+        condition: service_healthy
+      ascom-sim:
         condition: service_started
-    command: kv load /config/*.yaml
+    command: config load -v /opt/sensorkit.yaml
     environment:
-      SENSORKIT_BACKEND_ARG: nats
+      <<: *common-env
     volumes:
-      - ./config:/config:ro
+      - ./sensorkit.yaml:/opt/sensorkit.yaml:ro
 
-  sk-webapi:
-    image: sensorkit
-    ports:
-      - "8000:8000"
-    command: service run webapi sensorkit.webapi
-    environment:
-      SENSORKIT_BACKEND_ARG: nats
-    restart: unless-stopped
-    depends_on:
-      sk-bootstrap:
-        condition: service_completed_successfully
-
-  sk-agent:
+  agent:
     image: sensorkit
     command: service run agent sensorkit.auto.agent
     environment:
-      SENSORKIT_BACKEND_ARG: nats
+      <<: *common-env
     restart: unless-stopped
     depends_on:
-      sk-bootstrap:
+      reload-config:
         condition: service_completed_successfully
-      sk-controller: 
+      sensor:
         condition: service_started
-      sk-planewave:
+      planewave:
         condition: service_started
-      sk-ascom: 
+      alpaca:
         condition: service_started
 
-  sk-controller:
+  webapi:
     image: sensorkit
-    command: service run controller_service sensorkit.std.sensor
+    ports:
+      - "8000:8000"
+    command: service run WebAPI sensorkit.webapi
     environment:
-      SENSORKIT_BACKEND_ARG: nats
+      <<: *common-env
+    volumes:
+      - ./tmp:/opt/data
     restart: unless-stopped
     depends_on:
-      sk-bootstrap:
+      reload-config:
         condition: service_completed_successfully
 
-  sk-ascom:
+  sensor:
     image: sensorkit
-    command: service run ascom_service sensorkit.ascom.service
+    command: service run SimulatedSensor sensorkit.std.sensor
     environment:
-      SENSORKIT_BACKEND_ARG: nats
+      <<: *common-env
     restart: unless-stopped
     depends_on:
-      sk-bootstrap:
+      reload-config:
         condition: service_completed_successfully
 
-  sk-planewave:
+  alpaca:
     image: sensorkit
-    command: service run pwi4_service sensorkit.pwi4.service
+    command: service run Alpaca sensorkit.alpaca.service
     environment:
-      SENSORKIT_BACKEND_ARG: nats
+      <<: *common-env
+      NATS_URL: nats://localhost:4222
+    network_mode: "host"  # So that "localhost" config also works for baremetal
+    volumes:
+      - ./tmp:/opt/data
     restart: unless-stopped
     depends_on:
-      sk-bootstrap:
+      reload-config:
         condition: service_completed_successfully
 
-  sk-program:
+  planewave:
     image: sensorkit
-    command: service run sim_program /app/program.py
+    command: service run PlaneWave sensorkit.pwi4.service
     environment:
-      SENSORKIT_BACKEND_ARG: nats
+      <<: *common-env
+      NATS_URL: nats://localhost:4222
+    network_mode: "host"  # So that "localhost" config also works for baremetal
+    restart: unless-stopped
+    depends_on:
+      reload-config:
+        condition: service_completed_successfully
+
+  program:
+    image: sensorkit
+    command: service run SimulatedProgram /app/program.py
+    environment:
+      <<: *common-env
     volumes:
       - ./program.py:/app/program.py
     restart: unless-stopped
     depends_on:
-      sk-bootstrap:
+      reload-config:
+        condition: service_completed_successfully
+
+  otto:
+    image: sensorkit
+    command: service run Otto sensorkit.otto.service
+    environment:
+      <<: *common-env
+    restart: unless-stopped
+    depends_on:
+      reload-config:
         condition: service_completed_successfully

@@ -2,11 +2,11 @@ version: 1
 
 automation:
   first_run:
-    operate_all: false
+    operate_all: true
     enable_scheduling: true
 
   controllers:
-    sim_sensor:
+    SimulatedSensor:
       estimated_startup_time: 60
 
       modes:
@@ -26,7 +26,7 @@ automation:
       constraints:
         - kind: weather
           hold: 5.0
-          provider: sim_weather
+          provider: SimulatedWeather
           humidity_max: 75.0
           humidity_deadband: 1.0
           wind_max: 12.0
@@ -34,7 +34,7 @@ automation:
         - kind: conditional
           hold: 10.0
           optional: true
-          entity: sim_weather
+          entity: SimulatedWeather
           keyword: BasicWeather
           field: humidity
           condition:
@@ -43,7 +43,7 @@ automation:
             deadband: 2.0
 
       tasking:
-        - program: sim_program
+        - program: SimulatedProgram
           priority: 1
 
   contexts:
@@ -51,7 +51,7 @@ automation:
       file_name: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-f{frame_num}.fits"
     
 data_flow:
-  - entity: sim_camera
+  - entity: SimulatedCamera
     producer:
       simple:
         - op: app_source
@@ -67,18 +67,18 @@ data_flow:
             RADEG: ra
             DECDEG: dec
         - op: write_file
-          directory: f"C:\\Temp\\sim_camera"
+          directory: f"C:\\Temp\\SimulatedCamera"
 
 sensors:
-  - id: sim_sensor
+  - id: SimulatedSensor
 
     devices:
-      mount: sim_mount
-      camera: sim_camera
-      dome: sim_dome
-      filter_wheel: sim_fw
-      rotator: sim_rotator
-      focuser: sim_focuser
+      mount: SimulatedMount
+      camera: SimulatedCamera
+      dome: SimulatedDome
+      filter_wheel: SimulatedFilterWheel
+      rotator: SimulatedRotator
+      focuser: SimulatedFocuser
 
     site_position:
       latitude_degrees: 36.063067
@@ -97,9 +97,9 @@ sensors:
     controller_name: ""
 
 otto:
-  - id: otto_service
-    entity: otto
-    controller: sim_sensor
+  - id: Otto
+    entity: Otto
+    controller: SimulatedSensor
     task:
       objects: [ "21639" ]
       tle_update_interval_hours: 4
@@ -124,44 +124,44 @@ otto:
       port: 8070
 
 alpaca:
-  - id: ascom_service
+  - id: Alpaca
     endpoints:
       - host: localhost
         port: 30000
         protocol: http
         devices:
-          sim_camera:
+          SimulatedCamera:
             device_type: camera
             device_number: 0
             status_frequency: 1.0
-          sim_dome:
+          SimulatedDome:
             device_type: dome
             device_number: 0
             status_frequency: 1.0
-          sim_fw:
+          SimulatedFilterWheel:
             device_type: filter_wheel
             device_number: 0
             status_frequency: 1.0
-          sim_rotator:
+          SimulatedRotator:
             device_type: rotator
             device_number: 0
             status_frequency: 1.0
-          sim_focuser:
+          SimulatedFocuser:
             device_type: focuser
             device_number: 0
             status_frequency: 1.0
-          sim_weather:
+          SimulatedWeather:
             device_type: observing_conditions
             device_number: 0
             status_frequency: 1.0
 
 pwi4:
-  - id: pwi4_service
+  - id: PlaneWave
     endpoints:
     - host: localhost
       port: 8220
       devices:
-        sim_mount:
+        SimulatedMount:
           device_type: mount
           status_frequency: 1.0
           park_absolute: true
@@ -169,14 +169,14 @@ pwi4:
           park_axis1_degrees: 0
 
 config:
-  sim_sensor:
+  SimulatedSensor:
     SitePosition:
       latitude_degrees: 36.063067
       longitude_degrees: -115.144828
       altitude_km: .05
 
 services:
-  - id: webapi
+  - id: WebAPI
     python_module: sensorkit.webapi
-  - id: sim_program
+  - id: SimulatedProgram
     python_module: deploy/simulated/program.py

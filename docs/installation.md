@@ -9,15 +9,15 @@
 ## Install SensorKit
 
 ```bash
-uv pip install sensorkit
+pip install sensorkit
 ```
 
-To include a specific hardware module (ASCOM, PWI4, etc.):
+Modules are optional extras. To include specific hardware support:
 
 ```bash
-uv pip install "sensorkit[ascom]"
-uv pip install "sensorkit[pwi4]"
-uv pip install "sensorkit[ascom,pwi4]"
+pip install "sensorkit[alpaca]"
+pip install "sensorkit[pwi4]"
+pip install "sensorkit[alpaca,pwi4]"
 ```
 
 ## Start NATS
@@ -44,10 +44,10 @@ services:
 
 ## Connect to NATS
 
-SensorKit reads the NATS URL from the `SENSORKIT_BACKEND_ARG` environment variable:
+SensorKit reads the NATS URL from the `NATS_URL` environment variable:
 
 ```bash
-export SENSORKIT_BACKEND_ARG=nats://localhost:4222
+export NATS_URL=nats://localhost:4222
 ```
 
 For remote NATS servers, substitute the hostname or IP. If this variable is not set, SensorKit defaults to `nats://127.0.0.1:4222`.
@@ -90,33 +90,55 @@ Add `-r` to restart the service automatically if it exits:
 sensorkit service run sensorkit.std.sensor my-sensor -r
 ```
 
-### Multiple services from a manifest
+### Multiple services from a config file
 
-Create a `services.yaml` file:
+`sensorkit go` can launch all services defined in a config file. It accepts two formats:
+
+**Unified config (`sensorkit.yaml`)** — the preferred format. A single file that holds both service definitions and all other configuration (sensors, devices, automation, data flow). Pass `-l` to have `sensorkit go` automatically load the configuration into NATS before starting services:
+
+```bash
+sensorkit go -c sensorkit.yaml -l
+```
+
+**Services manifest (`services.yaml`)** — a minimal file listing only service definitions:
 
 ```yaml
 services:
   - name: ascom-service
-    module: sensorkit.ascom.service
+    module: sensorkit.alpaca.service
   - name: my-sensor
     module: sensorkit.std.sensor
   - name: my-agent
     module: sensorkit.auto.agent
 ```
 
-Then launch all services in one command:
+By default, `sensorkit go` looks for `sensorkit.yaml`, then `services.yaml`, in the current directory. Pass `-c` to use a different file:
 
 ```bash
-sensorkit go
-```
-
-By default, `sensorkit go` looks for `services.yaml` in the current directory. Pass `-c` to use a different file:
-
-```bash
-sensorkit go -c /etc/sensorkit/services.yaml -r
+sensorkit go -c /etc/sensorkit/sensorkit.yaml -l -r
 ```
 
 The `go` command streams combined log output from all services. Add `--log-file path/to/file.log` to also write logs to disk.
+
+## Test Deployment
+
+To run SensorKit locally against simulated hardware (without the full Docker stack):
+
+1. Start only the simulators and NATS:
+
+```bash
+docker compose -f deploy/simulated/docker-compose.yml up --build -d nats planewave-sim ascom-sim
+```
+
+2. Copy `deploy/simulated/sensorkit.yaml` and edit it for your environment. In particular, check the image output path in the `data_flow` section.
+
+3. Launch SensorKit directly:
+
+```bash
+sensorkit go -c deploy/simulated/sensorkit.yaml -l --log-level DEBUG
+```
+
+The `-l` flag loads configuration into NATS automatically before starting services.
 
 ## Check running services
 

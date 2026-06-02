@@ -79,7 +79,7 @@ Modules are optional extras:
 Install one or more:
 
 ```bash
-pip install "sensorkit[alpaca,pwi4]"
+pip install sensorkit[alpaca,pwi4]
 ```
 
 SensorKit requires a running NATS server with JetStream enabled. The simplest way to run one is:
@@ -134,7 +134,7 @@ uv run sensorkit --help
 
 ### Test Deployment
 
-1. Spin up simulated dependencies via: `docker compose -f deploy/simulated/docker-compose.yml up --build -d nats planewave-sim alpaca-sim` 
+1. Spin up simulated dependencies via: `docker compose -f deploy/simulated/docker-compose.yml up --build -d nats planewave-sim ascom-sim` 
 2. Copy and/or edit your test configuration at deploy/simulated/sensorkit.yaml.
   - Make sure the test image output path in the `data_flow` section is what you want / correct for your platform
 3. Use the `sensorkit go` command to directly run the system specified by your configuration.

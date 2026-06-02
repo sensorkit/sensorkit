@@ -34,21 +34,30 @@ sensorkit service run sensorkit.auto.agent my-agent -r
 
 ## go
 
-Launch and supervise multiple services from a YAML manifest.
+Launch and supervise multiple services from a config file.
 
 ```bash
-sensorkit go [-c services.yaml] [-r] [--log-file FILE] [--log-level LEVEL]
+sensorkit go [-c FILE] [-l] [-r] [--log-file FILE] [--log-level LEVEL]
              [--add-service name:module[:entrypoint] ...]
+             [--shutdown-timeout SECONDS]
 ```
 
-Default manifest file is `services.yaml` in the current directory.
+`sensorkit go` looks for `sensorkit.yaml` (unified format), then `services.yaml`, in the current directory.
 
-**Manifest format:**
+**Config file formats:**
+
+*Unified config (`sensorkit.yaml`)* — holds service definitions alongside all other configuration (sensors, devices, automation, data flow). Use `-l` to automatically load configuration into NATS before starting:
+
+```bash
+sensorkit go -c sensorkit.yaml -l
+```
+
+*Services manifest (`services.yaml`)* — lists only service definitions:
 
 ```yaml
 services:
-  - name: ascom-service
-    module: sensorkit.ascom.service
+  - name: alpaca-service
+    module: sensorkit.alpaca.service
   - name: pwi4-service
     module: sensorkit.pwi4.service
   - name: my-sensor
@@ -62,12 +71,14 @@ services:
 
 | Flag | Description |
 |---|---|
-| `-c FILE` | Path to manifest file (default: `services.yaml`) |
+| `-c FILE` | Path to config file (default: `sensorkit.yaml`, then `services.yaml`) |
+| `-l` / `--load-config` | Automatically load configuration before starting (unified format only) |
 | `-r` / `--restart` | Restart services automatically on exit |
 | `--log-file FILE` | Write combined log output to a file |
 | `--log-file-append` | Append to log file instead of overwriting (default: true) |
 | `--log-level LEVEL` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) |
-| `--add-service name:module` | Add a service without editing the manifest file |
+| `--add-service name:module` | Add a service without editing the config file |
+| `--shutdown-timeout SECONDS` | Max seconds per service for graceful shutdown (default: `180`) |
 
 ---
 

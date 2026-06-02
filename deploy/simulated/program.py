@@ -21,7 +21,7 @@ class SimProgram:
     async def task_factory(self):
         return StandardCollectTask(
             task_id=uuid.uuid1(),
-            controller_id="sim_sensor",
+            controller_id="SimulatedSensor",
             target=AltAzTarget(coords=Horizontal(random.randint(0, 30), 85)),
             camera_params=CameraParameterSet(
                 integration_time_seconds=5.0,
