@@ -15,10 +15,13 @@ def _format_time(dt: datetime):
 
 def configure_logging(
     *,
-    level="INFO",
+    level: str | None = None,
     format: str | Callable | None = None,
     force_color: bool = True,
 ):
+    if level is None:
+        level = "DEBUG" if os.environ.get("SENSORKIT_DEBUG") else "INFO"
+
     if force_color:
         os.environ["FORCE_COLOR"] = "1"
 
