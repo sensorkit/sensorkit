@@ -439,6 +439,14 @@ class OttoProgram:
                                     **sidereal_kwargs,
                                 )
                                 await self.task_queue.push_task(task)
+
+                    # Wait for this target's tasks to drain before generating
+                    # tasks for the next target.  This prevents far-future tasks
+                    # from expiring while the controller is still working through
+                    # earlier targets in the scan list.
+                    while await self.task_queue.peek_task():
+                        await asyncio.sleep(1)
+
             except Exception as e:
                 logger.exception(f"Error in task generator: {e}")
 
