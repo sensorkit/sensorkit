@@ -13,12 +13,20 @@ class Publisher(ABC):
 
     @property
     @abstractmethod
-    def name(self) -> str: ...
+    def name(self) -> str:
+        """Identifies this publisher in logs and error messages."""
 
     @abstractmethod
-    async def publish(self, context: dict, data: bytes) -> None: ...
+    async def publish(self, context: dict, data: bytes) -> None:
+        """Deliver one frame to the destination.
+
+        Args:
+            context: DataGraph sink metadata (task_id, frame_num, file_path, …).
+            data: Raw FITS bytes from the sink's async stream.
+        """
 
     async def close(self) -> None:
+        """Release connections and resources after all frames are published."""
         pass
 
 
