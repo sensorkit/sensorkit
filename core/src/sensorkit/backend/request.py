@@ -249,7 +249,7 @@ class CallContext[R: ExtendedResponse | None, V: BaseModel | None]:
     def accept(self, *, response: R):
         """Mark the call as accepted and set the initial response, allowing progress events to follow."""
         if self.response.done():
-            raise CallHandlerError("Call has already been accepted or rejected")
+            raise CallHandlerResponseError(responded=True)
 
         if response is None:
             response = ExtendedResponse()
@@ -261,7 +261,7 @@ class CallContext[R: ExtendedResponse | None, V: BaseModel | None]:
     def reject(self, *, response: R):
         """Reject the call immediately, returning a failure response without further events."""
         if self.response.done():
-            raise CallHandlerError("Call has already been accepted or rejected")
+            raise CallHandlerResponseError(responded=True)
 
         if response is None:
             response = ExtendedResponse()
@@ -273,7 +273,7 @@ class CallContext[R: ExtendedResponse | None, V: BaseModel | None]:
     async def progress(self, ttl: float, payload: Any = None):
         """Emit a progress event, extending the caller's deadline by ttl seconds."""
         if not self.response.done():
-            raise CallHandlerError("Call must be accepted or rejected")
+            raise CallHandlerResponseError(responded=False)
 
         await self._call_event(
             CallEvent(
@@ -306,7 +306,7 @@ class CallContext[R: ExtendedResponse | None, V: BaseModel | None]:
     async def succeed(self, *, result: V):
         """Emit a success event carrying the final result, completing the extended call."""
         if not self.response.done():
-            raise CallHandlerError("Call must be accepted or rejected")
+            raise CallHandlerResponseError(responded=False)
 
         if self.response.result().call_state == "failure":
             raise CallHandlerError("Cannot send success result for rejected call")
@@ -324,7 +324,7 @@ class CallContext[R: ExtendedResponse | None, V: BaseModel | None]:
     async def fail(self, payload: Any = None):
         """Emit a failure event, completing the extended call in a failed state."""
         if not self.response.done():
-            raise CallHandlerError("Call must be accepted or rejected")
+            raise CallHandlerResponseError(responded=False)
 
         await self._call_event(
             CallEvent(
@@ -387,7 +387,7 @@ class ExtendedCallHandler[P: BaseModel | None, R: ExtendedResponse, V: BaseModel
         if not context.response.done():
             # The handler func did not call `accept` or `reject`.
             await context.fail()
-            raise CallHandlerError
+            raise CallHandlerResponseError(responded=False)
 
         # Get the initial response object.
         response = context.response.result()
@@ -419,6 +419,13 @@ class CallError(Exception):
 
 class CallHandlerError(CallError):
     """Raised when a call method is called in an invalid state."""
+
+
+class CallHandlerResponseError(CallHandlerError):
+    def __init__(self, *, responded: bool):
+        self.responded = responded
+        problem = "has already called" if responded else "did not call"
+        super().__init__(f"Call handler {problem} `accept` or `reject`")
 
 
 @dataclass
