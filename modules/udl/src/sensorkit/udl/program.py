@@ -296,7 +296,7 @@ class UDLProgram:
 
     async def _publish_imagery(self, context: dict, data: bytes) -> None:
         """Build and upload SkyImagery for a completed frame."""
-        task_id = context.get("task_id")
+        task_id: str | None = context.get("task_id")
         if not task_id:
             return
 
@@ -345,6 +345,7 @@ class UDLProgram:
             "filename": filename,
             "filesize": len(data),
             "source": self.config.api.source,
+            "origin": request.origin,
             "dataMode": request.data_mode or "TEST",
             "imageType": context.get("image_type") or self.config.image_type,
         }
