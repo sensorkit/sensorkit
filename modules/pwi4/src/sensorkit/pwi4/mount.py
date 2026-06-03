@@ -208,9 +208,6 @@ class PWI4Mount(PWI4Device):
         # Home, as needed
         await self.mount_home(Home())
 
-        # Go to park position for cover opening
-        await self.mount_park(MoveToPark())
-
         # Initialize the optical tube
         await self.init_ot()
 
