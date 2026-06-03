@@ -185,7 +185,7 @@ class AlpacaTelescope(AlpacaDevice):
 
         # Home, as needed
         if not self.state.has_been_homed:
-            self.telescope_home(Home())
+            await self.telescope_home(Home())
 
     async def _check_can_move_axis(self, axis: int) -> bool:
         try:
