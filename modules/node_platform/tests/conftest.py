@@ -136,7 +136,8 @@ def make_safety_status(**overrides):
 
 def make_operation_status(mode="ASSISTED"):
     """Build a mock V1SystemOperationStatus."""
+    import ourskyai_node_platform_api as osapi
+
     status = MagicMock()
-    status.system_operation_mode = MagicMock()
-    status.system_operation_mode.value = mode
+    status.system_operation_mode = osapi.V1SystemOperationMode(mode)
     return status

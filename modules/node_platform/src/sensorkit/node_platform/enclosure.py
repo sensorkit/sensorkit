@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Literal, override
 
 import ourskyai_node_platform_api as osapi
@@ -156,118 +157,76 @@ class NodePlatformEnclosure(NodePlatformDevice):
     async def enclosure_open(self, cmd: OpenEnclosure):
         await self.require_connected()
 
-        # Ensure we're not moving
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                status: osapi.V2EnclosureStatus = await self.api.call(
-                    "v2_get_enclosure_status"
-                )
-                shutter_state = (
-                    status.shutters.statuses[0].state
-                    if status.shutters and status.shutters.statuses
-                    else None
-                )
-                if shutter_state not in (
-                    EnclosureShutterState.MOVING_OPEN,
-                    EnclosureShutterState.MOVING_CLOSE,
-                    EnclosureShutterState.HOMING,
-                    EnclosureShutterState.ERROR,
-                    EnclosureShutterState.UNKNOWN,
-                    None,
-                ):
-                    break
-                await asyncio.sleep(1)
+        # If it's closing, halt and reverse rather than waiting for it to finish.
+        if await self._shutter_status() is EnclosureShutterState.MOVING_CLOSE:
+            await self.api.call("v1_halt_enclosure_shutters")
 
-        # ASSISTED mode no longer auto-opens on safe — switch to MANUAL mode for the
-        # open, then restore ASSISTED (if configured) so unsafe-close behavior is preserved.
-        assisted = self.config.operation_mode == "assisted"
-        try:
-            if assisted:
-                await self.api.call("v1_enable_manual_operation")
-                logger.debug("switched Node Platform to MANUAL mode for enclosure open")
-
+        async with self._manual_mode():
             logger.debug("opening enclosure")
             req = osapi.V1OpenEnclosureShuttersRequest(ignore_safety=False)
             await self.api.call("v1_open_enclosure_shutters", req)
-            await asyncio.sleep(0.1)
-
-            async with asyncio.timeout(self.config.timeout):
-                while True:
-                    status: osapi.V2EnclosureStatus = await self.api.call(
-                        "v2_get_enclosure_status"
-                    )
-                    shutter_state = (
-                        status.shutters.statuses[0].state
-                        if status.shutters and status.shutters.statuses
-                        else None
-                    )
-                    if shutter_state is EnclosureShutterState.OPENED:
-                        break
-                    await asyncio.sleep(1)
-
+            await self._wait_for_shutter(EnclosureShutterState.OPENED)
             logger.debug("opened enclosure")
-        finally:
-            if assisted:
-                await self.api.call("v1_enable_assisted_operation")
-                logger.debug("restored Node Platform to ASSISTED mode")
 
     @sk.command_handler
     async def enclosure_close(self, cmd: CloseEnclosure):
         await self.require_connected()
 
-        # Ensure we're not moving
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                status: osapi.V2EnclosureStatus = await self.api.call(
-                    "v2_get_enclosure_status"
-                )
-                shutter_state = (
-                    status.shutters.statuses[0].state
-                    if status.shutters and status.shutters.statuses
-                    else None
-                )
-                if shutter_state not in (
-                    EnclosureShutterState.MOVING_OPEN,
-                    EnclosureShutterState.MOVING_CLOSE,
-                    EnclosureShutterState.HOMING,
-                    EnclosureShutterState.ERROR,
-                    EnclosureShutterState.UNKNOWN,
-                    None,
-                ):
-                    break
-                await asyncio.sleep(1)
+        # If it's opening, halt and reverse rather than waiting for it to finish.
+        if await self._shutter_status() is EnclosureShutterState.MOVING_OPEN:
+            await self.api.call("v1_halt_enclosure_shutters")
 
-        # ASSISTED mode auto-closes on unsafe but ignores explicit close requests
-        # — switch to MANUAL mode for the close, then restore ASSISTED (if configured).
-        assisted = self.config.operation_mode == "assisted"
-        try:
-            if assisted:
-                await self.api.call("v1_enable_manual_operation")
-                logger.debug("switched Node Platform to MANUAL mode for enclosure close")
+        # In ASSISTED mode the Platform closes the shutter itself when conditions are unsafe.
+        # If it's unsafe, let the Platform do it — seizing MANUAL mode to close would disarm
+        # the Platform's own safety net for the duration. We only close explicitly when the
+        # Platform won't: a safe/scheduled shutdown, or if its safety status can't be read.
+        # Query the live mode rather than trusting config — it may have been toggled out-of-band.
+        op = await self.api.call("v1_get_system_operation_status")
+        if op.system_operation_mode is osapi.V1SystemOperationMode.ASSISTED:
+            try:
+                unsafe = not (await self.api.call("v1_get_safety_status")).is_safe
+            except Exception as e:
+                logger.warning(f"Safety status unavailable, closing via MANUAL mode: {e}")
+                unsafe = False
+            if unsafe:
+                logger.debug("deferring enclosure close to Node Platform")
+                await self._wait_for_shutter(EnclosureShutterState.CLOSED)
+                return
 
+        async with self._manual_mode():
             logger.debug("closing enclosure")
             await self.api.call("v1_close_enclosure_shutters")
-            await asyncio.sleep(0.1)
-
-            async with asyncio.timeout(self.config.timeout):
-                while True:
-                    status: osapi.V2EnclosureStatus = await self.api.call(
-                        "v2_get_enclosure_status"
-                    )
-                    shutter_state = (
-                        status.shutters.statuses[0].state
-                        if status.shutters and status.shutters.statuses
-                        else None
-                    )
-                    if shutter_state is EnclosureShutterState.CLOSED:
-                        break
-                    await asyncio.sleep(1)
-
+            await self._wait_for_shutter(EnclosureShutterState.CLOSED)
             logger.debug("closed enclosure")
+
+    @contextlib.asynccontextmanager
+    async def _manual_mode(self):
+        """
+        ASSISTED mode ignores explicit open/close requests, so we must take MANUAL control to
+        actuate the shutter, then re-arm ASSISTED so the Platform's unsafe-close protection
+        resumes. A no-op when the Platform is not in ASSISTED mode.
+        """
+        op = await self.api.call("v1_get_system_operation_status")
+        if op.system_operation_mode is not osapi.V1SystemOperationMode.ASSISTED:
+            yield
+            return
+
+        await self.api.call("v1_enable_manual_operation")
+        try:
+            yield
         finally:
-            if assisted:
-                await self.api.call("v1_enable_assisted_operation")
-                logger.debug("restored Node Platform to ASSISTED mode")
+            await self.api.call("v1_enable_assisted_operation")
+
+    async def _shutter_status(self) -> EnclosureShutterState | None:
+        status: osapi.V2EnclosureStatus = await self.api.call("v2_get_enclosure_status")
+        if status and status.shutters and status.shutters.statuses:
+            return status.shutters.statuses[0].state
+        return None
+
+    async def _wait_for_shutter(self, target: EnclosureShutterState):
+        async with asyncio.timeout(self.config.timeout):
+            while await self._shutter_status() is not target:
+                await asyncio.sleep(1)
 
     async def status_publish(self):
         while True:

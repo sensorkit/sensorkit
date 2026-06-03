@@ -34,6 +34,7 @@ from sensorkit.models.devices import (
     Init,
     MountAxis,
     MoveToPark,
+    SetParkPosition,
     Slewing,
     Stop,
     Tracking,
@@ -43,7 +44,7 @@ from sensorkit.node_platform.device import (
     NodePlatformDeviceConfig,
     NodePlatformDeviceState,
 )
-from sensorkit.std import Connected
+from sensorkit.std import Connect, Connected, Enable, Disable
 
 
 @sk.declare_keyword
@@ -135,14 +136,11 @@ class NodePlatformMount(NodePlatformDevice):
         await self.require_connected()
 
         # Enable the motors
-        await self.mount_enable(sk.Enable())
+        await self.mount_enable(Enable())
 
         # Home, as needed
         if not self.state.has_been_homed:
             await self.mount_home(Home())
-
-        # Go to park position for cover opening
-        await self.mount_park(MoveToPark())
 
         # Initialize the optical tube
         await self.init_ot()
@@ -152,11 +150,18 @@ class NodePlatformMount(NodePlatformDevice):
         self._stop_fast_status()
         await self.mount_stop(Stop())
         await self.mount_park(MoveToPark())
-        await self.mount_disable(sk.Disable())
+        await self.mount_disable(Disable())
         await self.deinit_ot()
 
     @sk.command_handler
-    async def mount_enable(self, cmd: sk.Enable):
+    async def mount_connect(self, cmd: Connect):
+        """Implemented for error recovery."""
+        logger.debug("enabling mount motors (recover)")
+        await self.mount_enable(Enable())
+        logger.debug("enabled motors (recover)")
+
+    @sk.command_handler
+    async def mount_enable(self, cmd: Enable):
         await self.require_connected()
 
         status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
@@ -166,7 +171,7 @@ class NodePlatformMount(NodePlatformDevice):
             logger.debug("enabled mount motors")
 
     @sk.command_handler
-    async def mount_disable(self, cmd: sk.Disable):
+    async def mount_disable(self, cmd: Disable):
         await self.require_connected()
 
         status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
@@ -217,7 +222,7 @@ class NodePlatformMount(NodePlatformDevice):
         logger.debug("parked mount")
 
     @sk.command_handler
-    async def mount_set_park_position(self, cmd: sk.SetParkPosition):
+    async def mount_set_park_position(self, cmd: SetParkPosition):
         await self.require_connected()
         logger.debug("setting park position")
         await self.api.call("v1_set_mount_park_position_here")
