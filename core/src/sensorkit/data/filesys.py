@@ -16,6 +16,7 @@ from watchdog.events import (
 )
 from watchdog.observers import Observer
 
+from sensorkit.common.aio import cleanup_future
 from sensorkit.data.graph import Context, DataFlow, DataOp, SourceOp
 from sensorkit.data.streams import StreamReader, StreamWriter
 
@@ -245,7 +246,9 @@ async def get_file_reader(
             reader.feed_eof()
 
     # Start feeding data in the background.
-    asyncio.create_task(feed_data())
+    task = asyncio.create_task(feed_data())
+    task.add_done_callback(cleanup_future)
+    ctx.callback(lambda: task)  # Prevent task GC until done
 
     return reader
 
