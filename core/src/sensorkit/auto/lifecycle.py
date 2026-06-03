@@ -457,7 +457,7 @@ class ControllerLifecycle:
                             logger.critical("Controller is inoperable!")
                             self._can_operate.clear()
                     case "program":
-                        logger.error(f"Program lifecycle error: {active_error}")
+                        logger.opt(exception=active_error).error(f"Program lifecycle error: {active_error}")
                         # TODO: Handle retry counting and blacklisting via ProgramStateManager.
 
                 # Sleep to avoid thrashing, but only when there was an error.
