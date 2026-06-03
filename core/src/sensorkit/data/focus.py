@@ -122,7 +122,7 @@ class AnalyzeFocusStars(DataOp):
         if not mask.any():
             return None
 
-        positions = np.where(mask)
+        positions = np.nonzero(mask)
         fluxes = img[mask]
         total_flux = fluxes.sum()
 
