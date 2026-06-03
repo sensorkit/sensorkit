@@ -255,21 +255,30 @@ class SensorControl:
             **adhoc,
         )
 
+        # Support acquisition of sidereal frames among a non-sidereal collect sequence.
+        currently_sidereal = False
+
         # Capture the requested frames.
         for frame_num in range(0, task.camera_params.frame_count):
-            if task.sidereal_track_from_frame == frame_num:
-                # Switch to sidereal tracking.
-                logger.info("Beginning sidereal track")
+            want_sidereal = frame_num in task.sidereal_frames
+
+            if want_sidereal and not currently_sidereal:
+                # Hold the current RA/Dec under sidereal tracking.
+                logger.info(f"Frame #{frame_num+1} of {task.camera_params.frame_count}: switching to sidereal track")
                 await self.sensor.mount.command(
                     FollowTarget(target=FrameTarget(frame=ReferenceFrame.ICRF))
                 )
-                adhoc["track_mode"] = "sidereal"
-                await asyncio.sleep(0.1)
+                currently_sidereal = True
+            elif not want_sidereal and currently_sidereal:
+                # Resume following the original target.
+                logger.info(f"Frame #{frame_num+1} of {task.camera_params.frame_count}: resuming target track")
+                await self.sensor.mount.command(FollowTarget(target=task.target))
+                currently_sidereal = False
 
-            logger.info(f"Acquiring frame #{frame_num}")
+            logger.info(f"Acquiring frame #{frame_num+1} of {task.camera_params.frame_count}")
             context = await sk.controller().update_context(
                 frame_num=frame_num,
-                track_mode=adhoc["track_mode"]
+                track_mode="sidereal" if want_sidereal else adhoc["track_mode"],
             )
             _add_compat_context(context)
 

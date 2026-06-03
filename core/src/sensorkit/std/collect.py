@@ -33,4 +33,4 @@ class StandardCollectTask(CollectTask):
     target: Target
     camera_params: CameraParameterSet
     end_time: datetime
-    sidereal_track_from_frame: int | None = None
+    sidereal_frames: list[int] = Field(default_factory=list)

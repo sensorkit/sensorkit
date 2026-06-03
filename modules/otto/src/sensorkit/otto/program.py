@@ -388,7 +388,7 @@ class OttoProgram:
 
                     # Account for rate-sidereal mode
                     sidereal_kwargs = (
-                        {"sidereal_track_from_frame": self.config.collect.num_frames - 1}
+                        {"sidereal_frames": [self.config.collect.num_frames - 1]}
                         if self.config.collect.track_mode == "rate_sidereal"
                         else {}
                     )
