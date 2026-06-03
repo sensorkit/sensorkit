@@ -120,4 +120,5 @@ class UDLPublisher(Publisher):
         raise NotImplementedError("UDL publisher not yet implemented — see udl module branch")
 
     async def close(self) -> None:
+        # NYI.
         pass

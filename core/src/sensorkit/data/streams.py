@@ -100,6 +100,7 @@ class BufferWriter(StreamWriter):
         self._bytes.extend(data)
 
     def write_eof(self):
+        # No eof.
         pass
 
     def close(self):
@@ -112,6 +113,7 @@ class BufferWriter(StreamWriter):
         await self._future
 
     async def drain(self):
+        # Writes are immediate.
         pass
 
     def get_future(self):
@@ -261,6 +263,7 @@ class QueueWriter(StreamWriter):
             await self._queue.join()
 
     async def drain(self):
+        # Writes are immediate.
         pass
 
 
