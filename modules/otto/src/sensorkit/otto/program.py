@@ -371,7 +371,17 @@ class OttoProgram:
                         )
                         continue
 
-                    tle_data = self.tles[object]
+                    tle_data = self.tles.get(object)
+                    if tle_data is None:
+                        logger.warning(
+                            f"Removing object {object} from the whitelist (TLE removed)"
+                        )
+                        await self.list_manager.move_object(
+                            object,
+                            ListType.WHITELIST,
+                            ListType.BLACKLIST,
+                        )
+                        continue
                     tle_obj = TLE(
                         line0=tle_data["line0"],
                         line1=tle_data["line1"],
