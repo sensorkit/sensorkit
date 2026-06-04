@@ -36,9 +36,8 @@ class TheSkyServerConfig(BaseModel):
         if isinstance(data, dict):
             if devices := data.get("devices"):
                 for device in devices.values():
-                    assert "host" not in device and "port" not in device
-                    device["host"] = data.get("host")
-                    device["port"] = data.get("port")
+                    device.setdefault("host", data.get("host"))
+                    device.setdefault("port", data.get("port", 3040))
 
         return data
 
