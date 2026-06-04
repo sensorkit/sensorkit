@@ -1,3 +1,4 @@
+import asyncio
 import os
 import warnings
 from typing import Literal
@@ -47,23 +48,25 @@ def import_plugins(
                     pass
 
 
-async def connect():
-    """Reads configuration to determine a backend and then creates a SensorKit client."""
+def _connect_sync():
+    # Load environment variables.
     load_dotenv(find_dotenv(usecwd=True))
+
+    # Do dynamic module imports based on configuration.
+    import_plugins(fail_policy="warn", warn_stacklevel=5)
 
     # Determine the backend based on user configuration.
     backend_module = os.environ.get("SENSORKIT_BACKEND", "sensorkit.backend.nats")
 
-    cls = obj_from_spec(
+    return obj_from_spec(
         spec=backend_module,
         base=BackendImpl,
         subclass=True,
     )
 
-    # Do dynamic module imports based on configuration.
-    import_plugins(fail_policy="warn", warn_stacklevel=3)
 
-    # Create the Backend instance.
-    backend_impl = await cls.create()
-    assert backend_impl
+async def connect():
+    """Reads configuration to determine a backend and then creates a SensorKit client."""
+    backend_cls = await asyncio.to_thread(_connect_sync)
+    backend_impl = await backend_cls.create()
     return SensorKit(backend=backend_impl)
