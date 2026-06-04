@@ -1,7 +1,10 @@
 # ruff: noqa: F401 E402
 from importlib.metadata import version as _pkg_version
 
-VERSION = _pkg_version("sensorkit")
+try:
+    VERSION = _pkg_version("sensorkit")
+except Exception:
+    VERSION = "0.0.0"
 
 from sensorkit.api.bootstrap import connect, import_plugins
 from sensorkit.api.declarative import (
