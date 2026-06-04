@@ -26,7 +26,6 @@ dependencies = [
     "satkit>=0.8.3",
     "scipy>=1.16.3",
     "skyfield>=1.53",
-    "systemd-python==235; sys_platform == 'linux'",
     "tzdata>=2025.2",
     "uuid-utils>=0.11.0",
     "uvicorn>=0.34.0",
@@ -74,6 +73,9 @@ slack = [
     "slack-sdk",
     "aiohttp",
 ]
+systemd = [
+    "systemd-python==235",
+]
 thesky = []
 thesky-simulator = [
     "dukpy>=0.5.0",
@@ -101,11 +103,6 @@ dev = [
     "testcontainers[nats]>=4.9.0",
     "zensical>=0.0.1",
 ]
-
-[[tool.uv.dependency-metadata]]
-name = "systemd-python"
-version = "235"
-requires-dist = []
 
 [tool.ruff]
 include = ["core/**/*.py", "modules/**/*.py"]

@@ -1,6 +1,5 @@
 FROM python:3.13
 
-RUN apt-get update && apt-get install -y libsystemd-dev && rm -rf /var/lib/apt/lists/*
 RUN pip install uv
 
 COPY pyproject.toml hatch_build.py uv.lock README.md /opt/sensorkit/
