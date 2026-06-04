@@ -52,7 +52,9 @@ def import_module_or_file(name: str):
     path = pathlib.Path(name)
 
     if path.exists(follow_symlinks=True):
-        return module_from_file(path, path.stem)
+        module = module_from_file(path, path.stem)
+        sys.modules[path.stem] = module
+        return module
 
     return importlib.import_module(name)
 

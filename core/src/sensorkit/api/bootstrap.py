@@ -49,9 +49,6 @@ def import_plugins(
 
 
 def _connect_sync():
-    # Load environment variables.
-    load_dotenv(find_dotenv(usecwd=True))
-
     # Do dynamic module imports based on configuration.
     import_plugins(fail_policy="warn", warn_stacklevel=5)
 
