@@ -47,6 +47,16 @@ def module_from_file(path: pathlib.Path, name: str):
     return module
 
 
+def import_module_or_file(name: str):
+    """Import a module by name or path, handling relative imports within it."""
+    path = pathlib.Path(name)
+
+    if path.exists(follow_symlinks=True):
+        return module_from_file(path, path.stem)
+
+    return importlib.import_module(name)
+
+
 def obj_from_spec[T](
         *,
         spec: str,
@@ -64,10 +74,8 @@ def obj_from_spec[T](
     else:
         module_name = spec
 
-    path = pathlib.Path(module_name)
-
-    if load_file and path.exists(follow_symlinks=True):
-        module = module_from_file(path, path.name)
+    if load_file:
+        module = import_module_or_file(module_name)
     else:
         module = importlib.import_module(module_name)
 

@@ -1,4 +1,3 @@
-import importlib
 import os
 import warnings
 from typing import Literal
@@ -6,7 +5,7 @@ from typing import Literal
 from dotenv import find_dotenv, load_dotenv
 
 from sensorkit.backend.base import BackendImpl
-from sensorkit.common.importutil import obj_from_spec
+from sensorkit.common.importutil import import_module_or_file, obj_from_spec
 from sensorkit.core.client import SensorKit
 
 DEFAULT_BASE_IMPORTS = (
@@ -37,7 +36,7 @@ def import_plugins(
 
     for module in imports:
         try:
-            importlib.import_module(module)
+            import_module_or_file(module)
         except Exception:
             match fail_policy:
                 case "error":
