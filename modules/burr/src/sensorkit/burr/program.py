@@ -287,7 +287,7 @@ class PendingTask:
     is_last_of_request: bool
 
 
-@sk.service_entrypoint(version="0.1.0")
+@sk.service_entrypoint(version=sk.VERSION)
 async def main(service: sk.Service):
     service.include(BurrProgram())
     await service.run()
