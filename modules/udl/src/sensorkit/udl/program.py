@@ -22,7 +22,12 @@ from sensorkit.astro.common import TLE, SitePosition
 from sensorkit.astro.coords import Equatorial, Cartesian, StateVector
 from sensorkit.astro.target import ICRSTarget, StateVectorTarget, Target, TLETarget
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
-from sensorkit.udl.models import ResponseStatus, UDLConfig, UDLReferenceFrame
+from sensorkit.udl.models import (
+    ResponseStatus,
+    UDLConfig,
+    UDLEndpointConfig,
+    UDLReferenceFrame,
+)
 from sensorkit.udl.task_queue import TaskQueue
 
 
@@ -54,11 +59,16 @@ class UDLProgram:
     def __init__(self):
         self.program: sk.ProgramImpl | None = None
 
-        # SDK client (created in program_init)
+        # SDK clients (created in program_init). upload_client targets the
+        # SkyImagery upload endpoint; it aliases client unless api.upload is
+        # configured.
         self.client: AsyncUnifieddatalibrary | None = None
+        self.upload_client: AsyncUnifieddatalibrary | None = None
 
         self._udl_username: str | None = None
         self._udl_password: str | None = None
+        self._upload_username: str | None = None
+        self._upload_password: str | None = None
 
         # Task management
         self.queue: TaskQueue | None = None
@@ -95,9 +105,50 @@ class UDLProgram:
             logger.warning(f"No saved state for {self.program.entity}")
             self.state = UDLState()
 
+    @staticmethod
+    def _load_credentials(endpoint: UDLEndpointConfig) -> tuple[str, str]:
+        """Read UDL_USERNAME/UDL_PASSWORD for an endpoint (use_certs=False)."""
+        env = dotenv_values(endpoint.env_file)
+        username = env.get("UDL_USERNAME") or os.environ.get("UDL_USERNAME")
+        password = env.get("UDL_PASSWORD") or os.environ.get("UDL_PASSWORD")
+
+        if not username or not password:
+            raise RuntimeError(
+                f"UDL_USERNAME and UDL_PASSWORD must be set in "
+                f"{endpoint.env_file} or as environment variables"
+            )
+
+        return username, password
+
+    def _create_client(
+        self, endpoint: UDLEndpointConfig, username: str | None, password: str | None
+    ) -> AsyncUnifieddatalibrary:
+        """Create an SDK client for an endpoint."""
+        if endpoint.use_certs:
+            http_client = httpx.AsyncClient(
+                cert=(endpoint.client_cert, endpoint.client_key),
+                verify=endpoint.client_verify,
+                timeout=endpoint.timeout,
+            )
+            logger.debug(f"using cert-based auth for {endpoint.base_url}")
+            return AsyncUnifieddatalibrary(
+                http_client=http_client,
+                base_url=endpoint.base_url,
+            )
+
+        client_kwargs = {
+            "username": username,
+            "password": password,
+            "timeout": endpoint.timeout,
+        }
+        if endpoint.base_url:
+            client_kwargs["base_url"] = endpoint.base_url
+
+        return AsyncUnifieddatalibrary(**client_kwargs)
+
     @sk.on_attach
     async def program_init(self) -> None:
-        """Restore state, create SDK client, start poller and image publisher."""
+        """Restore state, create SDK clients, start poller and image publisher."""
         self.program = sk.program()
 
         self.config = await self.program.kv_get_model(UDLConfig)
@@ -105,41 +156,30 @@ class UDLProgram:
         # Restore last known state
         await self._restore_state()
 
-        # Create SDK client with appropriate auth method
-        if self.config.api.use_certs:
-            http_client = httpx.AsyncClient(
-                cert=(self.config.api.client_cert, self.config.api.client_key),
-                verify=self.config.api.client_verify,
-                timeout=self.config.api.timeout,
-            )
-            self.client = AsyncUnifieddatalibrary(
-                http_client=http_client,
-                base_url=self.config.api.base_url,
-            )
-            logger.debug(f"using cert-based auth for {self.config.api.base_url}")
-        else:
-            env = dotenv_values(self.config.api.env_file)
-            username = env.get("UDL_USERNAME") or os.environ.get("UDL_USERNAME")
-            password = env.get("UDL_PASSWORD") or os.environ.get("UDL_PASSWORD")
+        # Primary client: CollectRequest polling and CollectResponses
+        if not self.config.api.use_certs:
+            self._udl_username, self._udl_password = self._load_credentials(self.config.api)
+        self.client = self._create_client(
+            self.config.api, self._udl_username, self._udl_password
+        )
 
-            if not username or not password:
-                raise RuntimeError(
-                    f"UDL_USERNAME and UDL_PASSWORD must be set in "
-                    f"{self.config.api.env_file} or as environment variables"
+        # Upload client: SkyImagery only. Aliases the primary client unless a
+        # separate upload endpoint is configured.
+        if self.config.api.upload:
+            if not self.config.api.upload.use_certs:
+                self._upload_username, self._upload_password = self._load_credentials(
+                    self.config.api.upload
                 )
-
-            self._udl_username = username
-            self._udl_password = password
-
-            client_kwargs = {
-                "username": username,
-                "password": password,
-                "timeout": self.config.api.timeout,
-            }
-            if self.config.api.base_url:
-                client_kwargs["base_url"] = self.config.api.base_url
-
-            self.client = AsyncUnifieddatalibrary(**client_kwargs)
+            self.upload_client = self._create_client(
+                self.config.api.upload, self._upload_username, self._upload_password
+            )
+            logger.debug(
+                f"SkyImagery uploads routed to {self.config.api.upload.base_url}"
+            )
+        else:
+            self.upload_client = self.client
+            self._upload_username = self._udl_username
+            self._upload_password = self._udl_password
 
         logger.debug(f"starting UDL program for {self.program.entity}")
 
@@ -191,6 +231,9 @@ class UDLProgram:
                     await task
 
         await self._save_state()
+
+        if self.upload_client and self.upload_client is not self.client:
+            await self.upload_client.close()
 
         if self.client:
             await self.client.close()
@@ -433,7 +476,7 @@ class UDLProgram:
         Returns None for hosts we don't recognise (e.g. MACHINA), signalling
         the caller to fall back to the SDK's upload_zip().
         """
-        base = self.config.api.base_url
+        base = self._upload_endpoint().base_url
         if not base:
             # SDK default → production UDL
             return "https://imagery.unifieddatalibrary.com/filedrop/udl-skyimagery"
@@ -445,6 +488,13 @@ class UDLProgram:
             return "https://imagery.unifieddatalibrary.com/filedrop/udl-skyimagery"
         return None
 
+    def _upload_endpoint(self) -> UDLEndpointConfig:
+        """Effective endpoint settings for SkyImagery uploads.
+
+        The separate upload endpoint when configured, the primary otherwise.
+        """
+        return self.config.api.upload or self.config.api
+
     async def _upload_skyimagery_zip(self, zip_bytes: bytes) -> None:
         """Upload a SkyImagery ZIP to the UDL imagery filedrop.
 
@@ -453,22 +503,28 @@ class UDLProgram:
         filedrop. Falls back to the SDK when the filedrop host can't be derived
         (e.g. MACHINA's custom base_url).
         """
+        endpoint = self._upload_endpoint()
+
         url = self._imagery_filedrop_url()
         if url is None:
-            await self.client.sky_imagery.upload_zip(file=zip_bytes)
+            # Pass a (filename, bytes) tuple so the multipart part carries a
+            # .zip filename — MACHINA's filedrop rejects unnamed payloads with
+            # "Only zip files are allowed".
+            await self.upload_client.sky_imagery.upload_zip(
+                file=("skyimagery.zip", zip_bytes),
+                timeout=endpoint.upload_timeout,
+            )
             return
 
-        if self.config.api.use_certs:
+        if endpoint.use_certs:
             client_kwargs = {
-                "cert": (self.config.api.client_cert, self.config.api.client_key),
-                "verify": self.config.api.client_verify,
+                "cert": (endpoint.client_cert, endpoint.client_key),
+                "verify": endpoint.client_verify,
             }
         else:
-            client_kwargs = {"auth": (self._udl_username, self._udl_password)}
+            client_kwargs = {"auth": (self._upload_username, self._upload_password)}
 
-        # Imagery uploads can be hundreds of MB — use a generous timeout rather
-        # than the lightweight per-request api.timeout used for the JSON API.
-        async with httpx.AsyncClient(timeout=300.0, **client_kwargs) as http:
+        async with httpx.AsyncClient(timeout=endpoint.upload_timeout, **client_kwargs) as http:
             resp = await http.post(
                 url,
                 content=zip_bytes,
