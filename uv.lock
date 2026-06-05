@@ -2501,7 +2501,6 @@ dependencies = [
     { name = "satkit" },
     { name = "scipy" },
     { name = "skyfield" },
-    { name = "systemd-python", marker = "sys_platform == 'linux'" },
     { name = "tzdata" },
     { name = "uuid-utils" },
     { name = "uvicorn" },
@@ -2544,6 +2543,9 @@ sky-transmission = [
 slack = [
     { name = "aiohttp" },
     { name = "slack-sdk" },
+]
+systemd = [
+    { name = "systemd-python", marker = "sys_platform == 'linux'" },
 ]
 thesky-simulator = [
     { name = "dukpy" },
@@ -2607,7 +2609,7 @@ requires-dist = [
     { name = "senpai", marker = "extra == 'senpai'", git = "https://github.com/zgazak/senpai.git?rev=big-optimize" },
     { name = "skyfield", specifier = ">=1.53" },
     { name = "slack-sdk", marker = "extra == 'slack'" },
-    { name = "systemd-python", marker = "sys_platform == 'linux'", specifier = "==235" },
+    { name = "systemd-python", marker = "sys_platform == 'linux' and extra == 'systemd'", specifier = "==235" },
     { name = "tzdata", specifier = ">=2025.2" },
     { name = "udl-sdk", marker = "extra == 'otto'" },
     { name = "udl-sdk", marker = "extra == 'udl'" },
@@ -2616,7 +2618,7 @@ requires-dist = [
     { name = "watchdog", specifier = ">=6.0.0" },
     { name = "websockets", marker = "extra == 'indigo'", specifier = ">=14.0" },
 ]
-provides-extras = ["alpaca", "filesys", "indigo", "nina", "node-platform", "otto", "pwi4", "senpai", "sky-transmission", "slack", "thesky", "thesky-simulator", "udl", "webapi"]
+provides-extras = ["alpaca", "filesys", "indigo", "nina", "node-platform", "otto", "pwi4", "senpai", "sky-transmission", "slack", "systemd", "thesky", "thesky-simulator", "udl", "webapi"]
 
 [package.metadata.requires-dev]
 dev = [

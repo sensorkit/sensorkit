@@ -74,7 +74,7 @@ slack = [
     "aiohttp",
 ]
 systemd = [
-    "systemd-python==235",
+    "systemd-python==235; sys_platform == 'linux'",
 ]
 thesky = []
 thesky-simulator = [
@@ -103,6 +103,11 @@ dev = [
     "testcontainers[nats]>=4.9.0",
     "zensical>=0.0.1",
 ]
+
+[[tool.uv.dependency-metadata]]
+name = "systemd-python"
+version = "235"
+requires-dist = []
 
 [tool.ruff]
 include = ["core/**/*.py", "modules/**/*.py"]
