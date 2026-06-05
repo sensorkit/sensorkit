@@ -44,9 +44,9 @@ automation:
 
       tasking:
         - program: SimulatedProgram
-          priority: 1
+          priority: 5
         - program: Burr
-          priority: 2
+          priority: 3
 
   contexts:
     standard_collect:
