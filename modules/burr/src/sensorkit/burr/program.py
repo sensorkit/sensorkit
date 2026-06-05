@@ -103,7 +103,9 @@ class BurrProgram:
     @sk.task_factory
     async def next_task(self):
         if not self._queue:
-            if not await asyncio.to_thread(self._enqueue_next_request):
+            await asyncio.to_thread(self._enqueue_next_request)
+
+            if not self._queue:
                 return
 
         pending = self._queue.popleft()
