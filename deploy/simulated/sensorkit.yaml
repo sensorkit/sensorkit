@@ -45,6 +45,8 @@ automation:
       tasking:
         - program: SimulatedProgram
           priority: 1
+        - program: Burr
+          priority: 2
 
   contexts:
     standard_collect:
@@ -167,6 +169,39 @@ pwi4:
           park_absolute: true
           park_axis0_degrees: 30
           park_axis1_degrees: 0
+
+burr:
+  - id: Burr
+    controller: SimulatedSensor
+    schedule:
+      twilight_flats:
+        windows:
+          - nautical_twilight
+        collect: true
+      calsats:
+        windows:
+          - night
+          - astronomical_twilight
+        collect: true
+        tle_provider: spacebook
+      photometric_standards:
+        windows:
+          - day
+          - night
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 10
+        n_exposures: 10
+        minimum_altitude_degrees: 30
+        collect: true
+      streaks:
+        collect: true
+        minimum_length_pixel: 5
+        maximum_length_pixel: 100
+    plotting:
+      debug: true
+      review: true
+    runtime:
+      output_dir: "/temp/burr/"
 
 config:
   SimulatedSensor:

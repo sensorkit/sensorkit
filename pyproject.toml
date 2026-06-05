@@ -41,6 +41,10 @@ alpaca = [
     "alpyca>=3.1.1",
     "numpy>=1.24.0",
 ]
+burr = [
+#    "burr @ git+https://github.com/zgazak/burr.git@dev",
+    "burr"
+]
 indigo = [
     "websockets>=14.0",
 ]
@@ -109,6 +113,9 @@ name = "systemd-python"
 version = "235"
 requires-dist = []
 
+[tool.uv.sources]
+burr = { path = "../burr", editable = true }
+
 [tool.ruff]
 include = ["core/**/*.py", "modules/**/*.py"]
 line-length = 99
@@ -143,6 +150,7 @@ type = "layers"
 layers = [
     """
     sensorkit.alpaca |
+    sensorkit.burr |
     sensorkit.indigo |
     sensorkit.nina |
     sensorkit.node_platform |
@@ -176,6 +184,7 @@ packages = ["core/src/sensorkit"]
 dev-mode-dirs = [
     "core/src",
     "modules/alpaca/src",
+    "modules/burr/src",
     "modules/indigo/src",
     "modules/nina/src",
     "modules/node_platform/src",
@@ -192,6 +201,7 @@ dev-mode-dirs = [
 path = "hatch_build.py"
 modules = [
     "alpaca",
+    "burr",
     "indigo",
     "nina",
     "node_platform",
