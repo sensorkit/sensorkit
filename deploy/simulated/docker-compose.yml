@@ -25,6 +25,7 @@ services:
   planewave-sim:
     build: pwi4
     image: pwi4-sim
+    pull_policy: never
     ports:
       - "8220:8220"
       - "6080:6080"
@@ -39,6 +40,7 @@ services:
   ascom-sim:
     build: ascom
     image: ascom-sim
+    pull_policy: never
     ports:
       - "30000:32323"
     command: "dotnet ascom.alpaca.simulators.dll"
@@ -49,6 +51,7 @@ services:
       context: ../..
       dockerfile: docker/Dockerfile
     image: sensorkit
+    pull_policy: never
     depends_on:
       nats:
         condition: service_healthy
@@ -64,6 +67,7 @@ services:
 
   agent:
     image: sensorkit
+    pull_policy: never
     command: service run agent sensorkit.auto.agent
     environment:
       <<: *common-env
@@ -80,6 +84,7 @@ services:
 
   webapi:
     image: sensorkit
+    pull_policy: never
     ports:
       - "8000:8000"
     command: service run WebAPI sensorkit.webapi
@@ -94,6 +99,7 @@ services:
 
   sensor:
     image: sensorkit
+    pull_policy: never
     command: service run SimulatedSensor sensorkit.std.sensor
     environment:
       <<: *common-env
@@ -104,6 +110,7 @@ services:
 
   alpaca:
     image: sensorkit
+    pull_policy: never
     command: service run Alpaca sensorkit.alpaca.service
     environment:
       <<: *common-env
@@ -118,6 +125,7 @@ services:
 
   planewave:
     image: sensorkit
+    pull_policy: never
     command: service run PlaneWave sensorkit.pwi4.service
     environment:
       <<: *common-env
@@ -130,6 +138,7 @@ services:
 
   program:
     image: sensorkit
+    pull_policy: never
     command: service run SimulatedProgram /app/program.py
     environment:
       <<: *common-env
@@ -142,6 +151,7 @@ services:
 
   otto:
     image: sensorkit
+    pull_policy: never
     command: service run Otto sensorkit.otto.service
     environment:
       <<: *common-env
