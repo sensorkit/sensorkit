@@ -240,7 +240,7 @@ class AlpacaTelescope(AlpacaDevice):
             await self.put(self.telescope, "Tracking", False)
             self._tracking = False
 
-        self._wait_for_telescope()
+        await self._wait_for_telescope()
 
         self._stop_fast_status()
         logger.debug("stopped telescope")
