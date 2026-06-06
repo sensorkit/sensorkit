@@ -47,6 +47,12 @@ from sensorkit.node_platform.device import (
 from sensorkit.std import Connect, Connected, Enable, Disable
 
 
+# Max time to wait for a commanded slew to *begin* (is_slewing -> True) before
+# waiting for it to settle. Also the worst-case stall on a positional no-op
+# (re-follow to an unchanged position, park-when-already-parked).
+_MOUNT_ONSET_TIMEOUT = 2.0
+
+
 @sk.declare_keyword
 class OTStatus(BaseModel):
     """Optical tube status (fans, heaters, temperature sensors, cover, M3)."""
@@ -186,9 +192,8 @@ class NodePlatformMount(NodePlatformDevice):
         logger.debug("stopping mount")
 
         await self.api.call("v1_halt_mount")
-        await asyncio.sleep(1)
 
-        await self._wait_for_mount()
+        await self._wait_for_mount(await_onset=False)
 
         self._stop_fast_status()
         logger.debug("stopped mount")
@@ -199,7 +204,6 @@ class NodePlatformMount(NodePlatformDevice):
         logger.debug("homing mount")
 
         await self.api.call("v1_mount_go_to_home")
-        await asyncio.sleep(1)
 
         await self._wait_for_mount()
 
@@ -215,7 +219,6 @@ class NodePlatformMount(NodePlatformDevice):
 
         self._stop_fast_status()
         await self.api.call("v1_park_mount")
-        await asyncio.sleep(1)
 
         await self._wait_for_mount()
 
@@ -252,7 +255,6 @@ class NodePlatformMount(NodePlatformDevice):
                     dec=target.coords.dec,
                 )
                 await self.api.call("v1_go_to_mount_coordinates", req)
-                await asyncio.sleep(1)
 
                 await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
@@ -267,7 +269,6 @@ class NodePlatformMount(NodePlatformDevice):
                     azimuth=target.coords.az,
                 )
                 await self.api.call("v1_go_to_mount_coordinates", req)
-                await asyncio.sleep(1)
 
                 await self._wait_for_mount(tracking=False)
                 self._start_fast_status()
@@ -282,7 +283,6 @@ class NodePlatformMount(NodePlatformDevice):
                     tle_line2=target.tle.line2,
                 )
                 await self.api.call("v1_mount_follow_tle", req)
-                await asyncio.sleep(1)
 
                 await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
@@ -308,7 +308,6 @@ class NodePlatformMount(NodePlatformDevice):
                     enu_samples=samples,
                 )
                 await self.api.call("v1_start_mount_track_path", req)
-                await asyncio.sleep(1)
 
                 await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
@@ -342,7 +341,6 @@ class NodePlatformMount(NodePlatformDevice):
                     enu_samples=samples,
                 )
                 await self.api.call("v1_start_mount_track_path", req)
-                await asyncio.sleep(1)
 
                 await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
@@ -355,12 +353,12 @@ class NodePlatformMount(NodePlatformDevice):
                         logger.debug("disabling tracking")
                         self._stop_fast_status()
                         await self.api.call("v1_disable_mount_tracking")
-                        await self._wait_for_mount(tracking=False)
+                        await self._wait_for_mount(tracking=False, await_onset=False)
                         logger.debug("disabled tracking")
                     case ReferenceFrame.ICRF:
                         logger.debug("enabling sidereal tracking")
                         await self.api.call("v1_enable_mount_tracking")
-                        await self._wait_for_mount(tracking=True)
+                        await self._wait_for_mount(tracking=True, await_onset=False)
                         self._start_fast_status()
                         logger.debug("enabled sidereal tracking")
 
@@ -378,18 +376,44 @@ class NodePlatformMount(NodePlatformDevice):
         *,
         slewing: bool = False,
         tracking: bool = False,
+        await_onset: bool = True,
     ):
         """Poll v2_get_mount_status until is_slewing and is_tracking both match.
 
-        Bounded by config.timeout; polls every 0.2 s.
+        When ``await_onset`` (the default, for commands that slew), first wait
+        briefly for the mount to *start* slewing. Without this, a command whose
+        target flags already equal the current flags (e.g. re-following while
+        already tracking) would match the stale pre-command state and return
+        before motion begins. If no slew is observed within _MOUNT_ONSET_TIMEOUT,
+        the command was a positional no-op, and we fall through to the settle check.
+
+        Non-slewing commands (stop, enable/disable tracking) must pass
+        ``await_onset=False``: they never raise is_slewing, so onset would
+        otherwise burn the full timeout on every call.
+
+        The settle wait is bounded by config.timeout; both phases poll at 0.1 s.
         """
+
+        if await_onset:
+            try:
+                async with asyncio.timeout(_MOUNT_ONSET_TIMEOUT):
+                    while True:
+                        status = await self.api.call("v2_get_mount_status")
+                        if status.is_slewing:
+                            break
+                        await asyncio.sleep(0.1)
+            except TimeoutError:
+                # No slew observed -> positional no-op. Fall through to the
+                # settle check, which returns at once if already on target or
+                # still waits out any flag change (e.g. tracking engaging).
+                pass
 
         async with asyncio.timeout(self.config.timeout):
             while True:
                 status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
                 if status.is_slewing == slewing and status.is_tracking == tracking:
                     break
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
 
     def _start_fast_status(self):
         if self._fast_status_task is None or self._fast_status_task.done():
