@@ -9,6 +9,7 @@ from sensorkit.data.fits import (
     ApplyDark,
     ArrayInfo,
     ArrayToFITS,
+    CompressFITS,
     ContextFromFITS,
     DarkInfo,
     ReshapeArray,
@@ -369,5 +370,108 @@ async def test_apply_dark_closest_exposure(tmp_path):
 
     recv = asyncio.create_task(receiver())
     await incoming.send(Context(), image_buf)
+    await recv
+    await task
+
+
+# --- CompressFITS tests ---
+
+
+@pytest.mark.asyncio
+async def test_compress_fits_rice():
+    """RICE_1 compression round-trips 16-bit data correctly."""
+    image_data = np.arange(64, dtype=np.uint16).reshape(8, 8)
+    fits_buf = _make_fits_buffer(image_data)
+
+    op = CompressFITS()  # defaults: algorithm=RICE_1, quantize_level=0.0
+    incoming = DataFlow()
+    outgoing = DataFlow()
+    task = asyncio.create_task(op.process([incoming], [outgoing]))
+
+    async def receiver():
+        _, compressed_buf = await outgoing.receive("buffer")
+        # Compressed buffer should be smaller (or at least valid FITS)
+        with fits.open(io.BytesIO(compressed_buf)) as hdul:
+            # CompImageHDU is stored as extension 1
+            assert len(hdul) == 2
+            assert isinstance(hdul[1], fits.CompImageHDU)
+            np.testing.assert_array_equal(hdul[1].data, image_data)
+
+    recv = asyncio.create_task(receiver())
+    await incoming.send(Context(), fits_buf)
+    await recv
+    await task
+
+
+@pytest.mark.asyncio
+async def test_compress_fits_gzip():
+    """Explicit GZIP_1 algorithm works for 16-bit data."""
+    image_data = np.arange(64, dtype=np.uint16).reshape(8, 8)
+    fits_buf = _make_fits_buffer(image_data)
+
+    op = CompressFITS(algorithm="GZIP_1")
+    incoming = DataFlow()
+    outgoing = DataFlow()
+    task = asyncio.create_task(op.process([incoming], [outgoing]))
+
+    async def receiver():
+        _, compressed_buf = await outgoing.receive("buffer")
+        with fits.open(io.BytesIO(compressed_buf)) as hdul:
+            assert isinstance(hdul[1], fits.CompImageHDU)
+            np.testing.assert_array_equal(hdul[1].data, image_data)
+
+    recv = asyncio.create_task(receiver())
+    await incoming.send(Context(), fits_buf)
+    await recv
+    await task
+
+
+@pytest.mark.asyncio
+async def test_compress_fits_fallback_on_64bit(caplog):
+    """64-bit data with RICE_1 falls back to GZIP_1 with a warning."""
+    image_data = np.arange(64, dtype=np.int64).reshape(8, 8)
+    fits_buf = _make_fits_buffer(image_data)
+
+    op = CompressFITS(algorithm="RICE_1")
+    incoming = DataFlow()
+    outgoing = DataFlow()
+    task = asyncio.create_task(op.process([incoming], [outgoing]))
+
+    async def receiver():
+        _, compressed_buf = await outgoing.receive("buffer")
+        with fits.open(io.BytesIO(compressed_buf)) as hdul:
+            assert isinstance(hdul[1], fits.CompImageHDU)
+            np.testing.assert_array_equal(hdul[1].data, image_data)
+
+    recv = asyncio.create_task(receiver())
+    with caplog.at_level("WARNING", logger="sensorkit.data.fits"):
+        await incoming.send(Context(), fits_buf)
+        await recv
+        await task
+
+    assert "exceeds 32 bits" in caplog.text
+    assert "GZIP_1" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_compress_fits_passthrough_header():
+    """FITS header keywords survive compression."""
+    image_data = np.zeros((8, 8), dtype=np.uint16)
+    fits_buf = _make_fits_buffer(image_data, {"INSTRUME": "TestCam", "EXPTIME": 30.0})
+
+    op = CompressFITS()
+    incoming = DataFlow()
+    outgoing = DataFlow()
+    task = asyncio.create_task(op.process([incoming], [outgoing]))
+
+    async def receiver():
+        _, compressed_buf = await outgoing.receive("buffer")
+        with fits.open(io.BytesIO(compressed_buf)) as hdul:
+            header = hdul[1].header
+            assert header["INSTRUME"] == "TestCam"
+            assert header["EXPTIME"] == 30.0
+
+    recv = asyncio.create_task(receiver())
+    await incoming.send(Context(), fits_buf)
     await recv
     await task

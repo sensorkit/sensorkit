@@ -1,5 +1,6 @@
 import asyncio
 import io
+import logging
 from collections.abc import Buffer
 from typing import Literal
 
@@ -9,6 +10,8 @@ from pydantic import BaseModel, Field
 
 from sensorkit.common.keyword import declare_keyword
 from sensorkit.data.graph import DataFlow, DataOp
+
+logger = logging.getLogger(__name__)
 
 
 @declare_keyword
@@ -112,6 +115,61 @@ class ArrayToFITS(DataOp):
         hdul.writeto(bio)
 
         await outgoing[0].send(context, bio.getvalue())
+
+
+class CompressFITS(DataOp):
+    """Tile-compress a FITS image buffer using the FITS tiled-image convention.
+
+    Wraps the primary image HDU in a CompImageHDU. If the image data exceeds
+    32 bits per pixel (e.g. int64, float64), compression falls back to GZIP_1
+    (lossless for all dtypes) and logs a warning, since RICE_1 only supports
+    ≤32-bit values.
+    """
+    op: Literal["compress_fits"] = "compress_fits"
+    algorithm: Literal["RICE_1", "GZIP_1", "GZIP_2", "HCOMPRESS_1"] = Field(
+        "RICE_1",
+        description="Tile compression algorithm. RICE_1 is lossless for ≤32-bit integer data.",
+    )
+    quantize_level: float = Field(
+        0.0,
+        description=(
+            "Floating-point quantization level. 0 disables quantization (lossless). "
+            "Values > 0 enable lossy quantization for floating-point data."
+        ),
+    )
+
+    async def process(self, incoming: list[DataFlow], outgoing: list[DataFlow]):
+        context, buffer = await incoming[0].receive("buffer")
+        compressed = await asyncio.to_thread(self._compress, buffer)
+        await outgoing[0].send(context, compressed)
+
+    def _compress(self, buffer: bytes) -> bytes:
+        with fits.open(io.BytesIO(buffer)) as hdul:
+            data = hdul[0].data
+            header = hdul[0].header
+
+            algorithm = self.algorithm
+
+            # Safety check: RICE_1 and HCOMPRESS_1 only support ≤32-bit data.
+            if data.dtype.itemsize > 4 and algorithm in ("RICE_1", "HCOMPRESS_1"):
+                logger.warning(
+                    "compress_fits: image dtype %s exceeds 32 bits; "
+                    "falling back to GZIP_1 for lossless compression.",
+                    data.dtype,
+                )
+                algorithm = "GZIP_1"
+
+            compressed_hdu = fits.CompImageHDU(
+                data=data,
+                header=header,
+                compression_type=algorithm,
+                quantize_level=self.quantize_level,
+            )
+            new_hdul = fits.HDUList([fits.PrimaryHDU(), compressed_hdu])
+
+            bio = io.BytesIO()
+            new_hdul.writeto(bio)
+            return bio.getvalue()
 
 
 class ContextFromFITS(DataOp):
