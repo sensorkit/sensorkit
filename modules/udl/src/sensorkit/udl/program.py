@@ -15,6 +15,7 @@ from dotenv import dotenv_values
 from loguru import logger
 from pydantic import BaseModel, Field
 from unifieddatalibrary import AsyncUnifieddatalibrary
+from unifieddatalibrary._types import Headers
 from unifieddatalibrary.types import CollectRequestFull
 
 import sensorkit.api as sk
@@ -29,6 +30,22 @@ from sensorkit.udl.models import (
     UDLReferenceFrame,
 )
 from sensorkit.udl.task_queue import TaskQueue
+
+
+class _UDLClient(AsyncUnifieddatalibrary):
+    """UDL SDK client that permits cert-only and unauthenticated requests.
+
+    The stock client refuses to issue any request unless it can resolve a
+    username/password/access_token, or the Authorization header is omitted
+    per-request. We support two auth modes it doesn't anticipate as a client
+    default: cert auth (handled at the TLS layer, no Authorization header) and
+    unauthenticated access to local UDL-like endpoints. Relax the check here;
+    a partial/missing credential misconfig is already caught by
+    UDLProgram._load_credentials.
+    """
+
+    def _validate_headers(self, headers: Headers, custom_headers: Headers) -> None:
+        return None
 
 
 def _udl_ts(dt: datetime) -> str:
@@ -106,19 +123,26 @@ class UDLProgram:
             self.state = UDLState()
 
     @staticmethod
-    def _load_credentials(endpoint: UDLEndpointConfig) -> tuple[str, str]:
-        """Read UDL_USERNAME/UDL_PASSWORD for an endpoint (use_certs=False)."""
+    def _load_credentials(endpoint: UDLEndpointConfig) -> tuple[str | None, str | None]:
+        """Read UDL_USERNAME/UDL_PASSWORD for an endpoint (use_certs=False).
+
+        Returns (None, None) when no credentials are configured, allowing
+        unauthenticated requests against local UDL-like endpoints (e.g. a
+        UDLx-enabled MACHINA that doesn't enforce auth). When exactly one of
+        username/password is provided, the partial config is treated as a
+        mistake and rejected.
+        """
         env = dotenv_values(endpoint.env_file)
         username = env.get("UDL_USERNAME") or os.environ.get("UDL_USERNAME")
         password = env.get("UDL_PASSWORD") or os.environ.get("UDL_PASSWORD")
 
-        if not username or not password:
+        if bool(username) != bool(password):
             raise RuntimeError(
-                f"UDL_USERNAME and UDL_PASSWORD must be set in "
-                f"{endpoint.env_file} or as environment variables"
+                f"UDL_USERNAME and UDL_PASSWORD must both be set (or both omitted) "
+                f"in {endpoint.env_file} or as environment variables"
             )
 
-        return username, password
+        return username or None, password or None
 
     def _create_client(
         self, endpoint: UDLEndpointConfig, username: str | None, password: str | None
@@ -131,7 +155,7 @@ class UDLProgram:
                 timeout=endpoint.timeout,
             )
             logger.debug(f"using cert-based auth for {endpoint.base_url}")
-            return AsyncUnifieddatalibrary(
+            return _UDLClient(
                 http_client=http_client,
                 base_url=endpoint.base_url,
             )
@@ -144,7 +168,7 @@ class UDLProgram:
         if endpoint.base_url:
             client_kwargs["base_url"] = endpoint.base_url
 
-        return AsyncUnifieddatalibrary(**client_kwargs)
+        return _UDLClient(**client_kwargs)
 
     @sk.on_attach
     async def program_init(self) -> None:

@@ -16,6 +16,7 @@ import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -494,3 +495,61 @@ async def test_poll_from_a_respond_to_a_publish_to_b(
     imagery_a = await get_skyimagery_from_udlx(udlx_a_base_url, id_sensor)
     assert len(imagery_b) == 1, "Expected 1 SkyImagery in instance B (upload endpoint)"
     assert len(imagery_a) == 0, "Expected 0 SkyImagery in instance A (polling endpoint)"
+
+
+@pytest.mark.asyncio
+async def test_program_init_without_credentials(
+    _mock_sk_program,
+    monkeypatch: pytest.MonkeyPatch,
+    udlx_a_base_url: str,
+) -> None:
+    """
+    BEHAVIOR: With no certs and no username/password configured, the program
+    initializes and talks to a local UDL-like endpoint unauthenticated.
+
+    Drives the real program_init() (which the other tests bypass) so this
+    exercises the credential-resolution path end-to-end. The UDLx instances
+    accept unauthenticated requests, so an immediate poll must succeed.
+    """
+    # Ensure neither the environment nor a stray .env supplies credentials.
+    monkeypatch.delenv("UDL_USERNAME", raising=False)
+    monkeypatch.delenv("UDL_PASSWORD", raising=False)
+
+    config = UDLConfig(
+        controller="controller1",
+        api=UDLAPIConfig(
+            base_url=udlx_a_base_url,
+            id_sensor="UDLX-TEST-NOAUTH",
+            source=TEST_SOURCE,
+            env_file="/nonexistent/.env",
+        ),
+    )
+
+    async def _kv_get_model(model):
+        if model is UDLConfig:
+            return config
+        raise Exception("no saved state")
+
+    _mock_sk_program.kv_get_model = AsyncMock(side_effect=_kv_get_model)
+
+    program = UDLProgram()
+    try:
+        # Without the fix this raises RuntimeError at credential loading.
+        await program.program_init()
+
+        assert program.client is not None
+        assert program.upload_client is program.client, (
+            "No api.upload → upload client aliases primary client"
+        )
+
+        # An unauthenticated poll against the live instance must succeed
+        # (raises on auth failure inside the SDK call).
+        await program.client.collect_requests.list(
+            start_time=f"<{datetime.now(UTC):%Y-%m-%dT%H:%M:%S.%f}Z",
+            extra_query={
+                "origSensorId": "UDLX-TEST-NOAUTH",
+                "endTime": f">{datetime.now(UTC):%Y-%m-%dT%H:%M:%S.%f}Z",
+            },
+        )
+    finally:
+        await program.program_deinit()
