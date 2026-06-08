@@ -312,72 +312,74 @@ class ProgramStateManager:
         return self._desired_enable.get(program)
 
     async def start(
-        self, client: SensorKit, discovery: ProgramDiscovery, task_group: Any = asyncio
+        self,
+        client: SensorKit,
+        discovery: ProgramDiscovery,
+        task_group: asyncio.TaskGroup,
     ):
         """Start the background task that drives remote program enable/disable state."""
-        task_group.create_task(self._drive_remote_state(client, discovery))
+        self.client = client
+        self.discovery = discovery
+        self._retries = set()
+        self._program_locks: dict[str, asyncio.Lock] = {}
 
-    async def _drive_remote_state(self, client: SensorKit, discovery: ProgramDiscovery):
-        retries = set()
-        program_locks: dict[str, asyncio.Lock] = {}
+        # Start monitoring tasks.
+        task_group.create_task(self._watch_discovery())
+        task_group.create_task(self._watch_changes())
 
-        async def handle_program(program: str):
-            if program not in program_locks:
-                program_locks[program] = asyncio.Lock()
+    async def _handle_program(self, program: str):
+        if program not in self._program_locks:
+            self._program_locks[program] = asyncio.Lock()
 
-            async with program_locks[program]:
+        async with self._program_locks[program]:
+            program_client = self.client.program(program)
+
+            try:
+                state = await program_client.kv_get_model(ProgramState)
                 target = self.get_target_controller(program)
-                program_client = client.program(program)
-                try:
-                    state = await program_client.kv_get_model(ProgramState)
-                    target = self.get_target_controller(program)
-                    if target:
-                        if (
-                            not state.enable_state.enabled
-                            or state.enable_state.controller != target
-                        ):
-                            logger.info(f"Enabling program {program} for {target}")
-                            await program_client.enable(target)
-                    else:
-                        if state.enable_state.enabled:
-                            logger.info(f"Disabling program {program}")
-                            await program_client.disable()
-                except Exception as e:
-                    logger.error(f"Failed to drive program {program} state: {e}")
 
-                    async def delayed_retry(delay: float = 10.0):
-                        logger.debug(f"retrying in {delay} sec")
-                        await asyncio.sleep(delay)
-                        await handle_program(program)
-
-                    retries.add(asyncio.create_task(delayed_retry()))
-
-                for task in list(retries):
-                    if task.done():
-                        retries.discard(task)
-
-        async def watch_discovery():
-            previous_discovered = set()
-
-            async for programs in discovery.known_programs():
-                changed = programs.symmetric_difference(previous_discovered)
-
-                for p in changed:
-                    if p in self.all_programs:
-                        await handle_program(p)
-
-                previous_discovered = programs
-
-        async def watch_changes():
-            async for program in self.on_change.consume(initial_value=True):
-                if program is None:
-                    # Global change, re-evaluate all programs.
-                    for p in self.all_programs:
-                        await handle_program(p)
+                if target:
+                    if not state.enable_state.enabled or state.enable_state.controller != target:
+                        logger.info(f"Enabling program {program} for {target}")
+                        await program_client.enable(target)
                 else:
-                    await handle_program(program)
+                    if state.enable_state.enabled:
+                        logger.info(f"Disabling program {program}")
+                        await program_client.disable()
+            except Exception as e:
+                logger.error(f"Failed to drive program {program} state: {e}")
 
-        await asyncio.gather(watch_discovery(), watch_changes())
+                async def delayed_retry(delay: float = 10.0):
+                    logger.debug(f"retrying in {delay} sec")
+                    await asyncio.sleep(delay)
+                    await self._handle_program(program)
+
+                self._retries.add(asyncio.create_task(delayed_retry()))
+
+            for task in list(self._retries):
+                if task.done():
+                    self._retries.discard(task)
+
+    async def _watch_discovery(self):
+        previous_discovered = set()
+
+        async for programs in self.discovery.known_programs():
+            changed = programs.symmetric_difference(previous_discovered)
+
+            for p in changed:
+                if p in self.all_programs:
+                    await self._handle_program(p)
+
+            previous_discovered = programs
+
+    async def _watch_changes(self):
+        async for program in self.on_change.consume(initial_value=True):
+            if program is None:
+                # Global change, re-evaluate all programs.
+                for p in self.all_programs:
+                    await self._handle_program(p)
+            else:
+                await self._handle_program(program)
 
     def enabled_programs(self):
         """Return the set of currently enabled program entity names."""
