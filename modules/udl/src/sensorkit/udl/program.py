@@ -14,8 +14,8 @@ import httpx
 from dotenv import dotenv_values
 from loguru import logger
 from pydantic import BaseModel, Field
-from unifieddatalibrary import AsyncUnifieddatalibrary
-from unifieddatalibrary._types import Headers
+from unifieddatalibrary import AsyncUnifieddatalibrary, Omit
+from unifieddatalibrary._models import FinalRequestOptions
 from unifieddatalibrary.types import CollectRequestFull
 
 import sensorkit.api as sk
@@ -32,20 +32,25 @@ from sensorkit.udl.models import (
 from sensorkit.udl.task_queue import TaskQueue
 
 
-class _UDLClient(AsyncUnifieddatalibrary):
-    """UDL SDK client that permits cert-only and unauthenticated requests.
+class _UnauthenticatedUDLClient(AsyncUnifieddatalibrary):
+    """UDL SDK client for cert-auth or unauthenticated endpoints.
 
-    The stock client refuses to issue any request unless it can resolve a
-    username/password/access_token, or the Authorization header is omitted
-    per-request. We support two auth modes it doesn't anticipate as a client
-    default: cert auth (handled at the TLS layer, no Authorization header) and
-    unauthenticated access to local UDL-like endpoints. Relax the check here;
-    a partial/missing credential misconfig is already caught by
-    UDLProgram._load_credentials.
+    The stock client refuses to issue a request unless it resolves a
+    username/password/access_token, or the Authorization header is explicitly
+    omitted per-request. Cert auth (handled at the TLS layer) and unauthenticated
+    local endpoints send no Authorization header, so we omit it via the SDK's
+    own sanctioned mechanism on every request. This leaves the SDK's header
+    validation in force — rather than disabling it — so an unexpected request
+    that somehow lacks the omission still fails loudly.
+
+    Use this only when there is no Basic-auth header to preserve: the SDK merges
+    per-request headers over the client's auth headers, so an injected Omit on a
+    credentialed client would strip its own Authorization.
     """
 
-    def _validate_headers(self, headers: Headers, custom_headers: Headers) -> None:
-        return None
+    async def _prepare_options(self, options: FinalRequestOptions) -> FinalRequestOptions:
+        options.headers = {**(options.headers or {}), "Authorization": Omit()}
+        return await super()._prepare_options(options)
 
 
 def _udl_ts(dt: datetime) -> str:
@@ -155,20 +160,25 @@ class UDLProgram:
                 timeout=endpoint.timeout,
             )
             logger.debug(f"using cert-based auth for {endpoint.base_url}")
-            return _UDLClient(
+            return _UnauthenticatedUDLClient(
                 http_client=http_client,
                 base_url=endpoint.base_url,
             )
 
-        client_kwargs = {
-            "username": username,
-            "password": password,
-            "timeout": endpoint.timeout,
-        }
+        client_kwargs = {"timeout": endpoint.timeout}
         if endpoint.base_url:
             client_kwargs["base_url"] = endpoint.base_url
 
-        return _UDLClient(**client_kwargs)
+        if username and password:
+            return AsyncUnifieddatalibrary(
+                username=username, password=password, **client_kwargs
+            )
+
+        logger.warning(
+            f"no UDL credentials configured; issuing unauthenticated requests "
+            f"to {endpoint.base_url}"
+        )
+        return _UnauthenticatedUDLClient(**client_kwargs)
 
     @sk.on_attach
     async def program_init(self) -> None:
