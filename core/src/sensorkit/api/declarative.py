@@ -200,7 +200,15 @@ class DeclaredEntity[T: EntityImpl = EntityImpl](EntityDelegate):
         self.client = client
         self.service = service
 
-        # Run init callbacks.
+        # Run init callbacks and the post-initialization hook. Also start a background task to
+        # trap service shutdown and run the deinit callbacks, and return the task to the user.
+        await self._run_init_callbacks()
+        await self.post_decl_init()
+
+        self._deinit_task = asyncio.create_task(self._run_deinit_callbacks())
+        return self._deinit_task
+
+    async def _run_init_callbacks(self):
         with self.impl.enter_context():
             for init_callback in self._init_callbacks:
                 try:
@@ -212,44 +220,38 @@ class DeclaredEntity[T: EntityImpl = EntityImpl](EntityDelegate):
                     logger.warning(f"Error during {self.name} initialization ({type(e).__name__})")
                     raise
 
-        # Run post-initialization hook.
-        await self.post_decl_init()
-
-        async def run_deinit_callbacks():
-            try:
-                # Wait for the service task to end.
-                await self.service.join()
-            except asyncio.CancelledError:
-                # Propagate only direct cancellation.
-                if asyncio.current_task().cancelling():
-                    raise
-            except Exception:
-                # Defer propagation of exceptions until after our deinit callbacks have been run.
-                pass
-
-            # Run deinit callbacks.
-            with self.impl.enter_context():
-                for deinit_callback in self._deinit_callbacks:
-                    try:
-                        aw = deinit_callback()
-
-                        if asyncio.iscoroutine(aw):
-                            await aw
-                    except asyncio.CancelledError:
-                        # Propagate only direct cancellation.
-                        if asyncio.current_task().cancelling():
-                            raise
-
-                        logger.warning(f"Cancelled during cleanup of {self.name}")
-                    except Exception as e:
-                        logger.warning(f"Error cleaning up {self.name} ({type(e).__name__})")
-                        logger.opt(exception=e).debug("deinit callback raised")
-
-            # Propagate exception, if any.
+    async def _run_deinit_callbacks(self):
+        try:
+            # Wait for the service task to end.
             await self.service.join()
+        except asyncio.CancelledError:
+            # Propagate only direct cancellation.
+            if asyncio.current_task().cancelling():
+                raise
+        except Exception:
+            # Defer propagation of exceptions until after our deinit callbacks have been run.
+            pass
 
-        self._deinit_task = asyncio.create_task(run_deinit_callbacks())
-        return self._deinit_task
+        # Run deinit callbacks.
+        with self.impl.enter_context():
+            for deinit_callback in self._deinit_callbacks:
+                try:
+                    aw = deinit_callback()
+
+                    if asyncio.iscoroutine(aw):
+                        await aw
+                except asyncio.CancelledError:
+                    # Propagate only direct cancellation.
+                    if asyncio.current_task().cancelling():
+                        raise
+
+                    logger.warning(f"Cancelled during cleanup of {self.name}")
+                except Exception as e:
+                    logger.warning(f"Error cleaning up {self.name} ({type(e).__name__})")
+                    logger.opt(exception=e).debug("deinit callback raised")
+
+        # Propagate exception, if any.
+        await self.service.join()
 
     def create_impl(self, service: ServiceContext):
         """Instantiate the implementation object bound to *service*."""
