@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+import pytest_asyncio
 from unifieddatalibrary import AsyncUnifieddatalibrary
 from unifieddatalibrary.types import CollectRequestFull
 
@@ -47,6 +48,9 @@ pytestmark = pytest.mark.skipif(
     not (_instance_available(UDLX_A_BASE_URL) and _instance_available(UDLX_B_BASE_URL)),
     reason=f"requires live UDLx instances at {UDLX_A_BASE_URL} and {UDLX_B_BASE_URL}",
 )
+
+
+# ── Query helpers ──
 
 
 async def get_skyimagery_from_udlx(base_url: str, id_sensor: str) -> list[dict[str, Any]]:
@@ -85,6 +89,9 @@ async def get_collectresponses_from_udlx(
             return content
         print(f"Query failed with status {resp.status_code}: {resp.text}")
         return []
+
+
+# ── Data-graph / queue stand-ins ──
 
 
 class _MultiFrameBinding:
@@ -129,6 +136,96 @@ class _StubQueue:
 
     def iter(self):
         return iter(self.pushed)
+
+
+# ── Program builders ──
+
+
+def make_collect_request(id_sensor: str, num_frames: int = 3) -> CollectRequestFull:
+    """CollectRequest as the program would have received it from polling."""
+    return CollectRequestFull.model_validate(
+        {
+            "id": str(uuid.uuid1()),
+            "classificationMarking": "U",
+            "dataMode": "TEST",
+            "source": TEST_SOURCE,
+            "type": "DIRECTED_SEARCH",
+            "startTime": datetime.now(UTC).isoformat(),
+            "endTime": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+            "origSensorId": id_sensor,
+            "idSensor": id_sensor,
+            "satNo": 51850,
+            "numFrames": num_frames,
+            "integrationTime": 1500,
+        }
+    )
+
+
+def make_program(
+    base_url: str,
+    id_sensor: str,
+    collect_request: CollectRequestFull,
+    binding: _MultiFrameBinding,
+    upload_base_url: str | None = None,
+) -> UDLProgram:
+    """
+    Build a UDLProgram wired the way program_init() leaves it, pointed at
+    live UDLx instances (which accept any username/password).
+
+    With upload_base_url set, CollectRequests are polled from base_url while
+    SkyImagery is uploaded to upload_base_url — the dual-endpoint split.
+    """
+    program = UDLProgram()
+    program.config = UDLConfig(
+        controller="controller1",
+        api=UDLAPIConfig(
+            base_url=base_url,
+            id_sensor=id_sensor,
+            source=TEST_SOURCE,
+            upload=(
+                UDLEndpointConfig(base_url=upload_base_url)
+                if upload_base_url
+                else None
+            ),
+        ),
+    )
+    program.client = AsyncUnifieddatalibrary(
+        username="test",
+        password="test",
+        base_url=base_url,
+        timeout=program.config.api.timeout,
+    )
+    program._udl_username = "test"
+    program._udl_password = "test"
+    if upload_base_url:
+        program.upload_client = AsyncUnifieddatalibrary(
+            username="test",
+            password="test",
+            base_url=upload_base_url,
+            timeout=program.config.api.upload.timeout,
+        )
+        program._upload_username = "test"
+        program._upload_password = "test"
+    else:
+        program.upload_client = program.client
+        program._upload_username = program._udl_username
+        program._upload_password = program._udl_password
+    program._site = SitePosition(
+        latitude_degrees=36.06789,
+        longitude_degrees=-115.121193,
+        altitude_km=2.0,
+    )
+    program.tasks = {collect_request.id: collect_request}
+    program.program = binding  # _publish_loop only needs data_graph()
+    program.queue = _StubQueue()
+    return program
+
+
+async def _close_clients(program: UDLProgram) -> None:
+    """Close a program's SDK client(s) (the single-endpoint case aliases them)."""
+    if program.upload_client is not program.client:
+        await program.upload_client.close()
+    await program.client.close()
 
 
 # ── Fixtures ──
@@ -206,28 +303,9 @@ def id_sensor(udlx_a_base_url: str, udlx_b_base_url: str):
             client.delete(f"/udl/sensor/{sensor_id}")
 
 
-def make_collect_request(id_sensor: str, num_frames: int = 3) -> CollectRequestFull:
-    """CollectRequest as the program would have received it from polling."""
-    return CollectRequestFull.model_validate(
-        {
-            "id": str(uuid.uuid1()),
-            "classificationMarking": "U",
-            "dataMode": "TEST",
-            "source": TEST_SOURCE,
-            "type": "DIRECTED_SEARCH",
-            "startTime": datetime.now(UTC).isoformat(),
-            "endTime": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
-            "origSensorId": id_sensor,
-            "idSensor": id_sensor,
-            "satNo": 51850,
-            "numFrames": num_frames,
-            "integrationTime": 1500,
-        }
-    )
-
-
 @pytest.fixture
 def collect_request(id_sensor: str) -> CollectRequestFull:
+    """A CollectRequest already correlated to the program (preloaded into tasks)."""
     return make_collect_request(id_sensor)
 
 
@@ -246,84 +324,149 @@ def publisher_context(collect_request: CollectRequestFull) -> dict[str, Any]:
     }
 
 
-def make_program(
-    base_url: str,
+@pytest_asyncio.fixture
+async def publisher_program(
+    request: pytest.FixtureRequest,
     id_sensor: str,
     collect_request: CollectRequestFull,
-    binding: _MultiFrameBinding,
-    upload_base_url: str | None = None,
-) -> UDLProgram:
-    """
-    Build a UDLProgram wired the way program_init() leaves it, pointed at
-    live UDLx instances (which accept any username/password).
+    publisher_context: dict[str, Any],
+    udlx_a_base_url: str,
+    udlx_b_base_url: str,
+):
+    """A UDLProgram preloaded with one task and a finite data graph, ready to publish.
 
-    With upload_base_url set, CollectRequests are polled from base_url while
-    SkyImagery is uploaded to upload_base_url — the dual-endpoint split.
+    Indirect params (a dict, all keys optional):
+      split:      route SkyImagery to instance B via api.upload (default False)
+      num_frames: frames the data graph emits (default 1)
+
+    Closes the SDK client(s) on teardown.
     """
-    program = UDLProgram()
-    program.config = UDLConfig(
+    params: dict[str, Any] = getattr(request, "param", {})
+    split = params.get("split", False)
+    num_frames = params.get("num_frames", 1)
+
+    program = make_program(
+        base_url=udlx_a_base_url,
+        id_sensor=id_sensor,
+        collect_request=collect_request,
+        binding=_MultiFrameBinding(context=publisher_context, num_frames=num_frames),
+        upload_base_url=udlx_b_base_url if split else None,
+    )
+    try:
+        yield program
+    finally:
+        await _close_clients(program)
+
+
+@pytest_asyncio.fixture
+async def seeded_collect_request(
+    id_sensor: str, udlx_a_base_url: str
+) -> CollectRequestFull:
+    """A CollectRequest tasked into instance A for the poller to discover.
+
+    Cleaned up by the id_sensor fixture (it deletes CollectRequests by origSensorId).
+    """
+    seeded = make_collect_request(id_sensor)
+    payload = seeded.model_dump(by_alias=True, exclude_none=True, mode="json")
+    async with httpx.AsyncClient(base_url=udlx_a_base_url, timeout=30.0) as client:
+        resp = await client.post("/udl/collectrequest", json=payload)
+        assert resp.status_code == 200, f"Failed to seed CollectRequest: {resp.text}"
+    return seeded
+
+
+@pytest_asyncio.fixture
+async def polling_program(
+    seeded_collect_request: CollectRequestFull,
+    id_sensor: str,
+    udlx_a_base_url: str,
+    udlx_b_base_url: str,
+):
+    """Split-mode program that must DISCOVER its task by polling instance A.
+
+    tasks start empty — the seeded CollectRequest is waiting in instance A — so
+    the test exercises the real poll path. Closes SDK client(s) on teardown.
+    """
+    context = {
+        "task_id": seeded_collect_request.id,
+        "frame_num": 0,
+        "date_obs": datetime.now(UTC).isoformat(),
+        "exptime": 1.5,
+        "file_path": "polled_frame.fits",
+    }
+    program = make_program(
+        base_url=udlx_a_base_url,
+        id_sensor=id_sensor,
+        collect_request=seeded_collect_request,
+        binding=_MultiFrameBinding(context=context, num_frames=1),
+        upload_base_url=udlx_b_base_url,
+    )
+    program.tasks = {}  # poller must discover the task, not find it preloaded
+    try:
+        yield program
+    finally:
+        await _close_clients(program)
+
+
+@pytest.fixture
+def config(
+    _mock_sk_program,
+    monkeypatch: pytest.MonkeyPatch,
+    udlx_a_base_url: str,
+) -> UDLConfig:
+    """No-certs, no-username/password UDLConfig wired into the mocked sk.program().
+
+    Clears the credential env vars and points env_file at a nonexistent path so
+    the program resolves to unauthenticated mode, and makes the mocked
+    sk.program().kv_get_model(UDLConfig) return this config (other models raise,
+    mimicking "no saved state"). monkeypatch restores the environment on teardown.
+    """
+    monkeypatch.delenv("UDL_USERNAME", raising=False)
+    monkeypatch.delenv("UDL_PASSWORD", raising=False)
+
+    config = UDLConfig(
         controller="controller1",
         api=UDLAPIConfig(
-            base_url=base_url,
-            id_sensor=id_sensor,
+            base_url=udlx_a_base_url,
+            id_sensor="UDLX-TEST-NOAUTH",
             source=TEST_SOURCE,
-            upload=(
-                UDLEndpointConfig(base_url=upload_base_url)
-                if upload_base_url
-                else None
-            ),
+            env_file="/nonexistent/.env",
         ),
     )
-    program.client = AsyncUnifieddatalibrary(
-        username="test",
-        password="test",
-        base_url=base_url,
-        timeout=program.config.api.timeout,
-    )
-    program._udl_username = "test"
-    program._udl_password = "test"
-    if upload_base_url:
-        program.upload_client = AsyncUnifieddatalibrary(
-            username="test",
-            password="test",
-            base_url=upload_base_url,
-            timeout=program.config.api.upload.timeout,
-        )
-        program._upload_username = "test"
-        program._upload_password = "test"
-    else:
-        program.upload_client = program.client
-        program._upload_username = program._udl_username
-        program._upload_password = program._udl_password
-    program._site = SitePosition(
-        latitude_degrees=36.06789,
-        longitude_degrees=-115.121193,
-        altitude_km=2.0,
-    )
-    program.tasks = {collect_request.id: collect_request}
-    program.program = binding  # _publish_loop only needs data_graph()
-    program.queue = _StubQueue()
-    return program
+
+    async def _kv_get_model(model):
+        if model is UDLConfig:
+            return config
+        raise Exception("no saved state")
+
+    _mock_sk_program.kv_get_model = AsyncMock(side_effect=_kv_get_model)
+    return config
 
 
-async def run_publisher(program: UDLProgram) -> None:
-    """Drain the publish loop (the multi-frame sink is finite) and close up."""
+@pytest_asyncio.fixture
+async def program(config: UDLConfig):
+    """UDLProgram brought up via the real program_init() and torn down after.
+
+    program_init() is the credential-resolution path under test; building it
+    here means a regression (RuntimeError on missing creds) surfaces as a setup
+    failure. program_deinit() cancels the poller/publisher and closes clients.
+    """
+    program = UDLProgram()
+    await program.program_init()
     try:
-        await program._publish_loop()
+        yield program
     finally:
-        if program.upload_client is not program.client:
-            await program.upload_client.close()
-        await program.client.close()
+        await program.program_deinit()
 
 
 # ── Tests ──
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("publisher_program", [{"split": False, "num_frames": 1}], indirect=True)
 async def test_single_endpoint_upload_no_split(
+    publisher_program: UDLProgram,
     collect_request: CollectRequestFull,
     id_sensor: str,
-    publisher_context: dict[str, Any],
     udlx_a_base_url: str,
     udlx_b_base_url: str,
 ) -> None:
@@ -334,16 +477,10 @@ async def test_single_endpoint_upload_no_split(
 
     This test verifies backward compatibility.
     """
-    program = make_program(
-        base_url=udlx_a_base_url,
-        id_sensor=id_sensor,
-        collect_request=collect_request,
-        binding=_MultiFrameBinding(context=publisher_context, num_frames=1),
-    )
-    assert program.upload_client is program.client, (
+    assert publisher_program.upload_client is publisher_program.client, (
         "Without api.upload the upload client should alias the primary client"
     )
-    await run_publisher(program)
+    await publisher_program._publish_loop()
 
     # Assert: SkyImagery exists in instance A
     imagery_a = await get_skyimagery_from_udlx(udlx_a_base_url, id_sensor)
@@ -364,10 +501,10 @@ async def test_single_endpoint_upload_no_split(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("publisher_program", [{"split": True, "num_frames": 1}], indirect=True)
 async def test_split_uploads_imagery_to_b_only(
-    collect_request: CollectRequestFull,
+    publisher_program: UDLProgram,
     id_sensor: str,
-    publisher_context: dict[str, Any],
     udlx_a_base_url: str,
     udlx_b_base_url: str,
 ) -> None:
@@ -377,14 +514,7 @@ async def test_split_uploads_imagery_to_b_only(
 
     This is the core poll-here/upload-there split.
     """
-    program = make_program(
-        base_url=udlx_a_base_url,
-        id_sensor=id_sensor,
-        collect_request=collect_request,
-        binding=_MultiFrameBinding(context=publisher_context, num_frames=1),
-        upload_base_url=udlx_b_base_url,
-    )
-    await run_publisher(program)
+    await publisher_program._publish_loop()
 
     # Assert: SkyImagery exists ONLY in instance B
     imagery_b = await get_skyimagery_from_udlx(udlx_b_base_url, id_sensor)
@@ -398,10 +528,11 @@ async def test_split_uploads_imagery_to_b_only(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("publisher_program", [{"split": True, "num_frames": 3}], indirect=True)
 async def test_split_multi_frame_upload(
+    publisher_program: UDLProgram,
     collect_request: CollectRequestFull,
     id_sensor: str,
-    publisher_context: dict[str, Any],
     udlx_a_base_url: str,
     udlx_b_base_url: str,
 ) -> None:
@@ -410,14 +541,7 @@ async def test_split_multi_frame_upload(
     frame, ALL on the upload endpoint, grouped by imageSetId ==
     CollectRequest.id with 1-based sequenceIds.
     """
-    program = make_program(
-        base_url=udlx_a_base_url,
-        id_sensor=id_sensor,
-        collect_request=collect_request,
-        binding=_MultiFrameBinding(context=publisher_context, num_frames=3),
-        upload_base_url=udlx_b_base_url,
-    )
-    await run_publisher(program)
+    await publisher_program._publish_loop()
 
     # Assert: 3 SkyImagery in instance B
     imagery_b = await get_skyimagery_from_udlx(udlx_b_base_url, id_sensor)
@@ -441,6 +565,8 @@ async def test_split_multi_frame_upload(
 
 @pytest.mark.asyncio
 async def test_poll_from_a_respond_to_a_publish_to_b(
+    polling_program: UDLProgram,
+    seeded_collect_request: CollectRequestFull,
     id_sensor: str,
     udlx_a_base_url: str,
     udlx_b_base_url: str,
@@ -451,45 +577,24 @@ async def test_poll_from_a_respond_to_a_publish_to_b(
     2. The ACCEPTED CollectResponse goes to A (the polling endpoint), not B
     3. Published SkyImagery goes to B (the upload endpoint), not A
     """
-    # Task instance A with a CollectRequest for our sensor
-    seeded = make_collect_request(id_sensor)
-    seed_payload = seeded.model_dump(by_alias=True, exclude_none=True, mode="json")
-    async with httpx.AsyncClient(base_url=udlx_a_base_url, timeout=30.0) as client:
-        resp = await client.post("/udl/collectrequest", json=seed_payload)
-        assert resp.status_code == 200, f"Failed to seed CollectRequest: {resp.text}"
-
-    context = {
-        "task_id": seeded.id,
-        "frame_num": 0,
-        "date_obs": datetime.now(UTC).isoformat(),
-        "exptime": 1.5,
-        "file_path": "polled_frame.fits",
-    }
-    program = make_program(
-        base_url=udlx_a_base_url,
-        id_sensor=id_sensor,
-        collect_request=seeded,
-        binding=_MultiFrameBinding(context=context, num_frames=1),
-        upload_base_url=udlx_b_base_url,
-    )
-    program.tasks = {}  # the poller, not the fixture, must discover the task
-
     # Poll instance A exactly as the background loop does
-    await program._poll_collect_requests()
+    await polling_program._poll_collect_requests()
 
-    assert seeded.id in program.tasks, "Poller should have picked up the seeded request"
-    assert len(program.queue.pushed) == 1, "Request should be queued for execution"
+    assert seeded_collect_request.id in polling_program.tasks, (
+        "Poller should have picked up the seeded request"
+    )
+    assert len(polling_program.queue.pushed) == 1, "Request should be queued for execution"
 
     # ACCEPTED CollectResponse landed in A only
-    responses_a = await get_collectresponses_from_udlx(udlx_a_base_url, seeded.id)
-    responses_b = await get_collectresponses_from_udlx(udlx_b_base_url, seeded.id)
+    responses_a = await get_collectresponses_from_udlx(udlx_a_base_url, seeded_collect_request.id)
+    responses_b = await get_collectresponses_from_udlx(udlx_b_base_url, seeded_collect_request.id)
     assert len(responses_a) == 1, "Expected ACCEPTED CollectResponse in instance A"
     assert responses_a[0]["status"] == "ACCEPTED"
     assert responses_a[0]["idSensor"] == id_sensor
     assert len(responses_b) == 0, "CollectResponses must stay on the polling endpoint"
 
     # Publish imagery for the polled task
-    await run_publisher(program)
+    await polling_program._publish_loop()
 
     imagery_b = await get_skyimagery_from_udlx(udlx_b_base_url, id_sensor)
     imagery_a = await get_skyimagery_from_udlx(udlx_a_base_url, id_sensor)
@@ -498,58 +603,27 @@ async def test_poll_from_a_respond_to_a_publish_to_b(
 
 
 @pytest.mark.asyncio
-async def test_program_init_without_credentials(
-    _mock_sk_program,
-    monkeypatch: pytest.MonkeyPatch,
-    udlx_a_base_url: str,
-) -> None:
+async def test_program_init_without_credentials(program: UDLProgram) -> None:
     """
     BEHAVIOR: With no certs and no username/password configured, the program
     initializes and talks to a local UDL-like endpoint unauthenticated.
 
-    Drives the real program_init() (which the other tests bypass) so this
-    exercises the credential-resolution path end-to-end. The UDLx instances
-    accept unauthenticated requests, so an immediate poll must succeed.
+    Drives the real program_init() (via the `program` fixture, which the other
+    tests bypass) so this exercises the credential-resolution path end-to-end.
+    The UDLx instances accept unauthenticated requests, so an immediate poll
+    must succeed.
     """
-    # Ensure neither the environment nor a stray .env supplies credentials.
-    monkeypatch.delenv("UDL_USERNAME", raising=False)
-    monkeypatch.delenv("UDL_PASSWORD", raising=False)
-
-    config = UDLConfig(
-        controller="controller1",
-        api=UDLAPIConfig(
-            base_url=udlx_a_base_url,
-            id_sensor="UDLX-TEST-NOAUTH",
-            source=TEST_SOURCE,
-            env_file="/nonexistent/.env",
-        ),
+    assert program.client is not None
+    assert program.upload_client is program.client, (
+        "No api.upload → upload client aliases primary client"
     )
 
-    async def _kv_get_model(model):
-        if model is UDLConfig:
-            return config
-        raise Exception("no saved state")
-
-    _mock_sk_program.kv_get_model = AsyncMock(side_effect=_kv_get_model)
-
-    program = UDLProgram()
-    try:
-        # Without the fix this raises RuntimeError at credential loading.
-        await program.program_init()
-
-        assert program.client is not None
-        assert program.upload_client is program.client, (
-            "No api.upload → upload client aliases primary client"
-        )
-
-        # An unauthenticated poll against the live instance must succeed
-        # (raises on auth failure inside the SDK call).
-        await program.client.collect_requests.list(
-            start_time=f"<{datetime.now(UTC):%Y-%m-%dT%H:%M:%S.%f}Z",
-            extra_query={
-                "origSensorId": "UDLX-TEST-NOAUTH",
-                "endTime": f">{datetime.now(UTC):%Y-%m-%dT%H:%M:%S.%f}Z",
-            },
-        )
-    finally:
-        await program.program_deinit()
+    # An unauthenticated poll against the live instance must succeed
+    # (raises on auth failure inside the SDK call).
+    await program.client.collect_requests.list(
+        start_time=f"<{datetime.now(UTC):%Y-%m-%dT%H:%M:%S.%f}Z",
+        extra_query={
+            "origSensorId": "UDLX-TEST-NOAUTH",
+            "endTime": f">{datetime.now(UTC):%Y-%m-%dT%H:%M:%S.%f}Z",
+        },
+    )
