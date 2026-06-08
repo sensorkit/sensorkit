@@ -8,7 +8,7 @@ import os
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import httpx
 from dotenv import dotenv_values
@@ -165,7 +165,7 @@ class UDLProgram:
                 base_url=endpoint.base_url,
             )
 
-        client_kwargs = {"timeout": endpoint.timeout}
+        client_kwargs: dict[str, Any] = {"timeout": endpoint.timeout}
         if endpoint.base_url:
             client_kwargs["base_url"] = endpoint.base_url
 
@@ -541,11 +541,11 @@ class UDLProgram:
 
         url = self._imagery_filedrop_url()
         if url is None:
-            # Pass a (filename, bytes) tuple so the multipart part carries a
-            # .zip filename — MACHINA's filedrop rejects unnamed payloads with
-            # "Only zip files are allowed".
+            # The UDL filedrop contract is "a zip is all that's required" — no
+            # multipart filename. We rely on that, and our integration tests
+            # assert UDLx MACHINA keeps parity by accepting the same payload.
             await self.upload_client.sky_imagery.upload_zip(
-                file=("skyimagery.zip", zip_bytes),
+                file=zip_bytes,
                 timeout=endpoint.upload_timeout,
             )
             return
