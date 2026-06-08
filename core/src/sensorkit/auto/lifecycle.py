@@ -221,6 +221,19 @@ class DemandProc(ABC):
         """Immediate abort logic for this demand procedure."""
 
     @final
+    async def interrupt_no_raise(self, msg: Any | None = None, *, abort: bool = False):
+        """Interrupt the current demand procedure and return any exceptions that occurred."""
+        try:
+            if abort:
+                await self.abort()
+            else:
+                await self.stop()
+        except Exception as e:
+            return e
+
+        return None
+
+    @final
     async def stop(self, msg: Any | None = None):
         """End the task gracefully and wait for completion."""
         if self._interrupt_level > 1:
@@ -388,81 +401,9 @@ class ControllerLifecycle:
                 # demand state change or a passive error to occur.
                 demand_proc = None
 
-            # Build a list of futures that capture when:
-            #   a) the demand procedure, if there is one, ends
-            #     - it should have raised; this is considered an active error
-            #     - if it did not raise, this is a bug
-            #   b) a demand state change is detected
-            #   c) the Controller explicitly reports an error
-            futures: list[asyncio.Future[None]] = [
-                asyncio.create_task(self._demand.wait_until_pending()),
-                asyncio.create_task(self._monitor.wait()),
-                *([demand_proc.future()] if demand_proc else []),
-            ]
-
             try:
-                # Wait for any of the above conditions to occur.
-                await asyncio.wait(futures, return_when=asyncio.FIRST_COMPLETED)
-
-                # Determine whether we are in an error state.
-                active_error: BaseException | None = None
-
-                if demand_proc:
-                    if demand_proc.done():
-                        # The demand procedure has ended. This can only happen through cancellation
-                        # or by an error occurring, so by contract it must have raised.
-                        active_error = demand_proc.error()
-                        assert active_error, "demand procedures must raise"
-                    elif self._demand.pending_change():
-                        # The demand procedure is still executing and our demand has changed. Stop
-                        # it according to the interrupt policy of the incoming demand.
-                        try:
-                            if self._demand.pending_value.interrupt:
-                                await demand_proc.abort()
-                            else:
-                                await demand_proc.stop()
-                        except Exception as e:
-                            active_error = e
-                    else:
-                        # The demand procedure is still executing and a passive error was detected.
-                        # In this case we always send a hard abort.
-                        assert self._monitor.in_error()
-
-                        try:
-                            await demand_proc.abort()
-                        except Exception as e:
-                            active_error = e
-
-                error_kind: DemandProcError.ErrorKind | None = None
-
-                if self._monitor.in_error():
-                    error_kind = "controller"
-                elif isinstance(active_error, DemandProcError):
-                    error_kind = active_error.kind
-                elif active_error:
-                    error_kind = "internal"
-
-                match error_kind:
-                    case "controller":
-                        # Run the recovery loop if the controller is in an error state.
-                        logger.error(f"Controller lifecycle error: {active_error or '<passive>'}")
-
-                        try:
-                            await self._error_recovery()
-                        except Exception:
-                            # If we were unable to recover from the error state, the controller is
-                            # inoperable!
-                            # FIXME: This will be replaced by blacklisting/backoff, and throwing in
-                            #        the towel will be left as a higher-level decision.
-                            logger.critical("Controller is inoperable!")
-                            self._can_operate.clear()
-                    case "program":
-                        logger.opt(exception=active_error).error(f"Program lifecycle error: {active_error}")
-                        # TODO: Handle retry counting and blacklisting via ProgramStateManager.
-
-                # Sleep to avoid thrashing, but only when there was an error.
-                if error_kind is not None:
-                    await asyncio.sleep(5.0)
+                # Wait for our procedure to complete or an error to occur.
+                error_kind = await self._lifecycle_reactor(demand_proc)
             except asyncio.CancelledError:
                 logger.debug(f"{self.controller.entity} lifecycle loop cancelled")
 
@@ -473,10 +414,81 @@ class ControllerLifecycle:
                         await demand_proc.abort()
 
                 raise
-            finally:
-                # Clean up tasks.
-                for future in futures:
-                    future.cancel()
+
+            # Sleep to avoid thrashing, but only when there was an error.
+            if error_kind is not None:
+                await asyncio.sleep(5.0)
+
+    async def _lifecycle_reactor(self, demand_proc: DemandProc | None):
+        # Build a list of futures that capture when:
+        #   a) the demand procedure, if there is one, ends
+        #     - it should have raised; this is considered an active error
+        #     - if it did not raise, this is a bug
+        #   b) a demand state change is detected
+        #   c) the Controller explicitly reports an error
+        futures: list[asyncio.Future[None]] = [
+            asyncio.create_task(self._demand.wait_until_pending()),
+            asyncio.create_task(self._monitor.wait()),
+            *([demand_proc.future()] if demand_proc else []),
+        ]
+
+        try:
+            # Wait for any of the above conditions to occur.
+            await asyncio.wait(futures, return_when=asyncio.FIRST_COMPLETED)
+
+            # Determine whether we are in an error state.
+            active_error: BaseException | None = None
+
+            if demand_proc:
+                if demand_proc.done():
+                    # The demand procedure has ended. This can only happen through cancellation
+                    # or by an error occurring, so by contract it must have raised.
+                    active_error = demand_proc.error()
+                elif self._demand.pending_change():
+                    # The demand procedure is still executing and our demand has changed. Stop
+                    # it according to the interrupt policy of the incoming demand.
+                    active_error = await demand_proc.interrupt_no_raise(
+                        abort=self._demand.pending_value.interrupt
+                    )
+                else:
+                    # The demand procedure is still executing and a passive error was detected.
+                    # In this case we always send a hard abort.
+                    assert self._monitor.in_error()
+                    active_error = await demand_proc.interrupt_no_raise(abort=True)
+
+            error_kind = (
+                "controller"
+                if self._monitor.in_error()
+                else active_error.kind
+                if isinstance(active_error, DemandProcError)
+                else "internal"
+                if active_error
+                else None
+            )
+
+            match error_kind:
+                case "controller":
+                    # Run the recovery loop if the controller is in an error state.
+                    logger.error(f"Controller lifecycle error: {active_error or '<passive>'}")
+
+                    try:
+                        await self._error_recovery()
+                    except Exception:
+                        # If we were unable to recover from the error state, the controller is
+                        # inoperable!
+                        # FIXME: This will be replaced by blacklisting/backoff, and throwing in
+                        #        the towel will be left as a higher-level decision.
+                        logger.critical("Controller is inoperable!")
+                        self._can_operate.clear()
+                case "program":
+                    logger.opt(exception=active_error).error(f"Program lifecycle error: {active_error}")
+                    # TODO: Handle retry counting and blacklisting via ProgramStateManager.
+
+            return error_kind
+        finally:
+            # Clean up tasks.
+            for future in futures:
+                future.cancel()
 
     async def _error_recovery(self):
         self.belief_state = InternalControllerState.ERROR
