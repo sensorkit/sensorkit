@@ -139,45 +139,63 @@ async def run_services(
         raise
 
 
-def _service_loop(
-    name: str,
-    entrypoint: ServiceEntrypoint,
-    shutdown_signal: concurrent.futures.Future,
+def _restart_loop(
+    wait_fn: Callable[[float], bool],
+    *,
     max_restarts: int | None = None,
     startup_failure_threshold: float = 30.0,
     restart_backoff_min: float = 5.0,
     restart_backoff_max: float = 300.0,
     restart_backoff_random: float = 5.0,
     restart_backoff_factor: float = 1.8,
-    startup_timeout: float = 300.0,
-    shutdown_timeout: float = 5.0,
 ):
+    """Restart loop generator. Yields once per iteration; caller runs the service body.
+
+    wait_fn(seconds) must return True to continue or False for graceful shutdown, and
+    raise to signal an abnormal stop.
+    """
     restarts = 0
     backoff = 0.0
+
+    while max_restarts is None or restarts <= max_restarts:
+        if not wait_fn(backoff):
+            return
+
+        start = time.monotonic()
+        yield
+        elapsed = time.monotonic() - start
+
+        if elapsed < startup_failure_threshold:
+            restarts += 1
+            backoff = backoff * restart_backoff_factor + random() * restart_backoff_random
+            backoff = min(max(backoff, restart_backoff_min), restart_backoff_max)
+        else:
+            restarts = 1
+            backoff = 0.0
+
+
+def _service_loop(
+    name: str,
+    entrypoint: ServiceEntrypoint,
+    shutdown_signal: concurrent.futures.Future,
+    startup_timeout: float = 300.0,
+    shutdown_timeout: float = 5.0,
+    **kwargs,
+):
     last_err: Exception | None = None
 
+    def _wait_for_shutdown(timeout: float) -> bool:
+        if timeout > 0.0 and not shutdown_signal.done():
+            logger.info(f"Waiting {timeout:1.0f} sec before restarting {name} ...")
+        try:
+            shutdown_signal.result(timeout=timeout)
+            return False
+        except concurrent.futures.TimeoutError:
+            return True
+
     try:
-        # Loop while we have not had too many consecutive failed restarts.
-        while max_restarts is None or restarts <= max_restarts:
-            # Backoff if required, waking early if the shutdown signal fires.
-            if backoff > 0.0 and not shutdown_signal.done():
-                logger.info(f"Waiting {backoff:1.0f} sec before restarting {name} ...")
-
-            try:
-                # Check for the shutdown signal, performing backoff wait as necessary. If this does
-                # not raise, the service stopped gracefully.
-                shutdown_signal.result(timeout=backoff)
-                break
-            except concurrent.futures.TimeoutError:
-                pass
-            except Exception as e:
-                # The service stopped abnormally.
-                last_err = e
-                break
-
-            # Run the service in a fresh event loop.
+        for _ in _restart_loop(_wait_for_shutdown, **kwargs):
             logger.info(f"Starting {name}")
-            start_time = time.monotonic()
             last_err = None
 
             try:
@@ -189,20 +207,8 @@ def _service_loop(
             except Exception as e:
                 logger.error(f"Service {name} exited due to {type(e).__name__}")
                 last_err = e
-
-            # Decide whether the previous run was a failure.
-            prev_elapsed = time.monotonic() - start_time
-
-            if prev_elapsed < startup_failure_threshold:
-                # Increment our restart counter and calculate exponential backoff.
-                restarts += 1
-                backoff = backoff * restart_backoff_factor + random() * restart_backoff_random
-                backoff = min(max(backoff, restart_backoff_min), restart_backoff_max)
-            else:
-                # This wasn't considered a failed startup, so reset our consecutive restart counter
-                # and zero out the backoff wait.
-                restarts = 1
-                backoff = 0.0
+    except ShutdownSignal as e:
+        last_err = e
     except Exception as e:
         logger.error(f"Terminating {name} service loop due to {type(e).__name__}")
         last_err = e
