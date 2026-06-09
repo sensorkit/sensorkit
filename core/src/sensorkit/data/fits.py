@@ -2,13 +2,14 @@ import asyncio
 import io
 import logging
 from collections.abc import Buffer
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 from astropy.io import fits
 from pydantic import BaseModel, Field
 
 from sensorkit.common.keyword import declare_keyword
+from sensorkit.data.context import Context
 from sensorkit.data.graph import DataFlow, DataOp
 
 logger = logging.getLogger(__name__)
@@ -90,23 +91,10 @@ class ArrayToFITS(DataOp):
         header = primary_hdu.header
 
         # Generate the desired FITS keywords by evaluating the input patterns against the context.
-        for kw, expr in self.header.items():
-            if isinstance(expr, dict):
-                value = context.eval(expr["value"])
-                if value is None:
-                    continue
-                comment = expr.get("comment")
-                header[kw] = (value, comment)
-            elif isinstance(expr, (list, tuple)) and len(expr) == 2:
-                value = context.eval(expr[0])
-                if value is None:
-                    continue
-                comment = expr[1]
-                header[kw] = (value, comment)
-            else:
-                value = context.eval(expr)
-                if value is None:
-                    continue
+        for kw, obj in self.header.items():
+            value = self._eval_header_value(obj, context)
+
+            if value is not None:
                 header[kw] = value
 
         # Build the output FITS bytes and send it along the graph.
@@ -115,6 +103,19 @@ class ArrayToFITS(DataOp):
         hdul.writeto(bio)
 
         await outgoing[0].send(context, bio.getvalue())
+
+    @staticmethod
+    def _eval_header_value(obj: Any, context: Context) -> tuple[Any, str | None] | None:
+        match obj:
+            case {"value": expr, "comment": comment} | [expr, comment] | (expr, comment):
+                pass
+            case {"value": expr} | str(expr):
+                comment = None
+            case _:
+                raise ValueError(f"Invalid header value: {obj}")
+
+        value = context.eval(expr)
+        return None if value is None else (value, comment)
 
 
 class CompressFITS(DataOp):

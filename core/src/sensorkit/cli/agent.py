@@ -1,5 +1,6 @@
 import asyncclick as click
 
+from sensorkit.auto.agent import AgentControllerInfo, AgentState
 from sensorkit.cli.utils import entity_option, with_kit
 
 
@@ -74,9 +75,7 @@ async def controller_control(kit, controller: str, state: str, entity: str):
 
 @agent_group.command("override")
 @click.argument("controller")
-@click.argument(
-    "state", type=click.Choice(["up", "down", "none"], case_sensitive=False)
-)
+@click.argument("state", type=click.Choice(["up", "down", "none"], case_sensitive=False))
 @entity_option(default="agent", help="Agent entity name")
 @with_kit
 async def controller_override(kit, controller: str, state: str, entity: str):
@@ -113,10 +112,7 @@ async def scheduling(kit, state: str, entity: str):
 @with_kit
 async def status(kit, entity: str):
     """View the agent's current status and configuration."""
-    from intervaltree import IntervalTree
-
     from sensorkit.auto.agent import AgentState
-    from sensorkit.auto.scheduler import debug_print_schedule
 
     try:
         state = await kit.entity(entity).kv_get_model(AgentState)
@@ -134,42 +130,9 @@ async def status(kit, entity: str):
         f"{'Scheduling:':<18} {'ON' if state.scheduler_state.scheduling_enabled else 'OFF'}\n"
     )
 
-    # Controllers
     if state.operating_state.controllers:
         for i, (name, info) in enumerate(state.operating_state.controllers.items(), 1):
-            control = "ON" if info.control_enabled else "OFF"
-
-            if not state.operating_state.global_control_enabled:
-                control += "*"
-
-            override = "NONE"
-
-            if info.demand_override is True:
-                override = "UP"
-            elif info.demand_override is False:
-                override = "DOWN"
-
-            elected = "NONE"
-
-            if info.elected_state is True:
-                elected = "UP"
-            elif info.elected_state is False:
-                elected = "DOWN"
-
-            click.echo(f"{f'Controller {i}:':<18} {name}\n")
-            click.echo(f"  Control:         {control}")
-            click.echo(f"  State override:  {override}")
-            click.echo(f"  Elected state:   {elected}")
-            click.echo()
-
-            if schedule := state.scheduler_state.schedule.get(name):
-                debug_print_schedule(
-                    IntervalTree.from_tuples(schedule),
-                    lookahead_mins=5,
-                    print_func=lambda x: click.echo(f"  {x}"),
-                )
-            else:
-                click.echo("  No schedule present.")
+            _print_controller_info(i, name, info, state)
             click.echo()
     else:
         click.echo("No controllers registered in agent.\n")
@@ -177,7 +140,48 @@ async def status(kit, entity: str):
     # Excluded programs
     if state.scheduler_state.excluded_programs:
         click.echo("Excluded Programs:")
+
         for program in sorted(state.scheduler_state.excluded_programs):
             click.echo(f"  - {program}")
     else:
         click.echo("No excluded programs.")
+
+
+def _print_controller_info(i: int, name: str, info: AgentControllerInfo, state: AgentState):
+    control = "ON" if info.control_enabled else "OFF"
+
+    if not state.operating_state.global_control_enabled:
+        control += "*"
+
+    override = "NONE"
+
+    if info.demand_override is True:
+        override = "UP"
+    elif info.demand_override is False:
+        override = "DOWN"
+
+    elected = "NONE"
+
+    if info.elected_state is True:
+        elected = "UP"
+    elif info.elected_state is False:
+        elected = "DOWN"
+
+    click.echo(f"{f'Controller {i}:':<18} {name}\n")
+    click.echo(f"  Control:         {control}")
+    click.echo(f"  State override:  {override}")
+    click.echo(f"  Elected state:   {elected}")
+    click.echo()
+
+    if schedule := state.scheduler_state.schedule.get(name):
+        from intervaltree import IntervalTree
+
+        from sensorkit.auto.scheduler import debug_print_schedule
+
+        debug_print_schedule(
+            IntervalTree.from_tuples(schedule),
+            lookahead_mins=5,
+            print_func=lambda x: click.echo(f"  {x}"),
+        )
+    else:
+        click.echo("  No schedule present.")

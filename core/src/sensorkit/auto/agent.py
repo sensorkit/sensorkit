@@ -274,7 +274,7 @@ async def agent_service(service: sk.Service):
 
             await asyncio.sleep(1)
 
-    asyncio.create_task(publish())
+    _publish_task = asyncio.create_task(publish())
 
     await service.context.kv_put_model(Capabilities(
         controllers=config.controllers
