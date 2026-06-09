@@ -54,28 +54,28 @@ class DataFlow:
 
     @overload
     async def send(
-            self,
-            context: Context,
-            arg: StreamReader,
+        self,
+        context: Context,
+        arg: StreamReader,
     ): ...
 
     @overload
     async def send(
-            self,
-            context: Context,
-            arg: Buffer,
+        self,
+        context: Context,
+        arg: Buffer,
     ): ...
 
     @overload
     async def send(
-            self,
-            context: Context,
+        self,
+        context: Context,
     ) -> StreamWriter: ...
 
-    async def send(  # noqa: C901
-            self,
-            context: Context,
-            arg: Buffer | StreamReader | None = None,
+    async def send(
+        self,
+        context: Context,
+        arg: Buffer | StreamReader | None = None,
     ) -> StreamWriter | None:
         """Send data through this edge to the consumer.
 
@@ -93,58 +93,48 @@ class DataFlow:
         # Implement each of the data passing combinations based on the type of the input argument
         # and the requested receive kind. Note that a `None` receive kind means that the argument
         # type dictates the effective receive kind, enabling "passthrough" semantics.
-        match arg:
+        match (arg, self.receive_kind):
             # When a buffer is given, we either pass it straight through to the consumer by
             # reference or we return a StreamReader backed by it. In the former case, ownership
             # of the buffer is transferred to the consumer. In the latter case, the buffer must
             # be immutable.
-            case Buffer():
-                match self.receive_kind:
-                    case "buffer" | None:
-                        # Buffer to buffer. We do this by reference to avoid a copy.
-                        self._send_ready(context, arg)
-                    case "stream":
-                        # Buffer to stream. Return a StreamReader backed by the input buffer.
-                        self._send_ready(context, BufferReader(arg))
-
-                return None
+            case (Buffer(), "buffer" | None):
+                # Buffer to buffer. We do this by reference to avoid a copy.
+                self._send_ready(context, arg)
+            case (Buffer(), "stream"):
+                # Buffer to stream. Return a StreamReader backed by the input buffer.
+                self._send_ready(context, BufferReader(arg))
 
             # When a StreamReader is given, we either drain it immediately (buffer case) or pass
             # it straight through to the consumer.
-            case StreamReader():
-                match self.receive_kind:
-                    case "buffer":
-                        bio = io.BytesIO()
+            case (StreamReader(), "buffer"):
+                bio = io.BytesIO()
 
-                        async for chunk in arg:
-                            # FIXME: event loop starvation possible here
-                            bio.write(chunk)
+                async for chunk in arg:
+                    # FIXME: event loop starvation possible here
+                    bio.write(chunk)
 
-                        self._send_ready(context, bio.getvalue())
-                    case "stream" | None:
-                        self._send_ready(context, arg)
-
-                return None
+                self._send_ready(context, bio.getvalue())
+            case (StreamReader(), "stream" | None):
+                self._send_ready(context, arg)
 
             # When no argument is supplied, we return a StreamWriter that writes data to the
             # requested destination.
-            case None:
-                match self.receive_kind:
-                    case "buffer":
-                        # Stream to buffer. Return a StreamWriter that will fill a buffer.
-                        writer = BufferWriter()
-                        fut = writer.get_future()
-                        fut.add_done_callback(
-                            lambda _: self._send_ready(context, fut.result())
-                        )
-                        return writer
-                    case "stream" | None:
-                        # Stream to stream.
-                        reader, writer = create_connected_streams()
-                        self._send_ready(context, reader)
-                        return writer
+            case (None, "buffer"):
+                # Stream to buffer. Return a StreamWriter that will fill a buffer.
+                writer = BufferWriter()
+                fut = writer.get_future()
+                fut.add_done_callback(lambda _: self._send_ready(context, fut.result()))
+                return writer
+            case (None, "stream" | None):
+                # Stream to stream.
+                reader, writer = create_connected_streams()
+                self._send_ready(context, reader)
+                return writer
+            case _:
+                raise TypeError()
 
-        raise TypeError
+        return None
 
     def _send_ready(self, *result: Unpack[tuple[Context, Buffer | StreamReader]]):
         # Signal the consumer that the receive result is ready.
@@ -153,24 +143,24 @@ class DataFlow:
 
     @overload
     async def receive(
-            self,
-            kind: Literal["stream"],
+        self,
+        kind: Literal["stream"],
     ) -> tuple[Context, StreamReader]: ...
 
     @overload
     async def receive(
-            self,
-            kind: Literal["buffer"],
+        self,
+        kind: Literal["buffer"],
     ) -> tuple[Context, Buffer]: ...
 
     @overload
     async def receive(
-            self,
+        self,
     ) -> tuple[Context, Buffer | StreamReader]: ...
 
     async def receive(
-            self,
-            kind: ReceiveKind = None,
+        self,
+        kind: ReceiveKind = None,
     ) -> tuple[Context, StreamReader | Buffer]:
         """Wait for the producer to send data and return ``(context, data)``.
 
