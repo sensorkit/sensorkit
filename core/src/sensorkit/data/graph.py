@@ -407,17 +407,22 @@ class DataGraphRunner:
         self._source = source
         self._task_group = task_group
         self._exec_task: asyncio.Task | None = None
-        self._node_tasks: set[asyncio.Task] = set()
 
     def start(self, done_callback: Callable[[Self], Any] | None = None):
         """Start executing the graph component, optionally invoking *done_callback* on exit."""
         if self._exec_task:
             raise RuntimeError("DataGraph runner already started")
 
+        # Get a hard reference to the DataGraph.
+        graph = self._graph()
+
+        if not graph:
+            raise RuntimeError("DataGraph was disposed")
+
+        # Ensure that exceptions are not propagated to the main task group, as runs should
+        # keep the service alive until they complete but errors should not kill the service.
+        self._exec_task = self._task_group.create_task(self._run_graph(graph))
         logger.info("DataGraph runner started")
-        # TODO: Use self._task_group but ensure that exceptions are not propagated, as runs should
-        #       keep the service alive until they complete but errors should not kill the service.
-        self._exec_task = asyncio.create_task(self._run_graph())
 
         def _finalize_graph_run(t: asyncio.Task):
             if t.cancelled():
@@ -440,63 +445,61 @@ class DataGraphRunner:
         with contextlib.suppress(asyncio.CancelledError):
             await self._exec_task
 
-    async def _run_graph(self):
-        graph = self._graph()
-
-        if not graph:
-            raise RuntimeError("graph was disposed")
-
-        source = cast(SourceOp, graph.nodes[self._source])
-
+    async def _run_graph(self, graph: DataGraph):
         # Invoke the source and prime the generator it returns.
+        source = cast(SourceOp, graph.nodes[self._source])
         gen = source.graph_source()
+        running = True
+
         await gen.asend(None)
 
         # Execute the graph for each iteration of the source op.
-        while True:
+        while running:
+            shutdown = False
+
             # Create a new edge to be injected as the incoming edge to the source node.
             edge = DataFlow()
 
-            # Run the graph.
-            new_tasks = self._run_tasks(source, edge)
-
-            for task in new_tasks:
-                task.add_done_callback(self._node_tasks.discard)
-                self._node_tasks.add(task)
-
             try:
-                # Wait for the SourceOp to trigger and feed the incoming edge.
-                await gen.asend(edge)
+                # Run the graph in a TaskGroup so that if any node fails, all nodes for this
+                # run are cancelled.
+                async with asyncio.TaskGroup() as tg:
+                    self._run_tasks(graph, source, edge, task_group=tg)
 
-                # Wait for graph execution to complete.
-                # FIXME: This serializes graph runs, which is not what we want. We probably want
-                #        another object to represent the individual run, and provide access to it
-                #        to the caller somehow so status/failure can be internally monitored.
-                await asyncio.gather(*new_tasks)
-            except StopAsyncIteration:
+                    try:
+                        # Wait for the SourceOp to trigger and feed the incoming edge.
+                        await gen.asend(edge)
+                    except asyncio.CancelledError:
+                        # FIXME: This check is likely not sufficient to guarantee no deadlock.
+                        if not edge.send_called:
+                            raise
+
+                        # Wait for tasks to complete before shutting down. We do this by
+                        # suppressing the cancellation and allowing the task group to complete.
+                        # Then we fall through to re-raise via the `shutdown` flag.
+                        asyncio.current_task().uncancel()
+                        shutdown = True
+            except* StopAsyncIteration:
                 logger.debug("DataGraph source stopped producing")
-                await asyncio.gather(*self._node_tasks, return_exceptions=True)
-                break
-            except asyncio.CancelledError:
-                logger.debug("DataGraph runner cancelling")
-                # Cancel all tasks and shut down.
-                for task in self._node_tasks:
-                    task.cancel()
-
-                await asyncio.gather(*self._node_tasks, return_exceptions=True)
-                raise
-            except Exception:
+                running = False
+            except* Exception:
+                # We log this as an exception so that the traceback is preserved.
                 logger.exception("DataGraph run encountered an error")
 
-                # Cancel all tasks and continue executing.
-                for task in self._node_tasks:
-                    task.cancel()
+            if shutdown:
+                raise asyncio.CancelledError()
 
-    def _run_tasks(self, source: DataOp, source_incoming: DataFlow):
+    def _run_tasks(
+        self,
+        graph: DataGraph,
+        source: DataOp,
+        source_incoming: DataFlow,
+        *,
+        task_group: asyncio.TaskGroup,
+    ):
         tasks: list[asyncio.Task] = []
         incoming: dict[str, list[DataFlow]] = collections.defaultdict(list)
         outgoing: dict[str, list[DataFlow]] = collections.defaultdict(list)
-        graph = self._graph()
 
         for name, node in graph.nodes.items():
             for output in node.output:
@@ -509,7 +512,7 @@ class DataGraphRunner:
 
         for name, node in graph.nodes.items():
             tasks.append(
-                asyncio.create_task(node.process(incoming[name], outgoing[name]))
+                task_group.create_task(node.process(incoming[name], outgoing[name]))
             )
 
         return tasks
