@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 import pytest_asyncio
-from unifieddatalibrary import AsyncUnifieddatalibrary
+from unifieddatalibrary import AsyncUnifieddatalibrary, omit
 from unifieddatalibrary.types import CollectRequestFull
 
 from sensorkit.astro.common import SitePosition
@@ -631,13 +631,18 @@ async def test_program_init_without_credentials(program: UDLProgram) -> None:
     assert program.upload_client is program.client, (
         "No api.upload → upload client aliases primary client"
     )
+    # With no credentials, init must resolve the per-request omit so the SDK
+    # allows an Authorization-less request.
+    assert program._client_headers == {"Authorization": omit}
 
-    # An unauthenticated poll against the live instance must succeed
-    # (raises on auth failure inside the SDK call).
+    # An unauthenticated poll against the live instance must succeed. Use the
+    # same per-request headers the program applies in _poll_collect_requests;
+    # without the omit the SDK raises before sending.
     await program.client.collect_requests.list(
         start_time=f"<{datetime.now(UTC):%Y-%m-%dT%H:%M:%S.%f}Z",
         extra_query={
             "origSensorId": "UDLX-TEST-NOAUTH",
             "endTime": f">{datetime.now(UTC):%Y-%m-%dT%H:%M:%S.%f}Z",
         },
+        extra_headers=program._client_headers,
     )

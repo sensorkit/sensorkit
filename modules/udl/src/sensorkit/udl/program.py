@@ -14,8 +14,7 @@ import httpx
 from dotenv import dotenv_values
 from loguru import logger
 from pydantic import BaseModel, Field
-from unifieddatalibrary import AsyncUnifieddatalibrary, Omit
-from unifieddatalibrary._models import FinalRequestOptions
+from unifieddatalibrary import AsyncUnifieddatalibrary, omit
 from unifieddatalibrary.types import CollectRequestFull
 
 import sensorkit.api as sk
@@ -30,27 +29,6 @@ from sensorkit.udl.models import (
     UDLReferenceFrame,
 )
 from sensorkit.udl.task_queue import TaskQueue
-
-
-class _UnauthenticatedUDLClient(AsyncUnifieddatalibrary):
-    """UDL SDK client for cert-auth or unauthenticated endpoints.
-
-    The stock client refuses to issue a request unless it resolves a
-    username/password/access_token, or the Authorization header is explicitly
-    omitted per-request. Cert auth (handled at the TLS layer) and unauthenticated
-    local endpoints send no Authorization header, so we omit it via the SDK's
-    own sanctioned mechanism on every request. This leaves the SDK's header
-    validation in force — rather than disabling it — so an unexpected request
-    that somehow lacks the omission still fails loudly.
-
-    Use this only when there is no Basic-auth header to preserve: the SDK merges
-    per-request headers over the client's auth headers, so an injected Omit on a
-    credentialed client would strip its own Authorization.
-    """
-
-    async def _prepare_options(self, options: FinalRequestOptions) -> FinalRequestOptions:
-        options.headers = {**(options.headers or {}), "Authorization": Omit()}
-        return await super()._prepare_options(options)
 
 
 def _udl_ts(dt: datetime) -> str:
@@ -91,6 +69,13 @@ class UDLProgram:
         self._udl_password: str | None = None
         self._upload_username: str | None = None
         self._upload_password: str | None = None
+
+        # Per-request headers for each client. Unauthenticated and cert-auth
+        # clients send no Authorization header, which the SDK refuses unless we
+        # explicitly omit it per request; credentialed clients pass {} so their
+        # Basic-auth header is preserved. Populated in program_init.
+        self._client_headers: dict[str, Any] = {}
+        self._upload_headers: dict[str, Any] = {}
 
         # Task management
         self.queue: TaskQueue | None = None
@@ -149,10 +134,26 @@ class UDLProgram:
 
         return username or None, password or None
 
+    @staticmethod
+    def _omit_auth_headers(username: str | None) -> dict[str, Any]:
+        """Per-request headers for a client built with the given username.
+
+        Without credentials (unauthenticated or cert-auth) we send no
+        Authorization header; the SDK refuses that unless it's explicitly
+        omitted per request, so pass `omit`. Credentialed clients pass nothing,
+        leaving their Basic-auth header intact (a per-request Omit would
+        override and strip it).
+        """
+        return {} if username else {"Authorization": omit}
+
     def _create_client(
         self, endpoint: UDLEndpointConfig, username: str | None, password: str | None
     ) -> AsyncUnifieddatalibrary:
-        """Create an SDK client for an endpoint."""
+        """Create an SDK client for an endpoint.
+
+        Auth that doesn't ride the Authorization header (cert/TLS, or none) is
+        handled per request via _omit_auth_headers; see program_init.
+        """
         if endpoint.use_certs:
             http_client = httpx.AsyncClient(
                 cert=(endpoint.client_cert, endpoint.client_key),
@@ -160,7 +161,7 @@ class UDLProgram:
                 timeout=endpoint.timeout,
             )
             logger.debug(f"using cert-based auth for {endpoint.base_url}")
-            return _UnauthenticatedUDLClient(
+            return AsyncUnifieddatalibrary(
                 http_client=http_client,
                 base_url=endpoint.base_url,
             )
@@ -169,16 +170,15 @@ class UDLProgram:
         if endpoint.base_url:
             client_kwargs["base_url"] = endpoint.base_url
 
-        if username and password:
-            return AsyncUnifieddatalibrary(
-                username=username, password=password, **client_kwargs
+        if not (username and password):
+            logger.warning(
+                f"no UDL credentials configured; issuing unauthenticated requests "
+                f"to {endpoint.base_url}"
             )
 
-        logger.warning(
-            f"no UDL credentials configured; issuing unauthenticated requests "
-            f"to {endpoint.base_url}"
+        return AsyncUnifieddatalibrary(
+            username=username, password=password, **client_kwargs
         )
-        return _UnauthenticatedUDLClient(**client_kwargs)
 
     @sk.on_attach
     async def program_init(self) -> None:
@@ -214,6 +214,12 @@ class UDLProgram:
             self.upload_client = self.client
             self._upload_username = self._udl_username
             self._upload_password = self._udl_password
+
+        # Resolve per-request auth-header omission for each client. Keying off
+        # the resolved username also covers the aliased case, where
+        # _upload_username == _udl_username.
+        self._client_headers = self._omit_auth_headers(self._udl_username)
+        self._upload_headers = self._omit_auth_headers(self._upload_username)
 
         logger.debug(f"starting UDL program for {self.program.entity}")
 
@@ -295,6 +301,7 @@ class UDLProgram:
                     "origSensorId": self.config.api.id_sensor,
                     "endTime": f">{_udl_ts(now)}",
                 },
+                extra_headers=self._client_headers,
             )
 
             for request in page.items:
@@ -349,6 +356,7 @@ class UDLProgram:
                 actual_start_time=_udl_ts(actual_start_time) if actual_start_time else None,
                 actual_end_time=_udl_ts(actual_end_time) if actual_end_time else None,
                 notes=notes,
+                extra_headers=self._client_headers,
             )
             logger.debug(f"sent {status.value} response for request {request.id}")
         except Exception as e:
@@ -547,6 +555,7 @@ class UDLProgram:
             await self.upload_client.sky_imagery.upload_zip(
                 file=zip_bytes,
                 timeout=endpoint.upload_timeout,
+                extra_headers=self._upload_headers,
             )
             return
 
