@@ -51,7 +51,7 @@ def import_module_or_file(name: str):
     """Import a module by name or path, handling relative imports within it."""
     path = pathlib.Path(name)
 
-    if path.exists(follow_symlinks=True):
+    if path.exists():
         module = module_from_file(path, path.stem)
         sys.modules[path.stem] = module
         return module
