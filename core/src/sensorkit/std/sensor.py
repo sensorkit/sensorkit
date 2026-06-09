@@ -255,12 +255,15 @@ class SensorControl:
             **adhoc,
         )
 
-        # Support acquisition of sidereal frames among a non-sidereal collect sequence.
-        currently_sidereal = False
+        # For inherently sidereal targets (stars), the initial FollowTarget already
+        # establishes sidereal tracking — mark as sidereal from the start so the frame
+        # loop never issues a redundant tracking switch.
+        target_is_sidereal = isinstance(task.target, (ICRSTarget, CatalogTarget))
+        currently_sidereal = target_is_sidereal
 
         # Capture the requested frames.
         for frame_num in range(0, task.camera_params.frame_count):
-            want_sidereal = frame_num in task.sidereal_frames
+            want_sidereal = target_is_sidereal or frame_num in task.sidereal_frames
 
             if want_sidereal and not currently_sidereal:
                 # Hold the current RA/Dec under sidereal tracking.
