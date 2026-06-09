@@ -461,17 +461,6 @@ async def program(config: UDLConfig):
 # ── Tests ──
 
 
-# UDLx MACHINA must maintain parity with the UDL API, whose filedrop accepts a
-# bare zip (no multipart filename). UDLx currently rejects that ("Only zip files
-# are allowed"), so the imagery-upload tests xfail. strict=True flips them to a
-# hard failure once UDLx is fixed — the signal to delete this marker.
-xfail_udlx_filedrop_parity = pytest.mark.xfail(
-    strict=True,
-    reason="UDLx parity gap: /filedrop/udl-skyimagery must accept a bare zip",
-)
-
-
-@xfail_udlx_filedrop_parity
 @pytest.mark.asyncio
 @pytest.mark.parametrize("publisher_program", [{"split": False, "num_frames": 1}], indirect=True)
 async def test_single_endpoint_upload_no_split(
@@ -511,7 +500,6 @@ async def test_single_endpoint_upload_no_split(
     assert len(imagery_b) == 0, "Expected 0 SkyImagery in instance B (single-endpoint mode)"
 
 
-@xfail_udlx_filedrop_parity
 @pytest.mark.asyncio
 @pytest.mark.parametrize("publisher_program", [{"split": True, "num_frames": 1}], indirect=True)
 async def test_split_uploads_imagery_to_b_only(
@@ -539,7 +527,6 @@ async def test_split_uploads_imagery_to_b_only(
     assert imagery_b[0]["sequenceId"] == 1
 
 
-@xfail_udlx_filedrop_parity
 @pytest.mark.asyncio
 @pytest.mark.parametrize("publisher_program", [{"split": True, "num_frames": 3}], indirect=True)
 async def test_split_multi_frame_upload(
@@ -576,7 +563,6 @@ async def test_split_multi_frame_upload(
     assert len(imagery_a) == 0, "Expected 0 SkyImagery in instance A (polling endpoint)"
 
 
-@xfail_udlx_filedrop_parity
 @pytest.mark.asyncio
 async def test_poll_from_a_respond_to_a_publish_to_b(
     polling_program: UDLProgram,
