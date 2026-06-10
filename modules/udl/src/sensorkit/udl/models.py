@@ -45,18 +45,21 @@ class UDLReferenceFrame(StrEnum):
 # Configuration Models
 # =============================================================================
 
-class UDLAPIConfig(BaseModel):
-    """Configuration for UDL API connection."""
+class UDLEndpointConfig(BaseModel):
+    """Connection and auth settings for one UDL-compatible endpoint."""
     # Base URL (optional - SDK defaults to UDL production)
     base_url: str | None = None
 
-    # Sensor identification — used as both idSensor (SkyImagery, CollectResponse)
-    # and origSensorId (CollectRequest polling filter)
-    id_sensor: str = Field(description="Sensor ID (maps to idSensor and origSensorId)")
-    source: str = Field(description="Data source identifier (e.g. 'DAO', 'MACHINA')")
-
     # Timeouts
     timeout: float = Field(default=60.0, description="HTTP request timeout in seconds")
+    upload_timeout: float = Field(
+        default=300.0,
+        description=(
+            "Timeout for SkyImagery uploads in seconds. Imagery can be "
+            "hundreds of MB, so this is more generous than the per-request "
+            "timeout used for the JSON API."
+        ),
+    )
 
     # Auth method selector
     use_certs: bool = Field(
@@ -72,6 +75,26 @@ class UDLAPIConfig(BaseModel):
     client_cert: str | None = None
     client_key: str | None = None
     client_verify: bool = Field(default=True)
+
+
+class UDLAPIConfig(UDLEndpointConfig):
+    """Configuration for UDL API connection."""
+    # Optional separate endpoint for SkyImagery uploads, with its own auth
+    # settings (e.g. poll UDL with basic auth, upload to a UDLx-enabled
+    # MACHINA with certs). When None (default), imagery is uploaded to the
+    # primary endpoint (backward compatible).
+    upload: UDLEndpointConfig | None = Field(
+        default=None,
+        description=(
+            "Separate endpoint for SkyImagery uploads. Polling and "
+            "CollectResponses always use the primary endpoint."
+        ),
+    )
+
+    # Sensor identification — used as both idSensor (SkyImagery, CollectResponse)
+    # and origSensorId (CollectRequest polling filter)
+    id_sensor: str = Field(description="Sensor ID (maps to idSensor and origSensorId)")
+    source: str = Field(description="Data source identifier (e.g. 'DAO', 'MACHINA')")
 
 
 class UDLConfig(BaseModel):

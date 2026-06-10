@@ -40,6 +40,7 @@ class MockCollectRequest:
         classification_marking="U",
         data_mode="TEST",
         source="TEST_SOURCE",
+        origin=None,
         id_sensor="SENSOR-01",
         orig_sensor_id="SENSOR-01",
         sat_no=25544,
@@ -68,6 +69,7 @@ class MockCollectRequest:
         mock.classification_marking = classification_marking
         mock.data_mode = data_mode
         mock.source = source
+        mock.origin = origin
         mock.id_sensor = id_sensor
         mock.orig_sensor_id = orig_sensor_id
         mock.sat_no = sat_no
