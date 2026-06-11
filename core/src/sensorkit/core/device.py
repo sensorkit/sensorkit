@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from abc import abstractmethod
 from collections.abc import Coroutine, Iterable
-from typing import Any, Callable, ClassVar
+from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 from pydantic import BaseModel
 
@@ -19,6 +19,9 @@ from sensorkit.core.entity import (
 )
 from sensorkit.core.state import EventSourcedState
 from sensorkit.core.trait import Trait, match_archetype, match_traits
+
+if TYPE_CHECKING:
+    from sensorkit.core.client import SensorKit
 
 type CommandHandlerCallback = Callable[[DeviceCommand], Coroutine[Any, Any, BaseModel | None]]
 
@@ -148,6 +151,9 @@ class DeviceClient(EntityClient):
 
 class DeviceRef(EntityRef[DeviceClient]):
     """A serializable reference to a device client."""
+
+    def _get_client(self, kit: SensorKit) -> DeviceClient:
+        return kit.device(self.name)
 
 
 class DeviceInterface(EntityInterface):

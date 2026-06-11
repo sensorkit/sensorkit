@@ -255,6 +255,10 @@ class EntityRef[T: EntityClient = EntityClient]:
         self.name = name
         self._client: T | None = None
 
+    def _get_client(self, kit: SensorKit) -> T:
+        """Return the client of the appropriate type for this reference."""
+        return kit.entity(self.name)
+
     def resolve(self, kit: SensorKit) -> None:
         """Resolve this reference against a SensorKit instance.
 
@@ -262,7 +266,7 @@ class EntityRef[T: EntityClient = EntityClient]:
         `get`, `require`, or ``__call__``.
         """
         if self.name is not None:
-            self._client = kit.device(self.name)
+            self._client = self._get_client(kit)
 
     def get(self) -> T | None:
         """Return the resolved client, or ``None`` if the reference is unset.

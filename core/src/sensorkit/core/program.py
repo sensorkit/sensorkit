@@ -184,6 +184,9 @@ class ProgramClient(EntityClient):
 class ProgramRef(EntityRef[ProgramClient]):
     """A serializable reference to a program client."""
 
+    def _get_client(self, kit: SensorKit) -> ProgramClient:
+        return kit.program(self.name)
+
 
 class ControllerOffers:
     """Monitor published offers for all Programs associated with a Controller."""

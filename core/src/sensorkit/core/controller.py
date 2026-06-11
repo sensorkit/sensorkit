@@ -5,7 +5,7 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum, auto
-from typing import Any, Callable, ClassVar, Collection, Mapping, Self
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Collection, Mapping, Self
 
 import uuid_utils.compat as uuid
 from pydantic import BaseModel, Field, model_validator
@@ -18,6 +18,9 @@ from sensorkit.core.entity import EntityClient, EntityInterface, EntityRef
 from sensorkit.core.state import EventSourcedState
 from sensorkit.core.task import ControllerTask
 from sensorkit.data.context import Context, ContextSubscription
+
+if TYPE_CHECKING:
+    from sensorkit.core.client import SensorKit
 
 
 class InternalControllerState(StrEnum):
@@ -206,6 +209,9 @@ class ControllerClient(EntityClient):
 
 class ControllerRef(EntityRef[ControllerClient]):
     """A serializable reference to a controller client."""
+
+    def _get_client(self, kit: SensorKit) -> ControllerClient:
+        return kit.controller(self.name)
 
 
 @dataclass
