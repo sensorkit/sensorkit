@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import contextlib
 import time
 import uuid
 from dataclasses import dataclass
@@ -13,15 +14,18 @@ from burr.core.config import (
     ScheduleConfig,
 )
 from burr.models.observation import ObservationRequest
+from burr.models.run import BurrRun
 from burr.models.site import LightingCondition, SiteMetadata
 from burr.run.utils import get_or_create_run
 from burr.scheduler.factory import build_scheduler
+from burr.scheduler.scheduler import Scheduler
 from burr.scheduler.slot import TaskSlot
 from burr.task_source.calsats.manager import CalibrationSatelliteManager
 from burr.task_source.coverage.manager import SkyCoverageManager
 from burr.task_source.flats.manager import FlatFieldManager
 from burr.task_source.lunar.manager import LunarBackgroundManager
 from burr.task_source.photometry.manager import PhotometricStandardsManager
+from burr.task_source.protocol import TaskSource
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -68,37 +72,64 @@ sk.declare_config_section(
 @sk.declare_program
 class BurrProgram:
 
+    run: BurrRun | None = None
+    sources: dict[str, TaskSource] | None = None
+    scheduler: Scheduler | None = None
+    _offer_task: asyncio.Task | None = None
+
     @sk.on_attach
     async def startup(self):
         self._queue: collections.deque[PendingTask] = collections.deque()
-        program = sk.program()
-        print("Burr program started!")
 
         # Get configuration.
+        program = sk.program()
         self.config = await program.kv_get_model(BurrConfig)
         self.app_config = await self.config.to_app_config(program.sensorkit())
-        logger.info(f"burr service starting for site {self.app_config.site.name}")
+        logger.debug(f"burr service starting for site {self.app_config.site.name}")
 
         # FIXME: Burr needs a way of setting config
         burr.core.config._config_instance = self.app_config
 
+    @sk.on_enable
+    async def enable(self):
+        program = sk.program()
+
+        # Set the assigned controller name in burr's internal config.
+        # FIXME: SK API needs a public way to get at the assigned controller.
+        self.app_config.site.name = program._state.enable_state.controller
+
+        def init_burr_sync():
+            config = self.app_config
+            self.run = get_or_create_run(site=config.site, verbose=False, new_config=config)
+            self.sources = dict(self._build_task_sources())
+            self.scheduler = build_scheduler(config, self.run, self.sources)
+
         # Initialize burr.
-        await asyncio.to_thread(self._init_burr_sync)
+        await asyncio.to_thread(init_burr_sync)
 
-        # Send initial offers.
-        for start, end in self._offer_intervals():
-            program.add_offer(start, end)
+        # Publish offers.
+        async def offer_loop(cadence: float):
+            while True:
+                for start, end in self._offer_intervals():
+                    program.add_offer(start, end)
 
-        await program.publish_offers()
+                logger.debug("burr publishing offers")
+                await program.publish_offers()
+                await asyncio.sleep(cadence)
 
+        await self._cleanup_offer_task()
+        self._offer_task = asyncio.create_task(offer_loop(cadence=1800))
         self.scheduler.log_status(
             self._current_condition(),
             offer_intervals=[(int.begin, int.end) for int in program.get_offers()],
         )
 
-    @sk.on_detach
-    async def shutdown(self):
-        print("Burr program stopped!")
+    @sk.on_disable
+    async def disable(self):
+        self.run = None
+        self.sources = None
+        self.scheduler = None
+        await self._cleanup_offer_task()
 
     @sk.task_factory
     async def next_task(self):
@@ -109,7 +140,7 @@ class BurrProgram:
                 return
 
         pending = self._queue.popleft()
-        logger.info(
+        logger.debug(
             f"yielding SK task {pending.task.task_id} for {pending.slot.name} "
             f"(request {pending.request.task_id}, "
             f"{'final' if pending.is_last_of_request else 'intermediate'} of fan-out)"
@@ -142,12 +173,6 @@ class BurrProgram:
                     pending.slot.source.on_request_completed(pending.request, duration)
 
             await asyncio.to_thread(finalize)
-
-    def _init_burr_sync(self):
-        config = self.app_config
-        self.run = get_or_create_run(site=config.site, verbose=True, new_config=config)
-        self.sources = dict(self._build_task_sources())
-        self.scheduler = build_scheduler(config, self.run, self.sources)
 
     def _build_task_sources(self):
         config = self.config.schedule
@@ -273,6 +298,15 @@ class BurrProgram:
                     is_last_of_request=(i == len(sk_tasks) - 1),
                 )
             )
+
+    async def _cleanup_offer_task(self):
+        if self._offer_task:
+            self._offer_task.cancel()
+
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._offer_task
+
+            self._offer_task = None
 
 
 @dataclass
