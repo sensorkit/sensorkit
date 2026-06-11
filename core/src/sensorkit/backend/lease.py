@@ -269,7 +269,9 @@ class LeaseGroup:
         max_wait = self._time_until_next_refresh()
 
         async with scoped_waiter(self._lease_added.wait()) as wait_added:
-            expired, _ = await asyncio.wait([wait_added, *waiters], timeout=max_wait)
+            expired, _ = await asyncio.wait(
+                [wait_added, *waiters], timeout=max_wait, return_when=asyncio.FIRST_COMPLETED
+            )
             expired.discard(wait_added)
 
         self._lease_added.clear()
