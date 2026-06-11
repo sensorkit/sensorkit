@@ -34,8 +34,8 @@ class DeviceImpl(EntityImpl, DeviceInterface):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        self._enable_hooks: set[Callable[[], None]] = set()
-        self._disable_hooks: set[Callable[[], None]] = set()
+        self._enable_hooks: list[Callable[[], None]] = []
+        self._disable_hooks: list[Callable[[], None]] = []
         self._handlers: dict[str, CommandHandlerCallback] = {}
         self._published_keywords: set[str] = set()
 
@@ -45,12 +45,12 @@ class DeviceImpl(EntityImpl, DeviceInterface):
 
     @override
     def on_enable(self, func: Callable[[], None]):
-        self._enable_hooks.add(func)
+        self._enable_hooks.append(func)
         return func
 
     @override
     def on_disable(self, func: Callable[[], None]):
-        self._disable_hooks.add(func)
+        self._disable_hooks.append(func)
         return func
 
     @override
@@ -60,10 +60,11 @@ class DeviceImpl(EntityImpl, DeviceInterface):
             enable_state=DeviceEnableState(enabled=True),
         )
 
+    @override
+    async def attach_impl(self):
         if self._state.enable_state.enabled:
             await self._call_with_context(self._enable_hooks)
 
-        # Set up the command request handler.
         await self.handle_request(set_enable_state_request, self._set_enable_state)
         await self.handle_request(run_command_request, self._command_request)
 
@@ -153,13 +154,11 @@ class DeviceImpl(EntityImpl, DeviceInterface):
         return decorator
 
     @override
-    async def publish_entity_info(self) -> EntityInfo:
-        info = EntityInfo(
+    def entity_info(self) -> EntityInfo:
+        return EntityInfo(
             entity_type="device",
             details=DeviceDetails(
                 supported_commands=frozenset(self._handlers.keys()),
                 published_keywords=frozenset(self._published_keywords),
             ),
         )
-        await self.kv_put_model(info)
-        return info

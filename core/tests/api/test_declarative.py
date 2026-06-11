@@ -254,6 +254,21 @@ async def test_declared_entity():
         await deinit_done.wait()
 
 
+@pytest.mark.asyncio
+async def test_attach_hook_failure_is_fatal(service):
+    """An exception raised in an on_attach hook aborts service startup."""
+    ent = declare_entity(name="boom")
+
+    @on_attach(ent)
+    async def fail():
+        raise ValueError("attach failed")
+
+    service.add(ent)
+
+    with pytest.raises(ValueError, match="attach failed"):
+        await service.run()
+
+
 class DevCmd(DeviceCommand):
     command_id: Literal["test_declared_device"] = "test_declared_device"
     val: int

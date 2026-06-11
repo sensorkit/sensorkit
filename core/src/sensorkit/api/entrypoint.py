@@ -275,11 +275,6 @@ async def _service_proc(
                 async with asyncio.timeout(shutdown_timeout):
                     await service.stop()
 
-        # Clean up any service tasks remaining, in case of abnormal shutdown.
-        with contextlib.suppress(Exception):
-            async with asyncio.timeout(shutdown_timeout):
-                await service.cleanup()
-
         # Kill the user entrypoint task.
         if service_task and not service_task.done():
             service_task.cancel()

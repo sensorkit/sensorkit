@@ -131,14 +131,13 @@ class ProgramImpl(EntityImpl, ProgramInterface):
                 ProgramActiveState(active=False, origin="init"),
             )
 
-        # Run the enable hook if we restored an enabled state.
+    @override
+    async def attach_impl(self):
         if self._state.enable_state.enabled:
             await self._call_with_context(self._enable_hooks)
 
-        # Attach request handlers.
         await self.handle_request(set_enable_state_request, self._set_enable_state)
         await self.handle_request(set_active_state_request, self._set_active_state)
-
 
     @override
     def on_enable(self, func: Callable[[], None]):
@@ -348,7 +347,5 @@ class ProgramImpl(EntityImpl, ProgramInterface):
         self._offers.clear()
 
     @override
-    async def publish_entity_info(self) -> EntityInfo:
-        info = EntityInfo(entity_type="program", details=None)
-        await self.kv_put_model(info)
-        return info
+    def entity_info(self) -> EntityInfo:
+        return EntityInfo(entity_type="program", details=None)

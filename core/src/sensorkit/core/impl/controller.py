@@ -70,8 +70,8 @@ class ControllerImpl(EntityImpl, ControllerInterface):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        self._enable_hooks: set[Callable[[], None]] = set()
-        self._disable_hooks: set[Callable[[], None]] = set()
+        self._enable_hooks: list[Callable[[], None]] = []
+        self._disable_hooks: list[Callable[[], None]] = []
         self._task_handlers: dict[type[ControllerTask], TaskHandlerCallback] = {}
         self._task_asyncio: asyncio.Task | None = None
         self._devices = ControllerDeviceMap()
@@ -82,12 +82,12 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
     @override
     def on_enable(self, func: Callable[[], None]):
-        self._enable_hooks.add(func)
+        self._enable_hooks.append(func)
         return func
 
     @override
     def on_disable(self, func: Callable[[], None]):
-        self._disable_hooks.add(func)
+        self._disable_hooks.append(func)
         return func
 
     @override
@@ -99,12 +99,20 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             execution_state=TaskExecutionState(task=None),
         )
 
+    @override
+    async def attach_impl(self):
         if self._state.enable_state.enabled:
             await self._call_with_context(self._enable_hooks)
 
         await self.handle_request(set_enable_state_request, self._set_enable_state)
         await self.handle_request(abort_task_request, self._abort_request)
         await self.handle_request(execute_task_request, self._execute_request)
+
+        await self.start_device_subscriptions()
+
+    @override
+    async def detach_impl(self):
+        await self.stop_device_subscriptions()
 
     @override
     def use_device(self, name: str, *, subscribe: list[type] | None = None) -> DeviceClient:
@@ -454,16 +462,14 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         return decorator
 
     @override
-    async def publish_entity_info(self) -> EntityInfo:
-        info = EntityInfo(
+    def entity_info(self) -> EntityInfo:
+        return EntityInfo(
             entity_type="controller",
             details=ControllerDetails(
                 supported_tasks=[t.__name__ for t in self._task_handlers.keys()],
                 controlled_devices=list(self._devices.keys()),
             ),
         )
-        await self.kv_put_model(info)
-        return info
 
     @override
     async def set_internal_state(self, state: InternalControllerState):

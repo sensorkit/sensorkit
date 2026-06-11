@@ -59,7 +59,7 @@ class SensorKit:
             for entity, record in records.items()
         }
 
-    async def list_entities(self):
+    async def list_entities(self) -> dict[Entity, EntityInfo]:
         """Return a mapping of entity to lease-value string for all currently online entities."""
         return {
             entry.key.entity(): EntityInfo.model_validate_json(entry.value)
@@ -177,6 +177,7 @@ class ServiceContext(EntityImpl):
 
         self.info = info
         self._lease_group = LeaseGroup()
+        self._impls: list[EntityImpl] = []
         self._shutdown = asyncio.get_running_loop().create_future()
         self._shutdown_called = False
 
@@ -186,8 +187,12 @@ class ServiceContext(EntityImpl):
         *,
         acquire_lease: bool = True,
         lease_ttl: float = ENTITY_LEASE_TTL,
-    ):
-        """Register an entity implementation on the backend."""
+    ) -> T:
+        """Register an entity implementation on the backend.
+
+        If `acquire_lease` is False, no lease is acquired. This should only be done in special
+        scenarios where the entity is already leased by another implementation in the same process.
+        """
         if acquire_lease:
             await self._lease_group.acquire(
                 impl._kv,
@@ -196,7 +201,14 @@ class ServiceContext(EntityImpl):
                 record=self.info,
             )
 
+        # Run baseline entity initialization.
         await impl.init_impl()
+
+        # Track the impl before attaching so that an impl whose attach raises partway is still
+        # detached on shutdown.
+        self._impls.append(impl)
+        await impl.attach()
+
         return impl
 
     @override
@@ -220,6 +232,7 @@ class ServiceContext(EntityImpl):
         await ready.wait()
 
     async def _service_task(self, ready: asyncio.Event):
+        ran_detach = False
         logger.debug(f"Service {self.info.name} startup")
 
         try:
@@ -230,8 +243,12 @@ class ServiceContext(EntityImpl):
                 # Start lease maintenance.
                 await self._lease_group.refresh_loop()
 
-                # If we get here, we expired our leases. Raise an exception to force all tasks to
-                # shut down.
+                # Normal exit. Run detach while the task group is still active and the backend
+                # is still live.
+                ran_detach = True
+                await self._run_detach()
+
+                # Force all tasks to shut down.
                 raise asyncio.CancelledError("Service shutdown")
         except asyncio.CancelledError:
             if self._shutdown_called:
@@ -260,6 +277,29 @@ class ServiceContext(EntityImpl):
                 async with asyncio.timeout(5.0):
                     await self.backend.shutdown_request_listeners()
 
+            # Ensure all impls are detached on every shutdown path.
+            if not ran_detach:
+                await self._run_detach()
+
+    async def _run_detach(self):
+        impls = list(self._impls)
+
+        # Detach all impls in parallel.
+        results = await asyncio.gather(
+            *(impl.detach() for impl in impls),
+            return_exceptions=True,
+        )
+
+        for impl, result in zip(impls, results, strict=True):
+            match result:
+                case Exception():
+                    logger.warning(f"Error during {impl.entity} detach ({type(result).__name__})")
+                case asyncio.CancelledError():
+                    pass
+                case BaseException():
+                    # Propagate nuclear exceptions (SystemExit / KeyboardInterrupt).
+                    raise result
+
     async def shutdown(self):
         """Shut down this service context, making it no longer usable."""
         self._shutdown_called = True
@@ -275,7 +315,7 @@ class ServiceContext(EntityImpl):
         # The caller has requested an intentional shutdown, so we won't bother propagating an error
         # if the service context happened to simultaneously blow up.
         with contextlib.suppress(asyncio.CancelledError, Exception):
-            await self._shutdown
+            await self.join()
 
     async def join(self):
         """Wait until the service shuts down.
