@@ -63,6 +63,9 @@ sensorkit = "sensorkit.cli.__main__:root"
 
 [project.optional-dependencies]
 filesys = []
+autofocus = [
+    "sensorkit[senpai]",
+]
 alpaca = [
     "alpyca>=3.1.1",
     "numpy>=1.24.0",
@@ -195,6 +198,7 @@ ignore_imports = [
     "sensorkit.autoslew.** -> sensorkit.alpaca.**",
 ]
 layers = [
+    "sensorkit.autofocus",
     """
     sensorkit.alpaca |
     sensorkit.autoslew |
@@ -243,6 +247,7 @@ include = [
 packages = ["core/src/sensorkit"]
 dev-mode-dirs = [
     "core/src",
+    "modules/autofocus/src",
     "modules/alpaca/src",
     "modules/autoslew/src",
     "modules/burr/src",
@@ -262,6 +267,7 @@ dev-mode-dirs = [
 [tool.hatch.build.hooks.custom]
 path = "hatch_build.py"
 modules = [
+    "autofocus",
     "alpaca",
     "autoslew",
     "burr",
