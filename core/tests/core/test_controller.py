@@ -158,7 +158,6 @@ async def test_controller_abort(kit):
             await exec_call.wait()
 
 
-@pytest.mark.skip
 @pytest.mark.asyncio
 @pytest.mark.parametrize("task_id", [uuid.uuid7(), None], ids=("with_id", "without_id"))
 async def test_wait_for_task(kit, task_id):

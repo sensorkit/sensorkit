@@ -5,7 +5,6 @@ import inspect
 import threading
 from typing import ClassVar, Self, get_type_hints
 
-from loguru import logger
 from pydantic import BaseModel
 
 from sensorkit.backend.base import KVError
@@ -100,7 +99,7 @@ class EventSourcedState(BaseModel):
         stream = await entity.monitor_event(event_type)
         state = await entity.kv_get_model(cls)
         original: T | None = getattr(state, field)
-        original_ts = original.timestamp() if original is not None else 0
+        original_id = original.event_id.int if original is not None else 0
 
         yield original
 
@@ -108,15 +107,14 @@ class EventSourcedState(BaseModel):
         #        of starting the stream at a given timestamp. NATS supports this so this is just a
         #        much needed backend iteration. Below is a poor-man's substitute that kind of works
         #        only because we currently always publish a state update subsequent to every event.
+        #
+        # Skip any stream events already reflected in `original` (or that produced it), then yield
+        # everything after. We order by the full uuid7 event_id rather than timestamp(): the latter
+        # is only millisecond-resolution, so two events emitted in the same millisecond compare
+        # equal and a genuinely newer event would be silently dropped, hanging the consumer.
         async for event in stream:
-            ts = event.timestamp()
-            logger.debug(f"got event: {event.event_id}, time: {ts} vs: {original_ts}")
-
-            if ts > original_ts:
+            if event.event_id.int > original_id:
                 yield event
-                break
-            elif ts == original_ts and event.event_id == original.event_id:
-                # This is extra brittle, but it's best-effort for now.
                 break
 
         async for event in stream:
