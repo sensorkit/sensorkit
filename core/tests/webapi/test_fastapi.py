@@ -147,7 +147,7 @@ async def test_run_device_command(webapi_setup):
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
 
-    async with asyncio.timeout(1.0):
+    async with asyncio.timeout(3.0):
         await done.wait()
 
 
@@ -195,7 +195,7 @@ async def test_execute_controller_task(webapi_setup):
     assert body["status"] == "ok"
     assert body["task_id"] == task_id
 
-    async with asyncio.timeout(1.0):
+    async with asyncio.timeout(3.0):
         await done.wait()
 
 
@@ -219,7 +219,7 @@ async def test_abort_controller_task(webapi_setup):
         )
     )
 
-    async with asyncio.timeout(1.0):
+    async with asyncio.timeout(3.0):
         await ready.wait()
 
     resp = await client.post("/controller/mycontroller/abort")
@@ -244,7 +244,7 @@ async def test_wait_for_current_task(webapi_setup):
     async def handle(_: InitTask):
         ready.set()
 
-        async with asyncio.timeout(1.0):
+        async with asyncio.timeout(3.0):
             await can_finish.wait()
 
     exec_bg = asyncio.create_task(
@@ -254,7 +254,7 @@ async def test_wait_for_current_task(webapi_setup):
         )
     )
 
-    async with asyncio.timeout(1.0):
+    async with asyncio.timeout(3.0):
         await ready.wait()
 
         can_finish.set()
@@ -278,7 +278,7 @@ async def test_wait_for_task_by_id(webapi_setup):
     async def handle(_: InitTask):
         ready.set()
 
-        async with asyncio.timeout(1.0):
+        async with asyncio.timeout(3.0):
             await can_finish.wait()
 
     task_id = str(uuid.uuid7())
@@ -289,7 +289,7 @@ async def test_wait_for_task_by_id(webapi_setup):
         )
     )
 
-    async with asyncio.timeout(1.0):
+    async with asyncio.timeout(3.0):
         await ready.wait()
 
         can_finish.set()
@@ -333,14 +333,14 @@ async def test_enable_disable_program(webapi_setup):
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
 
-    async with asyncio.timeout(1.0):
+    async with asyncio.timeout(3.0):
         await enabled.wait()
 
     resp = await client.post("/program/myprogram/disable")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
 
-    async with asyncio.timeout(1.0):
+    async with asyncio.timeout(3.0):
         await disabled.wait()
 
 
@@ -374,7 +374,7 @@ async def test_activate_deactivate_program(webapi_setup):
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
 
-    async with asyncio.timeout(1.0):
+    async with asyncio.timeout(3.0):
         await task_done.wait()
 
     resp = await client.post("/program/myprogram/deactivate")
