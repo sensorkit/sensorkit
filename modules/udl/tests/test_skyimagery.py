@@ -312,8 +312,9 @@ class TestSkyImageryMetadata:
         assert "origObjectId" not in metadata
 
     @pytest.mark.asyncio
-    async def test_imageset_id_omitted_for_single_image(self, program):
-        """Per UDL: a single-image set (num_frames=1) doesn't need an imageSetId."""
+    async def test_imageset_id_set_for_single_image(self, program):
+        """imageSetId is always set (== CollectRequest id), even for a single image"""
+
         request = MockCollectRequest.with_tle(num_frames=1)
         program.tasks["test-request-001"] = request
 
@@ -339,7 +340,7 @@ class TestSkyImageryMetadata:
             metadata = json.loads(zf.read(metadata_files[0]))
 
         assert metadata["imageSetLength"] == 1
-        assert "imageSetId" not in metadata
+        assert metadata["imageSetId"] == "test-request-001"
 
     @pytest.mark.asyncio
     async def test_imageset_id_present_for_multi_image(self, program):

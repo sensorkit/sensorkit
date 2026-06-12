@@ -435,11 +435,8 @@ class UDLProgram:
             "imageType": context.get("image_type") or self.config.image_type,
         }
 
-        # imageSetId groups multiple frames of one collect into a set. Per UDL:
-        # a single-image set doesn't need an imageSetId, so only emit it when
-        # the set has more than one frame.
-        if image_set_length > 1:
-            metadata["imageSetId"] = request.id
+        # Always set imageSetId to link back to its CollectRequest
+        metadata["imageSetId"] = request.id
 
         if self._site:
             metadata["senlat"] = self._site.latitude_degrees
