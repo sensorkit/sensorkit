@@ -34,7 +34,7 @@ ControllerConfigMap = Annotated[
 class FirstRunConfig(BaseModel):
     """Initial state to assume on the first run before any persisted agent state exists."""
     operate_all: bool = False
-    enable_scheduling: bool = False
+    enable_scheduling: bool = True
 
 
 class AgentConfig(BaseModel):
