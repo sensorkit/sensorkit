@@ -1,5 +1,6 @@
 import asyncio
 import os
+import pathlib
 import warnings
 from typing import Literal
 
@@ -7,8 +8,10 @@ from dotenv import find_dotenv, load_dotenv
 
 from sensorkit.backend.base import BackendImpl
 from sensorkit.common.importutil import import_module_or_file, obj_from_spec
-from sensorkit.core.client import SensorKit
+from sensorkit.config.parser import SensorKitConfig, parse_config
 
+DEFAULT_BACKEND = "sensorkit.backend.nats"
+DEFAULT_CONFIG_FILE = "sensorkit.yaml"
 DEFAULT_BASE_IMPORTS = (
     "sensorkit.std",
     "sensorkit.data.filesys",
@@ -18,7 +21,9 @@ DEFAULT_BASE_IMPORTS = (
 )
 
 
-def import_plugins(
+def import_modules(
+    *,
+    extra_imports: list[str] | None = None,
     fail_policy: Literal["error", "warn", "ignore"] = "error",
     warn_stacklevel: int = 2,
 ):
@@ -35,6 +40,9 @@ def import_plugins(
         mod.strip() for mod in os.environ.get("SENSORKIT_IMPORTS", "").split(",") if mod
     )
 
+    if extra_imports:
+        imports.extend(extra_imports)
+
     for module in imports:
         try:
             import_module_or_file(module)
@@ -48,12 +56,15 @@ def import_plugins(
                     pass
 
 
-def _connect_sync():
+def _connect_sync(default_backend: str):
     # Do dynamic module imports based on configuration.
-    import_plugins(fail_policy="warn", warn_stacklevel=5)
+    import_modules(fail_policy="warn", warn_stacklevel=5)
 
     # Determine the backend based on user configuration.
-    backend_module = os.environ.get("SENSORKIT_BACKEND", "sensorkit.backend.nats")
+    backend_module = os.environ.get(
+        "SENSORKIT_BACKEND",
+        default_backend,
+    )
 
     return obj_from_spec(
         spec=backend_module,
@@ -62,8 +73,31 @@ def _connect_sync():
     )
 
 
-async def connect():
+async def connect(*, default_backend: str | None = None):
     """Reads configuration to determine a backend and then creates a SensorKit client."""
-    backend_cls = await asyncio.to_thread(_connect_sync)
+    from sensorkit.core.client import SensorKit
+
+    default_backend = default_backend or DEFAULT_BACKEND
+    backend_cls = await asyncio.to_thread(_connect_sync, default_backend)
     backend_impl = await backend_cls.create()
     return SensorKit(backend=backend_impl)
+
+
+def _load_config_sync(path: pathlib.Path):
+    import yaml
+
+    base = parse_config(yaml.safe_load(path.read_text()))
+
+    import_modules(
+        extra_imports=base.configured_imports(),
+        fail_policy="warn",
+        warn_stacklevel=5,
+    )
+
+    return base.resolve_dynamic_sections()
+
+
+async def load_config(*, default_location: str | None = None) -> SensorKitConfig:
+    default_location = default_location or DEFAULT_CONFIG_FILE
+    path = pathlib.Path(os.environ.get("SENSORKIT_CONFIG", default_location))
+    return await asyncio.to_thread(_load_config_sync, path)
