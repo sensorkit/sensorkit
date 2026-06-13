@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections
 import importlib
+import itertools
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -62,11 +63,12 @@ class SensorKitBaseConfig(BaseModel, extra="allow"):
             entity_kv=ekv,
         )
 
-    def configured_imports(self):
-        return [
-            *self.sensorkit.imports,
-            *(f"sensorkit.{module}" for module in self.sensorkit.modules),
-        ]
+    def configured_imports(self) -> Iterable[str]:
+        # Modules must come first, in case any imported user code uses them.
+        return itertools.chain(
+            (f"sensorkit.{module}" for module in self.sensorkit.modules),
+            self.sensorkit.imports,
+        )
 
 
 @dataclass
