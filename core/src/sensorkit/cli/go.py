@@ -1,21 +1,14 @@
 import asyncio
-import pathlib
 import textwrap
 
-import aiofile
 import asyncclick as click
-import yaml
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.cli.config import config_load
 from sensorkit.cli.utils import report_errors
 from sensorkit.common.logging import add_debug_logger, configure_logging
-from sensorkit.config.parser import parse_config
-
-DEFAULT_CONFIG_FILE = "services.yaml"
-DEFAULT_UNIFIED_FILE = "sensorkit.yaml"
 
 
 class ServiceDefinition(BaseModel):
@@ -26,83 +19,20 @@ class ServiceDefinition(BaseModel):
 
     @classmethod
     def from_shorthand(cls, in_str: str):
-        """Parse a ``name:module[:entrypoint]`` shorthand string into a ServiceDefinition."""
+        """Parse a `name:module[:entrypoint]` shorthand string into a ServiceDefinition."""
         name, module, *func = in_str.split(":")
         func = func[0] if func else None
         return cls(name=name, module=module, func=func)
 
 
-class ServiceConfig(BaseModel):
-    """Collection of service definitions loaded from a YAML config file."""
-    services: list[ServiceDefinition] = Field(default_factory=list)
-
-    @classmethod
-    async def from_yaml_file(cls, config_file: pathlib.Path):
-        """Load service configuration from a YAML file.
-
-        Args:
-            config_file: Path to the config file, or None to use the default.
-
-        Returns:
-            ServiceConfig instance, or None if the file does not exist.
-
-        Raises:
-            ValidationError: If the input configuration is invalid.
-            YAMLError: If the config file cannot be parsed.
-            OSError: If the config file cannot be read.
-        """
-        try:
-            async with aiofile.async_open(config_file, "r") as f:
-                return cls.model_validate(yaml.safe_load(await f.read()))
-        except FileNotFoundError:
-            return None
-
-
-async def load_unified_config(config_file: pathlib.Path):
-    """Load service configuration from a YAML file."""
-    try:
-        async with aiofile.async_open(config_file, "r") as f:
-            parsed = parse_config(yaml.safe_load(await f.read()))
-            config = ServiceConfig()
-
-            for svc in parsed.services:
-                if svc.python_module:
-                    config.services.append(
-                        ServiceDefinition.from_shorthand(f"{svc.id}:{svc.python_module}")
-                    )
-
-            return config
-    except FileNotFoundError:
-        return None
-
-
 async def read_config_file(config_file: str | None):
-    """Find the config file, if any."""
-    config: ServiceConfig | None = None
-    is_unified = False
-    errs = []
-
-    try:
-        file = config_file or DEFAULT_CONFIG_FILE
-        config = await ServiceConfig.from_yaml_file(pathlib.Path(file))
-    except Exception as e:
-        errs.append(e)
-
-    if not config:
-        file = config_file or DEFAULT_UNIFIED_FILE
-
-        try:
-            # Try the unified config format.
-            sk.import_plugins()
-            config = await load_unified_config(pathlib.Path(file))
-            is_unified = True
-        except Exception as e:
-            errs.append(e)
-
-    if not config and errs:
-        raise ExceptionGroup("could not load configuration", errs)
-
-    return config, is_unified
+    """Load the unified config file, if any."""
+    config = await sk.load_config(default_location=config_file)
+    return [
+        ServiceDefinition.from_shorthand(f"{svc.id}:{svc.python_module}")
+        for svc in config.services
+        if svc.python_module
+    ]
 
 
 def _logger_formatter(record):
@@ -177,12 +107,6 @@ def _logger_patcher(record):
     help="Log level for console output."
 )
 @click.option(
-    "--add-service",
-    multiple=True,
-    metavar="name:module[:entrypoint]",
-    help="Service name and entrypoint spec",
-)
-@click.option(
     "--shutdown-timeout",
     type=float,
     default=180.0,
@@ -201,7 +125,6 @@ async def go_command(
     log_file: str | None,
     log_file_append: bool,
     log_level: str,
-    add_service: tuple[str],
     shutdown_timeout: float,
 ):
     """Launch and manage services."""
@@ -209,16 +132,13 @@ async def go_command(
 
     # Read service configuration from file.
     try:
-        config, is_unified = await read_config_file(config_file)
-    except ExceptionGroup as e:
-        logger.opt(exception=e).debug("could not load either config format")
-        info = textwrap.indent(f"{e.exceptions}", prefix="  ")
-        click.secho(f"Could not read configuration:\n{info}", fg="red", err=True)
+        services = await read_config_file(config_file)
+    except Exception as e:
+        logger.opt(exception=e).debug("could not load config")
+        click.secho(f"Could not read configuration:\n{e}", fg="red", err=True)
         return
 
-    if not config:
-        config = ServiceConfig()
-    elif is_unified and load_config:
+    if load_config:
         print()
         print(" ▶️ Loading configuration...")
         print()
@@ -226,22 +146,15 @@ async def go_command(
         # Run the 'config load' subcommand to load config.
         try:
             async with asyncio.timeout(5.0):
-                await ctx.invoke(config_load, file=config_file or DEFAULT_UNIFIED_FILE, verbose=1)
+                await ctx.invoke(config_load, file=config_file, verbose=1)
         except Exception as e:
             click.secho(f"{type(e).__name__} while loading configuration", fg="red", err=True)
             return
 
-    # Include additional services from command line args.
-    for shorthand in add_service:
-        try:
-            config.services.append(ServiceDefinition.from_shorthand(shorthand))
-        except ValueError as e:
-            raise click.UsageError(f"Invalid argument: {shorthand}") from e
-
     # Find entrypoint objects.
     entrypoints: dict[str, ServiceEntrypoint] = {}
 
-    for svc in config.services:
+    for svc in services:
         try:
             entrypoints[svc.name] = ServiceEntrypoint.from_spec(
                 svc.module + (f":{svc.func}" if svc.func else ""),

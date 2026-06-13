@@ -2,21 +2,19 @@ from __future__ import annotations
 
 import asyncio
 
-import aiofile
 import asyncclick as click
 import yaml
 from pydantic import BaseModel, ValidationError
 from rich.text import Text
 
+import sensorkit.api as sk
 from sensorkit.backend.base import BackendError, KeyNotFound
 from sensorkit.cli.utils import console, with_kit
 from sensorkit.config.parser import (
     ConfigError,
     ConfigSectionUnknown,
     ConfigVersionUnsupported,
-    parse_config,
 )
-from sensorkit.core.client import SensorKit
 
 
 @click.group("config")
@@ -25,7 +23,7 @@ async def config_group():
 
 
 async def get_changed_ekv(
-    kit: SensorKit,
+    kit: sk.SensorKit,
     ekv: dict[str, list[BaseModel]],
 ) -> dict[str, list[BaseModel]]:
     out = {}
@@ -80,25 +78,21 @@ def print_ekv(
 
 
 @config_group.command("load")
-@click.argument("file", required=True)
+@click.argument("file")
 @click.option("-n", "--dry-run", is_flag=True, help="Do not write to configuration backend")
 @click.option("-f", "--force", is_flag=True, help="Write configuration even if unchanged")
 @click.option("-v", "verbose", count=True, help="Increase output verbosity")
 @with_kit
-async def config_load(kit, *, file: str, force: bool, dry_run: bool, verbose: int):
+async def config_load(kit, *, file: str | None, force: bool, dry_run: bool, verbose: int):
     """Load a SensorKit unified configuration file."""
     try:
-        async with aiofile.async_open(file) as f:
-            raw = yaml.safe_load(await f.read())
+        config = await sk.load_config(default_location=file)
     except FileNotFoundError:
         console.print(f"[bold red]ERROR: file not found: {file}[/bold red]")
         return
     except yaml.YAMLError as e:
         console.print(f"[bold red]ERROR: invalid YAML in {file}: {e}[/bold red]")
         return
-
-    try:
-        config = parse_config(raw)
     except ConfigVersionUnsupported as e:
         console.print(f"[bold red]ERROR: unsupported config version: {e}[/bold red]")
         return
