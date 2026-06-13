@@ -3,24 +3,25 @@ from __future__ import annotations
 import collections
 import importlib
 from collections.abc import Iterable, Mapping
-from typing import Any, NamedTuple
+from dataclasses import dataclass
+from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, TypeAdapter, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.config.section import ConfigSection, get_config_section
 
 PARSER_VERSION = 1
-VERSION_KEY = "version"
-GLOBALS_KEY = "sensorkit"
-SERVICES_KEY = "services"
-
-# Import core sections.
-importlib.import_module("sensorkit.config.core")
 
 
-class ServiceConfig(BaseModel):
+class GeneralConfig(BaseModel, extra="forbid"):
+    backend: str | None = None
+    modules: list[str] = Field(default_factory=list)
+    imports: list[str] = Field(default_factory=list)
+
+
+class ServiceConfig(BaseModel, extra="forbid"):
     id: str
     python_path: str | None = None
     python_module: str | None = None
@@ -37,11 +38,50 @@ class ServiceConfig(BaseModel):
         return self
 
 
-class ParsedConfig(NamedTuple):
-    global_kv: KeywordDict
-    entity_kv: dict[str, list[BaseModel]]
+class SensorKitBaseConfig(BaseModel, extra="allow"):
+    version: int = 0
+    sensorkit: GeneralConfig = Field(default_factory=GeneralConfig)
+    globals: KeywordDict = Field(default_factory=KeywordDict)
+    services: list[ServiceConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate(self):
+        if self.version != PARSER_VERSION:
+            raise ConfigVersionUnsupported(f"Unsupported config version: {self.version}")
+
+        return self
+
+    def resolve_dynamic_sections(self):
+        # Make sure core sections are imported.
+        importlib.import_module("sensorkit.config.core")
+
+        ekv, services = _parse_extra_sections(self.model_extra)
+        return SensorKitConfig(
+            base=self,
+            services=self.services + services,
+            entity_kv=ekv,
+        )
+
+    def configured_imports(self):
+        return [
+            *self.sensorkit.imports,
+            *(f"sensorkit.{module}" for module in self.sensorkit.modules),
+        ]
+
+
+@dataclass
+class SensorKitConfig:
+    base: SensorKitBaseConfig
     services: list[ServiceConfig]
-    version: int = PARSER_VERSION
+    entity_kv: dict[str, list[BaseModel]]
+
+    @property
+    def backend(self):
+        return self.base.sensorkit.backend
+
+    @property
+    def global_kv(self):
+        return self.base.globals
 
 
 def _validate_mapper_return_value[T](value: Any, expected_type: type[T]) -> tuple[T] | None:
@@ -82,14 +122,11 @@ def _parse_section(section: ConfigSection, value: Any) -> Iterable[tuple[str, Ba
     return zip(ids, models, strict=True)
 
 
-def _parse_sections(config: Mapping[str, Any]):
+def _parse_extra_sections(config: Mapping[str, Any]):
     ekv: dict[str, list[BaseModel]] = collections.defaultdict(list)
-    services = TypeAdapter(list[ServiceConfig]).validate_python(config.get(SERVICES_KEY, []))
+    services: list[ServiceConfig] = []
 
     for key, value in config.items():
-        if key in (VERSION_KEY, GLOBALS_KEY, SERVICES_KEY):
-            continue
-
         section = get_config_section(key)
 
         if not section:
@@ -104,21 +141,14 @@ def _parse_sections(config: Mapping[str, Any]):
     return ekv, services
 
 
-def _parse_globals(config: Mapping[str, Any]):
-    if global_section := config.get(GLOBALS_KEY, None):
-        return TypeAdapter(KeywordDict).validate_python(global_section)
-    else:
-        return KeywordDict()
-
-
-def parse_config(config: Mapping[str, Any]) -> ParsedConfig:
+def parse_config(config: Mapping[str, Any]) -> SensorKitBaseConfig:
     """Parse the given unified configuration dict.
 
     Args:
         config: A mapping containing the unified configuration data.
 
     Returns:
-        A tuple containing global and per-entity KV settings that describe the input config.
+        A SensorKitBaseConfig instance.
 
     Raises:
         ConfigVersionUnsupported: The config version is mismatched
@@ -126,14 +156,7 @@ def parse_config(config: Mapping[str, Any]) -> ParsedConfig:
         ConfigError: An internal error with config processing
         ValidationError: A config section fails Pydantic validation during parsing
     """
-    version = config.get(VERSION_KEY)
-
-    if version != PARSER_VERSION:
-        raise ConfigVersionUnsupported(f"Unsupported config version: {version}")
-
-    gkv = _parse_globals(config)
-    ekv, services = _parse_sections(config)
-    return ParsedConfig(gkv, ekv, services)
+    return SensorKitBaseConfig.model_validate(config)
 
 
 class ConfigError(Exception):
