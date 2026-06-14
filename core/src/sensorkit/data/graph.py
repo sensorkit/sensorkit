@@ -241,7 +241,7 @@ def _parse_simple(simple: list[dict[str, Any]]):
         if prev_id:
             nodes[prev_id]["output"] = [node_id]
 
-        nodes[node_id] = node
+        nodes[node_id] = dict(node)
         prev_id = node_id
 
     return nodes
