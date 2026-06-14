@@ -104,7 +104,7 @@ def build_sk_tasks(
 
     # A TLE target carries its own motion — PWI4's follow_tle handles the
     # rate. For non-TLE targets, request.rates must supply the rate vector.
-    is_tle_target = isinstance(request.target, TLETarget)
+    is_tle_target = isinstance(request.target, obs.TLETarget)
     any_rate = any(m == TrackingMode.RATE for m in modes)
     if any_rate and not is_tle_target and request.rates is None:
         raise ValueError(
@@ -187,14 +187,13 @@ def build_sk_tasks(
                 context=exposure_context,
             )
         elif _is_rates_then_nonrate(modes):
-            first_nonrate = next(i for i, m in enumerate(modes) if m != TrackingMode.RATE)
             yield StandardCollectTask(
                 task_id=uuid.uuid4(),
                 controller_id=controller_id,
                 target=_rate_target(),
                 camera_params=cam,
                 end_time=end_time,
-                sidereal_track_from_frame=first_nonrate,
+                sidereal_frames=[i for i, m in enumerate(modes) if m != TrackingMode.RATE],
                 context=exposure_context,
             )
         elif _is_nonrate_then_rates(modes):
