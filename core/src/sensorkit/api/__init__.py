@@ -6,7 +6,7 @@ try:
 except Exception:
     VERSION = "0.0.0"
 
-from sensorkit.api.bootstrap import connect, import_modules, load_config
+from sensorkit.api.bootstrap import connect, import_modules, load_config, set_config_location
 from sensorkit.api.declarative import (
     DeclaredController,
     DeclaredDevice,

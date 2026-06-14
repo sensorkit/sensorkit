@@ -86,7 +86,8 @@ def print_ekv(
 async def config_load(kit, *, file: str | None, force: bool, dry_run: bool, verbose: int):
     """Load a SensorKit unified configuration file."""
     try:
-        config = await sk.load_config(default_location=file)
+        sk.set_config_location(file)
+        config = await sk.load_config()
     except FileNotFoundError:
         console.print(f"[bold red]ERROR: file not found: {file}[/bold red]")
         return

@@ -12,7 +12,12 @@ from sensorkit.cli.service import service_group
 
 
 @click.group()
-async def cli(): ...
+async def cli():
+    # Load .env before any command resolves config/backend/imports from the
+    # environment (notably with_kit's connect()), so process env > .env > defaults.
+    from dotenv import find_dotenv, load_dotenv
+
+    load_dotenv(find_dotenv(usecwd=True))
 
 
 cli.add_command(cast(click.Command, config_group))

@@ -27,7 +27,8 @@ class ServiceDefinition(BaseModel):
 
 async def read_config_file(config_file: str | None):
     """Load the unified config file, if any."""
-    config = await sk.load_config(default_location=config_file)
+    sk.set_config_location(config_file)
+    config = await sk.load_config()
     return [
         ServiceDefinition.from_shorthand(f"{svc.id}:{svc.python_module}")
         for svc in config.services

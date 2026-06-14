@@ -48,7 +48,8 @@ async def service_run(name, spec, config_file, restart):
     # Try to load config. A missing file is nonfatal (the spec must then be
     # supplied explicitly); any other load error is fatal.
     try:
-        config = await sk.load_config(default_location=config_file)
+        sk.set_config_location(config_file)
+        config = await sk.load_config()
     except FileNotFoundError as e:
         logger.opt(exception=e).debug("config file not found")
         config = None
