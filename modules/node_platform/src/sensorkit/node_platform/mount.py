@@ -189,39 +189,35 @@ class NodePlatformMount(NodePlatformDevice):
     @sk.command_handler
     async def mount_stop(self, cmd: Stop):
         await self.require_connected()
+
         logger.debug("stopping mount")
-
         await self.api.call("v1_halt_mount")
-
         await self._wait_for_mount(await_onset=False)
+        logger.debug("stopped mount")
 
         self._stop_fast_status()
-        logger.debug("stopped mount")
 
     @sk.command_handler
     async def mount_home(self, cmd: Home):
         await self.require_connected()
+        await self.mount_enable(Enable())
+
         logger.debug("homing mount")
-
         await self.api.call("v1_mount_go_to_home")
-
         await self._wait_for_mount()
+        logger.debug("homed mount")
 
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
 
-        logger.debug("homed mount")
-
     @sk.command_handler
     async def mount_park(self, cmd: MoveToPark):
         await self.require_connected()
+        await self.mount_enable(Enable())
+
         logger.debug("parking mount")
-
-        self._stop_fast_status()
         await self.api.call("v1_park_mount")
-
         await self._wait_for_mount()
-
         logger.debug("parked mount")
 
     @sk.command_handler
@@ -234,6 +230,7 @@ class NodePlatformMount(NodePlatformDevice):
     @sk.command_handler
     async def mount_follow_target(self, cmd: FollowTarget):
         await self.require_connected()
+        await self.mount_enable(Enable())
 
         target = await cmd.target.adapt(
             ICRSTarget,
