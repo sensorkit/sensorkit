@@ -50,8 +50,18 @@ def _logger_patcher(record):
 
     if current:
         entity = current.entity
+        name = str(entity).lower()
 
-        if sk.device():
+        if name == "agent":
+            entity_type = "🤖 "
+            entity_color = "fg 84"
+        elif name == "burr":
+            entity_type = "☕️ "
+            entity_color = "fg 130"
+        elif name == "otto":
+            entity_type = "🎶 "
+            entity_color = "fg 213"
+        elif sk.device():
             entity_type = "💠 "
             entity_color = "fg 57"
         elif sk.controller():
@@ -60,9 +70,6 @@ def _logger_patcher(record):
         elif sk.program():
             entity_type = "⏭️ "
             entity_color = "fg 36"
-        elif entity == "agent":
-            entity_type = "🤖 "
-            entity_color = "fg 84"
         else:
             entity_type = "🟣 "
             entity_color = "fg 144"
