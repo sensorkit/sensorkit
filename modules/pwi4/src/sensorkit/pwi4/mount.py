@@ -61,6 +61,12 @@ from sensorkit.pwi4.device import (
 from sensorkit.std import Connect, Connected, Disconnect
 
 
+# Max time to wait for a commanded slew to *begin* (is_slewing -> True) before
+# waiting for it to settle. Also the worst-case stall on a positional no-op
+# (re-follow to an unchanged position, park-when-already-parked).
+_MOUNT_ONSET_TIMEOUT = 2.0
+
+
 @sk.declare_keyword
 class MountAxisEnabled(BaseModel):
     axis: list[AxisEnabled]
@@ -297,14 +303,13 @@ class PWI4Mount(PWI4Device):
     @sk.command_handler
     async def mount_stop(self, cmd: Stop):
         await self.require_connected()
+
         logger.debug("stopping mount")
-
         await self.client.request("/mount/stop")
-
-        await self._wait_for_mount()
+        await self._wait_for_mount(await_onset=False)
+        logger.debug("stopped mount")
 
         self._stop_fast_status()
-        logger.debug("stopped mount")
 
     @sk.command_handler
     async def mount_home(self, cmd: Home):
@@ -338,18 +343,15 @@ class PWI4Mount(PWI4Device):
     @sk.command_handler
     async def mount_park(self, cmd: MoveToPark):
         await self.require_connected()
-        logger.debug("parking mount")
 
         await asyncio.gather(
             self.mount_enable_axis(EnableAxis(axis=MountAxis.AZIMUTH)),
             self.mount_enable_axis(EnableAxis(axis=MountAxis.ALTITUDE)),
         )
 
+        logger.debug("parking mount")
         await self.client.request("/mount/park")
-        await asyncio.sleep(1)
-
         await self._wait_for_mount()
-
         logger.debug("parked mount")
 
     @sk.command_handler
@@ -362,6 +364,10 @@ class PWI4Mount(PWI4Device):
     @sk.command_handler
     async def mount_follow_target(self, cmd: FollowTarget):
         await self.require_connected()
+        await asyncio.gather(
+            self.mount_enable_axis(EnableAxis(axis=MountAxis.AZIMUTH)),
+            self.mount_enable_axis(EnableAxis(axis=MountAxis.ALTITUDE)),
+        )
 
         target = await cmd.target.adapt(
             ICRSTarget,
@@ -372,11 +378,6 @@ class PWI4Mount(PWI4Device):
             (RateTarget, ReferenceFrame.ICRF),
             (EphemerisTarget, ReferenceFrame.ICRF),
             observer=self._geodetic,
-        )
-
-        await asyncio.gather(
-            self.mount_enable_axis(EnableAxis(axis=MountAxis.AZIMUTH)),
-            self.mount_enable_axis(EnableAxis(axis=MountAxis.ALTITUDE)),
         )
 
         match target:
@@ -390,7 +391,6 @@ class PWI4Mount(PWI4Device):
                         "dec_degs": target.coords.dec,
                     },
                 )
-                await asyncio.sleep(1)
 
                 await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
@@ -407,7 +407,6 @@ class PWI4Mount(PWI4Device):
                         "az_degs": target.coords.az,
                     },
                 )
-                await asyncio.sleep(1)
 
                 await self._wait_for_mount(tracking=False)
                 self._start_fast_status()
@@ -425,7 +424,6 @@ class PWI4Mount(PWI4Device):
                         "line3": target.tle.line2,
                     },
                 )
-                await asyncio.sleep(1)
 
                 await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
@@ -443,7 +441,6 @@ class PWI4Mount(PWI4Device):
                         "dec_degs": target.initial_coords.dec,
                     },
                 )
-                await asyncio.sleep(1)
 
                 await self._wait_for_mount(tracking=True)
 
@@ -473,7 +470,6 @@ class PWI4Mount(PWI4Device):
                         },
                     )
                 await self.client.request("/mount/radecpath/apply")
-                await asyncio.sleep(1)
 
                 await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
@@ -486,12 +482,12 @@ class PWI4Mount(PWI4Device):
                         self._stop_fast_status()
                         logger.debug("disabling tracking")
                         await self.client.request("/mount/tracking_off")
-                        await self._wait_for_mount(tracking=False)
+                        await self._wait_for_mount(tracking=False, await_onset=False)
                         logger.debug("disabled tracking")
                     case ReferenceFrame.ICRF:
                         logger.debug("enabling sidereal tracking")
                         await self.client.request("/mount/tracking_on")
-                        await self._wait_for_mount(tracking=True)
+                        await self._wait_for_mount(tracking=True, await_onset=False)
                         self._start_fast_status()
                         logger.debug("enabled sidereal tracking")
 
@@ -602,11 +598,37 @@ class PWI4Mount(PWI4Device):
         *,
         slewing: bool = False,
         tracking: bool = False,
+        await_onset: bool = True,
     ):
         """Poll /status until mount.is_slewing and mount.is_tracking both match.
 
-        Bounded by config.timeout; polls every 0.2 s.
+        When ``await_onset`` (the default, for commands that slew), first wait
+        briefly for the mount to *start* slewing. Without this, a command whose
+        target flags already equal the current flags (e.g. re-following while
+        already tracking) would match the stale pre-command state and return
+        before motion begins. If no slew is observed within _MOUNT_ONSET_TIMEOUT,
+        the command was a positional no-op, and we fall through to the settle check.
+
+        Non-slewing commands (stop, enable/disable tracking) must pass
+        ``await_onset=False``: they never raise is_slewing, so onset would
+        otherwise burn the full timeout on every call.
+
+        The settle wait is bounded by config.timeout; both phases poll every 0.2 s.
         """
+
+        if await_onset:
+            try:
+                async with asyncio.timeout(_MOUNT_ONSET_TIMEOUT):
+                    while True:
+                        st = await self.client.status()
+                        if self.client.get_bool(st, "mount.is_slewing"):
+                            break
+                        await asyncio.sleep(0.2)
+            except TimeoutError:
+                # No slew observed -> positional no-op. Fall through to the
+                # settle check, which returns at once if already on target or
+                # still waits out any flag change (e.g. tracking engaging).
+                pass
 
         async with asyncio.timeout(self.config.timeout):
             while True:
