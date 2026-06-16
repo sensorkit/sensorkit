@@ -403,7 +403,7 @@ class AlpacaTelescope(AlpacaDevice):
                 await asyncio.sleep(1)
 
                 await self._wait_for_telescope()
-                await self._start_fast_status()
+                self._start_fast_status()
 
                 logger.debug("following AltAz target")
 
