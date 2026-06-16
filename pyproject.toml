@@ -42,8 +42,7 @@ alpaca = [
     "numpy>=1.24.0",
 ]
 burr = [
-#    "burr @ git+https://github.com/zgazak/burr.git@dev",
-    "burr"
+    "burr @ git+https://github.com/zgazak/burr.git@dev",
 ]
 indigo = [
     "websockets>=14.0",
@@ -112,9 +111,6 @@ dev = [
 name = "systemd-python"
 version = "235"
 requires-dist = []
-
-[tool.uv.sources]
-burr = { path = "../burr", editable = true }
 
 [tool.ruff]
 include = ["core/**/*.py", "modules/**/*.py"]

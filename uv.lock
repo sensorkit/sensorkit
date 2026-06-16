@@ -318,7 +318,7 @@ wheels = [
 [[package]]
 name = "burr"
 version = "0.3.0"
-source = { editable = "../burr" }
+source = { git = "https://github.com/zgazak/burr.git?rev=dev#5d080d48c280e4a365c174970fe048eaf2ee5a5b" }
 dependencies = [
     { name = "alpyca" },
     { name = "astropy" },
@@ -337,32 +337,6 @@ dependencies = [
     { name = "tzdata" },
     { name = "watchdog" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiofile", marker = "extra == 'sk'", specifier = ">=3.9.0" },
-    { name = "alpyca", specifier = ">=3.1.0" },
-    { name = "alpyca", marker = "extra == 'direct'", specifier = ">=3.1.0" },
-    { name = "astropy", specifier = ">=7.1.0" },
-    { name = "deepdiff", specifier = ">=6.7.1" },
-    { name = "dotenv", specifier = ">=0.9.9" },
-    { name = "loguru", specifier = ">=0.7.3" },
-    { name = "matplotlib", specifier = ">=3.10.3" },
-    { name = "nats-py", specifier = ">=2.7.0" },
-    { name = "numpy" },
-    { name = "pydantic", specifier = ">=2.11.5" },
-    { name = "requests", specifier = ">=2.32.4" },
-    { name = "scipy", specifier = ">=1.15.3" },
-    { name = "senpai", marker = "extra == 'senpai'", git = "https://github.com/zgazak/senpai.git?rev=dev" },
-    { name = "sensorkit", extras = ["alpaca", "pwi4", "filesys", "webapi"], marker = "extra == 'sk'", editable = "../../../../Erik/Desktop/Projects/sensorkit" },
-    { name = "skyfield", specifier = ">=1.53" },
-    { name = "slack-sdk", marker = "extra == 'notify'", specifier = ">=3.35.0" },
-    { name = "timezonefinder", specifier = ">=6.5.9" },
-    { name = "tqdm", specifier = ">=4.67.1" },
-    { name = "tzdata" },
-    { name = "watchdog", specifier = ">=6.0.0" },
-]
-provides-extras = ["sk", "direct", "senpai", "notify"]
 
 [[package]]
 name = "cachebox"
@@ -2762,7 +2736,7 @@ requires-dist = [
     { name = "alpyca", marker = "extra == 'sky-transmission'", specifier = ">=3.1.0" },
     { name = "astropy", specifier = ">=7.1.0" },
     { name = "asyncclick", specifier = "==8.1.8" },
-    { name = "burr", marker = "extra == 'burr'", editable = "../burr" },
+    { name = "burr", marker = "extra == 'burr'", git = "https://github.com/zgazak/burr.git?rev=dev" },
     { name = "dropbox", marker = "extra == 'otto'" },
     { name = "dukpy", marker = "extra == 'thesky-simulator'", specifier = ">=0.5.0" },
     { name = "fastapi", specifier = ">=0.115.12" },
