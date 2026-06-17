@@ -133,6 +133,10 @@ class ServeLocalFITSHandler(ServeHandler):
         root = pathlib.Path(self.config.root_directory)
         queue: asyncio.Queue[pathlib.Path] = asyncio.Queue()
 
+        while not await asyncio.to_thread(root.exists):
+            logger.debug(f"waiting for fits server directory {root} to exist...")
+            await asyncio.sleep(30.0)
+
         handler = FileAppearedHandler(queue, match_suffix=".fits")
         observer = Observer()
         observer.schedule(handler, str(root), recursive=True)
