@@ -203,6 +203,10 @@ burr:
     runtime:
       output_dir: "/temp/burr/"
 
+webapi:
+  id: WebAPI
+  port: 8000
+
 config:
   SimulatedSensor:
     SitePosition:
@@ -211,7 +215,5 @@ config:
       altitude_km: .05
 
 services:
-  - id: WebAPI
-    python_module: sensorkit.webapi
   - id: SimulatedProgram
     python_module: deploy/simulated/program.py

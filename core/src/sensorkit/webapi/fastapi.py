@@ -8,7 +8,6 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.sse import EventSourceResponse, ServerSentEvent
-from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 
 import sensorkit.api as sk
@@ -19,7 +18,6 @@ from sensorkit.backend.base import (
     RemoteRequestError,
     UnregisteredResponder,
 )
-from sensorkit.backend.request import CallError
 from sensorkit.core.controller import ControllerState
 from sensorkit.core.device import DeviceState
 from sensorkit.core.entity import DeviceDetails, EntityInfo
@@ -82,7 +80,7 @@ def _error_handler():
         raise HTTPException(status_code=503, detail="Endpoint unavailable") from err
     except BackendError as err:
         raise HTTPException(status_code=503, detail="Backend not available") from err
-    except CallError as err:
+    except sk.CallError as err:
         raise HTTPException(status_code=409, detail=str(err)) from err
 
 
