@@ -152,15 +152,12 @@ class ServeLocalFITSHandler(ServeHandler):
                 await self._found_file(path)
                 queue.task_done()
         finally:
-            logger.debug("fits server shutting down")
             observer.stop()
             queue.shutdown(True)
 
     async def _found_file(self, path: pathlib.Path):
         try:
             from astropy.io import fits
-
-            logger.debug(f"fits server found {path}")
 
             def _read_header():
                 with fits.open(path) as hdul:

@@ -26,7 +26,7 @@ from sensorkit.core.program import ProgramState
 from sensorkit.webapi.forwarder import (
     KeyValueForwarder,
     ProductForwarder,
-    SHUTDOWN,
+    RecordQueueSet,
     SKRecord,
     StreamForwarder,
 )
@@ -105,7 +105,7 @@ class WebAPI:
     def __init__(self, kit: sk.SensorKit, config: WebAPIConfig):
         self.kit = kit
         self.config = config
-        self.client_queues: set[asyncio.Queue[SKRecord]] = set()
+        self.client_queues: RecordQueueSet = set()
         self.kv_forwarder = KeyValueForwarder(kit, targets=self.client_queues)
         self.stream_forwarder = StreamForwarder(kit, targets=self.client_queues)
         self._serve_handlers: list[ServeHandler] = []
@@ -154,8 +154,10 @@ class WebAPI:
 
                 while True:
                     upd = await queue.get()
-                    if upd is SHUTDOWN:        # identity check — graceful exit
+
+                    if upd is None:
                         break
+
                     yield ServerSentEvent(data=upd)
                     queue.task_done()
             finally:
@@ -281,7 +283,7 @@ class WebAPI:
         async def subscribe_controller_products(request: Request, controller_id: str):
             """SSE stream of product arrivals for a controller, including initial listing."""
             request.state.is_sse = True
-            queue: asyncio.Queue[SKRecord] = asyncio.Queue()
+            queue: asyncio.Queue[SKRecord | None] = asyncio.Queue()
             initial_records = [
                 record
                 for forwarder in self._product_forwarders
@@ -296,6 +298,10 @@ class WebAPI:
 
                 while True:
                     record = await queue.get()
+
+                    if record is None:
+                        break
+
                     try:
                         if record.kind == "product" and str(record.subject.entity()) == controller_id:
                             yield ServerSentEvent(data=record)
@@ -541,7 +547,7 @@ class WebAPI:
         # isn't stuck waiting on a never-ending SSE response. Snapshot the set
         # because each generator removes its own queue on exit.
         for queue in tuple(self.client_queues):
-            queue.put_nowait(SHUTDOWN)
+            queue.put_nowait(None)
 
         if self.server.started:
             await self.server.shutdown()

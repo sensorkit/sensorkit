@@ -2,7 +2,6 @@ import asyncio
 import collections
 import contextlib
 from abc import ABC, abstractmethod
-from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import Any, AsyncIterator, Literal, NamedTuple, override
 
@@ -20,18 +19,12 @@ class SKRecord(NamedTuple):
     payload: dict[str, Any] | None
 
 
-# A unique SKRecord pushed onto a client queue to tell its firehose generator to
-# exit cleanly at shutdown. Compared by identity (`is`); the field values are
-# never read, so this stays a valid SKRecord and keeps queues strictly typed.
-SHUTDOWN = SKRecord(kind="state", time=datetime.min, subject=sk.Subject(), payload=None)
-
-
-type RecordQueueCollection = Collection[asyncio.Queue[SKRecord]]
+type RecordQueueSet = set[asyncio.Queue[SKRecord | None]]
 
 
 class Forwarder(ABC):
 
-    def __init__(self, *, targets: RecordQueueCollection):
+    def __init__(self, *, targets: RecordQueueSet):
         self.targets = targets
         self.cache: dict[str, dict[str, SKRecord]] = collections.defaultdict(dict)
 
@@ -82,7 +75,7 @@ class Forwarder(ABC):
 class KeyValueForwarder(Forwarder):
     """Forwarder specialization that monitors Key-Value changes."""
 
-    def __init__(self, kit: sk.SensorKit, *, targets: RecordQueueCollection):
+    def __init__(self, kit: sk.SensorKit, *, targets: RecordQueueSet):
         super().__init__(targets=targets)
         self.kit = kit
 
@@ -109,7 +102,7 @@ class KeyValueForwarder(Forwarder):
 class StreamForwarder(Forwarder):
     """Forwarder specialization that monitors stream updates (state/events)."""
 
-    def __init__(self, kit: sk.SensorKit, *, targets: RecordQueueCollection):
+    def __init__(self, kit: sk.SensorKit, *, targets: RecordQueueSet):
         super().__init__(targets=targets)
         self.kit = kit
 
@@ -138,7 +131,7 @@ class StreamForwarder(Forwarder):
 class ProductForwarder(Forwarder):
     """Forwarder specialization that monitors data products from a ServeHandler."""
 
-    def __init__(self, serve_handler: ServeHandler, *, targets: RecordQueueCollection):
+    def __init__(self, serve_handler: ServeHandler, *, targets: RecordQueueSet):
         super().__init__(targets=targets)
         self.serve_handler = serve_handler
 
