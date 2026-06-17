@@ -8,6 +8,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.sse import EventSourceResponse, ServerSentEvent
+from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 
 import sensorkit.api as sk
@@ -29,6 +30,7 @@ from sensorkit.webapi.forwarder import (
     SKRecord,
     StreamForwarder,
 )
+from sensorkit.webapi.preview import PreviewJPEG
 from sensorkit.webapi.schema import add_sensorkit_schema
 from sensorkit.webapi.serve import ServeDataConfig, ServeHandler
 
@@ -324,13 +326,14 @@ class WebAPI:
                 products = handler._cache.get(controller_id, {})
 
                 if product_id in products:
-                    raw_bytes = await handler.get_data(controller_id, product_id)
+                    data = await handler.get_data(controller_id, product_id)
 
                     try:
-                        jpeg_bytes = await asyncio.to_thread(_fits_to_jpeg, raw_bytes)
+                        preview = await PreviewJPEG.from_fits(data)
                     except Exception as err:
                         raise HTTPException(status_code=422, detail=f"Could not generate preview: {err}") from err
-                    return Response(content=jpeg_bytes, media_type="image/jpeg")
+
+                    return Response(content=preview.jpeg_bytes, media_type="image/jpeg")
 
             raise HTTPException(status_code=404, detail="Product not found")
 
@@ -551,37 +554,3 @@ class WebAPI:
 
         await self.kv_forwarder.stop()
         await self.stream_forwarder.stop()
-
-
-def _fits_to_jpeg(raw_bytes: bytes) -> bytes:
-    import io
-
-    import numpy as np
-    from astropy.io import fits
-    from PIL import Image
-
-    with fits.open(io.BytesIO(raw_bytes)) as hdul:
-        data = None
-        for hdu in hdul:
-            if hdu.data is not None and hdu.data.ndim >= 2:
-                data = hdu.data
-                break
-
-    if data is None:
-        raise ValueError("No 2D image data found in FITS file")
-
-    # Collapse any leading dimensions down to 2D
-    while data.ndim > 2:
-        data = data[0]
-
-    data = data.astype(np.float32)
-    low, high = np.percentile(data, (1, 99))
-    if high > low:
-        scaled = np.clip((data - low) / (high - low), 0.0, 1.0)
-    else:
-        scaled = np.zeros_like(data)
-
-    img = Image.fromarray((scaled * 255).astype(np.uint8), mode="L")
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=90)
-    return buf.getvalue()
