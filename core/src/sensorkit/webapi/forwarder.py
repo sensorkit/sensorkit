@@ -35,7 +35,7 @@ class Forwarder(ABC):
         self.targets = targets
         self.cache: dict[str, dict[str, SKRecord]] = collections.defaultdict(dict)
 
-    async def start(self, *, task_group=asyncio):
+    async def start(self, *, task_group: asyncio.TaskGroup):
         """Start background monitoring task for this forwarder."""
         self.task = task_group.create_task(self._run())
         return self.task

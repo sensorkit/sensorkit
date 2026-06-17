@@ -516,7 +516,7 @@ class WebAPI:
 
         return app
 
-    async def serve(self, *, task_group=asyncio):
+    async def serve(self, *, task_group: asyncio.TaskGroup):
         """Run the FastAPI server."""
         await self.kv_forwarder.start(task_group=task_group)
         await self.stream_forwarder.start(task_group=task_group)
@@ -529,7 +529,7 @@ class WebAPI:
             forwarder = ProductForwarder(handler, targets=self.client_queues)
 
             await forwarder.start(task_group=task_group)
-            handler.start_monitor()
+            handler.start_monitor(task_group=task_group)
 
             self._serve_handlers.append(handler)
             self._product_forwarders.append(forwarder)

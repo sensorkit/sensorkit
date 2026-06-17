@@ -42,10 +42,10 @@ class ServeHandler(ABC):
 
     @abstractmethod
     async def get_data(self, controller_id: str, product_id: str) -> bytes:
-        """Return (metadata, raw_bytes) for the given controller and product."""
+        """Return the raw bytes for the given controller and product."""
 
     @abstractmethod
-    def start_monitor(self):
+    def start_monitor(self, *, task_group: asyncio.TaskGroup):
         """Start the background monitoring task."""
 
     @abstractmethod
@@ -71,8 +71,6 @@ class ServeLocalFITSConfig(BaseModel):
         return ServeLocalFITSHandler(self)
 
 
-# FIXME: A lot of what this done can be done with DataGraph, with a variant of WatchDirectory that
-#        does an initial file listing.
 class ServeLocalFITSHandler(ServeHandler):
     """ServeHandler that watches a local directory for FITS files."""
 
@@ -116,8 +114,8 @@ class ServeLocalFITSHandler(ServeHandler):
         return raw_bytes
 
     @override
-    def start_monitor(self):
-        self._task = asyncio.create_task(self._monitor())
+    def start_monitor(self, *, task_group: asyncio.TaskGroup):
+        self._task = task_group.create_task(self._monitor())
 
     @override
     async def stop_monitor(self):
