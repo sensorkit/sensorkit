@@ -355,11 +355,20 @@ class PWI4Mount(PWI4Device):
     async def mount_home(self, cmd: Home):
         await self.require_connected()
 
-        # Check if mount has already homed
+        # Check if mount has already homed. Some PWI4 builds — notably the mount
+        # simulator, which always knows its position — don't report
+        # `is_position_initialized` at all. Treat an absent field as
+        # already-initialized rather than polling for it until timeout (which
+        # would fail mount Init and, in turn, controller/agent operate).
         st = await self.client.status()
-        if self.client.get_bool(
-            st, "mount.axis0.is_position_initialized"
-        ) and self.client.get_bool(st, "mount.axis1.is_position_initialized"):
+        init_keys = (
+            "mount.axis0.is_position_initialized",
+            "mount.axis1.is_position_initialized",
+        )
+        if all(key not in st for key in init_keys):
+            logger.debug("mount does not report homing state; treating as initialized")
+            return
+        if all(self.client.get_bool(st, key) for key in init_keys):
             return
 
         await asyncio.gather(
