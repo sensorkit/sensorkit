@@ -174,8 +174,11 @@ class ServeLocalFITSHandler(ServeHandler):
                 controller_id = metadata.get(self.config.controller_from_metadata)
 
             if controller_id is None and self.config.controller_from_subdirectory:
-                relative_path = path.relative_to(pathlib.Path(self.config.root_directory))
-                controller_id = relative_path.parts[0] if len(relative_path.parts) > 1 else None
+                root = pathlib.Path(self.config.root_directory)
+                relative_path = path.relative_to(root)
+                controller_id = (
+                    relative_path.parts[0] if len(relative_path.parts) > 1 else root.parts[-1]
+                )
 
             if controller_id is None:
                 logger.warning(f"cannot determine controller for {path}, skipping")
