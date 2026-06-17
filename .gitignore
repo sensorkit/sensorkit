@@ -23,3 +23,5 @@ logs/
 tmp/
 de421.bsp
 /site/
+
+deploy/firefly/data/*fits
