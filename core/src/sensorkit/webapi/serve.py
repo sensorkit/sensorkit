@@ -100,7 +100,8 @@ class ServeLocalFITSHandler(ServeHandler):
             yield controller_id, product_id
 
         try:
-            yield await queue.get()
+            while True:
+                yield await queue.get()
         finally:
             self._observer.unsubscribe(queue)
 
