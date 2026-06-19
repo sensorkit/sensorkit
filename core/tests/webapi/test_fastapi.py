@@ -25,16 +25,17 @@ async def webapi_setup(kit, service_context):
     config = WebAPIConfig()  # default agent="agent"; entity not registered → backend errors
     webapi = WebAPI(kit, config)
 
-    await webapi.kv_forwarder.start()
-    await webapi.stream_forwarder.start()
+    async with asyncio.TaskGroup() as tg:
+        await webapi.kv_forwarder.start(task_group=tg)
+        await webapi.stream_forwarder.start(task_group=tg)
 
-    transport = httpx.ASGITransport(app=webapi.app)
-    client = httpx.AsyncClient(transport=transport, base_url="http://test")
+        transport = httpx.ASGITransport(app=webapi.app)
+        client = httpx.AsyncClient(transport=transport, base_url="http://test")
 
-    yield kit, service_context, dev, controller, program, webapi, client
+        yield kit, service_context, dev, controller, program, webapi, client
 
-    await client.aclose()
-    await webapi.shutdown()
+        await client.aclose()
+        await webapi.shutdown()
 
 
 @pytest_asyncio.fixture
