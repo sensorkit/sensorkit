@@ -96,7 +96,7 @@ class Context(KeywordDict):
         The form of `value` selects how it is interpreted:
 
         - `=<expr>`: evaluate the remainder as a Python expression (see `eval`), keeping
-          its native type, e.g. `=FileInfo.name.upper()` or `=frame_num + 1`.
+          its native type, e.g. `=FileInfo.path.name.upper()` or `=frame_num + 1`.
         - `f"..."` or `F"..."`: evaluate as that f-string, yielding a string. Use this form
           when escape sequences should be processed, e.g. `f"line\n{frame_num}"`.
         - text containing `{...}`: evaluate as a raw f-string template, so fields

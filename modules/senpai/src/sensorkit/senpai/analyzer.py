@@ -6,6 +6,7 @@ import time
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.data.filesys import FileInfo
 from sensorkit.senpai.models import SenpaiConfig
 from sensorkit.senpai.pipeline import SenpaiPipeline
 
@@ -45,7 +46,8 @@ class SenpaiAnalyzer:
             sink = graph.app_sink()
             async for context, data in sink.consume():
                 try:
-                    file_path = context.get("file_path", "")
+                    info = context.get(FileInfo)
+                    file_path = info.path if info else ""
                     logger.debug(f"processing frame: {file_path}")
                     t0 = time.monotonic()
 

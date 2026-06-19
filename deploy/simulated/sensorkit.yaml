@@ -50,8 +50,9 @@ automation:
 
   contexts:
     standard_collect:
-      file_name: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-f{frame_num}.fits"
-    
+      FileNameTemplate:
+        template: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-f{frame_num}.fits"
+
 data_flow:
   - entity: SimulatedCamera
     producer:

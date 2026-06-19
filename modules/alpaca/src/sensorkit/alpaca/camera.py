@@ -18,6 +18,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
+from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ArrayInfo
 from sensorkit.models.devices import Deinit, Init, Stop
 from sensorkit.std import (
@@ -424,8 +425,8 @@ class AlpacaCamera(AlpacaDevice):
         context["xbinning"] = await self.get(self.camera, "BinX", 1)
         context["ybinning"] = await self.get(self.camera, "BinY", 1)
 
-        if not context.get("file_name", None):
-            context["file_name"] = f"{uuid.uuid1()}.fits"
+        if not context.get(FileNameTemplate):
+            context.set(FileNameTemplate(template=f"{uuid.uuid1()}.fits"))
 
         # Reshape the array and write to the DataGraph
         task = asyncio.create_task(self._process_image(data, dtype, width, height, context))

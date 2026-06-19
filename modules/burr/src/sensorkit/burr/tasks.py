@@ -15,6 +15,7 @@ import sensorkit.api as sk
 from sensorkit.astro.common import TLE, ReferenceFrame
 from sensorkit.astro.coords import Equatorial, Horizontal
 from sensorkit.astro.target import AltAzTarget, ICRSTarget, RateTarget, Target, TLETarget
+from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.std import CameraParameterSet, StandardCollectTask
 
 # Produces e.g. ``20260424T031530_photometric_standards_110-364_f0.fits``.
@@ -118,12 +119,11 @@ def build_sk_tasks(
         # sidereal frame and the RateTarget rate frames of one sidereal-then-
         # rate collect carry the same seq — so downstream fitting regroups the
         # frames of one collect. Distinct exposure_seconds entries differ.
-        # file_name stays a flat top-level key because sensorkit's
-        # filesys.WriteFile reads ``context["file_name"]`` literally; its
-        # template resolves the identity via ``BurrContext.<field>``.
+        # The FileNameTemplate resolves the identity via ``BurrContext.<field>``
+        # when sensorkit's filesys.WriteFile renders it.
         exposure_context = sk.KeywordDict(
             BurrContext(seq=str(uuid.uuid4()), targ=targ, mode=mode),
-            file_name=_FILE_NAME_TEMPLATE,
+            FileNameTemplate(template=_FILE_NAME_TEMPLATE),
         )
 
         # Resolve rates for THIS exposure (non-TLE rate case only).

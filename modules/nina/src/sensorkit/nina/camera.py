@@ -12,6 +12,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ArrayInfo
 from sensorkit.nina.device import (
     NinaDevice,
@@ -296,8 +297,10 @@ class NinaCamera(NinaDevice):
             context["xbinning"] = await self._get_binning_x()
             context["ybinning"] = await self._get_binning_y()
 
-            if not context.get("file_name", None):
-                context["file_name"] = history.get("Filename", f"{uuid.uuid1()}.fits")
+            if not context.get(FileNameTemplate):
+                context.set(
+                    FileNameTemplate(template=history.get("Filename", f"{uuid.uuid1()}.fits"))
+                )
 
             # Write to DataGraph
             if graph := await sk.device().data_graph():

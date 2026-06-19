@@ -6,8 +6,17 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from conftest import MockCollectRequest
 
+from sensorkit.data.context import Context
+from sensorkit.data.filesys import FileInfo
 from sensorkit.udl.models import UDLAPIConfig, UDLConfig
 from sensorkit.udl.program import UDLProgram
+
+
+def _frame_context(name="test.fits", **fields):
+    """Build a DataGraph-style context carrying a FileInfo keyword."""
+    context = Context(fields)
+    context.set(FileInfo(path=name))
+    return context
 
 
 @pytest.fixture
@@ -47,16 +56,15 @@ class TestSkyImageryMetadata:
         program.client = MagicMock()
         program._upload_skyimagery_zip = AsyncMock()
 
-        context = {
-            "task_id": "test-request-001",
-            "frame_num": 0,
-            "date_obs": "2026-03-21T07:18:47.082000",
-            "exptime": 4.0,
-            "image_width": 8120,
-            "image_height": 8120,
-            "bits_per_pixel": 16,
-            "file_name": "test.fits",
-        }
+        context = _frame_context(
+            task_id="test-request-001",
+            frame_num=0,
+            date_obs="2026-03-21T07:18:47.082000",
+            exptime=4.0,
+            image_width=8120,
+            image_height=8120,
+            bits_per_pixel=16,
+        )
         data = b"\x00" * 100
 
         await program._publish_imagery(context, data)
@@ -88,12 +96,11 @@ class TestSkyImageryMetadata:
         program.client = MagicMock()
         program._upload_skyimagery_zip = AsyncMock()
 
-        context = {
-            "task_id": "test-request-001",
-            "frame_num": 0,
-            "date_obs": "2026-03-21T07:18:47.082000",
-            "file_name": "test.fits",
-        }
+        context = _frame_context(
+            task_id="test-request-001",
+            frame_num=0,
+            date_obs="2026-03-21T07:18:47.082000",
+        )
 
         await program._publish_imagery(context, b"\x00" * 100)
 
@@ -117,12 +124,11 @@ class TestSkyImageryMetadata:
         program.client = MagicMock()
         program._upload_skyimagery_zip = AsyncMock()
 
-        context = {
-            "task_id": "test-request-001",
-            "frame_num": 0,
-            "date_obs": "2026-03-21T07:18:47.082000",
-            "file_name": "test.fits",
-        }
+        context = _frame_context(
+            task_id="test-request-001",
+            frame_num=0,
+            date_obs="2026-03-21T07:18:47.082000",
+        )
 
         await program._publish_imagery(context, b"\x00" * 100)
 
@@ -146,12 +152,11 @@ class TestSkyImageryMetadata:
         program.client = MagicMock()
         program._upload_skyimagery_zip = AsyncMock()
 
-        context = {
-            "task_id": "test-request-001",
-            "frame_num": 0,
-            "date_obs": "2026-03-21T07:18:47.082000",
-            "file_name": "test.fits",
-        }
+        context = _frame_context(
+            task_id="test-request-001",
+            frame_num=0,
+            date_obs="2026-03-21T07:18:47.082000",
+        )
 
         await program._publish_imagery(context, b"\x00" * 100)
 
@@ -175,12 +180,11 @@ class TestSkyImageryMetadata:
         program.client = MagicMock()
         program._upload_skyimagery_zip = AsyncMock()
 
-        context = {
-            "task_id": "test-request-001",
-            "frame_num": 0,
-            "date_obs": "2026-03-21T07:18:47.082000",
-            "file_name": "test.fits",
-        }
+        context = _frame_context(
+            task_id="test-request-001",
+            frame_num=0,
+            date_obs="2026-03-21T07:18:47.082000",
+        )
 
         await program._publish_imagery(context, b"\x00" * 100)
 
@@ -204,12 +208,11 @@ class TestSkyImageryMetadata:
         program.client = MagicMock()
         program._upload_skyimagery_zip = AsyncMock()
 
-        context = {
-            "task_id": "test-request-001",
-            "frame_num": 0,  # 0-indexed from SensorKit
-            "date_obs": "2026-03-21T07:18:47.082000",
-            "file_name": "test.fits",
-        }
+        context = _frame_context(
+            task_id="test-request-001",
+            frame_num=0,  # 0-indexed from SensorKit
+            date_obs="2026-03-21T07:18:47.082000",
+        )
 
         await program._publish_imagery(context, b"\x00" * 100)
 
@@ -233,12 +236,11 @@ class TestSkyImageryMetadata:
         program.client = MagicMock()
         program._upload_skyimagery_zip = AsyncMock()
 
-        context = {
-            "task_id": "test-request-001",
-            "frame_num": 0,
-            "date_obs": "2026-03-21T07:18:47.082000",
-            "file_name": "test.fits",
-        }
+        context = _frame_context(
+            task_id="test-request-001",
+            frame_num=0,
+            date_obs="2026-03-21T07:18:47.082000",
+        )
 
         await program._publish_imagery(context, b"\x00" * 100)
 
@@ -270,16 +272,16 @@ class TestSkyImageryMetadata:
         program.client = MagicMock()
         program._upload_skyimagery_zip = AsyncMock()
 
-        context = {
-            "task_id": "test-request-001",
-            "frame_num": 0,
-            "date_obs": "2026-03-21T07:18:47.082000",
-            "exptime": 5.344074,
-            "image_width": 8120,
-            "image_height": 8120,
-            "bits_per_pixel": 16,
-            "file_name": "3869a317-24f6-11f1-b697-3a7c7693f667.fits",
-        }
+        context = _frame_context(
+            name="3869a317-24f6-11f1-b697-3a7c7693f667.fits",
+            task_id="test-request-001",
+            frame_num=0,
+            date_obs="2026-03-21T07:18:47.082000",
+            exptime=5.344074,
+            image_width=8120,
+            image_height=8120,
+            bits_per_pixel=16,
+        )
 
         await program._publish_imagery(context, b"\x00" * 527480640)
 
@@ -320,12 +322,11 @@ class TestSkyImageryMetadata:
         program.client = MagicMock()
         program._upload_skyimagery_zip = AsyncMock()
 
-        context = {
-            "task_id": "test-request-001",
-            "frame_num": 0,
-            "date_obs": "2026-03-21T07:18:47.082000",
-            "file_name": "test.fits",
-        }
+        context = _frame_context(
+            task_id="test-request-001",
+            frame_num=0,
+            date_obs="2026-03-21T07:18:47.082000",
+        )
 
         await program._publish_imagery(context, b"\x00" * 100)
 
@@ -350,12 +351,11 @@ class TestSkyImageryMetadata:
         program.client = MagicMock()
         program._upload_skyimagery_zip = AsyncMock()
 
-        context = {
-            "task_id": "test-request-001",
-            "frame_num": 0,
-            "date_obs": "2026-03-21T07:18:47.082000",
-            "file_name": "test.fits",
-        }
+        context = _frame_context(
+            task_id="test-request-001",
+            frame_num=0,
+            date_obs="2026-03-21T07:18:47.082000",
+        )
 
         await program._publish_imagery(context, b"\x00" * 100)
 

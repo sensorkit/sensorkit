@@ -7,7 +7,13 @@ import pytest
 from loguru import logger
 
 from sensorkit.data.context import Context
-from sensorkit.data.filesys import ReadFile, WatchDirectory, WriteFile
+from sensorkit.data.filesys import (
+    FileInfo,
+    FileNameTemplate,
+    ReadFile,
+    WatchDirectory,
+    WriteFile,
+)
 from sensorkit.data.graph import DataFlow, DataGraph
 from sensorkit.data.local import AppSink
 
@@ -29,15 +35,15 @@ async def test_write_file():
         # Create test data and context
         test_data = b"Hello, WriteFile test!"
         context = Context()
-        context["file_name"] = "test_file.txt"
+        context.set(FileNameTemplate(template="test_file.txt"))
 
         # Start a task to receive from the outgoing edge
         async def receiver():
             out_context, buffer = await outgoing_edge.receive("buffer")
             logger.debug(f"receiver function received {buffer=}")
             # Verify context is passed through
-            assert out_context["file_name"] == "test_file.txt"
-            assert "file_path" in out_context
+            assert out_context[FileInfo].path is not None
+            assert out_context[FileInfo].path.name == "test_file.txt"
             logger.debug(f"{out_context=}")
             # Verify data is passed through
             assert buffer == test_data
@@ -79,7 +85,7 @@ async def test_write_file_no_outgoing():
         # Create test data and context
         test_data = b"Hello, WriteFile without outgoing edge!"
         context = Context()
-        context["file_name"] = "test_file_no_outgoing.txt"
+        context.set(FileNameTemplate(template="test_file_no_outgoing.txt"))
 
         # Send data through the incoming edge
         writer = await incoming_edge.send(context)
@@ -108,7 +114,7 @@ async def test_write_file_dynamic_directory():
 
         test_data = b"Dynamic directory test data"
         context = Context()
-        context["file_name"] = "image.fits"
+        context.set(FileNameTemplate(template="image.fits"))
         context["program_name"] = "survey_north"
 
         writer = await incoming_edge.send(context)
@@ -124,7 +130,7 @@ async def test_write_file_dynamic_directory():
         async with aiofile.async_open(expected, "rb") as f:
             assert await f.read() == test_data
 
-        assert context["file_path"] == expected
+        assert context[FileInfo].path == expected
 
 
 @pytest.mark.asyncio
@@ -152,14 +158,14 @@ async def test_read_file():
 
         # Create context with the file path
         context = Context()
-        context["file_path"] = str(file_path)
+        context.set(FileInfo(path=file_path))
 
         # Start a task to receive from the outgoing edge
         async def receiver():
             logger.debug("started receiver task")
             out_context, reader = await outgoing_edge.receive("stream")
             # Verify context is passed through
-            assert out_context["file_path"] == str(file_path)
+            assert out_context[FileInfo].path == file_path
 
             # Read all data from the stream
             data = bytearray()
@@ -203,13 +209,13 @@ async def test_read_file_wait_exists():
 
         # Create context with the file path that doesn't exist yet
         context = Context()
-        context["file_path"] = str(file_path)
+        context.set(FileInfo(path=file_path))
 
         # Start a task to receive from the outgoing edge
         async def receiver():
             out_context, reader = await outgoing_edge.receive("stream")
             # Verify context is passed through
-            assert out_context["file_path"] == str(file_path)
+            assert out_context[FileInfo].path == file_path
 
             # Read all data from the stream
             data = bytearray()
@@ -260,7 +266,7 @@ async def test_watch_directory():
 
         async with asyncio.timeout(1.0):
             async for context, data in sink.consume():
-                assert context["file_path"].name == "test_watch.txt"
+                assert context[FileInfo].path.name == "test_watch.txt"
                 assert data == test_data
                 break
 

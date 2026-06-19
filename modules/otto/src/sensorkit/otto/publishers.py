@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import io
 from abc import ABC, abstractmethod
-from pathlib import Path
 
 from loguru import logger
+
+from sensorkit.data.filesys import FileInfo
 
 
 class Publisher(ABC):
@@ -21,7 +22,7 @@ class Publisher(ABC):
         """Deliver one frame to the destination.
 
         Args:
-            context: DataGraph sink metadata (task_id, frame_num, file_path, …).
+            context: DataGraph sink metadata (task_id, frame_num, FileInfo, …).
             data: Raw FITS bytes from the sink's async stream.
         """
 
@@ -32,9 +33,9 @@ class Publisher(ABC):
 
 def _filename_from_context(context: dict) -> str:
     """Derive a filename from the DataGraph context."""
-    file_path = context.get("file_path")
-    if file_path:
-        return Path(file_path).name
+    info = context.get(FileInfo)
+    if info:
+        return info.path.name
     task_id = context.get("task_id", "unknown")
     frame_num = context.get("frame_num", 0)
     return f"{task_id}_{frame_num}.fits"
