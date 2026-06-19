@@ -19,6 +19,37 @@ type ControllerProductPair = tuple[str, str]
 type ServeDataConfig = ServeLocalFITSConfig
 
 
+def _header_to_dict(header) -> dict:
+    """Convert a FITS header into a plain, JSON-serializable dict.
+
+    We never retain the live header object: it is not directly JSON-serializable (it
+    carries non-primitive card values and internal references), so passing it through
+    the API or an SSE payload would fail or stall serialization. Commentary cards
+    (COMMENT/HISTORY) are collapsed into lists; non-primitive values are stringified.
+    """
+    def _coerce(value):
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, complex):
+            return [value.real, value.imag]
+        return str(value)
+
+    result: dict = {}
+
+    for card in header.cards:
+        keyword = card.keyword
+
+        if not keyword:
+            continue
+
+        if keyword in ("COMMENT", "HISTORY"):
+            result.setdefault(keyword, []).append(str(card.value))
+        else:
+            result[keyword] = _coerce(card.value)
+
+    return result
+
+
 class PathMetadataPair(NamedTuple):
     path: pathlib.Path
     metadata: dict
@@ -169,7 +200,7 @@ class ServeLocalFITSHandler(ServeHandler):
 
             def _read_header():
                 with fits.open(path) as hdul:
-                    return hdul[0].header.copy()
+                    return _header_to_dict(hdul[0].header)
 
             metadata = await asyncio.to_thread(_read_header)
             controller_id: str | None
