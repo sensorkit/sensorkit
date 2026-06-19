@@ -21,16 +21,7 @@ from sensorkit.data.graph import Context, DataFlow, DataOp, SourceOp
 from sensorkit.data.streams import StreamReader, StreamWriter
 
 
-def _resolve_template(template: str, context: Context) -> str:
-    """Resolve a template string against a Context.
 
-    Supports f-string syntax (e.g. ``f"{capture_time:%Y%m%dT%H%M%S}"``) which is
-    evaluated as a Python expression, or plain ``format_map`` syntax
-    (e.g. ``"{program_name}"``).
-    """
-    if template.startswith(('f"', "f'")):
-        return str(context.eval(template))
-    return template.format_map(context)
 
 
 class WatchDirectory(SourceOp):
@@ -90,10 +81,10 @@ class WriteFile(DataOp):
         # Read incoming data as a stream.
         context, reader = await incoming[0].receive("stream")
 
-        # Resolve the output directory against context values (e.g. "{program_name}").
-        directory = pathlib.Path(_resolve_template(self.directory, context))
+        # Resolve the output directory against context values (e.g. =f"{program_name}").
+        directory = pathlib.Path(str(context.resolve(self.directory)))
         await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
-        file_name = _resolve_template(context["file_name"], context)
+        file_name = str(context.resolve(context["file_name"]))
         context["file_path"] = directory / file_name
 
         # Get the file writer.
