@@ -4,7 +4,7 @@ import asyncio
 import builtins
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, overload
 
 from pydantic import BaseModel
 
@@ -90,7 +90,13 @@ class Context(KeywordDict):
 
             return default
 
-    def resolve(self, value: str, *, default: object = _MISSING):
+    @overload
+    def resolve[T](self, value: str | None, *, as_type: type[T], default: T = ...) -> T: ...
+
+    @overload
+    def resolve(self, value: str | None, *, default: object = ...) -> object: ...
+
+    def resolve(self, value: str | None, *, as_type = _MISSING, default = _MISSING):
         r"""Resolve a config string against this Context.
 
         The form of `value` selects how it is interpreted:
@@ -106,21 +112,31 @@ class Context(KeywordDict):
 
         Args:
             value: The config string to resolve.
-            default: For the evaluated and template forms, the value returned if a
-                referenced name is absent (see `eval`). Ignored for literal text.
+            as_type: If given, raise TypeError if the resolved value is not of this type.
+            default: The resolved value if a referenced name is absent (see `eval`) or if
+                     the input value is None.
 
         Returns:
             The resolved value: native type for `=<expr>`, a string for the f-string and
             template forms, or the original text for a literal.
+
+        Raises:
+            TypeError: if `as_type` is given and the resolved value is not of that type.
         """
-        if value.startswith("="):
-            return self.eval(value[1:], default=default)
+        if value is None:
+            if default is _MISSING:
+                raise TypeError("cannot resolve None without default")
 
-        if value.startswith(_FSTRING_OPENERS):
-            return self.eval(value, default=default)
+            value = default
+        elif value.startswith("="):
+            value = self.eval(value[1:], default=default)
+        elif value.startswith(_FSTRING_OPENERS):
+            value = self.eval(value, default=default)
+        elif "{" in value:
+            value = self.eval(_raw_fstring_source(value), default=default)
 
-        if "{" in value:
-            return self.eval(_raw_fstring_source(value), default=default)
+        if as_type is not _MISSING and not isinstance(value, as_type):
+            raise TypeError(f"expected {as_type.__name__}, got {type(value).__name__}")
 
         return value
 
