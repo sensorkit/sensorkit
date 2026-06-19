@@ -34,6 +34,10 @@ from sensorkit.webapi.preview import PreviewJPEG
 from sensorkit.webapi.schema import add_sensorkit_schema
 from sensorkit.webapi.serve import ServeDataConfig, ServeHandler
 
+# Seconds a product-listing request waits for a handler's initial scan to finish
+# before giving up with a 503. See list_controller_products.
+PRODUCT_LISTING_TIMEOUT = 10.0
+
 
 class WebAPIConfig(BaseModel):
     """Configuration for the WebAPI service."""
@@ -271,11 +275,25 @@ class WebAPI:
 
         @app.get("/controller/{controller_id}/products", tags=["Controller"])
         async def list_controller_products(controller_id: str) -> list[str]:
-            """List data products associated with a controller."""
+            """List data products associated with a controller.
+
+            A handler's listing may not be ready immediately. Rather than report an empty
+            listing — which would falsely imply the controller has no products — we wait
+            up to PRODUCT_LISTING_TIMEOUT and return 503 if it is still not available.
+            """
+            try:
+                async with asyncio.timeout(PRODUCT_LISTING_TIMEOUT):
+                    listings = [await handler.get_listing() for handler in self._serve_handlers]
+            except TimeoutError as err:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Data product listing not yet available; try again shortly",
+                ) from err
+
             return [
                 product_id
-                for handler in self._serve_handlers
-                for cid, product_id in await handler.get_listing()
+                for listing in listings
+                for cid, product_id in listing
                 if cid == controller_id
             ]
 
@@ -317,9 +335,7 @@ class WebAPI:
         async def get_controller_product_data(controller_id: str, product_id: str):
             """Return the raw FITS data for a product."""
             for handler in self._serve_handlers:
-                products = handler._cache.get(controller_id, {})
-
-                if product_id in products:
+                if handler.has_product(controller_id, product_id):
                     raw_bytes = await handler.get_data(controller_id, product_id)
                     return Response(content=raw_bytes, media_type="application/fits")
 
@@ -329,9 +345,7 @@ class WebAPI:
         async def get_controller_product_preview(controller_id: str, product_id: str):
             """Return a JPEG preview image generated from the FITS product data."""
             for handler in self._serve_handlers:
-                products = handler._cache.get(controller_id, {})
-
-                if product_id in products:
+                if handler.has_product(controller_id, product_id):
                     data = await handler.get_data(controller_id, product_id)
 
                     try:
@@ -347,9 +361,7 @@ class WebAPI:
         async def get_controller_product_metadata(controller_id: str, product_id: str) -> dict:
             """Return the cached metadata for a product as a JSON object."""
             for handler in self._serve_handlers:
-                products = handler._cache.get(controller_id, {})
-
-                if product_id in products:
+                if handler.has_product(controller_id, product_id):
                     return handler.get_metadata(controller_id, product_id)
 
             raise HTTPException(status_code=404, detail="Product not found")
@@ -522,8 +534,13 @@ class WebAPI:
 
         return app
 
-    async def serve(self, *, task_group: asyncio.TaskGroup):
-        """Run the FastAPI server."""
+    async def _start_forwarders(self, *, task_group: asyncio.TaskGroup):
+        """Start the KV/stream forwarders and any configured data-product handlers.
+
+        Split out from `serve` only so tests can drive it without running the uvicorn
+        server. Not for use elsewhere: calling this and `serve` both would start two sets
+        of forwarder tasks.
+        """
         await self.kv_forwarder.start(task_group=task_group)
         await self.stream_forwarder.start(task_group=task_group)
 
@@ -540,6 +557,9 @@ class WebAPI:
             self._serve_handlers.append(handler)
             self._product_forwarders.append(forwarder)
 
+    async def serve(self, *, task_group: asyncio.TaskGroup):
+        """Run the FastAPI server."""
+        await self._start_forwarders(task_group=task_group)
         await self.server.serve()
 
     async def shutdown(self):
