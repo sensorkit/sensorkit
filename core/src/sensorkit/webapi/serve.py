@@ -4,7 +4,7 @@ import contextlib
 import pathlib
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import Literal, NamedTuple, Protocol, override
+from typing import Literal, NamedTuple, override
 
 from loguru import logger
 from pydantic import BaseModel
@@ -12,6 +12,8 @@ from watchdog.observers import Observer
 
 from sensorkit.common.aio import AsyncObserver
 from sensorkit.data.filesys import FileAppearedHandler
+
+DEFAULT_CONTROLLER_ID_FIELD = "SKCTRL"
 
 type ControllerProductPair = tuple[str, str]
 type ServeDataConfig = ServeLocalFITSConfig
@@ -53,19 +55,13 @@ class ServeHandler(ABC):
         """Stop the background monitoring task."""
 
 
-class ServeConfig(Protocol):
-    """Protocol for config objects that produce a ServeHandler."""
-
-    def create_handler(self) -> ServeHandler: ...
-
-
 class ServeLocalFITSConfig(BaseModel):
     """Configure serving of FITS files."""
 
     kind: Literal["local_fits"] = "local_fits"
     root_directory: str
-    controller_from_subdirectory: bool = False
-    controller_from_metadata: str | None = None
+    controller_id: Literal["from_path", "from_metadata"] = "from_path"
+    controller_id_field: str | None = None
 
     def create_handler(self):
         return ServeLocalFITSHandler(self)
@@ -164,19 +160,22 @@ class ServeLocalFITSHandler(ServeHandler):
                     return hdul[0].header.copy()
 
             metadata = await asyncio.to_thread(_read_header)
-            controller_id: str | None = None
+            controller_id: str | None
 
-            # Metadata takes precedence over subdirectory
-            if self.config.controller_from_metadata:
-                controller_id = metadata.get(self.config.controller_from_metadata)
-
-            if controller_id is None and self.config.controller_from_subdirectory:
-                root = pathlib.Path(self.config.root_directory)
-                relative_path = path.relative_to(root)
-                controller_id = (
-                    relative_path.parts[0] if len(relative_path.parts) > 1 else root.parts[-1]
-                )
-
+            # Metadata takes precedence over path-based controller ID resolution.
+            match self.config.controller_id:
+                case "from_metadata":
+                    controller_id = metadata.get(
+                        self.config.controller_id_field or DEFAULT_CONTROLLER_ID_FIELD,
+                    )
+                case "from_path":
+                    root = pathlib.Path(self.config.root_directory)
+                    relative_path = path.relative_to(root)
+                    controller_id = (
+                        relative_path.parts[0]
+                        if len(relative_path.parts) > 1
+                        else root.parts[-1]
+                    )
             if controller_id is None:
                 logger.warning(f"cannot determine controller for {path}, skipping")
                 return

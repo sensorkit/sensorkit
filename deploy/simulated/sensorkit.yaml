@@ -180,6 +180,10 @@ pwi4:
 webapi:
   id: WebAPI
   port: 8000
+  serve_data_products:
+    - kind: local_fits
+      root_directory: /Temp/SimulatedSensor
+      controller_id: from_path
 
 config:
   SimulatedSensor:
