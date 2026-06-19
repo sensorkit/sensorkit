@@ -39,6 +39,14 @@ class ServeHandler(ABC):
         """Yield all data product records as they become known."""
 
     @abstractmethod
+    def has_product(self, controller_id: str, product_id: str) -> bool:
+        """Return whether the given product is currently known for the controller.
+
+        Reflects only what is known right now; unlike `get_listing`, it does not wait
+        for the initial listing to complete.
+        """
+
+    @abstractmethod
     def get_metadata(self, controller_id: str, product_id: str) -> dict:
         """Return the metadata dict for the given controller and product."""
 
@@ -98,6 +106,10 @@ class ServeLocalFITSHandler(ServeHandler):
                 yield await queue.get()
         finally:
             self._observer.unsubscribe(queue)
+
+    @override
+    def has_product(self, controller_id: str, product_id: str):
+        return product_id in self._cache.get(controller_id, {})
 
     @override
     def get_metadata(self, controller_id: str, product_id: str):
