@@ -181,7 +181,7 @@ class ServeLocalFITSHandler(ServeHandler):
                 logger.warning(f"cannot determine controller for {path}, skipping")
                 return
 
-            product_id = path.stem
+            product_id = path.name
             self._cache[controller_id][product_id] = PathMetadataPair(path, metadata)
             await self._observer.notify((controller_id, product_id))
         except Exception:
