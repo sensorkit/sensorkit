@@ -148,6 +148,7 @@ class WebAPI:
             initial_updates = itertools.chain(
                 self.kv_forwarder.snapshot(),
                 self.stream_forwarder.snapshot(),
+                *(forwarder.snapshot() for forwarder in self._product_forwarders),
             )
             self.client_queues.add(queue)
 
@@ -174,6 +175,7 @@ class WebAPI:
                 itertools.chain(
                     self.kv_forwarder.snapshot(),
                     self.stream_forwarder.snapshot(),
+                    *(forwarder.snapshot() for forwarder in self._product_forwarders),
                 )
             )
 
@@ -184,6 +186,10 @@ class WebAPI:
                 itertools.chain(
                     self.kv_forwarder.cache.get(entity_id, {}).values(),
                     self.stream_forwarder.cache.get(entity_id, {}).values(),
+                    *(
+                        forwarder.cache.get(entity_id, {}).values()
+                        for forwarder in self._product_forwarders
+                    ),
                 )
             )
 

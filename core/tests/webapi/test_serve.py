@@ -347,6 +347,52 @@ async def test_route_unknown_product_returns_404(product_api, suffix):
     assert resp.status_code == 404
 
 
+async def _wait_for_products(client, url):
+    """Poll *url* until it returns at least one ``product`` record.
+
+    Records serialize as ``[kind, time, subject, payload]`` arrays (SKRecord is a
+    NamedTuple). The ProductForwarder fills its cache from a background task, so a
+    snapshot taken immediately after startup may not yet include the products; poll
+    briefly instead.
+    """
+    async with asyncio.timeout(5.0):
+        while True:
+            resp = await client.get(url)
+            assert resp.status_code == 200
+
+            products = [record for record in resp.json() if record[0] == "product"]
+            if products:
+                return products
+
+            await asyncio.sleep(0.05)
+
+
+@pytest.mark.asyncio
+async def test_route_full_snapshot_includes_products(product_api):
+    _, client, _ = product_api
+
+    products = await _wait_for_products(client, "/data/snapshot")
+    products = [record for record in products if record[2]["prop"] == "frame1.fits"]
+
+    assert len(products) == 1
+    _, _, subject, payload = products[0]
+    assert subject["path"] == ["ctrlA"]
+    assert payload["EXPTIME"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_route_entity_snapshot_includes_products(product_api):
+    _, client, _ = product_api
+
+    products = await _wait_for_products(client, "/data/snapshot/ctrlA")
+    assert [record[2]["prop"] for record in products] == ["frame1.fits"]
+
+    # An unrelated entity sees none of ctrlA's products.
+    resp = await client.get("/data/snapshot/unknown")
+    assert resp.status_code == 200
+    assert [record for record in resp.json() if record[0] == "product"] == []
+
+
 @pytest.mark.asyncio
 async def test_route_list_products_503_when_not_ready(kit, tmp_path, monkeypatch):
     # Point at a directory that does not exist, so the listing never becomes ready.
