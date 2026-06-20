@@ -143,11 +143,9 @@ class ProductForwarder(Forwarder):
     @override
     async def _monitor(self) -> AsyncIterator[SKRecord]:
         async for info in self.serve_handler.watch_listing():
-            metadata = self.serve_handler.get_metadata(info.controller_id, info.product_id)
-
             yield SKRecord(
                 kind="product",
                 subject=sk.Subject(path=(info.controller_id,), prop=info.product_id),
                 time=datetime.now(UTC),
-                payload=metadata,
+                payload=info.model_dump(),
             )

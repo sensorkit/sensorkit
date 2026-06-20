@@ -377,7 +377,9 @@ async def test_route_full_snapshot_includes_products(product_api):
     assert len(products) == 1
     _, _, subject, payload = products[0]
     assert subject["path"] == ["ctrlA"]
-    assert payload["EXPTIME"] == 2.0
+    assert payload["controller_id"] == "ctrlA"
+    assert payload["product_id"] == "frame1.fits"
+    assert payload["data_size"] > 0
 
 
 @pytest.mark.asyncio
