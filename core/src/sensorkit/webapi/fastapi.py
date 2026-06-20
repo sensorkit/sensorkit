@@ -32,7 +32,7 @@ from sensorkit.webapi.forwarder import (
 )
 from sensorkit.webapi.preview import PreviewJPEG
 from sensorkit.webapi.schema import add_sensorkit_schema
-from sensorkit.webapi.serve import ServeDataConfig, ServeHandler
+from sensorkit.webapi.serve import ProductInfo, ServeDataConfig, ServeHandler
 
 # Seconds a product-listing request waits for a handler's initial scan to finish
 # before giving up with a 503. See list_controller_products.
@@ -154,7 +154,7 @@ class WebAPI:
             try:
                 # Send initial snapshot
                 for upd in initial_updates:
-                    yield ServerSentEvent(data=upd)
+                    yield ServerSentEvent(raw_data=upd.serialize())
 
                 while True:
                     upd = await queue.get()
@@ -162,7 +162,7 @@ class WebAPI:
                     if upd is None:
                         break
 
-                    yield ServerSentEvent(data=upd)
+                    yield ServerSentEvent(raw_data=upd.serialize())
                     queue.task_done()
             finally:
                 self.client_queues.remove(queue)
@@ -274,7 +274,7 @@ class WebAPI:
             return _status_ok()
 
         @app.get("/controller/{controller_id}/products", tags=["Controller"])
-        async def list_controller_products(controller_id: str) -> list[str]:
+        async def list_controller_products(controller_id: str) -> list[ProductInfo]:
             """List data products associated with a controller.
 
             A handler's listing may not be ready immediately. Rather than report an empty
@@ -291,10 +291,10 @@ class WebAPI:
                 ) from err
 
             return [
-                product_id
+                info
                 for listing in listings
-                for cid, product_id in listing
-                if cid == controller_id
+                for info in listing
+                if info.controller_id == controller_id
             ]
 
         @app.get("/controller/{controller_id}/products/subscribe", tags=["Controller"], response_class=EventSourceResponse)
@@ -312,7 +312,7 @@ class WebAPI:
 
             try:
                 for record in initial_records:
-                    yield ServerSentEvent(data=record)
+                    yield ServerSentEvent(raw_data=record.serialize())
 
                 while True:
                     record = await queue.get()
@@ -322,7 +322,7 @@ class WebAPI:
 
                     try:
                         if record.kind == "product" and str(record.subject.entity()) == controller_id:
-                            yield ServerSentEvent(data=record)
+                            yield ServerSentEvent(raw_data=record.serialize())
                     finally:
                         queue.task_done()
             except asyncio.CancelledError:
@@ -362,7 +362,12 @@ class WebAPI:
             """Return the cached metadata for a product as a JSON object."""
             for handler in self._serve_handlers:
                 if handler.has_product(controller_id, product_id):
-                    return handler.get_metadata(controller_id, product_id)
+                    metadata = handler.get_metadata(controller_id, product_id)
+
+                    if not metadata.get(ProductInfo):
+                        logger.warning(f"Product {product_id} has no ProductInfo keyword set")
+
+                    return metadata
 
             raise HTTPException(status_code=404, detail="Product not found")
 

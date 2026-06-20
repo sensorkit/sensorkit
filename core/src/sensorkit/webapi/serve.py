@@ -4,37 +4,35 @@ import contextlib
 import pathlib
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Literal, NamedTuple, override
 
+from astropy.io.fits.card import UNDEFINED
 from loguru import logger
 from pydantic import BaseModel
 from watchdog.observers import Observer
 
+import sensorkit.api as sk
 from sensorkit.common.aio import AsyncObserver
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.data.filesys import FileAppearedHandler
 
 DEFAULT_CONTROLLER_ID_FIELD = "SKCTRL"
 
-type ControllerProductPair = tuple[str, str]
 type ServeDataConfig = ServeLocalFITSConfig
 
 
-def _header_to_dict(header) -> dict:
-    """Convert a FITS header into a plain, JSON-serializable dict.
+@sk.declare_keyword
+class ProductInfo(BaseModel):
+    controller_id: str
+    product_id: str
+    register_time: datetime
+    data_size: int
 
-    We never retain the live header object: it is not directly JSON-serializable (it
-    carries non-primitive card values and internal references), so passing it through
-    the API or an SSE payload would fail or stall serialization. Commentary cards
-    (COMMENT/HISTORY) are collapsed into lists; non-primitive values are stringified.
-    """
-    def _coerce(value):
-        if value is None or isinstance(value, (str, int, float, bool)):
-            return value
-        if isinstance(value, complex):
-            return [value.real, value.imag]
-        return str(value)
 
-    result: dict = {}
+def _header_to_metadata(header) -> KeywordDict:
+    """Convert a FITS header into a serializable KeywordDict."""
+    result = KeywordDict()
 
     for card in header.cards:
         keyword = card.keyword
@@ -42,31 +40,37 @@ def _header_to_dict(header) -> dict:
         if not keyword:
             continue
 
-        if keyword in ("COMMENT", "HISTORY"):
-            result.setdefault(keyword, []).append(str(card.value))
+        value = None if card.value is UNDEFINED else card.value
+
+        if keyword in result:
+            if not isinstance(result[keyword], list):
+                result[keyword] = [result[keyword]]
+
+            result[keyword].append(value)
         else:
-            result[keyword] = _coerce(card.value)
+            result[keyword] = value
 
     return result
 
 
-class PathMetadataPair(NamedTuple):
+class _CacheEntry(NamedTuple):
+    info: ProductInfo
     path: pathlib.Path
-    metadata: dict
+    metadata: KeywordDict
 
 
 class ServeHandler(ABC):
     """Abstract base for data product serving backends."""
 
     @abstractmethod
-    async def get_listing(self) -> list[ControllerProductPair]:
+    async def get_listing(self) -> list[ProductInfo]:
         """Return all known data product records.
 
         This method waits until the initial listing is complete before returning.
         """
 
     @abstractmethod
-    def watch_listing(self) -> AsyncIterator[ControllerProductPair]:
+    def watch_listing(self) -> AsyncIterator[ProductInfo]:
         """Yield all data product records as they become known."""
 
     @abstractmethod
@@ -78,8 +82,12 @@ class ServeHandler(ABC):
         """
 
     @abstractmethod
-    def get_metadata(self, controller_id: str, product_id: str) -> dict:
-        """Return the metadata dict for the given controller and product."""
+    def get_metadata(self, controller_id: str, product_id: str) -> KeywordDict:
+        """Return the metadata dict for the given controller and product.
+
+        The `ProductInfo` keyword must always be present in the returned metadata,
+        whether it was embedded in the persisted metadata or injected by the handler.
+        """
 
     @abstractmethod
     async def get_data(self, controller_id: str, product_id: str) -> bytes:
@@ -112,25 +120,21 @@ class ServeLocalFITSHandler(ServeHandler):
     def __init__(self, config: ServeLocalFITSConfig):
         self.config = config
         self._task: asyncio.Task | None = None
-        self._observer: AsyncObserver[ControllerProductPair] = AsyncObserver()
-        self._cache = collections.defaultdict(dict[str, PathMetadataPair])
+        self._observer: AsyncObserver[ProductInfo] = AsyncObserver()
+        self._cache = collections.defaultdict(dict[str, _CacheEntry])
         self._listing_ready = asyncio.Event()
 
     @override
     async def get_listing(self):
         await self._listing_ready.wait()
-        return [
-            (controller_id, product_id)
-            for controller_id, products in self._cache.items()
-            for product_id in products
-        ]
+        return [entry.info for products in self._cache.values() for entry in products.values()]
 
     @override
     async def watch_listing(self):
         queue = self._observer.subscribe()
 
-        for controller_id, product_id in await self.get_listing():
-            yield controller_id, product_id
+        for info in await self.get_listing():
+            yield info
 
         try:
             while True:
@@ -140,7 +144,7 @@ class ServeLocalFITSHandler(ServeHandler):
 
     @override
     def has_product(self, controller_id: str, product_id: str):
-        return product_id in self._cache.get(controller_id, {})
+        return product_id in cache if (cache := self._cache.get(controller_id)) else False
 
     @override
     def get_metadata(self, controller_id: str, product_id: str):
@@ -198,12 +202,12 @@ class ServeLocalFITSHandler(ServeHandler):
         try:
             from astropy.io import fits
 
-            def _read_header():
+            def read_file():
                 with fits.open(path) as hdul:
-                    return _header_to_dict(hdul[0].header)
+                    return path.stat(), _header_to_metadata(hdul[0].header)
 
-            metadata = await asyncio.to_thread(_read_header)
-            controller_id: str | None
+            stat, metadata = await asyncio.to_thread(read_file)
+            controller_id: str | None = None
 
             # Metadata takes precedence over path-based controller ID resolution.
             match self.config.controller_id:
@@ -215,16 +219,26 @@ class ServeLocalFITSHandler(ServeHandler):
                     root = pathlib.Path(self.config.root_directory)
                     relative_path = path.relative_to(root)
                     controller_id = (
-                        relative_path.parts[0]
-                        if len(relative_path.parts) > 1
-                        else root.parts[-1]
+                        relative_path.parts[0] if len(relative_path.parts) > 1 else root.parts[-1]
                     )
+
             if controller_id is None:
                 logger.warning(f"cannot determine controller for {path}, skipping")
                 return
 
-            product_id = path.name
-            self._cache[controller_id][product_id] = PathMetadataPair(path, metadata)
-            await self._observer.notify((controller_id, product_id))
+            # Create ProductInfo and inject into the metadata. The product ID is the name of the
+            # file. This makes name clashes with other handlers unlikely, even if the stem of the
+            # filename is the same as another product ID (possibly the same one).
+            info = ProductInfo(
+                controller_id=controller_id,
+                product_id=path.name,
+                register_time=datetime.fromtimestamp(stat.st_birthtime, UTC),
+                data_size=stat.st_size,
+            )
+            metadata.set(info)
+
+            # Cache and notify observers.
+            self._cache[controller_id][info.product_id] = _CacheEntry(info, path, metadata)
+            await self._observer.notify(info)
         except Exception:
             logger.exception(f"error processing {path}")

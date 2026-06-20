@@ -4,13 +4,16 @@ import asyncio
 import contextlib
 import json
 import pathlib
+from datetime import UTC, datetime
 
 import httpx
 import numpy as np
 import pytest
 import pytest_asyncio
 from astropy.io import fits
+from pydantic import TypeAdapter
 
+import sensorkit.api as sk
 from sensorkit.webapi import fastapi as webapi_mod
 from sensorkit.webapi.fastapi import WebAPI, WebAPIConfig
 from sensorkit.webapi.forwarder import ProductForwarder, SKRecord
@@ -18,7 +21,7 @@ from sensorkit.webapi.preview import PreviewJPEG
 from sensorkit.webapi.serve import (
     ServeLocalFITSConfig,
     ServeLocalFITSHandler,
-    _header_to_dict,
+    _header_to_metadata,
 )
 
 
@@ -69,7 +72,7 @@ def test_header_to_dict_is_json_serializable():
     hdu.header.add_comment("a comment")
     hdu.header.add_history("made by test")
 
-    result = _header_to_dict(hdu.header)
+    result = _header_to_metadata(hdu.header)
 
     assert result["SKCTRL"] == "ctrlA"
     assert result["EXPTIME"] == 1.5
@@ -79,6 +82,40 @@ def test_header_to_dict_is_json_serializable():
 
     # The whole thing must round-trip through JSON without error.
     json.dumps(result)
+
+
+def test_header_to_metadata_handles_valueless_and_complex_cards():
+    # A valueless card reads back as astropy Undefined, which has no JSON form -> None.
+    # complex is left raw and serialized at the wire by pydantic (-> "2+3j").
+    hdu = fits.PrimaryHDU(data=np.zeros((4, 4), dtype=np.float32))
+    hdu.header["GAIN"] = 2 + 3j
+    hdu.header["BLANKVAL"] = None  # a valueless card -> astropy Undefined
+
+    result = _header_to_metadata(hdu.header)
+
+    assert result["GAIN"] == 2 + 3j  # preserved as a native complex
+    assert result["BLANKVAL"] is None
+
+    # The metadata route serializes the dict via pydantic, which renders complex as a string.
+    dumped = json.loads(TypeAdapter(dict).dump_json(result))
+    assert dumped["GAIN"] == "2+3j"
+    assert dumped["BLANKVAL"] is None
+
+
+def test_serialize_record_handles_complex_payload():
+    # The SSE path serializes records via pydantic (SKRecord.serialize), which copes with
+    # value types the stdlib json module cannot, e.g. complex.
+    record = SKRecord(
+        kind="product",
+        time=datetime(2026, 6, 19, 12, 0, tzinfo=UTC),
+        subject=sk.Subject(path=("ctrlA",), prop="frame1.fits"),
+        payload={"GAIN": 2 + 3j, "BLANKVAL": None},
+    )
+
+    _, _, subject, payload = json.loads(record.serialize())
+
+    assert subject == {"path": ["ctrlA"], "prop": "frame1.fits"}
+    assert payload == {"GAIN": "2+3j", "BLANKVAL": None}
 
 
 # ---------------------------------------------------------------------------
@@ -124,9 +161,10 @@ async def test_handler_lists_products_from_path(tmp_path):
 
     async with running_handler(config) as handler:
         listing = await handler.get_listing()
+        pairs = {(info.controller_id, info.product_id) for info in listing}
 
-        assert ("ctrlA", "frame1.fits") in listing
-        assert ("ctrlB", "frame2.fits") in listing
+        assert ("ctrlA", "frame1.fits") in pairs
+        assert ("ctrlB", "frame2.fits") in pairs
 
         assert handler.has_product("ctrlA", "frame1.fits")
         assert not handler.has_product("ctrlA", "missing.fits")
@@ -141,8 +179,9 @@ async def test_handler_controller_from_metadata(tmp_path):
 
     async with running_handler(config) as handler:
         listing = await handler.get_listing()
+        pairs = {(info.controller_id, info.product_id) for info in listing}
 
-        assert ("metactrl", "x.fits") in listing
+        assert ("metactrl", "x.fits") in pairs
         assert handler.get_metadata("metactrl", "x.fits")["SKCTRL"] == "metactrl"
 
 
@@ -248,7 +287,13 @@ async def test_route_list_products(product_api):
 
     resp = await client.get("/controller/ctrlA/products")
     assert resp.status_code == 200
-    assert resp.json() == ["frame1.fits"]
+
+    listing = resp.json()
+    assert [item["product_id"] for item in listing] == ["frame1.fits"]
+    (product,) = listing
+    assert product["controller_id"] == "ctrlA"
+    assert product["data_size"] > 0
+    assert "register_time" in product
 
 
 @pytest.mark.asyncio

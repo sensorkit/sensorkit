@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any, AsyncIterator, Literal, NamedTuple, override
 
 from loguru import logger
+from pydantic import TypeAdapter
 from pydantic_core import from_json
 
 from sensorkit import api as sk
@@ -18,12 +19,16 @@ class SKRecord(NamedTuple):
     subject: sk.Subject
     payload: dict[str, Any] | None
 
+    def serialize(self) -> str:
+        """Serialize to a JSON string."""
+        return _record_adapter.dump_json(self).decode()
 
+
+_record_adapter = TypeAdapter(SKRecord)
 type RecordQueueSet = set[asyncio.Queue[SKRecord | None]]
 
 
 class Forwarder(ABC):
-
     def __init__(self, *, targets: RecordQueueSet):
         self.targets = targets
         self.cache: dict[str, dict[str, SKRecord]] = collections.defaultdict(dict)
@@ -137,12 +142,12 @@ class ProductForwarder(Forwarder):
 
     @override
     async def _monitor(self) -> AsyncIterator[SKRecord]:
-        async for controller_id, product_id in self.serve_handler.watch_listing():
-            metadata = self.serve_handler.get_metadata(controller_id, product_id)
+        async for info in self.serve_handler.watch_listing():
+            metadata = self.serve_handler.get_metadata(info.controller_id, info.product_id)
 
             yield SKRecord(
                 kind="product",
-                subject=sk.Subject(path=(controller_id,), prop=product_id),
+                subject=sk.Subject(path=(info.controller_id,), prop=info.product_id),
                 time=datetime.now(UTC),
                 payload=metadata,
             )
