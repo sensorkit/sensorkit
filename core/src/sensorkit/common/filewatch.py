@@ -357,6 +357,8 @@ async def watch_dir(
     def predicate(event: FileEvent) -> bool:
         if kind_set is not None and event.kind not in kind_set:
             return False
+        if event.path == real_dir_path:
+            return False
         if not recursive and event.path.parent != real_dir_path:
             return False
         return True
