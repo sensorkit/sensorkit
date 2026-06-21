@@ -320,9 +320,10 @@ async def watch_dir(
     recursive: bool = True,
     kinds: Collection[FileEventKind] | None = None,
     existing: bool = False,
+    existing_done: asyncio.Event | None = None,
     max_queue: int = 0,
 ) -> AsyncGenerator[FileEvent, None]:
-    """Yield filesystem events occurring under *directory*.
+    """Subscribe to filesystem events under *directory* and return a stream of them.
 
     Args:
         directory: Directory to watch. Must already exist.
@@ -332,14 +333,20 @@ async def watch_dir(
             `recursive=True` for a directory already watched non-recursively raises ValueError.
         kinds: If given, only report events of these kinds; otherwise report all. To
             include the initial scan when `existing=True`, include `EXISTING`.
-        existing: When `True`, first emit an `EXISTING` event for each entry already
-            present (scanned after subscribing, so no live event is missed). A present
-            entry may therefore also be reported by a concurrent live event.
+        existing: When `True`, the returned generator first yields an `EXISTING` event for
+            each entry already present (scanned after subscribing, so no live event is missed).
+            A present entry may therefore also be reported by a concurrent live event.
+        existing_done: If given, set once the generator has yielded the last buffered
+            `EXISTING` event and is about to await live events. For a consumer that processes
+            each event before requesting the next (an `async for` that awaits in its body),
+            this fires right after the initial scan has been fully *processed* -- the signal a
+            caller needs to mark an initial listing complete. Fires on first iteration when
+            `existing=False` (the initial scan is empty). Intended for use with `existing=True`.
         max_queue: Maximum number of buffered events (0 means unbounded). On overflow the
             newest event is dropped and logged.
 
-    Yields:
-        FileEvent: Matching events, until the generator is closed.
+    Returns:
+        An async generator yielding matching `FileEvent`s until it is closed.
     """
     real_dir = os.path.realpath(directory)
     real_dir_path = pathlib.Path(real_dir)
@@ -357,17 +364,40 @@ async def watch_dir(
     subscriber = Subscriber(loop=loop, queue=queue, predicate=predicate, real_dir=real_dir)
     manager.subscribe(real_dir, subscriber, recursive=recursive)
 
+    # The watch is now live: matching events are delivered to `queue` and cannot be missed.
+    # Scan for pre-existing entries (if requested) before handing back the stream, so that the
+    # initial listing is complete by the time this coroutine returns. Unsubscribe if the scan
+    # fails, since the stream that would otherwise clean up is never handed out.
     try:
-        if existing:
-            for event in await asyncio.to_thread(scan_existing, real_dir, recursive):
-                if predicate(event):
-                    yield event
-
-        while True:
-            yield await queue.get()
-            queue.task_done()
-    finally:
+        existing_events = (
+            [
+                event
+                for event in await asyncio.to_thread(scan_existing, real_dir, recursive)
+                if predicate(event)
+            ]
+            if existing
+            else []
+        )
+    except BaseException:
         manager.unsubscribe(real_dir, subscriber)
+        raise
+
+    async def stream() -> AsyncGenerator[FileEvent, None]:
+        try:
+            for event in existing_events:
+                yield event
+
+            # The buffered scan is drained; a sequential consumer has processed it all by now.
+            if existing_done is not None:
+                existing_done.set()
+
+            while True:
+                yield await queue.get()
+                queue.task_done()
+        finally:
+            manager.unsubscribe(real_dir, subscriber)
+
+    return stream()
 
 
 class WaitFileHandler(FileSystemEventHandler):
