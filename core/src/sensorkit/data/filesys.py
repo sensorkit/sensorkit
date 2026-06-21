@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import os
 import pathlib
-from collections import deque
 from collections.abc import AsyncGenerator
 from fnmatch import fnmatch
 from typing import Literal
@@ -10,15 +9,10 @@ from typing import Literal
 import aiofile
 from loguru import logger
 from pydantic import BaseModel
-from watchdog.events import (
-    FileCreatedEvent,
-    FileMovedEvent,
-    FileSystemEventHandler,
-)
-from watchdog.observers import Observer
 
 import sensorkit.api as sk
 from sensorkit.common.aio import cleanup_future
+from sensorkit.common.filewatch import FileEventKind, watch_dir, wait_for_file
 from sensorkit.data.graph import Context, DataFlow, DataOp, SourceOp
 from sensorkit.data.streams import StreamReader, StreamWriter
 
@@ -81,11 +75,12 @@ class WatchDirectory(SourceOp):
     async def graph_source(self) -> AsyncGenerator[None, DataFlow]:
         logger.debug(f"starting WatchDirectory source at {self.directory}")
         await asyncio.to_thread(pathlib.Path(self.directory).mkdir, parents=True, exist_ok=True)
-        queue: asyncio.Queue[pathlib.Path] = asyncio.Queue()
-        handler = FileAppearedHandler(queue)
-        observer = Observer()
-        observer.schedule(handler, self.directory, recursive=self.recursive)
-        observer.start()
+
+        events = await watch_dir(
+            self.directory,
+            recursive=self.recursive,
+            kinds=(FileEventKind.CREATED, FileEventKind.MOVED),
+        )
 
         try:
             while True:
@@ -93,11 +88,9 @@ class WatchDirectory(SourceOp):
                 edge = yield
 
                 # Wait for a matching file to appear.
-                while True:
-                    path = await queue.get()
-
-                    # Make sure the filename matches the pattern.
-                    if fnmatch(path.name, self.match):
+                async for event in events:
+                    if fnmatch(event.path.name, self.match):
+                        path = event.path
                         break
 
                 logger.debug(f"file {path} appeared")
@@ -109,11 +102,8 @@ class WatchDirectory(SourceOp):
                     )
                 except Exception:
                     logger.exception("error sending file path to graph")
-
-                queue.task_done()
         finally:
-            observer.stop()
-            queue.shutdown(True)
+            await events.aclose()
 
 
 class WriteFile(DataOp):
@@ -271,62 +261,6 @@ class ReadFile(DataOp):
         await writer.wait_closed()
 
 
-class FileAppearedHandler(FileSystemEventHandler):
-    """Watchdog event handler that enqueues new file paths as they appear in a directory."""
-
-    def __init__(
-        self,
-        queue: asyncio.Queue[pathlib.Path],
-        /,
-        *,
-        match_suffix: str | None = None,
-        seen_capacity: int = 10,
-    ):
-        self._match_suffix = match_suffix
-        self._queue = queue
-        self._seen: deque[str] = deque(maxlen=seen_capacity)
-
-    def _enqueue_path(self, path_str: str):
-        if path_str in self._seen:
-            return
-        self._seen.append(path_str)
-
-        try:
-            path = pathlib.Path(path_str)
-            self._queue.put_nowait(path)
-        except Exception:
-            logger.exception("error putting file path in queue")
-
-    def on_created(self, event: FileCreatedEvent):
-        if self._match_suffix and not event.src_path.endswith(self._match_suffix):
-            return
-        self._enqueue_path(event.src_path)
-
-    def on_moved(self, event: FileMovedEvent):
-        if self._match_suffix and not event.dest_path.endswith(self._match_suffix):
-            return
-        self._enqueue_path(event.dest_path)
-
-
-
-async def wait_file_exists(path: pathlib.Path):
-    """Suspend until the given path exists, using a filesystem watcher to avoid polling."""
-    if not await asyncio.to_thread(os.path.exists, path):
-        logger.debug(f"waiting for {path} to exist...")
-        queue = asyncio.Queue()
-        handler = FileAppearedHandler(queue, match_suffix=path.name)
-        observer = Observer()
-        observer.schedule(handler, path.parent)
-        observer.start()
-
-        try:
-            if not await asyncio.to_thread(os.path.exists, path):
-                await queue.get()
-                queue.task_done()
-        finally:
-            observer.stop()
-
-
 async def get_file_reader(
     path: pathlib.Path,
     read_size: int,
@@ -339,7 +273,7 @@ async def get_file_reader(
     if wait_until_exists is not None:
         async with asyncio.timeout(wait_until_exists):
             # Wait until the file exists before opening.
-            await wait_file_exists(path)
+            await wait_for_file(path)
 
     ctx = contextlib.AsyncExitStack()
     f = await ctx.enter_async_context(aiofile.async_open(path, "rb"))
