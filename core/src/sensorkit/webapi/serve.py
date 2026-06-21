@@ -10,12 +10,11 @@ from typing import Literal, NamedTuple, override
 from astropy.io.fits.card import UNDEFINED
 from loguru import logger
 from pydantic import BaseModel
-from watchdog.observers import Observer
 
 import sensorkit.api as sk
 from sensorkit.common.aio import AsyncObserver
+from sensorkit.common.filewatch import FileEventKind, watch_dir
 from sensorkit.common.keyword import KeywordDict
-from sensorkit.data.filesys import FileAppearedHandler
 
 DEFAULT_CONTROLLER_ID_FIELD = "SKCTRL"
 
@@ -172,31 +171,26 @@ class ServeLocalFITSHandler(ServeHandler):
 
     async def _monitor(self):
         root = pathlib.Path(self.config.root_directory)
-        queue: asyncio.Queue[pathlib.Path] = asyncio.Queue()
 
         while not await asyncio.to_thread(root.exists):
             logger.debug(f"waiting for fits server directory {root} to exist...")
             await asyncio.sleep(30.0)
 
-        handler = FileAppearedHandler(queue, match_suffix=".fits")
-        observer = Observer()
-        observer.schedule(handler, str(root), recursive=True)
-        observer.start()
+        events = await watch_dir(
+            root,
+            recursive=True,
+            existing=True,
+            existing_done=self._listing_ready,
+            kinds=(FileEventKind.CREATED, FileEventKind.MOVED, FileEventKind.EXISTING),
+        )
 
         try:
-            for path in root.rglob("*.fits"):
-                if path.is_file():
-                    await self._found_file(path)
-
-            self._listing_ready.set()
-
-            while True:
-                path = await queue.get()
-                await self._found_file(path)
-                queue.task_done()
+            async for event in events:
+                if event.is_directory or event.path.suffix != ".fits":
+                    continue
+                await self._found_file(event.path)
         finally:
-            observer.stop()
-            queue.shutdown(True)
+            await events.aclose()
 
     async def _found_file(self, path: pathlib.Path):
         try:
