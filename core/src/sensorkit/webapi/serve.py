@@ -170,7 +170,7 @@ class ServeLocalFITSHandler(ServeHandler):
         self._task = None
 
     async def _monitor(self):
-        root = pathlib.Path(self.config.root_directory)
+        root = pathlib.Path(self.config.root_directory).resolve()
 
         while not await asyncio.to_thread(root.exists):
             logger.debug(f"waiting for fits server directory {root} to exist...")
@@ -210,7 +210,7 @@ class ServeLocalFITSHandler(ServeHandler):
                         self.config.controller_id_field or DEFAULT_CONTROLLER_ID_FIELD,
                     )
                 case "from_path":
-                    root = pathlib.Path(self.config.root_directory)
+                    root = pathlib.Path(self.config.root_directory).resolve()
                     relative_path = path.relative_to(root)
                     controller_id = (
                         relative_path.parts[0] if len(relative_path.parts) > 1 else root.parts[-1]
