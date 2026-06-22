@@ -404,6 +404,7 @@ class AlpacaCamera(AlpacaDevice):
         context.set(ArrayInfo(shape=(height, width), dtype=dtype))
         max_adu = await self.get(self.camera, "MaxADU", None)
         default_bitpix = (max_adu.bit_length() + 7) // 8 * 8 if max_adu else 16
+        context["max_adu"] = max_adu
         context["bitpix"] = _dtype_to_bitpix.get(dtype, default_bitpix)
         context["bscale"] = 1
         context["bzero"] = _dtype_to_bzero.get(dtype, 0)
@@ -425,6 +426,29 @@ class AlpacaCamera(AlpacaDevice):
         context["xbinning"] = await self.get(self.camera, "BinX", 1)
         context["ybinning"] = await self.get(self.camera, "BinY", 1)
 
+        # GPS/timing metadata defaults (None = keyword omitted from FITS header)
+        context["time_src"] = None
+        context["date_end"] = None
+        context["gps_seqn"] = None
+        context["gps_lat"] = None
+        context["gps_lon"] = None
+
+        # Fetch GPS/timing metadata (non-standard extension; graceful if absent)
+        try:
+            gps_meta = await asyncio.to_thread(self.camera._get, "gpsmetadata")
+            if isinstance(gps_meta, dict):
+                context["time_src"] = gps_meta.get("TIME-SRC")
+                context["date_end"] = gps_meta.get("DATE-END")
+                if gps_meta.get("TIME-SRC") == "GPS":
+                    context["gps_seqn"] = gps_meta.get("GPS-SEQN")
+                    context["gps_lat"] = gps_meta.get("GPS-LAT")
+                    context["gps_lon"] = gps_meta.get("GPS-LON")
+        except Exception:
+            pass  # Camera doesn't support this endpoint — defaults remain None
+
+        if not context.get("file_name", None):
+            context["file_name"] = f"{uuid.uuid1()}.fits"
+            
         if not context.get(FileNameTemplate):
             context.set(FileNameTemplate(template=f"{uuid.uuid1()}.fits"))
 

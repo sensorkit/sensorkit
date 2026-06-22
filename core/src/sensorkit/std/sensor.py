@@ -220,6 +220,11 @@ class SensorControl:
             task_id=task.task_id,
         )
 
+        # TLE fields default to None; only populated for TLE targets.
+        adhoc["tle_line0"] = None
+        adhoc["tle_line1"] = None
+        adhoc["tle_line2"] = None
+
         match task.target:
             case ICRSTarget():
                 adhoc["track_mode"] = "sidereal"
@@ -231,6 +236,9 @@ class SensorControl:
                 adhoc["track_mode"] = "rate"
                 adhoc["target_name"] = task.target.tle.line0
                 adhoc["target_id"] = task.target.tle.line0.split()[1]
+                adhoc["tle_line0"] = task.target.tle.line0
+                adhoc["tle_line1"] = task.target.tle.line1
+                adhoc["tle_line2"] = task.target.tle.line2
             case RateTarget():
                 adhoc["track_mode"] = "rate"
                 adhoc["target_id"] = "RateTarget"
