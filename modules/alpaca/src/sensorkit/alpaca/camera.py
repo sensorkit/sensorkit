@@ -407,8 +407,6 @@ class AlpacaCamera(AlpacaDevice):
         context["bitpix"] = _dtype_to_bitpix.get(dtype, default_bitpix)
         context["bscale"] = 1
         context["bzero"] = _dtype_to_bzero.get(dtype, 0)
-        if max_adu is not None:
-            context["max_adu"] = max_adu
 
         last_exposure_start_time = await self.get(self.camera, "LastExposureStartTime", None)
         if last_exposure_start_time:
@@ -458,7 +456,7 @@ class AlpacaCamera(AlpacaDevice):
     def _do_capture(self, exposure_seconds: float, light: bool, timeout: float) -> array.array:
         """Execute a capture synchronously (runs in thread)."""
 
-        self.camera._put("startexposure", tmo=timeout, Duration=exposure_seconds, Light=light)
+        self.camera.StartExposure(exposure_seconds, light)
 
         deadline = time.monotonic() + timeout
         slow_until = time.monotonic() + max(0, exposure_seconds - 3.0)
