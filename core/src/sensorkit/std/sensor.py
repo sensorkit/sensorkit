@@ -41,8 +41,8 @@ class Sensor:
         self.mount = impl.use_device(
             devices.mount,
             subscribe=[AltAzPointing, RADecPointing, AxisRates],
-        )
-        self.camera = impl.use_device(devices.camera)
+        ) if devices.mount else None
+        self.camera = impl.use_device(devices.camera) if devices.camera else None
         self.focuser = impl.use_device(devices.focuser) if devices.focuser else None
         self.rotator = impl.use_device(devices.rotator) if devices.rotator else None
         self.mirror_cover = impl.use_device(devices.mirror_cover) if devices.mirror_cover else None
@@ -65,14 +65,16 @@ class Sensor:
 
     async def init_mount(self):
         """Initialize the mount."""
-        logger.info("Initializing the mount")
-        async with asyncio.timeout(self.policies.mount_init_timeout):
-            await self.mount.command(Init())
+        if self.mount:
+            logger.info("Initializing the mount")
+            async with asyncio.timeout(self.policies.mount_init_timeout):
+                await self.mount.command(Init())
 
     async def deinit_mount(self):
         """Deinitialize the mount."""
-        logger.info("Deinitializing the mount")
-        await self.mount.command(Deinit())
+        if self.mount:
+            logger.info("Deinitializing the mount")
+            await self.mount.command(Deinit())
 
     async def init_mirror_cover(self):
         """Open the mirror cover if one is configured."""
@@ -114,8 +116,9 @@ class Sensor:
 
     async def stop_all(self):
         """Issue Stop commands to the mount, dome, and mirror cover, suppressing any errors."""
-        with contextlib.suppress(Exception):
-            await self.mount.command(Stop())
+        if self.mount:
+            with contextlib.suppress(Exception):
+                await self.mount.command(Stop())
 
         if self.dome:
             with contextlib.suppress(Exception):
@@ -186,6 +189,9 @@ class SensorControl:
     @sk.task_handler
     async def sensor_collect(self, task: StandardCollectTask):
         """Execute a StandardCollectTask: slew, configure camera, capture frames."""
+        if not self.sensor.mount or not self.sensor.camera:
+            raise RuntimeError("Standard collect requires a mount and a camera")
+
         # Perform the device commands to do the collect!
         logger.info("Moving to target")
         await self.sensor.mount.command(FollowTarget(target=task.target))
@@ -352,8 +358,8 @@ class SensorControl:
 class SensorDevices(BaseModel):
     """Device entity references for sensor control."""
 
-    mount: str
-    camera: str
+    mount: str | None = None
+    camera: str | None = None
     focuser: str | None = None
     rotator: str | None = None
     filter_wheel: str | None = None
