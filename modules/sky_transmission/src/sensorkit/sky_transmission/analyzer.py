@@ -8,11 +8,10 @@ import uuid
 
 from loguru import logger
 import numpy as np
-from watchdog.events import FileCreatedEvent, FileMovedEvent, FileSystemEventHandler
-from watchdog.observers import Observer
 
 import sensorkit.api as sk
 from sensorkit.astro.common import SitePosition, AltAzPointing
+from sensorkit.common.filewatch import FileEventKind, watch_dir
 from sensorkit.sky_transmission.models import (
     SkyTransmissionConfig,
     FrameState,
@@ -108,11 +107,11 @@ class SkyTransmissionAnalyzer:
 
         await asyncio.to_thread(watch_path.mkdir, parents=True, exist_ok=True)
 
-        queue: asyncio.Queue[pathlib.Path] = asyncio.Queue()
-        handler = _FileHandler(queue, asyncio.get_running_loop())
-        observer = Observer()
-        observer.schedule(handler, str(watch_path), recursive=acquisition.watch_recursive)
-        observer.start()
+        events = await watch_dir(
+            watch_path,
+            recursive=acquisition.watch_recursive,
+            kinds=(FileEventKind.CREATED, FileEventKind.MOVED),
+        )
 
         logger.debug(
             f"watching {watch_path} for {patterns} "
@@ -120,8 +119,10 @@ class SkyTransmissionAnalyzer:
         )
 
         try:
-            while True:
-                path = await queue.get()
+            async for event in events:
+                if event.is_directory:
+                    continue
+                path = event.path
                 if not any(fnmatch(path.name, p) for p in patterns):
                     continue
                 if not await self._wait_for_stable_file(path):
@@ -132,7 +133,7 @@ class SkyTransmissionAnalyzer:
                 except Exception:
                     logger.exception(f"frame processing error for {path}")
         finally:
-            observer.stop()
+            await events.aclose()
 
     async def _wait_for_stable_file(
         self,
@@ -329,21 +330,3 @@ class SkyTransmissionAnalyzer:
                     for p in wp.glob(pat):
                         if p.stat().st_mtime < cutoff:
                             p.unlink(missing_ok=True)
-
-
-class _FileHandler(FileSystemEventHandler):
-    def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
-        self._queue = queue
-        self._loop = loop
-
-    def on_created(self, event: FileCreatedEvent):
-        if not event.is_directory:
-            self._loop.call_soon_threadsafe(
-                self._queue.put_nowait, pathlib.Path(event.src_path)
-            )
-
-    def on_moved(self, event: FileMovedEvent):
-        if not event.is_directory:
-            self._loop.call_soon_threadsafe(
-                self._queue.put_nowait, pathlib.Path(event.dest_path)
-            )

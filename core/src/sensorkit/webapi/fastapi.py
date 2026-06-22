@@ -5,7 +5,7 @@ from typing import Any
 
 import uuid_utils.compat as uuid
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from loguru import logger
@@ -19,13 +19,24 @@ from sensorkit.backend.base import (
     RemoteRequestError,
     UnregisteredResponder,
 )
-from sensorkit.backend.request import CallError
 from sensorkit.core.controller import ControllerState
 from sensorkit.core.device import DeviceState
 from sensorkit.core.entity import DeviceDetails, EntityInfo
 from sensorkit.core.program import ProgramState
-from sensorkit.webapi.forwarder import SHUTDOWN, KeyValueForwarder, SKRecord, StreamForwarder
+from sensorkit.webapi.forwarder import (
+    KeyValueForwarder,
+    ProductForwarder,
+    RecordQueueSet,
+    SKRecord,
+    StreamForwarder,
+)
+from sensorkit.webapi.preview import PreviewJPEG
 from sensorkit.webapi.schema import add_sensorkit_schema
+from sensorkit.webapi.serve import ProductInfo, ServeDataConfig, ServeHandler
+
+# Seconds a product-listing request waits for a handler's initial scan to finish
+# before giving up with a 503. See list_controller_products.
+PRODUCT_LISTING_TIMEOUT = 10.0
 
 
 class WebAPIConfig(BaseModel):
@@ -34,6 +45,7 @@ class WebAPIConfig(BaseModel):
     port: int = 8000
     host: str = "0.0.0.0"
     agent: sk.EntityRef = sk.EntityRef("agent")
+    serve_data_products: list[ServeDataConfig] = []
 
 
 class AgentOverrideRequest(BaseModel):
@@ -82,7 +94,7 @@ def _error_handler():
         raise HTTPException(status_code=503, detail="Endpoint unavailable") from err
     except BackendError as err:
         raise HTTPException(status_code=503, detail="Backend not available") from err
-    except CallError as err:
+    except sk.CallError as err:
         raise HTTPException(status_code=409, detail=str(err)) from err
 
 
@@ -97,9 +109,11 @@ class WebAPI:
     def __init__(self, kit: sk.SensorKit, config: WebAPIConfig):
         self.kit = kit
         self.config = config
-        self.client_queues: set[asyncio.Queue[SKRecord]] = set()
+        self.client_queues: RecordQueueSet = set()
         self.kv_forwarder = KeyValueForwarder(kit, targets=self.client_queues)
         self.stream_forwarder = StreamForwarder(kit, targets=self.client_queues)
+        self._serve_handlers: list[ServeHandler] = []
+        self._product_forwarders: list[ProductForwarder] = []
         self.app = self._create_fastapi_app()
         self.server = uvicorn.Server(
             uvicorn.Config(
@@ -134,19 +148,22 @@ class WebAPI:
             initial_updates = itertools.chain(
                 self.kv_forwarder.snapshot(),
                 self.stream_forwarder.snapshot(),
+                *(forwarder.snapshot() for forwarder in self._product_forwarders),
             )
             self.client_queues.add(queue)
 
             try:
                 # Send initial snapshot
                 for upd in initial_updates:
-                    yield ServerSentEvent(data=upd)
+                    yield ServerSentEvent(raw_data=upd.serialize())
 
                 while True:
                     upd = await queue.get()
-                    if upd is SHUTDOWN:        # identity check — graceful exit
+
+                    if upd is None:
                         break
-                    yield ServerSentEvent(data=upd)
+
+                    yield ServerSentEvent(raw_data=upd.serialize())
                     queue.task_done()
             finally:
                 self.client_queues.remove(queue)
@@ -158,6 +175,7 @@ class WebAPI:
                 itertools.chain(
                     self.kv_forwarder.snapshot(),
                     self.stream_forwarder.snapshot(),
+                    *(forwarder.snapshot() for forwarder in self._product_forwarders),
                 )
             )
 
@@ -168,6 +186,10 @@ class WebAPI:
                 itertools.chain(
                     self.kv_forwarder.cache.get(entity_id, {}).values(),
                     self.stream_forwarder.cache.get(entity_id, {}).values(),
+                    *(
+                        forwarder.cache.get(entity_id, {}).values()
+                        for forwarder in self._product_forwarders
+                    ),
                 )
             )
 
@@ -256,6 +278,104 @@ class WebAPI:
                 await self.kit.controller(controller_id).abort_task(task_id)
 
             return _status_ok()
+
+        @app.get("/controller/{controller_id}/products", tags=["Controller"])
+        async def list_controller_products(controller_id: str) -> list[ProductInfo]:
+            """List data products associated with a controller.
+
+            A handler's listing may not be ready immediately. Rather than report an empty
+            listing — which would falsely imply the controller has no products — we wait
+            up to PRODUCT_LISTING_TIMEOUT and return 503 if it is still not available.
+            """
+            try:
+                async with asyncio.timeout(PRODUCT_LISTING_TIMEOUT):
+                    listings = [await handler.get_listing() for handler in self._serve_handlers]
+            except TimeoutError as err:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Data product listing not yet available; try again shortly",
+                ) from err
+
+            return [
+                info
+                for listing in listings
+                for info in listing
+                if info.controller_id == controller_id
+            ]
+
+        @app.get("/controller/{controller_id}/products/subscribe", tags=["Controller"], response_class=EventSourceResponse)
+        async def subscribe_controller_products(request: Request, controller_id: str):
+            """SSE stream of product arrivals for a controller, including initial listing."""
+            request.state.is_sse = True
+            queue: asyncio.Queue[SKRecord | None] = asyncio.Queue()
+            initial_records = [
+                record
+                for forwarder in self._product_forwarders
+                for record in forwarder.snapshot()
+                if str(record.subject.entity()) == controller_id
+            ]
+            self.client_queues.add(queue)
+
+            try:
+                for record in initial_records:
+                    yield ServerSentEvent(raw_data=record.serialize())
+
+                while True:
+                    record = await queue.get()
+
+                    if record is None:
+                        break
+
+                    try:
+                        if record.kind == "product" and str(record.subject.entity()) == controller_id:
+                            yield ServerSentEvent(raw_data=record.serialize())
+                    finally:
+                        queue.task_done()
+            except asyncio.CancelledError:
+                host = request.client.host if request.client else "unknown"
+                logger.debug(f"SSE client disconnected: {host}")
+            finally:
+                self.client_queues.remove(queue)
+
+        @app.get("/controller/{controller_id}/product/{product_id}/data", tags=["Controller"])
+        async def get_controller_product_data(controller_id: str, product_id: str):
+            """Return the raw FITS data for a product."""
+            for handler in self._serve_handlers:
+                if handler.has_product(controller_id, product_id):
+                    raw_bytes = await handler.get_data(controller_id, product_id)
+                    return Response(content=raw_bytes, media_type="application/fits")
+
+            raise HTTPException(status_code=404, detail="Product not found")
+
+        @app.get("/controller/{controller_id}/product/{product_id}/preview", tags=["Controller"])
+        async def get_controller_product_preview(controller_id: str, product_id: str):
+            """Return a JPEG preview image generated from the FITS product data."""
+            for handler in self._serve_handlers:
+                if handler.has_product(controller_id, product_id):
+                    data = await handler.get_data(controller_id, product_id)
+
+                    try:
+                        preview = await PreviewJPEG.from_fits(data)
+                    except Exception as err:
+                        raise HTTPException(status_code=422, detail=f"Could not generate preview: {err}") from err
+
+                    return Response(content=preview.jpeg_bytes, media_type="image/jpeg")
+
+            raise HTTPException(status_code=404, detail="Product not found")
+
+        @app.get("/controller/{controller_id}/product/{product_id}/metadata", tags=["Controller"])
+        async def get_controller_product_metadata(controller_id: str, product_id: str) -> dict:
+            """Return the cached metadata for a product as a JSON object."""
+            for handler in self._serve_handlers:
+                if handler.has_product(controller_id, product_id):
+                    metadata = handler.get_metadata(controller_id, product_id)
+
+                    if not metadata.get(ProductInfo):
+                        logger.warning(f"Product {product_id} has no ProductInfo keyword set")
+
+                    return metadata
+
+            raise HTTPException(status_code=404, detail="Product not found")
 
         # Program
 
@@ -425,10 +545,32 @@ class WebAPI:
 
         return app
 
-    async def serve(self, *, task_group=asyncio):
-        """Run the FastAPI server."""
+    async def _start_forwarders(self, *, task_group: asyncio.TaskGroup):
+        """Start the KV/stream forwarders and any configured data-product handlers.
+
+        Split out from `serve` only so tests can drive it without running the uvicorn
+        server. Not for use elsewhere: calling this and `serve` both would start two sets
+        of forwarder tasks.
+        """
         await self.kv_forwarder.start(task_group=task_group)
         await self.stream_forwarder.start(task_group=task_group)
+
+        self._serve_handlers = []
+        self._product_forwarders = []
+
+        for serve_config in self.config.serve_data_products:
+            handler = serve_config.create_handler()
+            forwarder = ProductForwarder(handler, targets=self.client_queues)
+
+            await forwarder.start(task_group=task_group)
+            handler.start_monitor(task_group=task_group)
+
+            self._serve_handlers.append(handler)
+            self._product_forwarders.append(forwarder)
+
+    async def serve(self, *, task_group: asyncio.TaskGroup):
+        """Run the FastAPI server."""
+        await self._start_forwarders(task_group=task_group)
         await self.server.serve()
 
     async def shutdown(self):
@@ -436,10 +578,16 @@ class WebAPI:
         # isn't stuck waiting on a never-ending SSE response. Snapshot the set
         # because each generator removes its own queue on exit.
         for queue in tuple(self.client_queues):
-            queue.put_nowait(SHUTDOWN)
+            queue.put_nowait(None)
 
         if self.server.started:
             await self.server.shutdown()
+
+        for handler in self._serve_handlers:
+            await handler.stop_monitor()
+
+        for forwarder in self._product_forwarders:
+            await forwarder.stop()
 
         await self.kv_forwarder.stop()
         await self.stream_forwarder.stop()

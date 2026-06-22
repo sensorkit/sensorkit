@@ -13,6 +13,7 @@ DEFAULT_BACKEND = "nats"
 DEFAULT_CONFIG_FILE = "sensorkit.yaml"
 DEFAULT_BASE_IMPORTS = (
     "sensorkit.std",
+    "sensorkit.webapi",
     "sensorkit.data.filesys",
     "sensorkit.data.fits",
     "sensorkit.data.local",

@@ -16,7 +16,7 @@ dependencies = [
     "fastapi>=0.115.12",
     "intervaltree>=3.1.0",
     "loguru~=0.7",
-    "nats-py~=2.13",
+    "nats-py==2.14",
     "pillow>=12.0.0",
     "pydantic~=2.11",
     "python-dateutil>=2.9.0.post0",
@@ -42,8 +42,7 @@ alpaca = [
     "numpy>=1.24.0",
 ]
 burr = [
-#    "burr @ git+https://github.com/zgazak/burr.git@dev",
-    "burr"
+    "burr @ git+https://github.com/zgazak/burr.git@dev",
 ]
 indigo = [
     "websockets>=14.0",
@@ -112,9 +111,6 @@ dev = [
 name = "systemd-python"
 version = "235"
 requires-dist = []
-
-[tool.uv.sources]
-burr = { path = "../burr", editable = true }
 
 [tool.ruff]
 include = ["core/**/*.py", "modules/**/*.py"]

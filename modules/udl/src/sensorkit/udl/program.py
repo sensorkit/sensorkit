@@ -21,6 +21,7 @@ import sensorkit.api as sk
 from sensorkit.astro.common import TLE, SitePosition
 from sensorkit.astro.coords import Equatorial, Cartesian, StateVector
 from sensorkit.astro.target import ICRSTarget, StateVectorTarget, Target, TLETarget
+from sensorkit.data.filesys import FileInfo
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 from sensorkit.udl.models import (
     ResponseStatus,
@@ -391,13 +392,8 @@ class UDLProgram:
             return
 
         # Extract context values
-        file_path = context.get("file_path")
-        path = Path(file_path) if isinstance(file_path, (str, Path)) else None
-        filename = (
-            path.name
-            if path
-            else context.get("file_name", f"{request.id}_{context.get('frame_num', 0)}.fits")
-        )
+        info = context.get(FileInfo)
+        filename = info.path.name if info else f"{request.id}_{context.get('frame_num', 0)}.fits"
 
         date_obs = context.get("date_obs")
         exp_start_time = datetime.fromisoformat(date_obs) if date_obs else datetime.now(UTC)

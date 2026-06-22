@@ -2,37 +2,38 @@ import asyncio
 import collections
 import contextlib
 from abc import ABC, abstractmethod
-from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import Any, AsyncIterator, Literal, NamedTuple, override
 
 from loguru import logger
+from pydantic import TypeAdapter
 from pydantic_core import from_json
 
 from sensorkit import api as sk
+from sensorkit.webapi.serve import ServeHandler
 
 
 class SKRecord(NamedTuple):
-    kind: Literal["stream", "event", "state"]
+    kind: Literal["stream", "event", "state", "product"]
     time: datetime
     subject: sk.Subject
     payload: dict[str, Any] | None
 
+    def serialize(self) -> str:
+        """Serialize to a JSON string."""
+        return _record_adapter.dump_json(self).decode()
 
-# A unique SKRecord pushed onto a client queue to tell its firehose generator to
-# exit cleanly at shutdown. Compared by identity (`is`); the field values are
-# never read, so this stays a valid SKRecord and keeps queues strictly typed.
-SHUTDOWN = SKRecord(kind="state", time=datetime.min, subject=sk.Subject(), payload=None)
+
+_record_adapter = TypeAdapter(SKRecord)
+type RecordQueueSet = set[asyncio.Queue[SKRecord | None]]
 
 
 class Forwarder(ABC):
-
-    def __init__(self, kit: sk.SensorKit, *, targets: Collection[asyncio.Queue[SKRecord]]):
-        self.kit = kit
+    def __init__(self, *, targets: RecordQueueSet):
         self.targets = targets
         self.cache: dict[str, dict[str, SKRecord]] = collections.defaultdict(dict)
 
-    async def start(self, *, task_group=asyncio):
+    async def start(self, *, task_group: asyncio.TaskGroup):
         """Start background monitoring task for this forwarder."""
         self.task = task_group.create_task(self._run())
         return self.task
@@ -79,6 +80,10 @@ class Forwarder(ABC):
 class KeyValueForwarder(Forwarder):
     """Forwarder specialization that monitors Key-Value changes."""
 
+    def __init__(self, kit: sk.SensorKit, *, targets: RecordQueueSet):
+        super().__init__(targets=targets)
+        self.kit = kit
+
     @override
     async def _monitor(self) -> AsyncIterator[SKRecord]:
         monitor = await self.kit.entity()._kv.monitor_all(deep=True)
@@ -102,6 +107,10 @@ class KeyValueForwarder(Forwarder):
 class StreamForwarder(Forwarder):
     """Forwarder specialization that monitors stream updates (state/events)."""
 
+    def __init__(self, kit: sk.SensorKit, *, targets: RecordQueueSet):
+        super().__init__(targets=targets)
+        self.kit = kit
+
     @override
     async def _monitor(self) -> AsyncIterator[SKRecord]:
         consumer = await self.kit.entity()._stream.consume(
@@ -121,4 +130,22 @@ class StreamForwarder(Forwarder):
                 subject=msg.subject,
                 time=msg.timestamp,
                 payload=payload,
+            )
+
+
+class ProductForwarder(Forwarder):
+    """Forwarder specialization that monitors data products from a ServeHandler."""
+
+    def __init__(self, serve_handler: ServeHandler, *, targets: RecordQueueSet):
+        super().__init__(targets=targets)
+        self.serve_handler = serve_handler
+
+    @override
+    async def _monitor(self) -> AsyncIterator[SKRecord]:
+        async for info in self.serve_handler.watch_listing():
+            yield SKRecord(
+                kind="product",
+                subject=sk.Subject(path=(info.controller_id,), prop=info.product_id),
+                time=datetime.now(UTC),
+                payload=info.model_dump(),
             )

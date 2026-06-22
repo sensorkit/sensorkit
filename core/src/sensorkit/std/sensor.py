@@ -459,3 +459,20 @@ def _add_compat_context(context: sk.Context):
     for key, expr in compat.items():
         with contextlib.suppress(Exception):
             context[key] = context.eval(expr)
+
+    # Fold legacy flat file_name/file_path keys into FileNameTemplate / FileInfo keywords.
+    # A file_name is an input naming template; a file_path is an explicit output location.
+    import pathlib
+
+    from sensorkit.data.filesys import FileInfo, FileNameTemplate
+
+    file_name = context.pop("file_name", None)
+    file_path = context.pop("file_path", None)
+
+    if file_name is not None:
+        logger.warning("The 'file_name' context key is deprecated. Use FileNameTemplate instead.")
+        context.set(FileNameTemplate(template=file_name))
+
+    if file_path is not None:
+        logger.warning("The 'file_path' context key is deprecated. Use FileInfo instead.")
+        context.set(FileInfo(path=pathlib.Path(file_path)))

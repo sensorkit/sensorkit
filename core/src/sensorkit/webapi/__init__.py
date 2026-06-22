@@ -3,10 +3,16 @@ from sensorkit.backend.base import KeyNotFound
 
 from .fastapi import WebAPI, WebAPIConfig
 
+sk.declare_config_section(
+    "webapi",
+    WebAPIConfig,
+    entity_mapper=lambda raw: raw.pop("id", "webapi"),
+    service_path=__name__,
+)
+
 
 @sk.declare_entity
 class WebAPIService:
-
     @sk.on_attach
     async def startup(self):
         entity = sk.entity()

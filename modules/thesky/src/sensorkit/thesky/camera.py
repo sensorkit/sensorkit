@@ -9,6 +9,7 @@ from astropy.time import Time
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ArrayInfo
 from sensorkit.models.devices import Deinit, Init, Stop
 from sensorkit.std import (
@@ -307,8 +308,8 @@ class TheSkyCamera(TheSkyDevice):
             cmd.context["xbinning"] = int(binx)
             cmd.context["ybinning"] = int(biny)
 
-            if not cmd.context.get("file_name", None):
-                cmd.context["file_name"] = f"{str(uuid.uuid1())}.fits"
+            if not cmd.context.get(FileNameTemplate):
+                cmd.context.set(FileNameTemplate(template=f"{str(uuid.uuid1())}.fits"))
 
             writer = source.produce(cmd.context)
             n = 0

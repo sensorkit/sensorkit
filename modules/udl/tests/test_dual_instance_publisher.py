@@ -25,6 +25,8 @@ from unifieddatalibrary import AsyncUnifieddatalibrary, omit
 from unifieddatalibrary.types import CollectRequestFull
 
 from sensorkit.astro.common import SitePosition
+from sensorkit.data.context import Context
+from sensorkit.data.filesys import FileInfo
 from sensorkit.udl.models import UDLAPIConfig, UDLConfig, UDLEndpointConfig
 from sensorkit.udl.program import UDLProgram
 
@@ -100,7 +102,7 @@ class _MultiFrameBinding:
     def __init__(self, context: dict[str, Any], num_frames: int = 3) -> None:
         self.context = context
         self.frames = [
-            ({**self.context, "frame_num": i}, f"frame{i}_data".encode("utf-8"))
+            (Context({**self.context, "frame_num": i}), f"frame{i}_data".encode("utf-8"))
             for i in range(num_frames)
         ]
 
@@ -310,18 +312,21 @@ def collect_request(id_sensor: str) -> CollectRequestFull:
 
 
 @pytest.fixture
-def publisher_context(collect_request: CollectRequestFull) -> dict[str, Any]:
-    """Context dict emitted by the data graph for each frame."""
-    return {
-        "task_id": collect_request.id,
-        "frame_num": 0,
-        "image_width": 100,
-        "image_height": 50,
-        "date_obs": datetime.now(UTC).isoformat(),
-        "exptime": 1.5,
-        "bits_per_pixel": 16,
-        "file_path": "test_frame.fits",
-    }
+def publisher_context(collect_request: CollectRequestFull) -> Context:
+    """Context emitted by the data graph for each frame."""
+    context = Context(
+        {
+            "task_id": collect_request.id,
+            "frame_num": 0,
+            "image_width": 100,
+            "image_height": 50,
+            "date_obs": datetime.now(UTC).isoformat(),
+            "exptime": 1.5,
+            "bits_per_pixel": 16,
+        }
+    )
+    context.set(FileInfo(path="test_frame.fits"))
+    return context
 
 
 @pytest_asyncio.fixture
@@ -386,13 +391,15 @@ async def polling_program(
     tasks start empty — the seeded CollectRequest is waiting in instance A — so
     the test exercises the real poll path. Closes SDK client(s) on teardown.
     """
-    context = {
-        "task_id": seeded_collect_request.id,
-        "frame_num": 0,
-        "date_obs": datetime.now(UTC).isoformat(),
-        "exptime": 1.5,
-        "file_path": "polled_frame.fits",
-    }
+    context = Context(
+        {
+            "task_id": seeded_collect_request.id,
+            "frame_num": 0,
+            "date_obs": datetime.now(UTC).isoformat(),
+            "exptime": 1.5,
+        }
+    )
+    context.set(FileInfo(path="polled_frame.fits"))
     program = make_program(
         base_url=udlx_a_base_url,
         id_sensor=id_sensor,

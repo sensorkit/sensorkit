@@ -1,5 +1,19 @@
 version: 1
 
+sensorkit:
+  imports:
+    - sensorkit.otto.service
+    - sensorkit.alpaca.service
+    - sensorkit.pwi4.service
+
+sensorkit:
+  imports:
+    - sensorkit.otto.models
+    - sensorkit.alpaca.service
+    - sensorkit.pwi4.service
+    - sensorkit.burr.program
+    - sensorkit.webapi
+
 automation:
   first_run:
     operate_all: true
@@ -50,8 +64,9 @@ automation:
 
   contexts:
     standard_collect:
-      file_name: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-f{frame_num}.fits"
-    
+      FileNameTemplate:
+        template: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-f{frame_num}.fits"
+
 data_flow:
   - entity: SimulatedCamera
     producer:
@@ -69,7 +84,7 @@ data_flow:
             RADEG: ra
             DECDEG: dec
         - op: write_file
-          directory: f"C:\\Temp\\SimulatedCamera"
+          directory: /Temp/SimulatedSensor
 
 sensors:
   - id: SimulatedSensor
@@ -170,38 +185,13 @@ pwi4:
           park_axis0_degrees: 30
           park_axis1_degrees: 0
 
-burr:
-  - id: Burr
-    controller: SimulatedSensor
-    schedule:
-      twilight_flats:
-        windows:
-          - nautical_twilight
-        collect: true
-      calsats:
-        windows:
-          - night
-          - astronomical_twilight
-        collect: true
-        tle_provider: spacebook
-      photometric_standards:
-        windows:
-          - day
-          - night
-        minimum_exposure_seconds: 1
-        maximum_exposure_seconds: 10
-        n_exposures: 10
-        minimum_altitude_degrees: 30
-        collect: true
-      streaks:
-        collect: true
-        minimum_length_pixel: 5
-        maximum_length_pixel: 100
-    plotting:
-      debug: true
-      review: true
-    runtime:
-      output_dir: "/temp/burr/"
+webapi:
+  id: WebAPI
+  port: 8000
+  serve_data_products:
+    - kind: local_fits
+      root_directory: /Temp/SimulatedSensor
+      controller_id: from_path
 
 config:
   SimulatedSensor:
@@ -211,7 +201,5 @@ config:
       altitude_km: .05
 
 services:
-  - id: WebAPI
-    python_module: sensorkit.webapi
   - id: SimulatedProgram
     python_module: deploy/simulated/program.py
