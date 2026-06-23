@@ -1,10 +1,8 @@
 import asyncio
 from datetime import UTC, datetime
-from typing import Union
 
 from loguru import logger
 
-import sensorkit.api as sk
 from sensorkit.std.collect import StandardCollectTask
 
 
@@ -98,44 +96,3 @@ class TaskQueue:
 
     def __len__(self):
         return len(self.tasks)
-
-
-def get_registered_collect_tasks():
-    """Get all registered collect task types."""
-    return tuple(
-        obj for obj in sk.ControllerTask.registry.entries
-        if obj is StandardCollectTask or issubclass(obj, StandardCollectTask)
-    )
-
-
-async def start_fastapi(config: dict, task_queue: TaskQueue):
-    """Start FastAPI server for manual task submission."""
-    try:
-        from fastapi import FastAPI
-        from uvicorn import Config, Server
-    except ImportError as e:
-        raise RuntimeError(
-            "FastAPI dependencies not installed. Please install 'fastapi' and 'uvicorn'"
-        ) from e
-
-    task_type = Union[get_registered_collect_tasks()]
-    app = FastAPI()
-
-    @app.post("/submit_task")
-    async def submit_task(task: task_type):  # type: ignore[valid-type]
-        await task_queue.push_task(task)
-        return {"status": "success", "task_id": task.task_id}
-
-    @app.get("/tasks")
-    async def get_tasks():
-        return {"tasks": task_queue.tasks, "count": len(task_queue)}
-
-    @app.delete("/tasks/{task_id}")
-    async def delete_task(task_id: str):
-        """Remove a specific task from the queue."""
-        if await task_queue.remove_task(task_id):
-            return {"status": "success", "task_id": task_id}
-        return {"status": "not_found", "task_id": task_id}
-
-    server = Server(Config(app=app, **config))
-    return await server.serve()

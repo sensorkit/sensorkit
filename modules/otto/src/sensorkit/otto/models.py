@@ -1,7 +1,7 @@
 import os
 from typing import List, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 import sensorkit.api as sk
 
@@ -68,26 +68,11 @@ class PublishConfig(EnvResolvingModel):
     udl: UDLPublishConfig | None = None
 
 
-UvicornLogLevel = Literal["critical", "error", "warning", "info", "debug", "trace"]
-
-
-class ServerConfig(BaseModel):
-    host: str
-    port: int = 8000
-    log_level: UvicornLogLevel | None = None
-
-    @field_validator("log_level", mode="before")
-    @classmethod
-    def _normalize_log_level(cls, v):
-        return v.lower() if isinstance(v, str) else v
-
-
 class OttoConfig(BaseModel):
     controller: str
     task: TaskConfig
     collect: CollectConfig
     publish: PublishConfig
-    server: ServerConfig
 
 
 sk.declare_config_section(
@@ -95,5 +80,5 @@ sk.declare_config_section(
     list[OttoConfig],
     entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
     model_mapper=iter,
-    service_path="sensorkit.otto.service",
+    service_path="sensorkit.otto.program",
 )

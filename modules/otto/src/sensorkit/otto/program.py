@@ -11,7 +11,7 @@ import sensorkit.api as sk
 from sensorkit.astro.common import TLE, SitePosition
 from sensorkit.astro.target import TLETarget
 from sensorkit.otto.models import OttoConfig
-from sensorkit.otto.task_queue import TaskQueue, start_fastapi
+from sensorkit.otto.task_queue import TaskQueue
 from sensorkit.otto.utils import (
     ListType,
     ObjectListManager,
@@ -45,7 +45,6 @@ class OttoProgram:
         self.tles: Dict[str, Dict[str, str]] = {}
         self._tle_updater: asyncio.Task | None = None
 
-        self._fastapi_server: asyncio.Task | None = None
         self._task_generator: asyncio.Task | None = None
         self._publisher: asyncio.Task | None = None
 
@@ -119,15 +118,6 @@ class OttoProgram:
         # Start graylist promoter
         self._graylist_promoter = asyncio.create_task(self.promote_graylist_loop())
 
-        # Start FastAPI server for manual tasking additions
-        server = getattr(self.config, "server", None)
-        fastapi_config = {
-            "host": getattr(server, "host", "0.0.0.0"),
-            "port": getattr(server, "port", 8001),
-            "log_level": getattr(server, "log_level", "info"),
-        }
-        self._fastapi_server = asyncio.create_task(start_fastapi(fastapi_config, self.task_queue))
-
         # Get site location
         self.controller_client = self.program.sensorkit().controller(self.config.controller)
         self._controller_location = await self.controller_client.kv_get_model(SitePosition)
@@ -150,7 +140,6 @@ class OttoProgram:
 
         # Cancel background tasks
         for task in [
-            self._fastapi_server,
             self._task_generator,
             self._publisher,
             self._tle_updater,
@@ -498,3 +487,11 @@ class OttoProgram:
         finally:
             for pub in publishers:
                 await pub.close()
+
+
+@sk.service_entrypoint(version=sk.VERSION)
+async def otto_service(service: sk.Service):
+    await service.register()
+
+    service.include(OttoProgram())
+    await service.run()

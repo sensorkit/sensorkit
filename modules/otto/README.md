@@ -50,10 +50,6 @@ value:
       username: ${UDL_USERNAME}
       password: ${UDL_PASSWORD}
       sensor_name: MY_SENSOR
-  server:
-    host: 0.0.0.0
-    port: 8001
-    log_level: INFO
 
 ---
 
@@ -176,5 +172,5 @@ UDL publishing is not yet implemented in otto.
 ## Usage
 
 ```sh
-sensorkit service run -s sensorkit.otto.service -n otto
+sensorkit service run -s sensorkit.otto.program -n otto
 ```
