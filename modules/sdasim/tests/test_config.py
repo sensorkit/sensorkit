@@ -6,7 +6,6 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from sensorkit.sdasim.camera import SdasimCamera, SdasimCameraConfig, SdasimCameraState
-from sensorkit.sdasim.service import SdasimConfig
 
 
 class TestSdasimCameraConfig:
@@ -37,44 +36,38 @@ class TestSdasimCameraConfig:
         assert state.bin_y == 1
 
 
-class TestSdasimConfig:
-    def test_parses_devices_mapping(self):
-        raw = {
-            "devices": {
-                "SimulatedCamera": {
-                    "sdasim_config": "scene.yaml",
-                    "mount_entity": "SimulatedMount",
-                    "binning": 2,
-                }
-            }
-        }
-        config = SdasimConfig.model_validate(raw)
-        camera = config.devices["SimulatedCamera"]
-        assert isinstance(camera, SdasimCameraConfig)
-        assert camera.mount_entity == "SimulatedMount"
-        assert camera.binning == 2
-
-    def test_unified_list_form_ignores_id(self):
-        # Mirrors the entity_mapper contract: a list of entries each with an `id`
-        # (the `id` is popped for the entity name; extra fields are ignored).
+class TestSdasimSection:
+    def test_unified_list_form_pops_id(self):
+        # Mirrors the entity_mapper contract: a flat list of camera entries, each
+        # with an `id` popped for the entity name; the rest validates as a camera
+        # config. One entry == one camera == one service (delegate entity).
         raw = [
             {
-                "id": "Sdasim",
-                "devices": {
-                    "SimulatedCamera": {
-                        "sdasim_config": "scene.yaml",
-                    }
-                },
-            }
+                "id": "sdasimCameraAlpaca",
+                "sdasim_config": "scene.yaml",
+                "mount_entity": "OmniSimTelescope",
+                "rotator_entity": "OmniSimRotator",
+                "binning": 2,
+            },
+            {
+                "id": "sdasimCameraPWI4",
+                "sdasim_config": "scene.yaml",
+                "mount_entity": "PWI4Telescope",
+            },
         ]
         ids = [elem.pop("id") for elem in raw]
-        assert ids == ["Sdasim"]
+        assert ids == ["sdasimCameraAlpaca", "sdasimCameraPWI4"]
 
-        parsed = TypeAdapter(list[SdasimConfig]).validate_python(raw)
-        assert parsed[0].devices["SimulatedCamera"].sdasim_config == "scene.yaml"
+        parsed = TypeAdapter(list[SdasimCameraConfig]).validate_python(raw)
+        assert parsed[0].mount_entity == "OmniSimTelescope"
+        assert parsed[0].rotator_entity == "OmniSimRotator"
+        assert parsed[0].binning == 2
+        assert parsed[1].mount_entity == "PWI4Telescope"
+        assert parsed[1].rotator_entity is None
 
 
 def test_config_section_registered():
+    import sensorkit.sdasim.service  # noqa: F401 -- import registers the config section
     from sensorkit.config.section import get_config_section
 
     section = get_config_section("sdasim")
