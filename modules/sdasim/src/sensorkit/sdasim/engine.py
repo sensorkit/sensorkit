@@ -1,13 +1,10 @@
-"""sdasim rendering engine and SensorKit telemetry bridge.
+"""sdasim rendering engine.
 
 ``SdasimEngine`` wraps a reusable sdasim ``Scene``: it is built once (parsing the
 satellite catalog, if enabled) and reused across exposures, with pointing, mount
 rate, and observation time passed as per-frame ``render()`` overrides. The Scene
 is rebuilt only when the pointing drifts past a threshold or the exposure
 changes (the star field and exposure are baked in at construction).
-
-``SensorKitBridge`` subscribes to another entity's pointing/rate/rotator keywords
-and caches the latest values for the camera to consume at capture time.
 
 ``sdasim`` and ``torch`` are imported lazily inside the methods that need them so
 this module (and the rest of SensorKit) can be imported without the optional
@@ -16,136 +13,12 @@ this module (and the rest of SensorKit) can be imported without the optional
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import copy
 import math
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 from loguru import logger
-
-
-@dataclass
-class MountState:
-    """Cached mount telemetry from SensorKit."""
-
-    ra_hours: float = 0.0  # Right ascension (hours)
-    dec_degrees: float = 0.0  # Declination (degrees)
-    ra_rate_dps: float = 0.0  # Inertial (ICRF) RA rate (degrees/sec); 0 == sidereal
-    dec_rate_dps: float = 0.0  # Inertial (ICRF) Dec rate (degrees/sec)
-    connected: bool = False
-
-
-@dataclass
-class RotatorState:
-    """Cached rotator telemetry from SensorKit."""
-
-    position_degrees: float = 0.0  # Mechanical position (degrees)
-    connected: bool = False
-
-
-@dataclass
-class SensorKitState:
-    """Combined SensorKit telemetry snapshot."""
-
-    mount: MountState = field(default_factory=MountState)
-    rotator: RotatorState = field(default_factory=RotatorState)
-
-
-class SensorKitBridge:
-    """Subscribes to mount/rotator keywords from other SensorKit entities.
-
-    Uses the SensorKit client API (``kit.entity(name).monitor(keyword)``) to
-    follow keyword streams and cache the latest values. The cached snapshot is
-    consumed by the camera at capture time to parameterize sdasim. Everything
-    runs on the service event loop, so no locking is required.
-
-    Mount RA/Dec rates are cached as published. With an ICRF AxisRates producer
-    (the alpaca telescope) a sidereal track reports (0, 0) and a rate track
-    reports the tracked object's apparent rate -- exactly what sdasim's
-    ``apparent_rate = object_rate - mount_rate`` model wants, no conversion.
-    """
-
-    def __init__(self, mount_entity: str | None, rotator_entity: str | None):
-        self._mount_entity = mount_entity
-        self._rotator_entity = rotator_entity
-        self._state = SensorKitState()
-        self._tasks: list[asyncio.Task] = []
-
-    async def start(self, kit) -> None:
-        """Start async monitor tasks for the configured mount/rotator entities.
-
-        Args:
-            kit: A connected SensorKit client (``sk.device().sensorkit()``).
-        """
-        if not self._mount_entity and not self._rotator_entity:
-            logger.info("sdasim bridge: no mount/rotator entities configured")
-            return
-
-        from sensorkit.astro.common import RADecPointing
-        from sensorkit.models.devices import AxisRates
-        from sensorkit.std import RotatorPosition
-
-        if self._mount_entity:
-            mount = kit.entity(self._mount_entity)
-            self._tasks.append(asyncio.create_task(self._monitor_pointing(mount, RADecPointing)))
-            self._tasks.append(asyncio.create_task(self._monitor_rates(mount, AxisRates)))
-            logger.debug(f"sdasim bridge: subscribed to mount '{self._mount_entity}'")
-
-        if self._rotator_entity:
-            rotator = kit.entity(self._rotator_entity)
-            self._tasks.append(
-                asyncio.create_task(self._monitor_rotator(rotator, RotatorPosition))
-            )
-            logger.debug(f"sdasim bridge: subscribed to rotator '{self._rotator_entity}'")
-
-    async def _monitor_pointing(self, mount, radec_cls) -> None:
-        try:
-            async for _, pointing in await mount.monitor(radec_cls):
-                self._state.mount.ra_hours = pointing.right_ascension_hours
-                self._state.mount.dec_degrees = pointing.declination_degrees
-                self._state.mount.connected = True
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.exception(f"sdasim bridge: mount pointing subscription failed: {e}")
-
-    async def _monitor_rates(self, mount, axis_rates_cls) -> None:
-        try:
-            async for _, rates in await mount.monitor(axis_rates_cls):
-                if rates.right_ascension and rates.right_ascension.velocity is not None:
-                    self._state.mount.ra_rate_dps = rates.right_ascension.velocity
-                if rates.declination and rates.declination.velocity is not None:
-                    self._state.mount.dec_rate_dps = rates.declination.velocity
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.exception(f"sdasim bridge: mount rates subscription failed: {e}")
-
-    async def _monitor_rotator(self, rotator, rotator_position_cls) -> None:
-        try:
-            async for _, pos in await rotator.monitor(rotator_position_cls):
-                self._state.rotator.position_degrees = pos.position
-                self._state.rotator.connected = True
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.exception(f"sdasim bridge: rotator subscription failed: {e}")
-
-    def get_state(self) -> SensorKitState:
-        """Return a snapshot copy of the current SensorKit telemetry."""
-        return copy.deepcopy(self._state)
-
-    async def stop(self) -> None:
-        """Cancel all monitor tasks."""
-        for task in self._tasks:
-            task.cancel()
-        for task in self._tasks:
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        self._tasks.clear()
 
 
 class SdasimEngine:

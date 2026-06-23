@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sensorkit.sdasim.engine import SdasimEngine, SensorKitBridge
+from sensorkit.sdasim.engine import SdasimEngine
 
 # Minimal self-contained sdasim SceneConfig (bins star field, catalog OFF, so no
 # external data or Space-Track creds needed) used by the real-render tests.
@@ -33,23 +33,6 @@ def scene_yaml(tmp_path):
     path = tmp_path / "scene.yaml"
     path.write_text(_SCENE)
     return str(path)
-
-
-class TestSensorKitBridge:
-    @pytest.mark.asyncio
-    async def test_start_without_entities_is_noop(self):
-        bridge = SensorKitBridge(None, None)
-        await bridge.start(kit=object())  # kit never used when no entities
-        assert bridge._tasks == []
-
-    def test_get_state_returns_independent_copy(self):
-        bridge = SensorKitBridge("Mount", None)
-        bridge._state.mount.ra_hours = 5.0
-        snap = bridge.get_state()
-        assert snap.mount.ra_hours == 5.0
-        snap.mount.ra_hours = 9.0
-        # Mutating the snapshot must not change the bridge's internal state.
-        assert bridge._state.mount.ra_hours == 5.0
 
 
 class TestEngineNotInitialized:

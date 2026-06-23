@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 from conftest import FakeContext, make_data_graph_writer
 
+from sensorkit.astro.common import RADecPointing
 from sensorkit.data.fits import ArrayInfo
-from sensorkit.sdasim.camera import SdasimCamera, SdasimCameraConfig
-from sensorkit.sdasim.engine import SensorKitState
+from sensorkit.models.devices import AxisRate, AxisRates, MountAxis
+from sensorkit.sdasim.camera import DeviceConnectionError, SdasimCamera, SdasimCameraConfig
 from sensorkit.std import (
     Binning,
     CameraCapture,
@@ -20,6 +22,24 @@ from sensorkit.std import (
     ConfigureCameraSensor,
     TemperatureUnit,
 )
+
+
+def fake_mount_sub(ra_hours: float, dec_degrees: float, ra_rate: float = 0.0, dec_rate: float = 0.0):
+    """A stand-in for a started mount ContextSubscription.
+
+    Exposes the same `.cache.get(KeywordType)` surface the camera reads, holding
+    real keyword models so type-keyed lookups behave like the real cache.
+    """
+    cache = {
+        RADecPointing: RADecPointing(
+            right_ascension_hours=ra_hours, declination_degrees=dec_degrees
+        ),
+        AxisRates: AxisRates(
+            right_ascension=AxisRate(axis=MountAxis.RIGHT_ASCENSION, velocity=ra_rate),
+            declination=AxisRate(axis=MountAxis.DECLINATION, velocity=dec_rate),
+        ),
+    }
+    return SimpleNamespace(cache=cache)
 
 
 def make_camera(**overrides) -> SdasimCamera:
@@ -38,17 +58,9 @@ def make_camera(**overrides) -> SdasimCamera:
         return_value=(np.ones((48, 64), dtype=np.uint16), {"num_targets": 3})
     )
 
-    state = SensorKitState()
-    state.mount.connected = True
-    state.mount.ra_hours = 6.0  # -> point_ra 90 deg
-    state.mount.dec_degrees = 20.0
-    state.mount.ra_rate_dps = 0.0
-    state.mount.dec_rate_dps = 0.0
-    bridge = MagicMock()
-    bridge.get_state = MagicMock(return_value=state)
-
     camera._engine = engine
-    camera._bridge = bridge
+    camera._mount_sub = fake_mount_sub(6.0, 20.0)  # -> point_ra 90 deg, sidereal
+    camera._rotator_sub = None
     camera._bin_x = camera._bin_y = 1
     camera._temperature = config.temperature
     camera._num_targets = None
@@ -109,13 +121,24 @@ class TestCapture:
     @pytest.mark.asyncio
     async def test_capture_falls_back_to_scene_center_without_mount(self, mock_sk_device):
         camera = make_camera()
-        camera._bridge.get_state.return_value = SensorKitState()  # mount not connected
+        camera._mount_sub = None  # no mount subscription -> scene center, sidereal
         camera._engine.default_point = (123.0, -45.0)
         await camera.camera_capture(CameraCapture(integration_time=0.0, context=FakeContext()))
         args = camera._engine.render_frame.call_args.args
         assert args[1] == pytest.approx(123.0)
         assert args[2] == pytest.approx(-45.0)
         assert args[3] == 0.0 and args[4] == 0.0  # sidereal fallback
+
+    @pytest.mark.asyncio
+    async def test_capture_uses_inertial_mount_rate(self, mock_sk_device):
+        # A rate track publishes nonzero ICRF axis rates; they pass straight through.
+        camera = make_camera()
+        camera._mount_sub = fake_mount_sub(6.0, 20.0, ra_rate=0.5, dec_rate=-0.25)
+        await camera.camera_capture(CameraCapture(integration_time=0.0, context=FakeContext()))
+        args = camera._engine.render_frame.call_args.args
+        assert args[3] == pytest.approx(0.5)
+        assert args[4] == pytest.approx(-0.25)
+
     @pytest.mark.asyncio
     async def test_capture_no_datagraph_is_safe(self, mock_sk_device):
         # data_graph returns None by default -> capture renders but discards.
@@ -165,12 +188,45 @@ class TestCapture:
 
     @pytest.mark.asyncio
     async def test_capture_requires_connected(self, mock_sk_device):
-        from sensorkit.sdasim.device import DeviceConnectionError
-
         camera = make_camera()
-        camera.device_connected = False  # no reconnect set
+        camera.device_connected = False
         with pytest.raises(DeviceConnectionError):
             await camera.camera_capture(CameraCapture(integration_time=1.0, context=FakeContext()))
+
+
+class TestLifecycle:
+    """Connection guard + status-loop scaffolding (flattened onto the camera)."""
+
+    def _camera(self) -> SdasimCamera:
+        return SdasimCamera(SdasimCameraConfig(sdasim_config="scene.yaml"))
+
+    @pytest.mark.asyncio
+    async def test_require_connected_returns_when_connected(self):
+        camera = self._camera()
+        camera.device_connected = True
+        await camera.require_connected()  # no raise
+
+    @pytest.mark.asyncio
+    async def test_require_connected_raises_when_not_connected(self):
+        camera = self._camera()
+        with pytest.raises(DeviceConnectionError):
+            await camera.require_connected()
+
+    @pytest.mark.asyncio
+    async def test_status_loop_start_and_stop(self):
+        camera = self._camera()
+        ran = asyncio.Event()
+
+        async def loop():
+            ran.set()
+            await asyncio.sleep(3600)
+
+        camera.start_status_loop(loop())
+        await asyncio.wait_for(ran.wait(), timeout=1.0)
+        assert camera._status_task is not None
+
+        await camera.stop_status_loop()
+        assert camera._status_task is None
 
 
 class TestArchetype:
@@ -178,3 +234,9 @@ class TestArchetype:
         # CameraCapture handler exists so the StandardCamera archetype is satisfied.
         assert hasattr(SdasimCamera, "camera_capture")
         assert hasattr(SdasimCamera, "camera_init")
+
+    def test_connect_disconnect_handlers_removed(self):
+        # Connect/Disconnect are optional on the StandardCamera archetype; the
+        # simulated camera publishes connected state at init/deinit instead.
+        assert not hasattr(SdasimCamera, "camera_connect")
+        assert not hasattr(SdasimCamera, "camera_disconnect")

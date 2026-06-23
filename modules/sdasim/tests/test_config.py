@@ -12,7 +12,6 @@ from sensorkit.sdasim.service import SdasimConfig
 class TestSdasimCameraConfig:
     def test_defaults(self):
         config = SdasimCameraConfig(sdasim_config="scene.yaml")
-        assert config.device_type == "camera"
         assert config.sdasim_config == "scene.yaml"
         assert config.mount_entity is None
         assert config.rotator_entity is None
@@ -21,7 +20,6 @@ class TestSdasimCameraConfig:
         assert config.binning == 1
         assert config.rebuild_threshold_deg == 0.25
         assert config.status_frequency == 1.0
-        assert config.timeout == 60.0
 
     def test_sdasim_config_required(self):
         with pytest.raises(ValidationError):
@@ -35,7 +33,6 @@ class TestSdasimCameraConfig:
 
     def test_state_defaults(self):
         state = SdasimCameraState()
-        assert state.device_type == "camera"
         assert state.bin_x == 1
         assert state.bin_y == 1
 
@@ -45,7 +42,6 @@ class TestSdasimConfig:
         raw = {
             "devices": {
                 "SimulatedCamera": {
-                    "device_type": "camera",
                     "sdasim_config": "scene.yaml",
                     "mount_entity": "SimulatedMount",
                     "binning": 2,
@@ -66,7 +62,6 @@ class TestSdasimConfig:
                 "id": "Sdasim",
                 "devices": {
                     "SimulatedCamera": {
-                        "device_type": "camera",
                         "sdasim_config": "scene.yaml",
                     }
                 },
