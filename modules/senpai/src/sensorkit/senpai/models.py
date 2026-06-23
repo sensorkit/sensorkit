@@ -8,9 +8,16 @@ import sensorkit.api as sk
 
 
 class SenpaiConfig(BaseModel):
-    entity: str
     senpai_config: str
     senpai_output_dir: str
+
+
+sk.declare_config_section(
+    "senpai",
+    SenpaiConfig,
+    entity_mapper=lambda raw: raw.pop("id", "senpai"),
+    service_path="sensorkit.senpai.service",
+)
 
 
 class Detection(BaseModel):

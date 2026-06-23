@@ -9,6 +9,6 @@ async def senpai_service(service: sk.Service):
 
     config = await service.context.kv_get_model(SenpaiConfig)
 
-    service.include(SenpaiAnalyzer(config), name=config.entity)
+    service.include(SenpaiAnalyzer(config))
 
     await service.run()
