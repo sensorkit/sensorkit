@@ -124,20 +124,28 @@ class AllClearPipeline:
             lon_deg=sky_result.site_lon,
         )
 
-        # Add timestamp, clear fraction, solve status
+        # Annotate the frame. Note plot_frame uses origin="lower", so y=0 is the
+        # bottom edge. Clear-sky/status go top-right; the collection timestamp is
+        # pinned to the bottom-right corner.
         ny, nx = data.shape
         margin = 0.005 * np.array(data.shape)
         fs = max(6, min(nx, ny) * 0.01) * 1.2
-        lines = [
-            sky_result.obs_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
+
+        info_lines = [
             f"Clear sky: {sky_result.clear_fraction:.0%}",
             f"Status: {sky_result.status}",
         ]
-        for i, line in enumerate(reversed(lines)):
+        for i, line in enumerate(info_lines):
             ax.text(
-                nx - margin[1], margin[0] + fs * 2.0 * i, line,
-                color="white", ha="right", va="bottom", size=fs, alpha=0.8,
+                nx - margin[1], (ny - 1) - margin[0] - fs * 2.0 * i, line,
+                color="white", ha="right", va="top", size=fs, alpha=0.8,
             )
+
+        ax.text(
+            nx - margin[1], margin[0],
+            sky_result.obs_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
+            color="white", ha="right", va="bottom", size=fs, alpha=0.8,
+        )
 
         # Add telescope pointing crosshairs
         if pointings and fig is not None:

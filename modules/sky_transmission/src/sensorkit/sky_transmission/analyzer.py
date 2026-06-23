@@ -4,13 +4,12 @@ import asyncio
 from fnmatch import fnmatch
 import pathlib
 import time
-import uuid
 
 from loguru import logger
 import numpy as np
 
 import sensorkit.api as sk
-from sensorkit.astro.common import SitePosition, AltAzPointing
+from sensorkit.astro.common import AltAzPointing
 from sensorkit.common.filewatch import FileEventKind, watch_dir
 from sensorkit.sky_transmission.models import (
     SkyTransmissionConfig,
@@ -20,6 +19,8 @@ from sensorkit.sky_transmission.models import (
 )
 from sensorkit.sky_transmission.pipeline import AllClearPipeline, MovieBuilder
 from sensorkit.sky_transmission.server import start_image_server
+from sensorkit.std.instrument import CameraCapture
+from sensorkit.std.sensor import Capabilities
 
 
 @sk.declare_entity
@@ -28,12 +29,11 @@ class SkyTransmissionAnalyzer:
 
     def __init__(self, config: SkyTransmissionConfig):
         self.config = config
-        self._site_position: SitePosition | None = None
 
         self._pipeline = AllClearPipeline(self.config.allclear)
         self._movie_builder = MovieBuilder()
 
-        self.state = FrameState(output_dir=self.config.output.directory)
+        self.state = FrameState()
 
         self._pointings: dict[str, tuple[float, float]] = {}
 
@@ -44,30 +44,23 @@ class SkyTransmissionAnalyzer:
     async def entity_init(self):
         self._entity = sk.entity()
         self._sk = self._entity.sensorkit()
-        logger.info(f"starting SkyTransmissionAnalyzer for {self.config.entity}")
+        logger.info("starting SkyTransmissionAnalyzer")
 
-        try:
-            self._site_position = await self._sk.controller(
-                self.config.controller
-            ).kv_get_model(SitePosition)
-        except Exception:
-            logger.warning(
-                f"could not get SitePosition from '{self.config.controller}'"
-            )
+        for mount in await self._discover_mounts():
+            self._tasks.append(asyncio.create_task(self._monitor_pointing(mount)))
 
-        for mount in self.config.mounts:
-            self._tasks.append(
-                asyncio.create_task(self._monitor_pointing(mount))
-            )
+        acquisition = self.config.acquisition
+        if acquisition.mode not in ("watch_directory", "alpaca"):
+            raise RuntimeError(f"unknown acquisition mode {acquisition.mode}")
 
-        if self.config.acquisition.mode == "watch_directory":
-            self._tasks.append(asyncio.create_task(self._watch_directory_loop()))
-        elif self.config.acquisition.mode == "alpaca":
-            self._tasks.append(asyncio.create_task(self._alpaca_loop()))
-        else:
-            raise RuntimeError(
-                f"unknown acquisition mode {self.config.acquisition.mode}"
-            )
+        # Both modes consume frames from watch_path via the directory watcher.
+        # In "alpaca" mode we additionally trigger the camera; its DataGraph
+        # producer writes frames into watch_path for the watcher to pick up.
+        self._tasks.append(asyncio.create_task(self._watch_directory_loop()))
+        if acquisition.mode == "alpaca":
+            if not acquisition.camera:
+                raise RuntimeError("alpaca acquisition mode requires acquisition.camera")
+            self._tasks.append(asyncio.create_task(self._capture_trigger_loop()))
 
         self._tasks.append(
             asyncio.create_task(
@@ -81,9 +74,26 @@ class SkyTransmissionAnalyzer:
 
     @sk.on_detach
     async def entity_deinit(self):
-        logger.info(f"stopping SkyTransmissionAnalyzer for {self.config.entity}")
+        logger.info("stopping SkyTransmissionAnalyzer")
         for task in self._tasks:
             task.cancel()
+
+    async def _discover_mounts(self) -> set[str]:
+        """Mount entities controlled by any configured controller, for overlay.
+
+        Each controller publishes its device map (Capabilities). We don't need
+        an explicit `mounts` list — we derive it from `controllers`.
+        """
+        mounts: set[str] = set()
+        for controller in self.config.controllers:
+            try:
+                caps = await self._sk.controller(controller).kv_get_model(Capabilities)
+            except Exception:
+                logger.warning(f"could not get devices for controller '{controller}'")
+                continue
+            if caps.devices.mount:
+                mounts.add(caps.devices.mount)
+        return mounts
 
     async def _monitor_pointing(self, mount: str):
         try:
@@ -169,71 +179,45 @@ class SkyTransmissionAnalyzer:
 
         return False
 
-    async def _alpaca_loop(self):
-        from alpyca.camera import Camera
+    async def _capture_trigger_loop(self):
+        """Periodically trigger the all-sky camera (alpaca acquisition mode).
 
+        The camera is a SensorKit alpaca-module entity whose DataGraph producer
+        (app_source -> array_to_fits -> write_file) writes each frame into
+        watch_path; _watch_directory_loop then consumes it. We only issue the
+        capture command here, on the configured interval.
+        """
         acquisition = self.config.acquisition
-        url = f"http://{acquisition.alpaca_host}:{acquisition.alpaca_port}"
+        camera = self._sk.device(acquisition.camera)
         backoff = 1.0
 
         while True:
+            t0 = time.monotonic()
             try:
-                camera = Camera(url, acquisition.alpaca_device_number)
-                camera.Connected = True
-                logger.debug(
-                    f"connected to Alpaca camera at {url} "
-                    f"(device {acquisition.alpaca_device_number})"
+                # context=None: a free-running all-sky capture has no tasking
+                # context, so the camera's producer graph must supply FITS
+                # metadata (DATE-OBS/EXPTIME) itself rather than reading tasking
+                # keys. Verify end-to-end against the real camera + data_flow.
+                await camera.command(
+                    CameraCapture(
+                        integration_time=acquisition.exposure_time_seconds,
+                        context=None,
+                    )
                 )
                 backoff = 1.0
-
-                while True:
-                    t0 = time.monotonic()
-                    image_path = await asyncio.to_thread(
-                        self._alpaca_capture,
-                        camera,
-                        acquisition.exposure_time_seconds,
-                    )
-                    await self._process_frame(image_path)
-
-                    elapsed = time.monotonic() - t0
-                    sleep_time = max(0.0, acquisition.interval_seconds - elapsed)
-                    if sleep_time > 0:
-                        await asyncio.sleep(sleep_time)
-
             except Exception:
                 logger.warning(
-                    f"Alpaca acquisition error; retrying in {backoff:.0f}s"
+                    f"all-sky capture trigger failed for '{acquisition.camera}'; "
+                    f"retrying in {backoff:.0f}s"
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60.0)
+                continue
 
-    def _alpaca_capture(self, camera, exposure_seconds: float) -> str:
-        from astropy.io import fits
-
-        camera.StartExposure(exposure_seconds, Light=True)
-        while not camera.ImageReady:
-            time.sleep(0.5)
-
-        data = np.column_stack(camera.ImageArray).astype(np.float64)
-        if data.ndim == 3:
-            data = np.mean(data, axis=2)
-
-        hdr = fits.Header()
-        hdr["DATE-OBS"] = camera.LastExposureStartTime
-        hdr["EXPTIME"] = camera.LastExposureDuration
-        if self._site_position is not None:
-            hdr["SITELAT"] = self._site_position.latitude_degrees
-            hdr["SITELONG"] = self._site_position.longitude_degrees
-        else:
-            hdr["SITELAT"] = self._pipeline.instrument_model.site_lat
-            hdr["SITELONG"] = self._pipeline.instrument_model.site_lon
-
-        output_dir = pathlib.Path(self.config.output.directory)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        filename = str(output_dir / f"{uuid.uuid4()}.fits")
-        fits.PrimaryHDU(data=data, header=hdr).writeto(filename)
-
-        return filename
+            elapsed = time.monotonic() - t0
+            sleep_time = max(0.0, acquisition.interval_seconds - elapsed)
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
 
     async def _process_frame(self, image_path: str):
         logger.debug(f"processing frame: {image_path}")
@@ -241,19 +225,11 @@ class SkyTransmissionAnalyzer:
 
         pointings = dict(self._pointings) if self._pointings else None
 
-        site_location = None
-        if self._site_position is not None:
-            site_location = (
-                self._site_position.latitude_degrees,
-                self._site_position.longitude_degrees,
-            )
-
         result = await asyncio.to_thread(
             self._pipeline.process_frame,
             image_path,
             pointings=pointings,
             output_dir=self.config.output.directory,
-            site_location=site_location,
         )
 
         elapsed = time.monotonic() - t0
@@ -264,10 +240,8 @@ class SkyTransmissionAnalyzer:
             f"status={result.status}"
         )
 
-        self.state.clear_fraction = result.clear_fraction
-        self.state.n_matched = result.n_matched
-        self.state.n_expected = result.n_expected
-        self.state.solve_status = result.status
+        # Metrics are published via the SkyTransmission keyword below; the
+        # server only needs the latest annotated JPEG for the stream.
         if result.annotated_jpeg:
             self.state.latest_jpeg = result.annotated_jpeg
             self.state.frame_id += 1

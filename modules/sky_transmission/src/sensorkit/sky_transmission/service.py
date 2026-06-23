@@ -9,6 +9,6 @@ async def sky_transmission_service(service: sk.Service):
 
     config = await service.context.kv_get_model(SkyTransmissionConfig)
 
-    service.include(SkyTransmissionAnalyzer(config), name=config.entity)
+    service.include(SkyTransmissionAnalyzer(config))
 
     await service.run()

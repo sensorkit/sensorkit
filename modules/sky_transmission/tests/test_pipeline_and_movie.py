@@ -145,7 +145,11 @@ class TestPipelineHeaderParsing:
 
         info = result.sky_result.query_radec(ra_deg=83.63, dec_deg=22.01)
         assert "status" in info
-        assert info["status"] in ("CLEAR", "CLOUDY", "NO_DATA", "BELOW_HORIZON")
+        # allclear >=0.3.0 adds OBSCURED (point under an obscuration mask) and
+        # STALE (result older than max_age_seconds) to the query status ladder.
+        assert info["status"] in (
+            "CLEAR", "CLOUDY", "NO_DATA", "BELOW_HORIZON", "OBSCURED", "STALE",
+        )
 
         d = result.sky_result.to_dict()
         assert isinstance(d, dict)

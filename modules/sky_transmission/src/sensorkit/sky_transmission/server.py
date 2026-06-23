@@ -1,44 +1,25 @@
 from __future__ import annotations
 
 import asyncio
-import pathlib
 
 from sensorkit.sky_transmission.models import FrameState
 
 
 async def start_image_server(host: str, port: int, state: FrameState):
-    """Start the FastAPI/uvicorn image server."""
+    """Serve the annotated all-sky frame as an MJPEG stream.
+
+    Only the MJPEG stream lives here — it's the one thing SensorKit's pub/sub +
+    webapi can't carry (binary video frames). SkyTransmission metrics are
+    published as a keyword (surfaced by the webapi), and raw/processed image
+    viewing is handled by the webapi, so there are no /status or /latest.* HTTP
+    endpoints. SensorView's Streams tab consumes this directly as an MJPEG
+    source (``multipart/x-mixed-replace``) at ``http://<host>:<port>/stream``.
+    """
     from fastapi import FastAPI
-    from fastapi.responses import JSONResponse, Response, StreamingResponse
-    from starlette.responses import FileResponse
+    from fastapi.responses import StreamingResponse
     from uvicorn import Config, Server
 
     app = FastAPI(title="SkyTransmission")
-
-    @app.get("/latest.jpg")
-    async def latest_jpg():
-        data = state.latest_jpeg
-        if not data:
-            return Response(status_code=204)
-        return Response(content=data, media_type="image/jpeg")
-
-    @app.get("/latest.mp4")
-    async def latest_mp4():
-        mp4_path = pathlib.Path(state.output_dir) / "latest.mp4"
-        if not await asyncio.to_thread(mp4_path.exists):
-            return Response(status_code=204)
-        return FileResponse(str(mp4_path), media_type="video/mp4")
-
-    @app.get("/status")
-    async def status():
-        return JSONResponse(
-            {
-                "clear_fraction": state.clear_fraction,
-                "n_matched": state.n_matched,
-                "n_expected": state.n_expected,
-                "status": state.solve_status,
-            }
-        )
 
     @app.get("/stream")
     async def mjpeg_stream():
