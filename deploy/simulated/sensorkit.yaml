@@ -2,16 +2,9 @@ version: 1
 
 sensorkit:
   imports:
-    - sensorkit.otto.service
-    - sensorkit.alpaca.service
-    - sensorkit.pwi4.service
-
-sensorkit:
-  imports:
     - sensorkit.otto.models
     - sensorkit.alpaca.service
     - sensorkit.pwi4.service
-    - sensorkit.burr.program
     - sensorkit.webapi
 
 automation:
@@ -136,9 +129,6 @@ otto:
     publish:
       upload: true
       sensor_name: "SK-TEST"
-    server:
-      host: "localhost"
-      port: 8070
 
 alpaca:
   - id: Alpaca
