@@ -59,6 +59,67 @@ conf.auto_max_age = None
 LEO_WAITING, LEO_SLEWING, LEO_SETTLING, LEO_TRACKING = 3, 4, 5, 6
 
 
+def radec_rates_to_altaz_rates(
+    ra_hr: float,
+    dec_deg: float,
+    ra_rate_deg_per_sec: float,
+    dec_rate_deg_per_sec: float,
+    location: EarthLocation,
+    time: Time,
+) -> tuple[float, float]:
+    """
+    Convert RA/Dec rates to Alt/Az rates.
+
+    Parameters
+    ----------
+    ra_hr : float
+        Right ascension in hours.
+    dec_deg : float
+        Declination in degrees.
+    ra_rate_deg_per_sec : float
+        RA rate in degrees per second.
+    dec_rate_deg_per_sec : float
+        Dec rate in degrees per second.
+    location : EarthLocation
+        Observer location.
+    time : Time
+        Observation time.
+
+    Returns
+    -------
+    tuple[float, float]
+        (alt_rate, az_rate) all in degrees per second.
+    """
+    # Convert RA from hours to degrees
+    ra_deg = ra_hr * 15.0
+
+    # Create the AltAz frame
+    altaz_frame = AltAz(obstime=time, location=location)
+
+    # Create coordinate at current RA/Dec position
+    coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame=ICRS())
+
+    # Small time step for numerical differentiation
+    dt = 0.01  # seconds
+
+    # Calculate new RA/Dec position after dt
+    new_ra = ra_deg + ra_rate_deg_per_sec * dt
+    new_dec = dec_deg + dec_rate_deg_per_sec * dt
+
+    # Create coordinate at new position
+    new_coord = SkyCoord(ra=new_ra * u.deg, dec=new_dec * u.deg, frame=ICRS())
+
+    # Transform both to AltAz (new position at an obstime advanced by dt)
+    altaz = coord.transform_to(altaz_frame)
+    new_altaz = new_coord.transform_to(AltAz(obstime=time + dt * u.s, location=location))
+
+    # Calculate alt/az rates in deg/sec
+    alt_rate_deg_per_sec = (new_altaz.alt.deg - altaz.alt.deg) / dt
+    az_rate_deg_per_sec = (new_altaz.az.deg - altaz.az.deg) / dt
+
+    return alt_rate_deg_per_sec, az_rate_deg_per_sec
+
+
 @sk.declare_device
 class TheSkyTelescope(TheSkyDevice):
     """TheSky Telescope implementation."""
@@ -510,6 +571,11 @@ class TheSkyTelescope(TheSkyDevice):
                 track_type = type(cmd.target).__name__
                 raise NotImplementedError(f"{track_type} tracking via TheSky is not supported")
 
+        try:
+            await self._publish_telescope_status()
+        except Exception as e:
+            logger.warning(f"Immediate telescope status publish failed: {e}")
+
     def write_tle(self, target: TLE) -> str:
         """Write TLE to a temp file and return the path for TheSky use."""
 
@@ -608,26 +674,32 @@ class TheSkyTelescope(TheSkyDevice):
         ra_rate /= 3600
         dec_rate /= 3600
 
+        icrf_ra = ra_rate if is_tracking else 0.0
+        icrf_dec = dec_rate if is_tracking else 0.0
+
         if self._location is not None:
-            alt_rate, az_rate = self.radec_rates_to_altaz_rates(
-                ra_hr=ra,
-                dec_deg=dec,
-                ra_rate_deg_per_sec=ra_rate,
-                dec_rate_deg_per_sec=dec_rate,
-                location=self._location,
-                time=Time.now(),
-            )
+            if is_tracking:
+                alt_rate, az_rate = radec_rates_to_altaz_rates(
+                    ra_hr=ra,
+                    dec_deg=dec,
+                    ra_rate_deg_per_sec=icrf_ra,
+                    dec_rate_deg_per_sec=icrf_dec,
+                    location=self._location,
+                    time=Time.now(),
+                )
+            else:
+                alt_rate = az_rate = 0.0
 
             await device.publish(
                 AxisRates(
                     azimuth=AxisRate(velocity=az_rate, axis=MountAxis.AZIMUTH),
                     altitude=AxisRate(velocity=alt_rate, axis=MountAxis.ALTITUDE),
                     right_ascension=AxisRate(
-                        velocity=ra_rate,
+                        velocity=icrf_ra,
                         axis=MountAxis.RIGHT_ASCENSION,
                     ),
                     declination=AxisRate(
-                        velocity=dec_rate,
+                        velocity=icrf_dec,
                         axis=MountAxis.DECLINATION,
                     ),
                 )
@@ -664,68 +736,6 @@ class TheSkyTelescope(TheSkyDevice):
                 continue
 
             await asyncio.sleep(self.config.status_frequency_fast)
-
-    def radec_rates_to_altaz_rates(
-        self,
-        ra_hr: float,
-        dec_deg: float,
-        ra_rate_deg_per_sec: float,
-        dec_rate_deg_per_sec: float,
-        location: EarthLocation,
-        time: Time,
-    ) -> tuple[float, float]:
-        """
-        Convert RA/Dec rates to Alt/Az rates.
-
-        Parameters
-        ----------
-        ra_hr : float
-            Right ascension in hours.
-        dec_deg : float
-            Declination in degrees.
-        ra_rate_deg_per_sec : float
-            RA rate in degrees per second.
-        dec_rate_deg_per_sec : float
-            Dec rate in degrees per second.
-        location : EarthLocation
-            Observer location.
-        time : Time
-            Observation time.
-
-        Returns
-        -------
-        tuple[float, float]
-            (alt_rate, az_rate) all in degrees per second.
-        """
-
-        # Convert RA from hours to degrees
-        ra_deg = ra_hr * 15.0
-
-        # Create the AltAz frame
-        altaz_frame = AltAz(obstime=time, location=location)
-
-        # Create coordinate at current RA/Dec position
-        coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame=ICRS())
-
-        # Small time step for numerical differentiation
-        dt = 0.01  # seconds
-
-        # Calculate new RA/Dec position after dt
-        new_ra = ra_deg + ra_rate_deg_per_sec * dt
-        new_dec = dec_deg + dec_rate_deg_per_sec * dt
-
-        # Create coordinate at new position
-        new_coord = SkyCoord(ra=new_ra * u.deg, dec=new_dec * u.deg, frame=ICRS())
-
-        # Transform both to AltAz
-        altaz = coord.transform_to(altaz_frame)
-        new_altaz = new_coord.transform_to(altaz_frame)
-
-        # Calculate alt/az rates in deg/sec
-        alt_rate_deg_per_sec = (new_altaz.alt.deg - altaz.alt.deg) / dt
-        az_rate_deg_per_sec = (new_altaz.az.deg - altaz.az.deg) / dt
-
-        return alt_rate_deg_per_sec, az_rate_deg_per_sec
 
 
 class TheSkyTelescopeConfig(TheSkyDeviceConfig[TheSkyTelescope]):

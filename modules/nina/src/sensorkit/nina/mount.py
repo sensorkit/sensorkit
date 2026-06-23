@@ -340,7 +340,7 @@ class NinaMount(NinaDevice):
         try:
             await self._publish_mount_status()
         except Exception as e:
-            logger.warning(f"Immediate mount status publish failed: ({e})")
+            logger.warning(f"Immediate mount status publish failed: {e}")
 
     async def _wait_for_mount(
         self,

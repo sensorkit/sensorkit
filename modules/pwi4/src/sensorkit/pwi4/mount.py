@@ -5,9 +5,9 @@ import contextlib
 from typing import Literal, override
 
 from astropy import units as u
-from astropy.coordinates import ICRS, EarthLocation, SkyCoord
-from astropy.coordinates import AltAz as AstropyAltAz
+from astropy.coordinates import ICRS, AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
+from astropy.utils import iers
 from loguru import logger
 from pydantic import BaseModel
 
@@ -59,6 +59,9 @@ from sensorkit.pwi4.device import (
     PWI4DeviceState,
 )
 from sensorkit.std import Connect, Connected, Disconnect
+
+iers.conf.auto_download = False
+iers.conf.auto_max_age = None
 
 
 # Max time to wait for a commanded slew to *begin* (is_slewing -> True) before
@@ -116,32 +119,56 @@ async def wrap_autocenter_loop(
 def altaz_rates_to_radec_rates(
     alt_deg: float,
     az_deg: float,
-    alt_rate: float,
-    az_rate: float,
+    alt_rate_deg_per_sec: float,
+    az_rate_deg_per_sec: float,
     location: EarthLocation,
     time: Time,
-) -> tuple[float, float, float, float]:
-    """Convert Alt/Az rates to RA/Dec rates via numerical differentiation.
+) -> tuple[float, float]:
+    """
+    Convert Alt/Az position and angular rates (deg/sec) into RA/Dec rates.
 
-    Returns (ra_deg, dec_deg, ra_rate_deg_per_sec, dec_rate_deg_per_sec).
+    Returns
+    -------
+    ra_rate_deg_per_sec : float
+        d(RA)/dt in deg/sec
+    dec_rate_deg_per_sec : float
+        d(Dec)/dt in deg/sec
     """
 
-    frame = AstropyAltAz(obstime=time, location=location)
-    coord = SkyCoord(alt=alt_deg * u.deg, az=az_deg * u.deg, frame=frame)
-    radec = coord.transform_to(ICRS())
+    # Numerical derivative for rates
+    dt = 0.01  # seconds
 
-    dt = 0.01
-    new_coord = SkyCoord(
-        alt=(alt_deg + alt_rate * dt) * u.deg,
-        az=(az_deg + az_rate * dt) * u.deg,
-        frame=frame,
+    # Current AltAz coordinate
+    coord_altaz = SkyCoord(
+        alt=alt_deg * u.deg,
+        az=az_deg * u.deg,
+        frame=AltAz(obstime=time, location=location)
     )
-    new_radec = new_coord.transform_to(ICRS())
 
-    ra_rate_dps = (new_radec.ra.deg - radec.ra.deg) / dt
-    dec_rate_dps = (new_radec.dec.deg - radec.dec.deg) / dt
+    # Convert to RA/Dec
+    coord_radec = coord_altaz.transform_to(ICRS())
+    ra_deg = coord_radec.ra.deg
+    dec_deg = coord_radec.dec.deg
 
-    return radec.ra.deg, radec.dec.deg, ra_rate_dps, dec_rate_dps
+    # New alt/az after dt
+    new_alt = alt_deg + alt_rate_deg_per_sec * dt
+    new_az = az_deg + az_rate_deg_per_sec * dt
+
+    # Create coordinate at new Alt/Az
+    new_coord_altaz = SkyCoord(
+        alt=new_alt * u.deg,
+        az=new_az * u.deg,
+        frame=AltAz(obstime=time + dt * u.s, location=location)
+    )
+
+    # Transform to RA/Dec
+    new_coord_radec = new_coord_altaz.transform_to(ICRS())
+
+    # Compute rates in deg/sec
+    ra_rate_deg_per_sec = (new_coord_radec.ra.deg - ra_deg) / dt
+    dec_rate_deg_per_sec = (new_coord_radec.dec.deg - dec_deg) / dt
+
+    return ra_rate_deg_per_sec, dec_rate_deg_per_sec
 
 
 @sk.declare_device
@@ -157,6 +184,7 @@ class PWI4Mount(PWI4Device):
         self._location: EarthLocation | None = None
         self._wrap_task: asyncio.Task | None = None
         self._fast_status_task: asyncio.Task | None = None
+        self._sidereal = False
 
     @sk.on_attach
     async def entity_init(self):
@@ -210,6 +238,16 @@ class PWI4Mount(PWI4Device):
             self.mount_enable_axis(EnableAxis(axis=MountAxis.AZIMUTH)),
             self.mount_enable_axis(EnableAxis(axis=MountAxis.ALTITUDE)),
         )
+
+        # Zero out any residual rates
+        await self.client.request(
+            "/mount/offset",
+            params={
+                "ra_set_rate_arcsec_per_sec": 0,
+                "dec_set_rate_arcsec_per_sec": 0,
+            },
+        )
+        await self.client.request("/mount/tracking_off")
 
         # Home, as needed
         await self.mount_home(Home())
@@ -308,6 +346,7 @@ class PWI4Mount(PWI4Device):
         await self.client.request("/mount/stop")
         await self._wait_for_mount(await_onset=False)
         logger.debug("stopped mount")
+        self._sidereal = False
 
         self._stop_fast_status()
 
@@ -380,6 +419,8 @@ class PWI4Mount(PWI4Device):
             observer=self._geodetic,
         )
 
+        self._sidereal = False
+
         match target:
             case ICRSTarget():
                 logger.debug("executing RADec follow")
@@ -393,6 +434,7 @@ class PWI4Mount(PWI4Device):
                 )
 
                 await self._wait_for_mount(tracking=True)
+                self._sidereal = True
                 self._start_fast_status()
 
                 logger.debug("following RADec target")
@@ -488,12 +530,19 @@ class PWI4Mount(PWI4Device):
                         logger.debug("enabling sidereal tracking")
                         await self.client.request("/mount/tracking_on")
                         await self._wait_for_mount(tracking=True, await_onset=False)
+                        self._sidereal = True
                         self._start_fast_status()
                         logger.debug("enabled sidereal tracking")
 
             case _:
                 track_type = type(cmd.target).__name__
                 raise NotImplementedError(f"{track_type} tracking via PWI4 is not supported")
+
+        try:
+            st = await self.client.status()
+            await self._publish_mount_status(st)
+        except Exception as e:
+            logger.warning(f"Immediate mount status publish failed: {e}")
 
     @sk.command_handler
     async def mount_offset(self, cmd: ApplyOffset):
@@ -695,9 +744,11 @@ class PWI4Mount(PWI4Device):
         alt_rate = self.client.get_float(st, "mount.axis1.measured_velocity_degs_per_sec")
 
         if self._location is not None:
-            _, _, ra_rate, dec_rate = altaz_rates_to_radec_rates(
+            ra_rate, dec_rate = altaz_rates_to_radec_rates(
                 alt_degs, az_degs, alt_rate, az_rate, self._location, Time.now()
             )
+            if self._sidereal:
+                ra_rate = dec_rate = 0.0
 
             await device.publish(
                 AxisRates(

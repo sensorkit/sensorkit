@@ -11,6 +11,7 @@ import numpy as np
 import ourskyai_node_platform_api as osapi
 from astropy.coordinates import ICRS, AltAz, CartesianRepresentation, EarthLocation, SkyCoord
 from astropy.time import Time
+from astropy.utils import iers
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -46,6 +47,9 @@ from sensorkit.node_platform.device import (
 )
 from sensorkit.std import Connect, Connected, Enable, Disable
 
+iers.conf.auto_download = False
+iers.conf.auto_max_age = None
+
 
 # Max time to wait for a commanded slew to *begin* (is_slewing -> True) before
 # waiting for it to settle. Also the worst-case stall on a positional no-op
@@ -58,6 +62,61 @@ class OTStatus(BaseModel):
     """Optical tube status (fans, heaters, temperature sensors, cover, M3)."""
 
     model_config = {"extra": "allow"}
+
+
+def altaz_rates_to_radec_rates(
+    alt_deg: float,
+    az_deg: float,
+    alt_rate_deg_per_sec: float,
+    az_rate_deg_per_sec: float,
+    location: EarthLocation,
+    time: Time,
+) -> tuple[float, float]:
+    """
+    Convert Alt/Az position and angular rates (deg/sec) into RA/Dec rates.
+
+    Returns
+    -------
+    ra_rate_deg_per_sec : float
+        d(RA)/dt in deg/sec
+    dec_rate_deg_per_sec : float
+        d(Dec)/dt in deg/sec
+    """
+
+    # Numerical derivative for rates
+    dt = 0.01  # seconds
+
+    # Current AltAz coordinate
+    coord_altaz = SkyCoord(
+        alt=alt_deg * u.deg,
+        az=az_deg * u.deg,
+        frame=AltAz(obstime=time, location=location)
+    )
+
+    # Convert to RA/Dec
+    coord_radec = coord_altaz.transform_to(ICRS())
+    ra_deg = coord_radec.ra.deg
+    dec_deg = coord_radec.dec.deg
+
+    # New alt/az after dt
+    new_alt = alt_deg + alt_rate_deg_per_sec * dt
+    new_az = az_deg + az_rate_deg_per_sec * dt
+
+    # Create coordinate at new Alt/Az
+    new_coord_altaz = SkyCoord(
+        alt=new_alt * u.deg,
+        az=new_az * u.deg,
+        frame=AltAz(obstime=time + dt * u.s, location=location)
+    )
+
+    # Transform to RA/Dec
+    new_coord_radec = new_coord_altaz.transform_to(ICRS())
+
+    # Compute rates in deg/sec
+    ra_rate_deg_per_sec = (new_coord_radec.ra.deg - ra_deg) / dt
+    dec_rate_deg_per_sec = (new_coord_radec.dec.deg - dec_deg) / dt
+
+    return ra_rate_deg_per_sec, dec_rate_deg_per_sec
 
 
 @sk.declare_device
@@ -82,6 +141,7 @@ class NodePlatformMount(NodePlatformDevice):
         self.mount_slewing: bool | None = None
         self.mount_tracking: bool | None = None
         self._fast_status_task: asyncio.Task | None = None
+        self._sidereal = False
 
         # Cache for site info (location + time)
         self._site_info: dict[str, object] = {}
@@ -144,6 +204,12 @@ class NodePlatformMount(NodePlatformDevice):
         # Enable the motors
         await self.mount_enable(Enable())
 
+        # Zero out any residual rates
+        try:
+            await self.api.call("v1_mount_stop_target_tracking")
+        except Exception as e:
+            logger.debug(f"no active target tracking to stop: {e}")
+
         # Home, as needed
         if not self.state.has_been_homed:
             await self.mount_home(Home())
@@ -194,6 +260,7 @@ class NodePlatformMount(NodePlatformDevice):
         await self.api.call("v1_halt_mount")
         await self._wait_for_mount(await_onset=False)
         logger.debug("stopped mount")
+        self._sidereal = False
 
         self._stop_fast_status()
 
@@ -243,6 +310,8 @@ class NodePlatformMount(NodePlatformDevice):
             observer=self._geodetic,
         )
 
+        self._sidereal = False
+
         match target:
             case ICRSTarget():
                 logger.debug("executing RADec follow")
@@ -254,6 +323,7 @@ class NodePlatformMount(NodePlatformDevice):
                 await self.api.call("v1_go_to_mount_coordinates", req)
 
                 await self._wait_for_mount(tracking=True)
+                self._sidereal = True
                 self._start_fast_status()
 
                 logger.debug("following RA/Dec target")
@@ -356,6 +426,7 @@ class NodePlatformMount(NodePlatformDevice):
                         logger.debug("enabling sidereal tracking")
                         await self.api.call("v1_enable_mount_tracking")
                         await self._wait_for_mount(tracking=True, await_onset=False)
+                        self._sidereal = True
                         self._start_fast_status()
                         logger.debug("enabled sidereal tracking")
 
@@ -367,6 +438,12 @@ class NodePlatformMount(NodePlatformDevice):
                 raise NotImplementedError(
                     f"{track_type} tracking via Node Platform is not supported"
                 )
+
+        try:
+            status = await self.api.call("v2_get_mount_status")
+            await self._publish_mount_status(status)
+        except Exception as e:
+            logger.warning(f"Immediate mount status publish failed: {e}")
 
     async def _wait_for_mount(
         self,
@@ -449,7 +526,7 @@ class NodePlatformMount(NodePlatformDevice):
         if self._location is not None:
             rate_a = status.motor_a.measured_velocity_degrees_per_second
             rate_b = status.motor_b.measured_velocity_degrees_per_second
-            ra_rate, dec_rate = self.altaz_rates_to_radec_rates(
+            ra_rate, dec_rate = altaz_rates_to_radec_rates(
                 status.altitude_degrees,
                 status.azimuth_degrees,
                 rate_b,
@@ -457,6 +534,8 @@ class NodePlatformMount(NodePlatformDevice):
                 location=self._location,
                 time=Time.now(),
             )
+            if self._sidereal:
+                ra_rate = dec_rate = 0.0
             await device.publish(
                 AxisRates(
                     azimuth=AxisRate(velocity=rate_a, axis=MountAxis.AZIMUTH),
@@ -728,54 +807,6 @@ class NodePlatformMount(NodePlatformDevice):
                 raise NotImplementedError(
                     f"ephemeris follow for {type(points[0]).__name__} points is not supported"
                 )
-
-    def altaz_rates_to_radec_rates(
-        self,
-        alt_deg: float,
-        az_deg: float,
-        alt_rate_deg_per_sec: float,
-        az_rate_deg_per_sec: float,
-        location: EarthLocation,
-        time: Time,
-    ) -> tuple[float, float]:
-        """
-        Convert Alt/Az position and angular rates (deg/sec) into RA/Dec rates.
-
-        Returns
-        -------
-        ra_rate_deg_per_sec : float
-            d(RA)/dt in deg/sec
-        dec_rate_deg_per_sec : float
-            d(Dec)/dt in deg/sec
-        """
-
-        # Current AltAz coordinate
-        altaz_frame = AltAz(obstime=time, location=location)
-        coord_altaz = SkyCoord(alt=alt_deg * u.deg, az=az_deg * u.deg, frame=altaz_frame)
-
-        # Convert to RA/Dec
-        coord_radec = coord_altaz.transform_to(ICRS())
-        ra_deg = coord_radec.ra.deg
-        dec_deg = coord_radec.dec.deg
-
-        # === Numerical derivative for rates ===
-        dt = 0.01  # seconds
-
-        # New alt/az after dt
-        new_alt = alt_deg + alt_rate_deg_per_sec * dt
-        new_az = az_deg + az_rate_deg_per_sec * dt
-
-        # Create coordinate at new Alt/Az
-        new_coord_altaz = SkyCoord(alt=new_alt * u.deg, az=new_az * u.deg, frame=altaz_frame)
-
-        # Transform to RA/Dec
-        new_coord_radec = new_coord_altaz.transform_to(ICRS())
-
-        # Compute rates in deg/sec
-        ra_rate_deg_per_sec = (new_coord_radec.ra.deg - ra_deg) / dt
-        dec_rate_deg_per_sec = (new_coord_radec.dec.deg - dec_deg) / dt
-
-        return ra_rate_deg_per_sec, dec_rate_deg_per_sec
 
     async def init_ot(self):
         """Set heater power levels and turn on fans."""

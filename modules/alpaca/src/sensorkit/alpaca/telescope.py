@@ -81,6 +81,78 @@ class AlpacaTelescopeStatus(BaseModel):
 _ALIGNMENT_MODES = {0: "AltAz", 1: "Polar", 2: "GermanPolar"}
 _DRIVE_RATES = {0: "Sidereal", 1: "Lunar", 2: "Solar", 3: "King"}
 _PIER_SIDES = {-1: "Unknown", 0: "East", 1: "West"}
+_EQUATORIAL_SYSTEMS = {0: "Other", 1: "Topocentric", 2: "J2000", 3: "J2050", 4: "B1950"}
+
+# Max time to wait for a commanded slew to *start* (Slewing -> True) before
+# treating the command as a positional no-op. See _wait_for_telescope.
+_TELESCOPE_ONSET_TIMEOUT = 2.0
+
+# Closed-loop TLE re-acquisition: after the initial slew the target has moved on
+# (the mount settled behind it), so re-resolve and correct until the residual is
+# small. One pass suffices for slow/GEO targets; faster ones converge in a few.
+_TLE_REACQUIRE_MAX_PASSES = 3
+_TLE_REACQUIRE_TOL_ARCSEC = 5.0
+
+
+def radec_rates_to_altaz_rates(
+    ra_hr: float,
+    dec_deg: float,
+    ra_rate_deg_per_sec: float,
+    dec_rate_deg_per_sec: float,
+    location: EarthLocation,
+    time: Time,
+) -> tuple[float, float]:
+    """
+    Convert RA/Dec rates to Alt/Az rates.
+
+    Parameters
+    ----------
+    ra_hr : float
+        Right ascension in hours.
+    dec_deg : float
+        Declination in degrees.
+    ra_rate_deg_per_sec : float
+        RA rate in degrees per second.
+    dec_rate_deg_per_sec : float
+        Dec rate in degrees per second.
+    location : EarthLocation
+        Observer location.
+    time : Time
+        Observation time.
+
+    Returns
+    -------
+    tuple[float, float]
+        (alt_rate, az_rate) all in degrees per second.
+    """
+    # Convert RA from hours to degrees
+    ra_deg = ra_hr * 15.0
+
+    # Create the AltAz frame
+    altaz_frame = AltAz(obstime=time, location=location)
+
+    # Create coordinate at current RA/Dec position
+    coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame=ICRS())
+
+    # Small time step for numerical differentiation
+    dt = 0.01  # seconds
+
+    # Calculate new RA/Dec position after dt
+    new_ra = ra_deg + ra_rate_deg_per_sec * dt
+    new_dec = dec_deg + dec_rate_deg_per_sec * dt
+
+    # Create coordinate at new position
+    new_coord = SkyCoord(ra=new_ra * u.deg, dec=new_dec * u.deg, frame=ICRS())
+
+    # Transform both to AltAz (new position at an obstime advanced by dt)
+    altaz = coord.transform_to(altaz_frame)
+    new_altaz = new_coord.transform_to(AltAz(obstime=time + dt * u.s, location=location))
+
+    # Calculate alt/az rates in deg/sec
+    alt_rate_deg_per_sec = (new_altaz.alt.deg - altaz.alt.deg) / dt
+    az_rate_deg_per_sec = (new_altaz.az.deg - altaz.az.deg) / dt
+
+    return alt_rate_deg_per_sec, az_rate_deg_per_sec
 
 
 @sk.declare_device
@@ -107,6 +179,16 @@ class AlpacaTelescope(AlpacaDevice):
         self._fast_status_task: asyncio.Task | None = None
         self._geodetic: Geodetic | None = None
         self._location: EarthLocation | None = None
+
+        # Initialize capabilities
+        self._can_slew = self._can_slew_async = False
+        self._can_slew_altaz = self._can_slew_altaz_async = False
+        self._can_park = self._can_unpark = self._can_find_home = False
+        self._can_set_tracking = self._can_set_park = self._can_pulse_guide = False
+        self._can_set_right_ascension_rate = self._can_set_declination_rate = False
+        self._can_set_guide_rates = self._can_set_pier_side = False
+        self._can_sync = self._can_sync_altaz = False
+        self._can_move_axis = [False, False, False]
 
     @sk.on_detach
     async def entity_deinit(self):
@@ -141,13 +223,31 @@ class AlpacaTelescope(AlpacaDevice):
         self._can_set_pier_side = await self.get(t, "CanSetPierSide", False)
         self._can_sync = await self.get(t, "CanSync", False)
         self._can_sync_altaz = await self.get(t, "CanSyncAltAz", False)
-        self._can_move_axis = [await self._check_can_move_axis(i) for i in range(3)]
+        self._can_move_axis = []
+        for axis in range(3):
+            try:
+                can = await asyncio.to_thread(self.telescope.CanMoveAxis, axis)
+            except Exception:
+                can = False
+            self._can_move_axis.append(can)
+
+        # Normalize the mount to a clean state on connect
+        if self._can_set_right_ascension_rate:
+            await self.put(t, "RightAscensionRate", 0.0)
+        if self._can_set_declination_rate:
+            await self.put(t, "DeclinationRate", 0.0)
+        if self._can_set_tracking:
+            await self.put(t, "Tracking", False)
+            self._tracking = False
 
         # Read static telescope properties
         self._aperture_diameter = await self.get(t, "ApertureDiameter", None)
         self._aperture_area = await self.get(t, "ApertureArea", None)
         self._focal_length = await self.get(t, "FocalLength", None)
-        self._equatorial_system = self._eq_system_str(await self.get(t, "EquatorialSystem", None))
+        eq_sys = await self.get(t, "EquatorialSystem", None)
+        self._equatorial_system = (
+            None if eq_sys is None else _EQUATORIAL_SYSTEMS.get(eq_sys, f"Unknown({eq_sys})")
+        )
         self._alignment_mode = _ALIGNMENT_MODES.get(await self.get(t, "AlignmentMode", -1))
         self._does_refraction = await self.get(t, "DoesRefraction", None)
 
@@ -186,19 +286,6 @@ class AlpacaTelescope(AlpacaDevice):
         # Home, as needed
         if not self.state.has_been_homed:
             await self.telescope_home(Home())
-
-    async def _check_can_move_axis(self, axis: int) -> bool:
-        try:
-            return await asyncio.to_thread(self.telescope.CanMoveAxis, axis)
-        except Exception:
-            return False
-
-    @staticmethod
-    def _eq_system_str(val) -> str | None:
-        if val is None:
-            return None
-        mapping = {0: "Other", 1: "Topocentric", 2: "J2000", 3: "J2050", 4: "B1950"}
-        return mapping.get(val, f"Unknown({val})")
 
     @sk.command_handler
     async def telescope_deinit(self, cmd: Deinit):
@@ -240,7 +327,7 @@ class AlpacaTelescope(AlpacaDevice):
             await self.put(self.telescope, "Tracking", False)
             self._tracking = False
 
-        await self._wait_for_telescope()
+        await self._wait_for_telescope(await_onset=False)
 
         self._stop_fast_status()
         logger.debug("stopped telescope")
@@ -334,13 +421,10 @@ class AlpacaTelescope(AlpacaDevice):
         dec_deg = dec0.degrees
 
         # RA offset rate: RA seconds per sidereal second
-        # apparent().radec() includes aberration, matching ICRS star catalogs
-        # and WCS solutions. (ra1 - ra0)/dt is motion relative to the celestial
-        # sphere (i.e., already the offset from sidereal).
-        # Convert from per-UTC-second to per-sidereal-second.
+        # Convert from per-UTC-second to per-sidereal-second
         ra_rate_ascom = (ra1.hours - ra0.hours) * 3600.0 / dt * _UTC_TO_SIDEREAL
 
-        # Dec offset rate: arcseconds per second (ASCOM convention)
+        # Dec offset rate: arcseconds per second
         dec_rate_ascom = (dec1.degrees - dec0.degrees) / dt * 3600.0
 
         return ra_hours, dec_deg, ra_rate_ascom, dec_rate_ascom
@@ -374,6 +458,11 @@ class AlpacaTelescope(AlpacaDevice):
                 ra_hours = target.coords.ra / 15.0
                 dec_deg = target.coords.dec
 
+                if self._can_set_right_ascension_rate:
+                    await self.put(self.telescope, "RightAscensionRate", 0.0)
+                if self._can_set_declination_rate:
+                    await self.put(self.telescope, "DeclinationRate", 0.0)
+
                 # Tracking must be enabled before equatorial slews
                 if self._can_set_tracking:
                     await self.put(self.telescope, "Tracking", True)
@@ -383,7 +472,6 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
                 elif self._can_slew:
                     await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
-                await asyncio.sleep(1)
 
                 await self._wait_for_telescope(tracking=True)
                 self._start_fast_status()
@@ -400,7 +488,6 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.call(self.telescope, "SlewToAltAzAsync", az_deg, alt_deg)
                 elif self._can_slew_altaz:
                     await asyncio.to_thread(self.telescope.SlewToAltAz, az_deg, alt_deg)
-                await asyncio.sleep(1)
 
                 await self._wait_for_telescope()
                 self._start_fast_status()
@@ -423,9 +510,31 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
                 elif self._can_slew:
                     await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
-                await asyncio.sleep(1)
-
                 await self._wait_for_telescope(tracking=True)
+
+                # Close the loop: the target moved during the slew, so the mount
+                # settled behind it. Re-resolve at the now-current time and slew to
+                # correct until the residual is small (one pass suffices for a
+                # slow/GEO target; faster ones converge in a few). The offset rate
+                # then only has to hold position, not also recover the slew lag.
+                for _ in range(_TLE_REACQUIRE_MAX_PASSES):
+                    ra_hours, dec_deg, ra_rate, dec_rate = await asyncio.to_thread(
+                        self._resolve_tle_position_and_rates, target
+                    )
+                    cur_ra = await self.get(self.telescope, "RightAscension", ra_hours)
+                    cur_dec = await self.get(self.telescope, "Declination", dec_deg)
+                    sep = SkyCoord(ra=cur_ra * 15.0 * u.deg, dec=cur_dec * u.deg).separation(
+                        SkyCoord(ra=ra_hours * 15.0 * u.deg, dec=dec_deg * u.deg)
+                    )
+                    if sep.arcsec <= _TLE_REACQUIRE_TOL_ARCSEC:
+                        break
+                    if self._can_slew_async:
+                        await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
+                    elif self._can_slew:
+                        await asyncio.to_thread(
+                            self.telescope.SlewToCoordinates, ra_hours, dec_deg
+                        )
+                    await self._wait_for_telescope(tracking=True)
 
                 if self._can_set_right_ascension_rate:
                     await self.put(self.telescope, "RightAscensionRate", ra_rate)
@@ -450,7 +559,6 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
                 elif self._can_slew:
                     await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
-                await asyncio.sleep(1)
 
                 await self._wait_for_telescope(tracking=True)
 
@@ -494,16 +602,47 @@ class AlpacaTelescope(AlpacaDevice):
                 track_type = type(cmd.target).__name__
                 raise NotImplementedError(f"{track_type} tracking via Alpaca is not supported")
 
+        try:
+            await self._publish_telescope_status()
+        except Exception as e:
+            logger.warning(f"Immediate telescope status publish failed: {e}")
+
     async def _wait_for_telescope(
         self,
         *,
         slewing: bool = False,
         tracking: bool = False,
+        await_onset: bool = True,
     ):
         """Poll the telescope until Slewing and Tracking both match.
 
-        Bounded by config.timeout; polls every 0.2 s.
+        When ``await_onset`` (the default, for commands that slew), first wait
+        briefly for the mount to *start* slewing. Without this, a command whose
+        target flags already equal the current flags (e.g. re-following while
+        already tracking) would match the stale pre-command state and return
+        before motion begins. If no slew is observed within
+        ``_TELESCOPE_ONSET_TIMEOUT``, the command was a positional no-op and we
+        fall through to the settle check (this replaces the old manual ``sleep(1)``
+        after each slew).
+
+        Non-slewing commands (stop, enable/disable tracking) must pass
+        ``await_onset=False``: they never raise Slewing, so onset would otherwise
+        burn the full onset timeout on every call.
+
+        The settle wait is bounded by config.timeout; both phases poll every 0.1 s.
         """
+
+        if await_onset:
+            try:
+                async with asyncio.timeout(_TELESCOPE_ONSET_TIMEOUT):
+                    while True:
+                        if await self.get(self.telescope, "Slewing", False):
+                            break
+                        await asyncio.sleep(0.1)
+            except TimeoutError:
+                # No slew observed -> positional no-op. Fall through to the settle
+                # check, which returns at once if already on target.
+                pass
 
         async with asyncio.timeout(self.config.timeout):
             while True:
@@ -529,8 +668,6 @@ class AlpacaTelescope(AlpacaDevice):
         return self._fast_status_task is not None and not self._fast_status_task.done()
 
     async def _publish_telescope_status(self):
-        _SIDEREAL_RATE_DEG_S = 15.04107 / 3600.0
-
         t = self.telescope
         ra_hours = await self.get(t, "RightAscension", 0.0)
         dec_deg = await self.get(t, "Declination", 0.0)
@@ -565,30 +702,32 @@ class AlpacaTelescope(AlpacaDevice):
         ra_offset_deg_s = alpaca_ra_rate * 15.0 / 3600.0
         dec_offset_deg_s = alpaca_dec_rate / 3600.0
 
-        # Total rates in deg/s (inertial frame)
         tracking = self._tracking or False
-        total_ra_deg_s = (_SIDEREAL_RATE_DEG_S + ra_offset_deg_s) if tracking else 0.0
-        total_dec_deg_s = dec_offset_deg_s if tracking else 0.0
+        icrf_ra_deg_s = ra_offset_deg_s if tracking else 0.0
+        icrf_dec_deg_s = dec_offset_deg_s if tracking else 0.0
 
         # Compute and publish alt/az rates if location is available
         if self._location is not None:
-            alt_rate_deg_s, az_rate_deg_s = self.radec_rates_to_altaz_rates(
-                ra_hr=ra_hours,
-                dec_deg=dec_deg,
-                ra_rate_deg_per_sec=total_ra_deg_s,
-                dec_rate_deg_per_sec=total_dec_deg_s,
-                location=self._location,
-                time=Time.now(),
-            )
+            if tracking:
+                alt_rate_deg_s, az_rate_deg_s = radec_rates_to_altaz_rates(
+                    ra_hr=ra_hours,
+                    dec_deg=dec_deg,
+                    ra_rate_deg_per_sec=icrf_ra_deg_s,
+                    dec_rate_deg_per_sec=icrf_dec_deg_s,
+                    location=self._location,
+                    time=Time.now(),
+                )
+            else:
+                alt_rate_deg_s = az_rate_deg_s = 0.0
 
             await device.publish(
                 AxisRates(
                     azimuth=AxisRate(axis=MountAxis.AZIMUTH, velocity=az_rate_deg_s),
                     altitude=AxisRate(axis=MountAxis.ALTITUDE, velocity=alt_rate_deg_s),
                     right_ascension=AxisRate(
-                        axis=MountAxis.RIGHT_ASCENSION, velocity=total_ra_deg_s
+                        axis=MountAxis.RIGHT_ASCENSION, velocity=icrf_ra_deg_s
                     ),
-                    declination=AxisRate(axis=MountAxis.DECLINATION, velocity=total_dec_deg_s),
+                    declination=AxisRate(axis=MountAxis.DECLINATION, velocity=icrf_dec_deg_s),
                 )
             )
 
@@ -677,67 +816,6 @@ class AlpacaTelescope(AlpacaDevice):
                 continue
 
             await asyncio.sleep(self.config.status_frequency_fast)
-
-    def radec_rates_to_altaz_rates(
-        self,
-        ra_hr: float,
-        dec_deg: float,
-        ra_rate_deg_per_sec: float,
-        dec_rate_deg_per_sec: float,
-        location: EarthLocation,
-        time: Time,
-    ) -> tuple[float, float]:
-        """
-        Convert RA/Dec rates to Alt/Az rates.
-
-        Parameters
-        ----------
-        ra_hr : float
-            Right ascension in hours.
-        dec_deg : float
-            Declination in degrees.
-        ra_rate_deg_per_sec : float
-            RA rate in degrees per second.
-        dec_rate_deg_per_sec : float
-            Dec rate in degrees per second.
-        location : EarthLocation
-            Observer location.
-        time : Time
-            Observation time.
-
-        Returns
-        -------
-        tuple[float, float]
-            (alt_rate, az_rate) all in degrees per second.
-        """
-        # Convert RA from hours to degrees
-        ra_deg = ra_hr * 15.0
-
-        # Create the AltAz frame
-        altaz_frame = AltAz(obstime=time, location=location)
-
-        # Create coordinate at current RA/Dec position
-        coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame=ICRS())
-
-        # Small time step for numerical differentiation
-        dt = 0.01  # seconds
-
-        # Calculate new RA/Dec position after dt
-        new_ra = ra_deg + ra_rate_deg_per_sec * dt
-        new_dec = dec_deg + dec_rate_deg_per_sec * dt
-
-        # Create coordinate at new position
-        new_coord = SkyCoord(ra=new_ra * u.deg, dec=new_dec * u.deg, frame=ICRS())
-
-        # Transform both to AltAz
-        altaz = coord.transform_to(altaz_frame)
-        new_altaz = new_coord.transform_to(altaz_frame)
-
-        # Calculate alt/az rates in deg/sec
-        alt_rate_deg_per_sec = (new_altaz.alt.deg - altaz.alt.deg) / dt
-        az_rate_deg_per_sec = (new_altaz.az.deg - altaz.az.deg) / dt
-
-        return alt_rate_deg_per_sec, az_rate_deg_per_sec
 
 
 class AlpacaTelescopeConfig(AlpacaDeviceConfig[AlpacaTelescope]):
