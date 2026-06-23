@@ -706,6 +706,12 @@ class UDLProgram:
                 request.num_frames or 1,
             ),
         )
+        logger.debug(
+            f"Task ({request.id}) integration time: "
+            f"request.integration_time={request.integration_time!r} ms, "
+            f"task.camera_params.integration_time_seconds="
+            f"{task.camera_params.integration_time_seconds!r} s"
+        )
 
         logger.info(f"Task ({request.id}): starting execution with end_time={task.end_time}")
 

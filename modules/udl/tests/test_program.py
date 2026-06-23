@@ -154,6 +154,21 @@ class TestCollectedResponseActualTimes:
 
 class TestTrackTypeTranslation:
     @pytest.mark.asyncio
+    async def test_integration_time_is_converted_from_milliseconds(self, program):
+        request_id = str(uuid.uuid4())
+        request = MockCollectRequest.with_tle(
+            id=request_id,
+            integration_time=1500,
+        )
+        await program.queue.push_task(request)
+
+        gen = program.generate()
+        task = await gen.asend(None)
+
+        assert task is not None
+        assert task.camera_params.integration_time_seconds == 1.5
+
+    @pytest.mark.asyncio
     async def test_rate_track_sidereal_requests_end_with_sidereal_frame(self, program):
         request_id = str(uuid.uuid4())
         request = MockCollectRequest.with_tle(
