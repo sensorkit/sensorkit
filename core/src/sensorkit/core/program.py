@@ -273,13 +273,25 @@ class ProgramDiscovery:
 
     async def _discover_programs(self, initial_update: asyncio.Event):
         tasks: dict[str, asyncio.Task] = {}
+        kv = self.client.backend.key_value()
+
+        # Programs present in the initial snapshot. We're "ready" once each of them
+        # has been discovered and reported its initial enable state — or immediately
+        # if there are none.
+        pending = {
+            str(entry.key.entity())
+            for entry in await kv.get_all(deep=True)
+            if entry.key.prop == "ProgramState"
+        }
+        if not pending:
+            initial_update.set()
 
         # Monitor all registered Programs.
         # FIXME: Need an alternate way to do this without firehose. Cannot assume the backend
         #        allows prefix wildcards to capture '*.ProgramState' (and NATS, in fact, does not).
         #        This most likely means we need to define a dedicated KV prefix for system info,
         #        where we can define keys to explicitly indicate existence, like EntityLease.
-        monitor = await self.client.backend.key_value().monitor_all(deep=True)
+        monitor = await kv.monitor_all(deep=True)
 
         async for entry in monitor:
             if entry.key.prop != "ProgramState":
@@ -303,7 +315,11 @@ class ProgramDiscovery:
 
             # Wait for the initial enablement status of each discovered program.
             await asyncio.gather(*(event.wait() for event in events), return_exceptions=True)
-            initial_update.set()
+
+            # Signal ready once every program from the initial snapshot has been seen.
+            pending.discard(program)
+            if not pending:
+                initial_update.set()
 
     async def _monitor_task(self, client: ProgramClient, initial_update: asyncio.Event):
         monitor = client.monitor_enable_state()
