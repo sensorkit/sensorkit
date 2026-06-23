@@ -152,7 +152,7 @@ services:
   otto:
     image: sensorkit
     pull_policy: never
-    command: service run Otto sensorkit.otto.service
+    command: service run Otto sensorkit.otto.program
     environment:
       <<: *common-env
     restart: unless-stopped
