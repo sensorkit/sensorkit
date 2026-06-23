@@ -61,6 +61,12 @@ def _logger_patcher(record):
         elif name == "otto":
             entity_type = "🎶 "
             entity_color = "fg 213"
+        elif name == "senpai":
+            entity_type = "🥷 "
+            entity_color = "fg 60"
+        elif "sky_transmission" in record["name"]:
+            entity_type = "☁️ "
+            entity_color = "fg 153"
         elif sk.device():
             entity_type = "💠 "
             entity_color = "fg 57"
