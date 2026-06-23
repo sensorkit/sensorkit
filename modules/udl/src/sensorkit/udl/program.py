@@ -208,10 +208,30 @@ class UDLProgram:
         )
 
     @staticmethod
-    def _default_sidereal_frames(target: Target, frame_count: int) -> list[int]:
-        """Temporary workaround until CollectRequest track type is plumbed through."""
+    def _sidereal_frames_from_request(
+        request: CollectRequestFull,
+        target: Target,
+        frame_count: int,
+    ) -> list[int]:
+        """Resolve sidereal frame overrides from the CollectRequest type.
+
+        UDL collect types can explicitly request a hybrid non-sidereal collect
+        that ends with a sidereal reference frame, e.g. ``RATE TRACK SIDEREAL``.
+        Honor that when present. Fall back to the historical target-based
+        heuristic only when the request type is absent.
+        """
         if frame_count < 1:
             return []
+
+        request_type = getattr(request, "type", None)
+        if request_type:
+            normalized = str(request_type).strip().upper()
+            if normalized == "RATE TRACK SIDEREAL":
+                return [frame_count - 1]
+            if normalized == "SIDEREAL":
+                return list(range(frame_count))
+            return []
+
         if isinstance(target, TLETarget | StateVectorTarget):
             return [frame_count - 1]
         return []
@@ -680,7 +700,11 @@ class UDLProgram:
                 else 1.0,
                 frame_count=request.num_frames or 1,
             ),
-            sidereal_frames=self._default_sidereal_frames(target, request.num_frames or 1),
+            sidereal_frames=self._sidereal_frames_from_request(
+                request,
+                target,
+                request.num_frames or 1,
+            ),
         )
 
         logger.info(f"Task ({request.id}): starting execution with end_time={task.end_time}")

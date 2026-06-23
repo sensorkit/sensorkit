@@ -38,6 +38,7 @@ class MockCollectRequest:
     @staticmethod
     def create(
         id="test-request-001",
+        collect_type=None,
         classification_marking="U",
         data_mode="TEST",
         source="TEST_SOURCE",
@@ -67,6 +68,7 @@ class MockCollectRequest:
 
         mock = MagicMock()
         mock.id = id
+        mock.type = collect_type
         mock.classification_marking = classification_marking
         mock.data_mode = data_mode
         mock.source = source

@@ -154,10 +154,13 @@ class TestCollectedResponseActualTimes:
 
 class TestTrackTypeTranslation:
     @pytest.mark.asyncio
-    async def test_tle_requests_default_to_hybrid_collects(self, program):
-        """Temporary workaround: non-sidereal UDL collects end with a sidereal frame."""
+    async def test_rate_track_sidereal_requests_end_with_sidereal_frame(self, program):
         request_id = str(uuid.uuid4())
-        request = MockCollectRequest.with_tle(id=request_id, num_frames=4)
+        request = MockCollectRequest.with_tle(
+            id=request_id,
+            num_frames=4,
+            collect_type="RATE TRACK SIDEREAL",
+        )
         await program.queue.push_task(request)
 
         gen = program.generate()
@@ -166,6 +169,40 @@ class TestTrackTypeTranslation:
         assert task is not None
         assert task.camera_params.frame_count == 4
         assert task.sidereal_frames == [3]
+
+    @pytest.mark.asyncio
+    async def test_rate_track_requests_do_not_add_sidereal_frame(self, program):
+        request_id = str(uuid.uuid4())
+        request = MockCollectRequest.with_tle(
+            id=request_id,
+            num_frames=4,
+            collect_type="RATE TRACK",
+        )
+        await program.queue.push_task(request)
+
+        gen = program.generate()
+        task = await gen.asend(None)
+
+        assert task is not None
+        assert task.camera_params.frame_count == 4
+        assert task.sidereal_frames == []
+
+    @pytest.mark.asyncio
+    async def test_sidereal_requests_force_all_frames_sidereal(self, program):
+        request_id = str(uuid.uuid4())
+        request = MockCollectRequest.with_tle(
+            id=request_id,
+            num_frames=4,
+            collect_type="SIDEREAL",
+        )
+        await program.queue.push_task(request)
+
+        gen = program.generate()
+        task = await gen.asend(None)
+
+        assert task is not None
+        assert task.camera_params.frame_count == 4
+        assert task.sidereal_frames == [0, 1, 2, 3]
 
     @pytest.mark.asyncio
     async def test_radec_requests_remain_sidereal_only(self, program):
