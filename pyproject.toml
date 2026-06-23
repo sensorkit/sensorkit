@@ -42,7 +42,7 @@ alpaca = [
     "numpy>=1.24.0",
 ]
 burr = [
-    "burr @ git+https://github.com/zgazak/burr.git@dev",
+    "astro-burr @ git+https://github.com/zgazak/burr.git@main",
 ]
 indigo = [
     "websockets>=14.0",
@@ -63,14 +63,18 @@ otto = [
 pwi4 = [
     "httpx",
 ]
+sdasim = [
+    "numpy>=1.24.0",
+    "sdasim[orbital]",
+]
 sky-transmission = [
-    "allclear @ git+https://github.com/zgazak/allclear.git@main",
+    "allclear",
     "alpyca>=3.1.0",
     "imageio[pyav]",
     "matplotlib",
 ]
 senpai = [
-    "senpai @ git+https://github.com/zgazak/senpai.git@big-optimize",
+    "astro-senpai>=2.3.1",
 ]
 slack = [
     "slack-sdk",
@@ -106,6 +110,11 @@ dev = [
     "testcontainers[nats]>=4.9.0",
     "zensical>=0.0.1",
 ]
+
+[tool.uv.sources]
+# The orbital API the sdasim module uses (ObjectConfig / objects / tracking /
+# SiteConfig) lives on the `orbital` branch of github.com/zgazak/sdasim.
+sdasim = { git = "https://github.com/zgazak/sdasim.git", branch = "orbital" }
 
 [[tool.uv.dependency-metadata]]
 name = "systemd-python"
@@ -152,6 +161,7 @@ layers = [
     sensorkit.node_platform |
     sensorkit.otto |
     sensorkit.pwi4 |
+    sensorkit.sdasim |
     sensorkit.senpai |
     sensorkit.sky_transmission |
     sensorkit.slack |
@@ -186,6 +196,7 @@ dev-mode-dirs = [
     "modules/node_platform/src",
     "modules/otto/src",
     "modules/pwi4/src",
+    "modules/sdasim/src",
     "modules/senpai/src",
     "modules/sky_transmission/src",
     "modules/slack/src",
@@ -203,6 +214,7 @@ modules = [
     "node_platform",
     "otto",
     "pwi4",
+    "sdasim",
     "senpai",
     "sky_transmission",
     "slack",
