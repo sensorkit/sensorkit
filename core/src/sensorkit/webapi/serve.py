@@ -226,7 +226,7 @@ class ServeLocalFITSHandler(ServeHandler):
             info = ProductInfo(
                 controller_id=controller_id,
                 product_id=path.name,
-                register_time=datetime.fromtimestamp(stat.st_birthtime, UTC),
+                register_time=datetime.fromtimestamp(getattr(stat, "st_birthtime", stat.st_mtime), UTC),
                 data_size=stat.st_size,
             )
             metadata.set(info)
