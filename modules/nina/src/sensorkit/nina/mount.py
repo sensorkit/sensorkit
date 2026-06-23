@@ -256,7 +256,6 @@ class NinaMount(NinaDevice):
                     dec=dec_deg,
                     waitToFinish=True,
                 )
-                await asyncio.sleep(1)
 
                 await self._wait_for_mount(tracking=True)
                 self._start_fast_status()
@@ -275,7 +274,6 @@ class NinaMount(NinaDevice):
                     azimuth=az_deg,
                     waitToFinish=True,
                 )
-                await asyncio.sleep(1)
 
                 await self._wait_for_mount(tracking=False)
                 self._start_fast_status()
@@ -314,7 +312,6 @@ class NinaMount(NinaDevice):
                         dec=dec_deg,
                         waitToFinish=True,
                     )
-                    await asyncio.sleep(1)
 
                     await self._wait_for_mount(tracking=True)
                     self._start_fast_status()
@@ -340,6 +337,11 @@ class NinaMount(NinaDevice):
             case _:
                 logger.warning(f"Unsupported target type: {type(target).__name__}")
 
+        try:
+            await self._publish_mount_status()
+        except Exception as e:
+            logger.warning(f"Immediate mount status publish failed: ({e})")
+
     async def _wait_for_mount(
         self,
         *,
@@ -348,7 +350,7 @@ class NinaMount(NinaDevice):
     ):
         """Poll /equipment/mount/info until Slewing and Tracking both match.
 
-        Bounded by config.timeout; polls every 0.2 s.
+        Bounded by config.timeout; polls every 0.1 s.
         """
 
         async with asyncio.timeout(self.config.timeout):
@@ -359,7 +361,7 @@ class NinaMount(NinaDevice):
                     and info.get("Tracking", False) == tracking
                 ):
                     break
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
 
     def _start_fast_status(self):
         if self._fast_status_task is None or self._fast_status_task.done():
@@ -377,8 +379,6 @@ class NinaMount(NinaDevice):
         return self._fast_status_task is not None and not self._fast_status_task.done()
 
     async def _publish_mount_status(self):
-        _SIDEREAL_RATE_DEG_S = 15.04107 / 3600.0
-
         info = await self.info("mount")
         ra_hours = info.get("RightAscension", 0.0)
         dec_deg = info.get("Declination", 0.0)
@@ -399,17 +399,13 @@ class NinaMount(NinaDevice):
             )
         )
 
-        # NINA doesn't expose offset rates, so rates are sidereal-only
-        tracking = self._tracking or False
-        total_ra_deg_s = _SIDEREAL_RATE_DEG_S if tracking else 0.0
-
         await device.publish(
             AxisRates(
                 azimuth=AxisRate(axis=MountAxis.AZIMUTH),
                 altitude=AxisRate(axis=MountAxis.ALTITUDE),
                 right_ascension=AxisRate(
                     axis=MountAxis.RIGHT_ASCENSION,
-                    velocity=total_ra_deg_s,
+                    velocity=0.0,
                 ),
                 declination=AxisRate(
                     axis=MountAxis.DECLINATION,
