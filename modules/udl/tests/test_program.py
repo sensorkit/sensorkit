@@ -152,6 +152,35 @@ class TestCollectedResponseActualTimes:
         assert call_kwargs["actual_end_time"] == "2026-03-21T07:19:12.000000Z"
 
 
+class TestTrackTypeTranslation:
+    @pytest.mark.asyncio
+    async def test_tle_requests_default_to_hybrid_collects(self, program):
+        """Temporary workaround: non-sidereal UDL collects end with a sidereal frame."""
+        request_id = str(uuid.uuid4())
+        request = MockCollectRequest.with_tle(id=request_id, num_frames=4)
+        await program.queue.push_task(request)
+
+        gen = program.generate()
+        task = await gen.asend(None)
+
+        assert task is not None
+        assert task.camera_params.frame_count == 4
+        assert task.sidereal_frames == [3]
+
+    @pytest.mark.asyncio
+    async def test_radec_requests_remain_sidereal_only(self, program):
+        request_id = str(uuid.uuid4())
+        request = MockCollectRequest.with_radec(id=request_id, num_frames=4)
+        await program.queue.push_task(request)
+
+        gen = program.generate()
+        task = await gen.asend(None)
+
+        assert task is not None
+        assert task.camera_params.frame_count == 4
+        assert task.sidereal_frames == []
+
+
 class TestEnvVarFallback:
     def test_env_file_default(self):
         """env_file should default to .env."""

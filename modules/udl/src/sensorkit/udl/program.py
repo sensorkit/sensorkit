@@ -207,6 +207,15 @@ class UDLProgram:
             username=username, password=password, **client_kwargs
         )
 
+    @staticmethod
+    def _default_sidereal_frames(target: Target, frame_count: int) -> list[int]:
+        """Temporary workaround until CollectRequest track type is plumbed through."""
+        if frame_count < 1:
+            return []
+        if isinstance(target, TLETarget | StateVectorTarget):
+            return [frame_count - 1]
+        return []
+
     @sk.on_attach
     async def program_init(self) -> None:
         """Restore state, create SDK clients, start poller and image publisher."""
@@ -671,6 +680,7 @@ class UDLProgram:
                 else 1.0,
                 frame_count=request.num_frames or 1,
             ),
+            sidereal_frames=self._default_sidereal_frames(target, request.num_frames or 1),
         )
 
         logger.info(f"Task ({request.id}): starting execution with end_time={task.end_time}")
