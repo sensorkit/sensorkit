@@ -9,9 +9,12 @@ from sensorkit.data.fits import (
     ApplyDark,
     ArrayInfo,
     ArrayToFITS,
+    BuildFITSHeader,
     CompressFITS,
     ContextFromFITS,
     DarkInfo,
+    FITSCardValueWithComment,
+    FITSHeader,
     ReshapeArray,
 )
 from sensorkit.data.graph import Context, DataFlow
@@ -26,6 +29,22 @@ def _make_fits_buffer(data: np.ndarray, header_dict: dict | None = None) -> byte
     bio = io.BytesIO()
     fits.HDUList([hdu]).writeto(bio)
     return bio.getvalue()
+
+
+async def _run_dataop(op, ctx: Context, buffer: bytes) -> tuple[Context, bytes]:
+    """Drive a single DataOp through one process() run and return (out_context, out_buffer)."""
+    incoming, outgoing = DataFlow(), DataFlow()
+    task = asyncio.create_task(op.process([incoming], [outgoing]))
+    holder: dict = {}
+
+    async def receiver():
+        holder["ctx"], holder["buf"] = await outgoing.receive("buffer")
+
+    recv = asyncio.create_task(receiver())
+    await incoming.send(ctx, buffer)
+    await recv
+    await task
+    return holder["ctx"], holder["buf"]
 
 
 @pytest.mark.asyncio
@@ -61,7 +80,7 @@ async def test_array_to_fits():
         header={
             "MYHDR": 'f"{mycontextval}"',
             "BYTEORD": 'f"{ArrayInfo.order}"',
-            "INSTRUME": '"Test Camera"',
+            "INSTRUME": "Test Camera",
         },
     )
 
@@ -155,9 +174,9 @@ async def test_array_to_fits_non_2d_raises():
 
 @pytest.mark.asyncio
 async def test_array_to_fits_dict_header():
-    """Header with dict syntax: {'value': expr, 'comment': ...}."""
+    """Header with dict syntax: {'value': ..., 'comment': ...}."""
     op = ArrayToFITS(
-        header={"CAMERA": {"value": '"MyCam"', "comment": "Camera name"}},
+        header={"CAMERA": {"value": "MyCam", "comment": "Camera name"}},
     )
     incoming = DataFlow()
     outgoing = DataFlow()
@@ -182,9 +201,9 @@ async def test_array_to_fits_dict_header():
 
 @pytest.mark.asyncio
 async def test_array_to_fits_tuple_header():
-    """Header with tuple/list syntax: [expr, comment]."""
+    """Header with tuple/list syntax: [value, comment]."""
     op = ArrayToFITS(
-        header={"INST": ['"Scope"', "Instrument"]},
+        header={"INST": ["Scope", "Instrument"]},
     )
     incoming = DataFlow()
     outgoing = DataFlow()
@@ -209,9 +228,9 @@ async def test_array_to_fits_tuple_header():
 
 @pytest.mark.asyncio
 async def test_array_to_fits_none_value_skipped():
-    """Header expression evaluating to None should be omitted."""
+    """Header value resolving to None should be omitted."""
     op = ArrayToFITS(
-        header={"MISSING": "None", "PRESENT": '"yes"'},
+        header={"MISSING": "=None", "PRESENT": "yes"},
     )
     incoming = DataFlow()
     outgoing = DataFlow()
@@ -232,6 +251,32 @@ async def test_array_to_fits_none_value_skipped():
     await incoming.send(ctx, data.tobytes())
     await recv
     await task
+
+
+@pytest.mark.asyncio
+async def test_array_to_fits_non_string_scalar_literals():
+    """Non-string YAML scalars (int/float/bool) pass through as literal card values."""
+    op = ArrayToFITS(
+        header={
+            "EXPTIME": 30.0,
+            "NCOADD": 4,
+            "SHUTTER": True,
+            "GAIN": [1.5, "detector gain"],
+        },
+    )
+    ctx = Context()
+    ctx.set(ArrayInfo(shape=(4, 4), dtype="uint16"))
+    data = np.zeros(16, dtype=np.uint16)
+
+    _, buf = await _run_dataop(op, ctx, data.tobytes())
+
+    with fits.open(io.BytesIO(buf)) as hdul:
+        header = hdul[0].header
+        assert header["EXPTIME"] == 30.0
+        assert header["NCOADD"] == 4
+        assert header["SHUTTER"] is True
+        assert header["GAIN"] == 1.5  # numeric value inside the [value, comment] form
+        assert "detector gain" in header.comments["GAIN"]
 
 
 @pytest.mark.asyncio
@@ -475,3 +520,139 @@ async def test_compress_fits_passthrough_header():
     await incoming.send(Context(), fits_buf)
     await recv
     await task
+
+
+# --- BuildFITSHeader tests ---
+
+
+class _StubCamera:
+    """Test FITSHeaderProvider yielding a plain card and a card with a comment."""
+
+    def get_fits_cards(self):
+        yield "INSTRUME", "StubCam"
+        yield "GAIN", FITSCardValueWithComment("1.5", "detector gain")
+
+
+@pytest.mark.asyncio
+async def test_build_fits_header_define_and_option():
+    """define resolves values; option only adds non-None and suppresses missing names."""
+    op = BuildFITSHeader(
+        define={"TELESCOP": "Scope-1", "EXPTIME": "=exptime"},
+        option={"CCDTEMP": "=ccdtemp", "FILTER": "=missing"},
+    )
+    ctx = Context()
+    ctx["exptime"] = 30.0
+    ctx["ccdtemp"] = -10.0
+
+    out_ctx, out_buf = await _run_dataop(op, ctx, b"raw-passthrough")
+
+    # The op builds a header but passes the buffer through unchanged.
+    assert out_buf == b"raw-passthrough"
+
+    header = out_ctx.get(FITSHeader)
+    assert header["TELESCOP"] == "Scope-1"  # bare string is a literal
+    assert header["EXPTIME"] == 30.0  # =expr evaluates against the context
+    assert header["CCDTEMP"] == -10.0
+    assert "FILTER" not in header  # option with an absent name is suppressed
+
+
+@pytest.mark.asyncio
+async def test_build_fits_header_respects_existing_and_define_skips_present():
+    """A pre-existing FITSHeader is reused; define does not overwrite present keywords."""
+    op = BuildFITSHeader(define={"OBSERVER": "Bob", "TELESCOP": "Scope-1"})
+    ctx = Context()
+    ctx.set(FITSHeader({"OBSERVER": "Alice"}))
+
+    out_ctx, _ = await _run_dataop(op, ctx, b"")
+
+    header = out_ctx.get(FITSHeader)
+    assert header["OBSERVER"] == "Alice"  # define skips an already-set keyword
+    assert header["TELESCOP"] == "Scope-1"
+
+
+@pytest.mark.asyncio
+async def test_build_fits_header_mutate_rename_remove():
+    """mutate replaces existing values only; rename moves cards; remove drops them."""
+    op = BuildFITSHeader(
+        mutate={"GAIN": "=gain", "ABSENT": "ignored"},
+        rename={"OLD": "NEW"},
+        remove={"JUNK"},
+    )
+    ctx = Context()
+    ctx.set(FITSHeader({"GAIN": "1.0", "OLD": "moved", "JUNK": "x"}))
+    ctx["gain"] = 2.5
+
+    out_ctx, _ = await _run_dataop(op, ctx, b"")
+
+    header = out_ctx.get(FITSHeader)
+    assert header["GAIN"] == 2.5  # mutated to the resolved value
+    assert "ABSENT" not in header  # mutate skips keywords not already present
+    assert header["NEW"] == "moved" and "OLD" not in header  # renamed
+    assert "JUNK" not in header  # removed
+
+
+@pytest.mark.asyncio
+async def test_build_fits_header_providers(caplog):
+    """Provider cards are pulled from the context; bad provider keys warn and are skipped."""
+    op = BuildFITSHeader(providers={"cam", "notaprovider", "missingkey"})
+    ctx = Context()
+    ctx["cam"] = _StubCamera()
+    ctx["notaprovider"] = 42
+
+    with caplog.at_level("WARNING", logger="sensorkit.data.fits"):
+        out_ctx, _ = await _run_dataop(op, ctx, b"")
+
+    header = out_ctx.get(FITSHeader)
+    assert header["INSTRUME"] == "StubCam"
+    # Provider cards (including comments) are stored verbatim, not resolved.
+    assert header["GAIN"] == FITSCardValueWithComment("1.5", "detector gain")
+
+    # Both the non-provider value and the missing key are skipped with a warning.
+    assert "notaprovider" in caplog.text
+    assert "missingkey" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_build_fits_header_comment_preserved():
+    """A [value, comment] card keeps its comment through resolution."""
+    op = BuildFITSHeader(define={"CCDTEMP": ["=ccdtemp", "sensor temperature, C"]})
+    ctx = Context()
+    ctx["ccdtemp"] = -12.3
+
+    out_ctx, _ = await _run_dataop(op, ctx, b"")
+
+    header = out_ctx.get(FITSHeader)
+    assert header["CCDTEMP"] == FITSCardValueWithComment(-12.3, "sensor temperature, C")
+
+
+@pytest.mark.asyncio
+async def test_build_fits_header_feeds_array_to_fits():
+    """BuildFITSHeader populates the context header that ArrayToFITS then writes out."""
+    width, height = 6, 4
+    data = np.arange(width * height, dtype=np.uint16)
+
+    ctx = Context()
+    ctx.set(ArrayInfo(shape=(height, width), dtype="uint16", order="C"))
+    ctx["exptime"] = 30.0
+
+    build = BuildFITSHeader(
+        providers={"cam"},
+        define={"EXPTIME": ["=exptime", "exposure seconds"]},
+    )
+    ctx["cam"] = _StubCamera()
+
+    # The raw array bytes pass through BuildFITSHeader unchanged into ArrayToFITS.
+    ctx, buffer = await _run_dataop(build, ctx, data.tobytes())
+
+    array_to_fits = ArrayToFITS(header={"OBSERVER": "Erik"})
+    out_ctx, fits_buf = await _run_dataop(array_to_fits, ctx, buffer)
+
+    with fits.open(io.BytesIO(fits_buf)) as hdul:
+        header = hdul[0].header
+        assert np.array_equal(hdul[0].data.flatten(), data)
+        assert header["INSTRUME"] == "StubCam"  # from the provider
+        assert header["GAIN"] == "1.5"  # provider card stored verbatim
+        assert "detector gain" in header.comments["GAIN"]  # provider comment carried through
+        assert header["EXPTIME"] == 30.0  # define, resolved against the context
+        assert "exposure seconds" in header.comments["EXPTIME"]
+        assert header["OBSERVER"] == "Erik"  # added by ArrayToFITS

@@ -1,8 +1,8 @@
 import asyncio
 import io
 import logging
-from collections.abc import Buffer
-from typing import Any, Literal
+from collections.abc import Buffer, Iterable
+from typing import Literal, NamedTuple, Protocol, runtime_checkable
 
 import numpy as np
 from astropy.io import fits
@@ -61,10 +61,196 @@ class ReshapeArray(DataOp):
         await outgoing[0].send(context, arr)
 
 
+# A bare FITS card value: a string (resolved against the context) or a non-string scalar
+# (an int/float/bool literal, e.g. from a YAML number or boolean) carried through verbatim.
+type FITSCardScalar = str | int | float | bool
+
+
+class FITSCardValueWithComment(NamedTuple):
+    value: FITSCardScalar
+    comment: str = ""
+
+
+type FITSCardValue = FITSCardScalar | FITSCardValueWithComment
+
+
+@declare_keyword
+class FITSHeader(dict[str, FITSCardValue]):
+    """A FITS header as a dictionary of keyword-value pairs.
+
+    Each value is either a bare card value or a `FITSCardValueWithComment` carrying
+    an associated comment.
+    """
+
+    def write_to(self, header: fits.Header) -> None:
+        """Write these cards into an astropy *header*, preserving comments."""
+        for keyword, card in self.items():
+            header[keyword] = card
+
+    def resolve_from_context(
+        self,
+        context: Context,
+        keyword: str,
+        card: FITSCardValue,
+        *,
+        suppress_missing: bool = False,
+    ) -> None:
+        """Resolve *card* and set it on this header under *keyword* unless it resolves to None."""
+        resolved = resolve_fits_card(card, context, suppress_missing=suppress_missing)
+
+        if resolved is not None:
+            self[keyword] = resolved
+
+
+@runtime_checkable
+class FITSHeaderProvider(Protocol):
+    """Protocol for objects that can provide FITS header cards."""
+
+    def get_fits_cards(self) -> Iterable[tuple[str, FITSCardValue]]: ...
+
+
+def resolve_fits_card(
+    card: FITSCardValue,
+    context: Context,
+    *,
+    suppress_missing: bool = False,
+) -> FITSCardValue | None:
+    """Resolve a FITS card's value against *context*.
+
+    The card is either a bare value or a `FITSCardValueWithComment` whose `value` is resolved
+    and whose `comment` is a literal kept verbatim. A string value is resolved with
+    `Context.resolve`: `=expr` evaluates a Python expression, `f"..."` and text containing
+    `{...}` interpolate, and anything else is literal text. A non-string scalar (int, float,
+    or bool, e.g. a YAML number or boolean) is a literal carried through unresolved.
+
+    Args:
+        card: The card to resolve, as a bare scalar value or a `FITSCardValueWithComment`.
+        context: The context the value is resolved against.
+        suppress_missing: When true, a reference to a name absent from the context resolves
+            to `None` instead of raising `NameError`.
+
+    Returns:
+        The resolved card (a bare value, or a `FITSCardValueWithComment` when a comment is
+        present), or `None` when the value resolves to `None`.
+    """
+    if isinstance(card, FITSCardValueWithComment):
+        source, comment = card.value, card.comment
+    else:
+        source, comment = card, ""
+
+    if isinstance(source, str):
+        value = context.resolve(source, default=None) if suppress_missing else context.resolve(source)
+    else:
+        # A non-string scalar (int/float/bool) is a literal value; pass it through unresolved.
+        value = source
+
+    if value is None:
+        return None
+
+    return FITSCardValueWithComment(value, comment) if comment else value
+
+
+class BuildFITSHeader(DataOp):
+    """Build a FITS header from a context.
+
+    This DataOp constructs FITS header cards by resolving card values against the context
+    and applying various transformations. Card values are resolved with `resolve_fits_card`
+    (via `Context.resolve`): `=expr` evaluates an expression, `f"..."` and `{...}` forms
+    interpolate, and anything else is literal text. It supports multiple ways to populate
+    header keywords, applied *in order* as shown below:
+
+    - **Providers** — `FITSHeaderProvider` objects looked up from the context by key.
+    - **Rename** — change keyword names.
+    - **Remove** — delete specific keywords.
+    - **Define** — set keywords that are not already set.
+    - **Option** — set keywords only if values resolve to non-`None` (suppresses `NameError`).
+    - **Mutate** — replace the value of keywords that already exist.
+
+    Attributes:
+        op: Operation type identifier, fixed as `"fits_header"`.
+        providers: Set of context keys; each is looked up in the context and, if the value
+            satisfies the `FITSHeaderProvider` protocol, its cards are added to the header.
+            A key that is missing or whose value is not a provider is skipped with a warning.
+        rename: Dictionary mapping old FITS keyword names to new names.
+        remove: Set of FITS keyword names to remove from the header.
+        define: Dictionary mapping FITS keyword names to card values resolved against the
+            context; only keywords not already present are set.
+        option: Like `define`, but the keyword is added only if the value resolves to a
+            non-`None` value, and a reference to an absent context name is suppressed.
+        mutate: Dictionary mapping existing FITS keyword names to card values that replace
+            their current values (keywords absent from the header are ignored).
+    """
+
+    op: Literal["fits_header"] = "fits_header"
+    providers: set[str] = Field(default_factory=set)
+    remove: set[str] = Field(default_factory=set)
+    define: dict[str, FITSCardValue] = Field(default_factory=dict)
+    option: dict[str, FITSCardValue] = Field(default_factory=dict)
+    mutate: dict[str, FITSCardValue] = Field(default_factory=dict)
+    rename: dict[str, str] = Field(default_factory=dict)
+
+    async def process(self, incoming: list[DataFlow], outgoing: list[DataFlow]):
+        context, buffer = await incoming[0].receive("buffer")
+
+        # Respect a pre-existing FITSHeader keyword, otherwise start a fresh one.
+        header = context.get(FITSHeader)
+        if header is None:
+            header = FITSHeader()
+
+        self._populate(header, context)
+        context.set(header)
+
+        # Pass the buffer through unchanged; this op only builds the header.
+        await outgoing[0].send(context, buffer)
+
+    def _populate(self, header: FITSHeader, context: Context):
+        """Apply each population step against *header* in documented order."""
+        self._apply_providers(header, context)
+
+        # Rename: move a keyword's card to a new name.
+        for old, new in self.rename.items():
+            if old in header:
+                header[new] = header.pop(old)
+
+        # Remove: drop keywords entirely.
+        for keyword in self.remove:
+            header.pop(keyword, None)
+
+        # Define: set keywords that are not already present.
+        for keyword, card in self.define.items():
+            if keyword not in header:
+                header.resolve_from_context(context, keyword, card)
+
+        # Option: set only when the value resolves to non-None; missing names are ignored.
+        for keyword, card in self.option.items():
+            header.resolve_from_context(context, keyword, card, suppress_missing=True)
+
+        # Mutate: replace the value of keywords that already exist.
+        for keyword, card in self.mutate.items():
+            if keyword in header:
+                header.resolve_from_context(context, keyword, card)
+
+    def _apply_providers(self, header: FITSHeader, context: Context):
+        """Add cards from each context-resolved `FITSHeaderProvider`, warning on bad keys."""
+        for key in self.providers:
+            provider = context.get(key)
+
+            if not isinstance(provider, FITSHeaderProvider):
+                logger.warning(
+                    "fits_header provider %r is not a FITSHeaderProvider (got %s); skipping",
+                    key,
+                    type(provider).__name__,
+                )
+                continue
+
+            for keyword, card in provider.get_fits_cards():
+                header[keyword] = card
+
+
 class ArrayToFITS(DataOp):
     """Converts an input array to FITS format."""
     op: Literal["array_to_fits"] = "array_to_fits"
-    header: dict = Field(default_factory=dict)
+    header: dict[str, FITSCardValue] = Field(default_factory=dict)
 
     async def process(self, incoming: list[DataFlow], outgoing: list[DataFlow]):
         context, buffer = await incoming[0].receive("buffer")
@@ -85,17 +271,23 @@ class ArrayToFITS(DataOp):
         # TODO: change this to ImageInfo and add bits-per-pixel, scale, color encoding, etc.
         context.set(ImageSize(width=image_ndarray.shape[1], height=image_ndarray.shape[0]))
 
+        # Respect a pre-existing FITSHeader keyword, otherwise start a fresh one, then add this
+        # op's own keywords by evaluating the input patterns against the context.
+        fits_header = context.get(FITSHeader)
+        if fits_header is None:
+            fits_header = FITSHeader()
+
+        for kw, card in self.header.items():
+            fits_header.resolve_from_context(context, kw, card)
+
+        context.set(fits_header)
+
         # Build primary HDU. astropy populates SIMPLE, NAXIS, and NAXIS{n} from the
         # array shape (NAXIS1 = fastest-varying axis = number of columns).
         primary_hdu = fits.PrimaryHDU(image_ndarray)
-        header = primary_hdu.header
 
-        # Generate the desired FITS keywords by evaluating the input patterns against the context.
-        for kw, obj in self.header.items():
-            value = self._eval_header_value(obj, context)
-
-            if value is not None:
-                header[kw] = value
+        # The accumulated FITSHeader is the source of truth for the written header.
+        fits_header.write_to(primary_hdu.header)
 
         # Build the output FITS bytes and send it along the graph.
         hdul = fits.HDUList([primary_hdu])
@@ -103,19 +295,6 @@ class ArrayToFITS(DataOp):
         hdul.writeto(bio)
 
         await outgoing[0].send(context, bio.getvalue())
-
-    @staticmethod
-    def _eval_header_value(obj: Any, context: Context) -> tuple[Any, str | None] | None:
-        match obj:
-            case {"value": expr, "comment": comment} | [expr, comment] | (expr, comment):
-                pass
-            case {"value": expr} | str(expr):
-                comment = None
-            case _:
-                raise ValueError(f"Invalid header value: {obj}")
-
-        value = context.eval(expr)
-        return None if value is None else (value, comment)
 
 
 class CompressFITS(DataOp):

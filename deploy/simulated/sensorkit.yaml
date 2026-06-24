@@ -65,17 +65,18 @@ data_flow:
     producer:
       simple:
         - op: app_source
+        - op: fits_header
+          define:
+            BSCALE: 1
+            BITPIX: =bitpix
+            BZERO: =bzero
+            TASKID: =task_id
+            FRAMENUM: =frame_num
+            CENTAZ: =az
+            CENTALT: =alt
+            RADEG: =ra
+            DECDEG: =dec
         - op: array_to_fits
-          header:
-            BSCALE: "1"
-            BITPIX: bitpix
-            BZERO: bzero
-            TASKID: task_id
-            FRAMENUM: frame_num
-            CENTAZ: az
-            CENTALT: alt
-            RADEG: ra
-            DECDEG: dec
         - op: write_file
           directory: /Temp/SimulatedSensor
 
