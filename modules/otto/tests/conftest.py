@@ -1,4 +1,3 @@
-import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -16,7 +15,6 @@ ISS_TLE = TLE(
 
 
 def make_task(
-    task_id=None,
     end_time=None,
     integration_time=10.0,
     frame_count=3,
@@ -26,8 +24,6 @@ def make_task(
 ):
     """Create a StandardCollectTask with sensible defaults."""
     return StandardCollectTask(
-        task_id=task_id or uuid.uuid1(),
-        controller_id="controller1",
         target=target or TLETarget(tle=ISS_TLE),
         end_time=end_time or (datetime.now(UTC) + timedelta(minutes=10)),
         camera_params=CameraParameterSet(

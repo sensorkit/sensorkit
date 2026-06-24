@@ -55,6 +55,10 @@ class Call[R: BaseModel, V: BaseModel = R](Awaitable[V]):
         """Wait until the call's future is resolved."""
         await self._future
 
+    def get_future(self) -> asyncio.Future[V]:
+        """Return the underlying future resolving to the call's final result."""
+        return self._future
+
     def done(self):
         """Return True if the call has completed (success or error)."""
         return self._future.done()

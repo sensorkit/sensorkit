@@ -158,7 +158,7 @@ class ContextSubscription:
         sub.add(RADecPointing)
 
         await sub.start()
-        ctx = sub.snapshot(task.get_context())
+        ctx = sub.snapshot(task.execution.get_context())
         await sub.stop()
     """
 

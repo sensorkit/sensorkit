@@ -14,7 +14,7 @@ from sensorkit.core.device import DeviceCommand, DeviceInterface
 from sensorkit.core.entity import EntityInterface
 from sensorkit.core.executor import TaskFactoryFunc
 from sensorkit.core.program import ProgramInterface
-from sensorkit.core.task import ControllerTask
+from sensorkit.core.task import Task
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Coroutine
@@ -122,7 +122,7 @@ class ControllerDelegate(EntityDelegate, ControllerInterface):
 
     @override
     def task_handler(
-        self, task_type: type[ControllerTask]
+        self, task_type: type[Task]
     ) -> Callable[[Callable[..., Coroutine[Any, Any, None]]], Callable[..., Coroutine[Any, Any, None]]]:
         return self.delegate_target.task_handler(task_type)
 

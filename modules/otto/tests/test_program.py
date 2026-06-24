@@ -1,6 +1,6 @@
 """Tests for OttoProgram task factory."""
 
-import uuid
+import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,6 +9,17 @@ from conftest import make_task
 
 from sensorkit.otto.program import OttoProgram, OttoState
 from sensorkit.otto.task_queue import TaskQueue
+
+
+def _resolved_execution():
+    """An already-resolved awaitable standing in for the dispatched execution.
+
+    The task factory resumes with ``await (yield ...)``, awaiting the execution the tasking loop
+    sends back; in these unit tests we drive the generator directly and feed it a settled future.
+    """
+    fut = asyncio.get_running_loop().create_future()
+    fut.set_result(None)
+    return fut
 
 
 @pytest.fixture
@@ -44,7 +55,7 @@ class TestGenerateTaskFactory:
         result = await gen.__anext__()
 
         assert result is not None
-        assert result.task_id == task.task_id
+        assert result.task is task
 
     @pytest.mark.asyncio
     async def test_yields_none_when_empty(self, program):
@@ -56,38 +67,26 @@ class TestGenerateTaskFactory:
     @pytest.mark.asyncio
     async def test_skips_expired_tasks(self, program):
         """generate() should skip expired tasks and return next valid one."""
-        expired = make_task(
-            task_id=uuid.uuid1(),
-            end_time=datetime.now(UTC) - timedelta(hours=1),
-        )
-        valid = make_task(
-            task_id=uuid.uuid1(),
-            end_time=datetime.now(UTC) + timedelta(hours=1),
-        )
+        expired = make_task(end_time=datetime.now(UTC) - timedelta(hours=1))
+        valid = make_task(end_time=datetime.now(UTC) + timedelta(hours=1))
         await program.task_queue.push_task(expired)
         await program.task_queue.push_task(valid)
 
         gen = program.generate()
         result = await gen.__anext__()
-        assert result.task_id == valid.task_id
+        assert result.task is valid
 
     @pytest.mark.asyncio
     async def test_pops_in_end_time_order(self, program):
         """Tasks should be popped in end_time order (soonest first)."""
-        later = make_task(
-            task_id=uuid.uuid1(),
-            end_time=datetime.now(UTC) + timedelta(hours=2),
-        )
-        sooner = make_task(
-            task_id=uuid.uuid1(),
-            end_time=datetime.now(UTC) + timedelta(hours=1),
-        )
+        later = make_task(end_time=datetime.now(UTC) + timedelta(hours=2))
+        sooner = make_task(end_time=datetime.now(UTC) + timedelta(hours=1))
         await program.task_queue.push_task(later)
         await program.task_queue.push_task(sooner)
 
         gen = program.generate()
         result = await gen.__anext__()
-        assert result.task_id == sooner.task_id
+        assert result.task is sooner
 
 
 class TestEndTimeRefresh:
@@ -116,7 +115,7 @@ class TestEndTimeRefresh:
         # end_time should be ~now + (10*3) + 60 = now + 90 seconds
         expected_min = before + timedelta(seconds=90)
         expected_max = after + timedelta(seconds=90)
-        assert expected_min <= result.end_time <= expected_max
+        assert expected_min <= result.task.end_time <= expected_max
 
     @pytest.mark.asyncio
     async def test_end_time_not_stale(self, program):
@@ -137,7 +136,7 @@ class TestEndTimeRefresh:
         result = await gen.__anext__()
 
         # Should have a fresh end_time: ~now + (5*2) + 30 = now + 40s
-        assert result.end_time > datetime.now(UTC) + timedelta(seconds=35)
+        assert result.task.end_time > datetime.now(UTC) + timedelta(seconds=35)
 
 
 class TestInterTaskDelay:
@@ -153,12 +152,13 @@ class TestInterTaskDelay:
         result = await gen.__anext__()
         assert result is not None
 
-        # Resume past the yield so the post-task delay runs.
+        # Resume past the yield so the post-task delay runs. The factory awaits the value sent
+        # back (the execution), so feed it an already-resolved awaitable.
         with patch(
             "sensorkit.otto.program.asyncio.sleep", new_callable=AsyncMock
         ) as mock_sleep:
             with pytest.raises(StopAsyncIteration):
-                await gen.__anext__()
+                await gen.asend(_resolved_execution())
             mock_sleep.assert_awaited_once_with(5.0)
 
     @pytest.mark.asyncio
@@ -176,7 +176,7 @@ class TestInterTaskDelay:
             "sensorkit.otto.program.asyncio.sleep", new_callable=AsyncMock
         ) as mock_sleep:
             with pytest.raises(StopAsyncIteration):
-                await gen.__anext__()
+                await gen.asend(_resolved_execution())
             mock_sleep.assert_not_awaited()
 
 

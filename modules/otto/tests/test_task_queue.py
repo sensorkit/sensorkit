@@ -24,20 +24,15 @@ class TestPushTask:
 
     @pytest.mark.asyncio
     async def test_push_sorted_by_end_time(self, queue):
-        later = make_task(
-            task_id=uuid.uuid1(),
-            end_time=datetime.now(UTC) + timedelta(minutes=20),
-        )
-        sooner = make_task(
-            task_id=uuid.uuid1(),
-            end_time=datetime.now(UTC) + timedelta(minutes=5),
-        )
+        later = make_task(end_time=datetime.now(UTC) + timedelta(minutes=20))
+        sooner = make_task(end_time=datetime.now(UTC) + timedelta(minutes=5))
 
         await queue.push_task(later)
-        await queue.push_task(sooner)
+        queued_sooner = await queue.push_task(sooner)
 
         popped = await queue.pop_task()
-        assert popped.task_id == sooner.task_id
+        assert popped.id == queued_sooner.id
+        assert popped.task is sooner
 
     @pytest.mark.asyncio
     async def test_push_updates_offers(self, queue, mock_program_binding):
@@ -53,11 +48,12 @@ class TestPopTask:
     @pytest.mark.asyncio
     async def test_pop_returns_task(self, queue):
         task = make_task()
-        await queue.push_task(task)
+        queued = await queue.push_task(task)
 
         result = await queue.pop_task()
         assert result is not None
-        assert result.task_id == task.task_id
+        assert result.id == queued.id
+        assert result.task is task
         assert len(queue) == 0
 
     @pytest.mark.asyncio
@@ -67,20 +63,14 @@ class TestPopTask:
 
     @pytest.mark.asyncio
     async def test_pop_removes_expired(self, queue):
-        expired = make_task(
-            task_id=uuid.uuid1(),
-            end_time=datetime.now(UTC) - timedelta(hours=1),
-        )
-        valid = make_task(
-            task_id=uuid.uuid1(),
-            end_time=datetime.now(UTC) + timedelta(hours=1),
-        )
+        expired = make_task(end_time=datetime.now(UTC) - timedelta(hours=1))
+        valid = make_task(end_time=datetime.now(UTC) + timedelta(hours=1))
 
         await queue.push_task(expired)
-        await queue.push_task(valid)
+        queued_valid = await queue.push_task(valid)
 
         result = await queue.pop_task()
-        assert result.task_id == valid.task_id
+        assert result.id == queued_valid.id
 
 
 class TestPeekTask:
@@ -100,10 +90,7 @@ class TestPeekTask:
 
     @pytest.mark.asyncio
     async def test_peek_removes_expired(self, queue):
-        expired = make_task(
-            task_id=uuid.uuid1(),
-            end_time=datetime.now(UTC) - timedelta(hours=1),
-        )
+        expired = make_task(end_time=datetime.now(UTC) - timedelta(hours=1))
         await queue.push_task(expired)
 
         result = await queue.peek_task()
@@ -115,33 +102,24 @@ class TestRemoveTask:
     @pytest.mark.asyncio
     async def test_remove_existing(self, queue):
         task = make_task()
-        await queue.push_task(task)
+        queued = await queue.push_task(task)
 
-        removed = await queue.remove_task(task.task_id)
+        removed = await queue.remove_task(queued.id)
         assert removed is True
         assert len(queue) == 0
 
     @pytest.mark.asyncio
     async def test_remove_nonexistent(self, queue):
-        removed = await queue.remove_task(uuid.uuid1())
+        removed = await queue.remove_task(uuid.uuid4())
         assert removed is False
 
 
 class TestFlushExpired:
     @pytest.mark.asyncio
     async def test_flush_removes_expired(self, queue):
-        expired1 = make_task(
-            task_id=uuid.uuid1(),
-            end_time=datetime.now(UTC) - timedelta(hours=2),
-        )
-        expired2 = make_task(
-            task_id=uuid.uuid1(),
-            end_time=datetime.now(UTC) - timedelta(hours=1),
-        )
-        valid = make_task(
-            task_id=uuid.uuid1(),
-            end_time=datetime.now(UTC) + timedelta(hours=1),
-        )
+        expired1 = make_task(end_time=datetime.now(UTC) - timedelta(hours=2))
+        expired2 = make_task(end_time=datetime.now(UTC) - timedelta(hours=1))
+        valid = make_task(end_time=datetime.now(UTC) + timedelta(hours=1))
 
         await queue.push_task(expired1)
         await queue.push_task(expired2)
@@ -158,9 +136,7 @@ class TestFlushExpired:
 
     @pytest.mark.asyncio
     async def test_flush_no_expired(self, queue):
-        task = make_task(
-            end_time=datetime.now(UTC) + timedelta(hours=1),
-        )
+        task = make_task(end_time=datetime.now(UTC) + timedelta(hours=1))
         await queue.push_task(task)
 
         removed = await queue.flush_expired()

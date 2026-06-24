@@ -74,7 +74,7 @@ async def test_program_tasking(kit):
 
         if not done.is_set():
             assert not task_ran
-            yield task_obj
+            await (yield task_obj)
             assert task_ran
             done.set()
 

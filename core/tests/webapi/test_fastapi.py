@@ -186,15 +186,15 @@ async def test_execute_controller_task(webapi_setup):
     async def handle(task: InitTask):
         done.set()
 
-    task_id = str(uuid.uuid7())
     resp = await client.post(
         "/controller/mycontroller/execute",
-        json={"task_type": "init", "controller_id": "mycontroller", "task_id": task_id},
+        json={"task_type": "init"},
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["task_id"] == task_id
+    # The controller mints the task_id; the response reports the minted value.
+    assert uuid.UUID(body["task_id"])
 
     async with asyncio.timeout(3.0):
         await done.wait()

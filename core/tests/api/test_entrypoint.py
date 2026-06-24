@@ -38,7 +38,7 @@ def test_entrypoint_direct_call_raises():
 @pytest.mark.asyncio
 async def test_entrypoint_run():
     """Happy path: entrypoint calls service.run(), returns (service, task)."""
-    os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+    os.environ["SENSORKIT_BACKEND"] = "fake"
 
     ep = ServiceEntrypoint(
         func=lambda svc: svc.run(),
@@ -59,7 +59,7 @@ async def test_entrypoint_run():
 @pytest.mark.asyncio
 async def test_entrypoint_no_run_raises():
     """Entrypoint returns without calling service.run() — should raise RuntimeError."""
-    os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+    os.environ["SENSORKIT_BACKEND"] = "fake"
 
     async def bad_entrypoint(svc: Service):
         pass  # never calls svc.run()
@@ -74,7 +74,7 @@ async def test_entrypoint_no_run_raises():
 @pytest.mark.asyncio
 async def test_entrypoint_error_before_run():
     """Entrypoint raises before calling service.run() — exception propagates."""
-    os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+    os.environ["SENSORKIT_BACKEND"] = "fake"
 
     async def failing_entrypoint(svc: Service):
         raise ValueError("startup failed")
@@ -89,7 +89,7 @@ async def test_entrypoint_error_before_run():
 @pytest.mark.asyncio
 async def test_service_loop_shutdown():
     """Service starts, then shutdown signal causes clean exit."""
-    os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+    os.environ["SENSORKIT_BACKEND"] = "fake"
     started = threading.Event()
 
     async def entrypoint_func(svc: Service):
@@ -116,7 +116,7 @@ async def test_service_loop_shutdown():
 @pytest.mark.asyncio
 async def test_service_loop_restart_on_failure():
     """Service crashes on first attempt, succeeds on second."""
-    os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+    os.environ["SENSORKIT_BACKEND"] = "fake"
     call_count = 0
     running = threading.Event()
 
@@ -158,7 +158,7 @@ async def test_service_loop_restart_on_failure():
 @pytest.mark.asyncio
 async def test_service_loop_max_restarts():
     """Service always fails — loop exits after max_restarts."""
-    os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+    os.environ["SENSORKIT_BACKEND"] = "fake"
     call_count = 0
 
     async def always_fails(svc: Service):
@@ -189,7 +189,7 @@ async def test_service_loop_max_restarts():
 @pytest.mark.asyncio
 async def test_service_loop_long_run_resets_restarts():
     """A run exceeding startup_failure_threshold resets the restart counter."""
-    os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+    os.environ["SENSORKIT_BACKEND"] = "fake"
     done = threading.Event()
     call_count = 0
 
@@ -236,7 +236,7 @@ async def test_service_loop_long_run_resets_restarts():
 @pytest.mark.asyncio
 async def test_run_services_shutdown():
     """run_services shuts down cleanly when SIGINT is received."""
-    os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+    os.environ["SENSORKIT_BACKEND"] = "fake"
     started = threading.Event()
 
     async def my_svc(svc: Service):

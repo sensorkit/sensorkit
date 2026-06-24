@@ -32,5 +32,8 @@ class StandardCollectTask(CollectTask):
     task_type: Literal['standard_collect'] = "standard_collect"
     target: Target
     camera_params: CameraParameterSet
-    end_time: datetime
+    # Domain scheduling deadline. Optional: programs that queue tasks set it to order their
+    # internal queues, but it is not required to execute a task (the execution deadline is carried
+    # by the dispatch ``expiry_time``). Slated for removal once no program relies on it.
+    end_time: datetime | None = None
     sidereal_frames: list[int] = Field(default_factory=list)

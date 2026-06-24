@@ -139,9 +139,10 @@ async def test_controller_abort(kit):
 
     async with asyncio.timeout(1.0):
         cli = kit.controller("mycontroller")
-        task_id = uuid.uuid1()
-        exec_call = cli.execute_task(InitTask(task_id=task_id, controller_id="mycontroller"))
-        await exec_call.invoke()
+        exec_call = cli.execute_task(InitTask())
+        # The controller mints the task_id; learn it from the initial response.
+        exec_response = await exec_call.invoke()
+        task_id = exec_response.execution.task_id
         await ready.wait()
 
         abort_call = cli.abort_task()
@@ -159,8 +160,8 @@ async def test_controller_abort(kit):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("task_id", [uuid.uuid7(), None], ids=("with_id", "without_id"))
-async def test_wait_for_task(kit, task_id):
+@pytest.mark.parametrize("with_id", [True, False], ids=("with_id", "without_id"))
+async def test_wait_for_task(kit, with_id):
     async with asyncio.timeout(1.0):
         sc = await kit.register_service("testservice", "0.1.0")
         controller = await sc.register_controller("mycontroller")
@@ -177,16 +178,19 @@ async def test_wait_for_task(kit, task_id):
         cli = kit.controller("mycontroller")
         await cli.enable()
 
-        event = await cli.wait_for_task(task_id=task_id)
-        assert event is None if task_id is not None else not event.executing
+        # No task is running yet: waiting for an arbitrary id returns None immediately.
+        probe_id = uuid.uuid7() if with_id else None
+        event = await cli.wait_for_task(task_id=probe_id)
+        assert event is None if with_id else not event.executing
 
-        exec_call = cli.execute_task(
-            InitTask(task_id=task_id or uuid.uuid7(), controller_id="mycontroller")
-        )
-        await exec_call.invoke()
+        exec_call = cli.execute_task(InitTask())
+        # The controller mints the task_id; learn it from the initial response.
+        response = await exec_call.invoke()
+        task_id = response.execution.task_id
         await started.wait()
 
-        wait_fut = asyncio.create_task(cli.wait_for_task(task_id=task_id))
+        want_id = task_id if with_id else None
+        wait_fut = asyncio.create_task(cli.wait_for_task(task_id=want_id))
         await asyncio.sleep(0)
         assert not wait_fut.done()
 
@@ -197,7 +201,7 @@ async def test_wait_for_task(kit, task_id):
         assert not event.finished.aborted
         assert not event.executing
 
-        if task_id is not None:
+        if with_id:
             assert event.task.task_id == task_id
 
         await exec_call

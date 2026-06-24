@@ -601,8 +601,6 @@ class UDLProgram:
         )
 
         task = StandardCollectTask(
-            task_id=request.id,
-            controller_id=str(self.config.controller),
             target=target,
             end_time=end_time,
             camera_params=CameraParameterSet(
@@ -621,7 +619,7 @@ class UDLProgram:
             # (before slew … after the mount stop), which we report as the
             # CollectResponse's actual window. Per-exposure precision is carried
             # separately by SkyImagery's expStartTime/expEndTime.
-            result = yield task
+            result = await (yield task.submit(expiry_time=end_time))
             logger.info(f"Task ({request.id}): finished execution successfully")
             await self._send_response(
                 request,

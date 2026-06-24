@@ -6,6 +6,7 @@ from _contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Callable, ClassVar, Collection, Mapping, override
 
+import uuid_utils.compat as uuid
 from loguru import logger
 
 from sensorkit.backend.base import Entity
@@ -34,7 +35,7 @@ from sensorkit.core.controller import (
 from sensorkit.core.device import DeviceClient
 from sensorkit.core.entity import ControllerDetails, EntityInfo
 from sensorkit.core.impl.entity import EntityImpl
-from sensorkit.core.task import ControllerTask
+from sensorkit.core.task import Task, TaskExecution
 from sensorkit.data.context import Context, ContextSubscription
 
 
@@ -72,7 +73,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
         self._enable_hooks: list[Callable[[], None]] = []
         self._disable_hooks: list[Callable[[], None]] = []
-        self._task_handlers: dict[type[ControllerTask], TaskHandlerCallback] = {}
+        self._task_handlers: dict[type[Task], TaskHandlerCallback] = {}
         self._task_asyncio: asyncio.Task | None = None
         self._devices = ControllerDeviceMap()
 
@@ -322,32 +323,43 @@ class ControllerImpl(EntityImpl, ControllerInterface):
     ):
         task = msg.task
 
+        # Mint the execution envelope: the controller owns identity (task_id, controller_id) and
+        # records the client-supplied execution parameters (context, end_time).
+        execution = TaskExecution(
+            task=task,
+            task_id=uuid.uuid7(),
+            controller_id=str(self.entity),
+            context=msg.context,
+            expiry_time=msg.expiry_time,
+        )
+        response = ExecuteResponseMessage(execution=execution)
+
         # Reject if we aren't ready.
         if not self._state.enable_state.enabled:
             logger.warning(f"Rejecting {type(task)} task: Controller is disabled")
-            call.reject(response=ExecuteResponseMessage(task_id=task.task_id))
+            call.reject(response=response)
             return
 
         # Reject if there's already a Task in work.
         if not msg.interrupt and self.task_running():
             logger.warning(f"Rejecting {type(task)} task: Task already in progress")
-            call.reject(response=ExecuteResponseMessage(task_id=task.task_id))
+            call.reject(response=response)
             return
 
         # Ensure we have a handler defined.
         if type(task) not in self._task_handlers:
             logger.warning(f"Rejecting {type(task)} task: No handler registered")
-            call.reject(response=ExecuteResponseMessage(task_id=task.task_id))
+            call.reject(response=response)
             return
 
         # Accept the task execution request.
-        call.accept(response=ExecuteResponseMessage(task_id=task.task_id))
+        call.accept(response=response)
         aio_task: asyncio.Task | None = None
 
         try:
             # Interrupt the current task, if there is one.
             if self._task_asyncio:
-                logger.info(f"Interrupting {self._state.execution_state.task.task_type} task")
+                logger.info(f"Interrupting {self._state.execution_state.task.task.task_type} task")
                 self._task_asyncio.cancel("Interrupted")
 
                 with contextlib.suppress(asyncio.CancelledError):
@@ -362,7 +374,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
             with self.enter_context():
                 logger.info(f"Executing {task.task_type} task")
-                aio_task = asyncio.create_task(self._execute_task(task))
+                aio_task = asyncio.create_task(self._execute_task(execution))
 
             self._task_asyncio = aio_task
 
@@ -386,7 +398,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         except Exception as e:
             with self.enter_context():
                 logger.error(f"Error executing {task.task_type} task")
-                logger.opt(exception=e).debug(f"{task.task_type} ({task.task_id}) failed")
+                logger.opt(exception=e).debug(f"{task.task_type} ({execution.task_id}) failed")
 
             try:
                 await call.fail()
@@ -398,7 +410,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
             await call.succeed(
                 result=TaskExecutionResult(
-                    task_id=task.task_id,
+                    task_id=execution.task_id,
                     start_time=start_time,
                     end_time=end_time,
                 )
@@ -414,14 +426,17 @@ class ControllerImpl(EntityImpl, ControllerInterface):
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await aio_task
 
-    async def _execute_task(self, task: ControllerTask):
-        logger.debug(f"execution begun {task=}")
+    async def _execute_task(self, execution: TaskExecution):
+        # Associate the envelope with the task so the handler can reach it via ``task.execution``.
+        task = execution.task
+        task.associate_execution(execution)
+        logger.debug(f"execution begun {execution=}")
         finish_info = TaskFinishInfo(aborted=True)
 
         # Emit the execution start event.
         await self._state.update(
             self,
-            TaskExecutionState(executing=True, task=task),
+            TaskExecutionState(executing=True, task=execution),
             self._state.operating_state.derive(target=task.target_state()),
         )
 
@@ -441,7 +456,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             try:
                 await self._state.update(
                     self,
-                    TaskExecutionState(finished=finish_info, task=task),
+                    TaskExecutionState(finished=finish_info, task=execution),
                     self._state.operating_state.derive(
                         current=ts if (ts := task.target_state()) is not None else ControllerOperatingState.NO_CHANGE,
                         target=None,
@@ -451,7 +466,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
                 logger.warning(f"Error logging final task execution state ({type(e).__name__})")
 
     @override
-    def task_handler[T: ControllerTask](self, task_model: type[T]):
+    def task_handler[T: Task](self, task_model: type[T]):
         def decorator(func: TaskHandlerCallback[T]):
             if task_model in self._task_handlers:
                 raise RuntimeError("multiple handlers for task type")

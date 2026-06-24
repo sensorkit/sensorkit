@@ -1,5 +1,6 @@
 """Test UDLProgram request handling and response logic."""
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
@@ -8,6 +9,7 @@ import pytest
 from conftest import MockCollectRequest
 
 from sensorkit.core.controller import TaskExecutionResult
+from sensorkit.core.task import TaskExecution
 from sensorkit.udl.models import ResponseStatus, UDLAPIConfig, UDLConfig
 from sensorkit.udl.program import UDLProgram
 from sensorkit.udl.task_queue import TaskQueue
@@ -118,8 +120,8 @@ class TestCollectedResponseActualTimes:
         await program.queue.push_task(request)
 
         gen = program.generate()
-        task = await gen.asend(None)
-        assert task is not None
+        request_out = await gen.asend(None)
+        assert request_out is not None
 
         result = TaskExecutionResult(
             task_id=uuid.UUID(request_id),
@@ -127,10 +129,21 @@ class TestCollectedResponseActualTimes:
             end_time=datetime(2026, 3, 21, 7, 19, 12, tzinfo=UTC),
         )
 
-        # Sending the result resumes past `result = yield task`; the generator
+        # The framework resumes the factory with the minted execution, whose result future the
+        # factory awaits. Bind an already-settled future so `await execution` returns the result.
+        future = asyncio.get_running_loop().create_future()
+        future.set_result(result)
+        execution = TaskExecution(
+            task=request_out.task,
+            task_id=uuid.UUID(request_id),
+            controller_id="controller1",
+        )
+        execution.bind_result(future)
+
+        # Sending the execution resumes past `result = await (yield ...)`; the generator
         # sends COLLECTED and then completes (StopAsyncIteration).
         with pytest.raises(StopAsyncIteration):
-            await gen.asend(result)
+            await gen.asend(execution)
 
         call_kwargs = program.client.collect_responses.create.call_args.kwargs
         assert call_kwargs["status"] == "COLLECTED"

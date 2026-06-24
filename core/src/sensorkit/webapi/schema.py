@@ -13,7 +13,7 @@ def _sensorkit_models():
     return itertools.chain(
         _keyword_index,
         sk.DeviceCommand.registry.entries,
-        sk.ControllerTask.registry.entries,
+        sk.Task.registry.entries,
     )
 
 

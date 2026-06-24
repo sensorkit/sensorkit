@@ -1,6 +1,5 @@
 import asyncio
 import random
-import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Dict, List
 
@@ -208,7 +207,9 @@ class OttoProgram:
             StandardCollectTask: The next task to be executed.
             None: If no task is available.
         """
-        if task := await self.task_queue.pop_task():
+        if queued := await self.task_queue.pop_task():
+            task = queued.task
+
             # Recalculate end_time based on current time so that tasks generated
             # before the controller started operating get a fresh execution deadline.
             task.end_time = (
@@ -221,12 +222,15 @@ class OttoProgram:
             )
 
             logger.info(
-                f"task ({task.task_id}): target -> {task.target}, camera -> {task.camera_params}"
+                f"task ({queued.id}): target -> {task.target}, camera -> {task.camera_params}"
             )
 
             try:
-                yield task
-                logger.info(f"task ({task.task_id}) finished execution successfully.")
+                # ``end_time`` is the domain scheduling deadline; pass it through as the
+                # execution ``expiry_time`` so the controller enforces the same deadline. Await the
+                # yielded execution so completion (and any failure) surfaces here.
+                await (yield task.submit(expiry_time=task.end_time))
+                logger.info(f"task ({queued.id}) finished execution successfully.")
                 # Optional fixed gap after each completed task. Skipped on
                 # cancellation/failure so those propagate without delay.
                 if self.config.task.inter_task_delay_seconds > 0:
@@ -235,16 +239,16 @@ class OttoProgram:
                     )
                     await asyncio.sleep(self.config.task.inter_task_delay_seconds)
             except asyncio.CancelledError as e:
-                logger.warning(f"Task ({task.task_id}) cancelled: {e}")
+                logger.warning(f"Task ({queued.id}) cancelled: {e}")
                 raise
             except Exception as e:
-                logger.exception(f"Task ({task.task_id}) failed with exception: {e}")
+                logger.exception(f"Task ({queued.id}) failed with exception: {e}")
                 raise
         else:
             # Peek at next task to provide info
-            if next_task := await self.task_queue.peek_task():
-                time_until = (next_task.end_time - datetime.now()).total_seconds()
-                logger.info(f"next task {next_task.task_id} available for {time_until:.1f}s")
+            if queued := await self.task_queue.peek_task():
+                time_until = (queued.task.end_time - datetime.now()).total_seconds()
+                logger.info(f"next task {queued.id} available for {time_until:.1f}s")
             else:
                 logger.debug("no tasks available")
             yield None
@@ -425,8 +429,6 @@ class OttoProgram:
                             for binning in binnings:
                                 cumulative_exposure += exposure * self.config.collect.num_frames
                                 task = StandardCollectTask(
-                                    task_id=uuid.uuid1(),
-                                    controller_id=str(self.config.controller),
                                     target=TLETarget(tle=tle_obj),
                                     end_time=(
                                         now

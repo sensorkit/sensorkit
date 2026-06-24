@@ -23,7 +23,7 @@ from sensorkit.std.sensor import SensorConfig, SensorControl, SensorDevices
 
 async def run_service(svc: Service):
     """Start the service and wait until it's fully running."""
-    os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+    os.environ["SENSORKIT_BACKEND"] = "fake"
     await svc.start()
 
 

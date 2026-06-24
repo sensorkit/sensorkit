@@ -68,11 +68,13 @@ from sensorkit.core.state import EventSourcedState
 from sensorkit.core.task import (
     CalibrateTask,
     CollectTask,
-    ControllerTask,
     InitTask,
     RecoverTask,
     ShutdownTask,
     StandbyTask,
+    Task,
+    TaskExecution,
+    TaskSubmission,
 )
 from sensorkit.core.trait import Archetype, Trait, declare_archetype, declare_trait
 from sensorkit.data.context import Context, ContextSubscription

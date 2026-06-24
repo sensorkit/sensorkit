@@ -6,19 +6,20 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
-from typing import Any, Awaitable, Literal, final, overload, override
+from typing import Any, Literal, final, overload, override
 
 from loguru import logger
 
 from sensorkit.common.aio import AsyncValueLatch
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.controller import ControllerClient, ControllerState, InternalControllerState
 from sensorkit.core.program import ProgramClient
 from sensorkit.core.task import (
-    ControllerTask,
     InitTask,
     RecoverTask,
     ShutdownTask,
     StandbyTask,
+    Task,
     TaskContexts,
 )
 
@@ -192,13 +193,6 @@ class DemandProc(ABC):
 
         return prereq_coro, logic_coro
 
-    @contextlib.contextmanager
-    def cleanup_task_on_interrupt(self, task: ControllerTask):
-        """Context manager that registers *task* for graceful or forced cleanup on interrupt."""
-        self._cleanup_tasks.add(task.task_id)
-        yield
-        self._cleanup_tasks.discard(task.task_id)
-
     async def shield_with_cleanup[T](self, fut: asyncio.Future[T]):
         """Awaits the input Future while shielding it from cancellation and handling stop/abort."""
         self._cleanup_futures.add(fut)
@@ -206,9 +200,33 @@ class DemandProc(ABC):
         self._cleanup_futures.discard(fut)
         return result
 
-    def run_with_cleanup[T](self, aw: Awaitable[T]):
-        """Awaits the input Future with the same semantics as `shield_with_cleanup`."""
-        return self.shield_with_cleanup(asyncio.ensure_future(aw))
+    def run_with_cleanup(self, task: Task, *, context: KeywordDict | None = None):
+        """Dispatch *task* (interrupting any current task) and await its completion under cleanup.
+
+        The execution future is registered for graceful/forced cleanup *synchronously*, before any
+        cancellable await, so the dispatch and completion happen inside the shielded region: a
+        demand change that cancels the procedure cannot slip in between dispatch and registration.
+        The controller-minted task id is registered for forced abort as soon as it is known.
+
+        Args:
+            task: The lifecycle task to execute.
+            context: Optional keyword context to attach to the execution.
+
+        Returns:
+            An awaitable yielding the final task execution result.
+        """
+        async def _execute():
+            execution = await self.lifecycle.controller.start_task(
+                task, context=context, interrupt=True
+            )
+            self._cleanup_tasks.add(execution.task_id)
+
+            try:
+                return await execution
+            finally:
+                self._cleanup_tasks.discard(execution.task_id)
+
+        return self.shield_with_cleanup(asyncio.ensure_future(_execute()))
 
     @abstractmethod
     async def state_logic(self):
@@ -508,10 +526,7 @@ class ControllerLifecycle:
                 try:
                     async with asyncio.timeout(recover_timeout):
                         await self.controller.execute_task(
-                            RecoverTask(
-                                task_id=uuid.uuid1(),
-                                controller_id=str(self.controller.entity),
-                            ),
+                            RecoverTask(),
                             interrupt=True,
                         )
 
@@ -530,10 +545,7 @@ class ControllerLifecycle:
             try:
                 async with asyncio.timeout(shutdown_timeout):
                     await self.controller.execute_task(
-                        ShutdownTask(
-                            task_id=uuid.uuid1(),
-                            controller_id=str(self.controller.entity),
-                        ),
+                        ShutdownTask(),
                         interrupt=True,
                     )
             except Exception as e:
@@ -565,16 +577,10 @@ class ControllerLifecycle:
             self.lifecycle.step = LifecycleStep.INIT
 
             logger.info(f"Preparing to operate ({controller})")
-            task = InitTask(
-                task_id=uuid.uuid1(),
-                controller_id=controller,
-                context=self.demand.contexts.get("init") if self.demand.contexts else None,
-            )
+            task = InitTask()
+            context = self.demand.contexts.get("init") if self.demand.contexts else None
 
-            with self.cleanup_task_on_interrupt(task):
-                await self.run_with_cleanup(
-                    self.lifecycle.controller.execute_task(task, interrupt=True)
-                )
+            await self.run_with_cleanup(task, context=context)
 
             # Init was successful.
             self.lifecycle.belief_state = InternalControllerState.OPERATE
@@ -648,16 +654,10 @@ class ControllerLifecycle:
             self.lifecycle.step = LifecycleStep.STANDBY
 
             logger.info(f"Entering standby mode ({controller})")
-            task = StandbyTask(
-                task_id=uuid.uuid1(),
-                controller_id=str(self.lifecycle.controller.entity),
-                context=self.demand.contexts.get("standby") if self.demand.contexts else None,
-            )
+            task = StandbyTask()
+            context = self.demand.contexts.get("standby") if self.demand.contexts else None
 
-            with self.cleanup_task_on_interrupt(task):
-                await self.run_with_cleanup(
-                    self.lifecycle.controller.execute_task(task, interrupt=True)
-                )
+            await self.run_with_cleanup(task, context=context)
 
             # Standby was successful.
             self.lifecycle.belief_state = InternalControllerState.STANDBY
@@ -682,16 +682,12 @@ class ControllerLifecycle:
             #        belief state. Then, the no-op below should be safe.
             if self.lifecycle.belief_state != InternalControllerState.SHUTDOWN:
                 logger.info(f"Commencing shutdown ({controller})")
-                task = ShutdownTask(
-                    task_id=uuid.uuid1(),
-                    controller_id=str(self.lifecycle.controller.entity),
-                    context=self.demand.contexts.get("shutdown") if self.demand.contexts else None,
+                task = ShutdownTask()
+                context = (
+                    self.demand.contexts.get("shutdown") if self.demand.contexts else None
                 )
 
-                with self.cleanup_task_on_interrupt(task):
-                    await self.run_with_cleanup(
-                        self.lifecycle.controller.execute_task(task, interrupt=True)
-                    )
+                await self.run_with_cleanup(task, context=context)
 
             # Shutdown was successful.
             self.lifecycle.belief_state = InternalControllerState.SHUTDOWN

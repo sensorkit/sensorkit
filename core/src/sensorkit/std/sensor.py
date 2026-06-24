@@ -223,7 +223,7 @@ class SensorControl:
             frame_count=task.camera_params.frame_count,
             latitude=self.config.site_position.latitude_degrees,
             longitude=self.config.site_position.longitude_degrees,
-            task_id=task.task_id,
+            task_id=task.execution.task_id,
         )
 
         # TLE fields default to None; only populated for TLE targets.
@@ -265,7 +265,7 @@ class SensorControl:
                 adhoc["target_id"] = "unknown"
 
         await sk.controller().update_context(
-            task.get_context(),
+            task.execution.get_context(),
             **adhoc,
         )
 

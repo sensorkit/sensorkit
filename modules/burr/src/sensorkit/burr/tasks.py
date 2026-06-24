@@ -58,7 +58,6 @@ class BurrContext(BaseModel):
 
 
 def build_sk_tasks(
-    controller_id: str,
     run: BurrRun,
     config: AppConfig,
     request: obs.ObservationRequest,
@@ -126,6 +125,11 @@ def build_sk_tasks(
             FileNameTemplate(template=_FILE_NAME_TEMPLATE),
         )
 
+        # The controller mints the task id; ``context`` and ``expiry_time`` are recorded on the
+        # minted execution. ``end_time`` is kept as a domain field for downstream scheduling.
+        def _emit(task: StandardCollectTask) -> sk.TaskSubmission:
+            return task.submit(context=exposure_context, expiry_time=end_time)
+
         # Resolve rates for THIS exposure (non-TLE rate case only).
         # RatesFromStreakDistribution samples a fresh rate per call,
         # which is what we want for streak-training distribution.
@@ -169,56 +173,51 @@ def build_sk_tasks(
         # other sources use SIDEREAL; from our perspective they're the
         # same "no custom rate" case for SK task emission.
         if all(m != TrackingMode.RATE for m in modes):
-            yield StandardCollectTask(
-                task_id=uuid.uuid4(),
-                controller_id=controller_id,
-                target=sidereal_target,
-                camera_params=cam,
-                end_time=end_time,
-                context=exposure_context,
+            yield _emit(
+                StandardCollectTask(
+                    target=sidereal_target,
+                    camera_params=cam,
+                    end_time=end_time,
+                )
             )
         elif all(m == TrackingMode.RATE for m in modes):
-            yield StandardCollectTask(
-                task_id=uuid.uuid4(),
-                controller_id=controller_id,
-                target=_rate_target(),
-                camera_params=cam,
-                end_time=end_time,
-                context=exposure_context,
+            yield _emit(
+                StandardCollectTask(
+                    target=_rate_target(),
+                    camera_params=cam,
+                    end_time=end_time,
+                )
             )
         elif _is_rates_then_nonrate(modes):
-            yield StandardCollectTask(
-                task_id=uuid.uuid4(),
-                controller_id=controller_id,
-                target=_rate_target(),
-                camera_params=cam,
-                end_time=end_time,
-                sidereal_frames=[i for i, m in enumerate(modes) if m != TrackingMode.RATE],
-                context=exposure_context,
+            yield _emit(
+                StandardCollectTask(
+                    target=_rate_target(),
+                    camera_params=cam,
+                    end_time=end_time,
+                    sidereal_frames=[i for i, m in enumerate(modes) if m != TrackingMode.RATE],
+                )
             )
         elif _is_nonrate_then_rates(modes):
             first_rate = modes.index(TrackingMode.RATE)
-            yield StandardCollectTask(
-                task_id=uuid.uuid4(),
-                controller_id=controller_id,
-                target=sidereal_target,
-                camera_params=CameraParameterSet(
-                    integration_time_seconds=exp_seconds,
-                    frame_count=first_rate,
-                ),
-                end_time=end_time,
-                context=exposure_context,
+            yield _emit(
+                StandardCollectTask(
+                    target=sidereal_target,
+                    camera_params=CameraParameterSet(
+                        integration_time_seconds=exp_seconds,
+                        frame_count=first_rate,
+                    ),
+                    end_time=end_time,
+                )
             )
-            yield StandardCollectTask(
-                task_id=uuid.uuid4(),
-                controller_id=controller_id,
-                target=_rate_target(),
-                camera_params=CameraParameterSet(
-                    integration_time_seconds=exp_seconds,
-                    frame_count=frame_count - first_rate,
-                ),
-                end_time=end_time,
-                context=exposure_context,
+            yield _emit(
+                StandardCollectTask(
+                    target=_rate_target(),
+                    camera_params=CameraParameterSet(
+                        integration_time_seconds=exp_seconds,
+                        frame_count=frame_count - first_rate,
+                    ),
+                    end_time=end_time,
+                )
             )
         else:
             raise ValueError(

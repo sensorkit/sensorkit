@@ -16,7 +16,7 @@ from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceClient
 from sensorkit.core.entity import EntityClient, EntityInterface, EntityRef
 from sensorkit.core.state import EventSourcedState
-from sensorkit.core.task import ControllerTask
+from sensorkit.core.task import Task, TaskExecution
 from sensorkit.data.context import Context, ContextSubscription
 
 if TYPE_CHECKING:
@@ -51,7 +51,7 @@ class TaskExecutionState(Event):
     executing: bool = False
     aborting: bool = False
     finished: TaskFinishInfo | None = None
-    task: ControllerTask | None
+    task: TaskExecution | None
     context: dict | None = None
 
     @model_validator(mode="after")
@@ -114,15 +114,25 @@ set_enable_state_request = Request.define(
 
 
 class ExecuteRequestMessage(BaseModel):
-    """Message model representing a Task execution request."""
-    task: ControllerTask
+    """A task execution request.
+
+    The client supplies the semantic `task` plus optional execution parameters. The controller
+    mints the identity (`task_id`, `controller_id`) and returns the resulting `TaskExecution` in
+    the response.
+    """
+    task: Task
+    context: KeywordDict | None = None
+    expiry_time: datetime | None = None
     interrupt: bool = False
 
 
 class ExecuteResponseMessage(ExtendedResponse):
-    """Message model representing a response to a Task execution request."""
-    task_id: uuid.UUID
-    start_time: datetime | None = None
+    """A response to a task execution request.
+
+    Carries the minted `TaskExecution` envelope so the client learns the assigned `task_id` (e.g.
+    for a subsequent abort) without having to supply it.
+    """
+    execution: TaskExecution | None = None
 
 
 class AbortRequestMessage(BaseModel):
@@ -180,14 +190,71 @@ class ControllerClient(EntityClient):
 
     def execute_task(
         self,
-        task: ControllerTask,
+        task: Task,
+        *,
+        context: KeywordDict | None = None,
+        expiry_time: datetime | None = None,
         interrupt=False,
     ) -> Call[ExecuteResponseMessage, TaskExecutionResult]:
-        """Send a task execution request to the controller and return a Call tracking completion."""
+        """Send a task execution request to the controller and return a `Call` tracking completion.
+
+        The controller assigns the `task_id` and `controller_id`. The optional execution
+        parameters are recorded on the resulting `TaskExecution`.
+
+        Args:
+            task: The semantic task to execute.
+            context: Optional keyword context to attach to the execution.
+            expiry_time: Optional time after which the execution should be considered expired.
+            interrupt: Whether to interrupt any task currently in progress.
+
+        Returns:
+            A `Call` that yields the final `TaskExecutionResult` when awaited.
+        """
         return self.call(
             execute_task_request,
-            ExecuteRequestMessage(task=task, interrupt=interrupt),
+            ExecuteRequestMessage(
+                task=task,
+                context=context,
+                expiry_time=expiry_time,
+                interrupt=interrupt,
+            ),
         )
+
+    async def start_task(
+        self,
+        task: Task,
+        *,
+        context: KeywordDict | None = None,
+        expiry_time: datetime | None = None,
+        interrupt=False,
+    ) -> TaskExecution:
+        """Submit a task and return its execution envelope once the controller acknowledges it.
+
+        Unlike `execute_task`, this awaits only the controller's initial response, then returns the
+        minted `TaskExecution`. The controller assigns the identity (`task_id`, `controller_id`);
+        the returned execution is bound to the in-flight call, so the caller can read the assigned
+        identity immediately and `await` the execution itself for the final `TaskExecutionResult`.
+
+        Args:
+            task: The semantic task to execute.
+            context: Optional keyword context to attach to the execution.
+            expiry_time: Optional time after which the execution should be considered expired.
+            interrupt: Whether to interrupt any task currently in progress.
+
+        Returns:
+            The minted execution envelope, awaitable for the final result.
+        """
+        call = self.execute_task(
+            task, context=context, expiry_time=expiry_time, interrupt=interrupt
+        )
+        response = await call.invoke()
+        execution = response.execution
+        assert execution is not None, "controller acknowledged task without an execution envelope"
+
+        # The in-flight call's future resolves to the result in this (client) context.
+        execution.bind_result(call.get_future())
+
+        return execution
 
     def abort_task(self, task_id: uuid.UUID | None = None) -> Call[AbortResponseMessage, None]:
         """Send an abort request to the controller for the optionally specified task ID."""
@@ -231,7 +298,7 @@ class ControllerDevice(Mapping[Any, Any]):
         return iter(self.subscription.cache)
 
 
-type TaskHandlerCallback[T: ControllerTask] = Callable[[T], Coroutine[Any, Any, None]]
+type TaskHandlerCallback[T: Task] = Callable[[T], Coroutine[Any, Any, None]]
 
 
 class ControllerInterface(EntityInterface):
@@ -282,7 +349,7 @@ class ControllerInterface(EntityInterface):
         ...
 
     @abstractmethod
-    def task_handler(self, task_type: type[ControllerTask]) -> Callable[..., TaskHandlerCallback]:
+    def task_handler(self, task_type: type[Task]) -> Callable[..., TaskHandlerCallback]:
         """Register a handler for the given task type and return a decorator."""
         ...
 

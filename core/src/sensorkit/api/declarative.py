@@ -27,7 +27,7 @@ from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.impl.device import DeviceImpl
 from sensorkit.core.impl.entity import EntityImpl
 from sensorkit.core.impl.program import ProgramImpl
-from sensorkit.core.task import ControllerTask
+from sensorkit.core.task import Task
 from sensorkit.core.trait import Archetype, Trait
 
 type AnyEntityDecl = DeclaredEntity | DeclaredDevice | DeclaredController | DeclaredProgram
@@ -285,7 +285,7 @@ class DeclaredController(DeclaredEntity[ControllerImpl], ControllerDelegate):
             case CallbackKind.TASK_HANDLER:
                 task_type = introspect_param_type(func)
 
-                if not issubclass(task_type, ControllerTask):
+                if not issubclass(task_type, Task):
                     raise DeclarationError("Task handler parameter has incorrect type")
 
                 self.impl.task_handler(task_type)(func)

@@ -241,19 +241,14 @@ class WebAPI:
                 return await self.kit.controller(controller_id).kv_get_model(ControllerState)
 
         @app.post("/controller/{controller_id}/execute", tags=["Controller"])
-        async def run_controller_task(controller_id: str, task: sk.ControllerTask):
+        async def run_controller_task(controller_id: str, task: sk.Task):
             """Execute a task on a controller."""
-            # Ensure task has ID and controller_id if not provided
-            if not task.task_id:
-                task.task_id = uuid.uuid7()
-
-            if not task.controller_id:
-                task.controller_id = controller_id
-
             with _error_handler():
-                await self.kit.controller(controller_id).execute_task(task)
+                # The controller mints the task_id; learn it from the returned execution.
+                execution = await self.kit.controller(controller_id).start_task(task)
+                await execution
 
-            return _status_ok(task_id=task.task_id)
+            return _status_ok(task_id=execution.task_id)
 
         @app.post("/controller/{controller_id}/wait", tags=["Controller"])
         async def wait_for_current_task(controller_id: str):

@@ -32,7 +32,6 @@ from pydantic import BaseModel, Field
 import sensorkit.api as sk
 from sensorkit.astro.common import SitePosition
 from sensorkit.burr.tasks import build_sk_tasks
-from sensorkit.std import StandardCollectTask
 
 
 class BurrConfig(BaseModel):
@@ -141,7 +140,7 @@ class BurrProgram:
 
         pending = self._queue.popleft()
         logger.debug(
-            f"yielding SK task {pending.task.task_id} for {pending.slot.name} "
+            f"yielding SK task for {pending.slot.name} "
             f"(request {pending.request.task_id}, "
             f"{'final' if pending.is_last_of_request else 'intermediate'} of fan-out)"
         )
@@ -150,7 +149,7 @@ class BurrProgram:
         start_time = time.monotonic()
 
         try:
-            yield pending.task
+            await (yield pending.task)
         except Exception as e:
             error = e
 
@@ -272,7 +271,6 @@ class BurrProgram:
         try:
             sk_tasks = list(
                 build_sk_tasks(
-                    self.config.controller.name,
                     self.run,
                     self.app_config,
                     chosen_request,
@@ -315,7 +313,7 @@ class PendingTask:
     request-level bookkeeping so ``_next_task`` knows when to record
     completion."""
 
-    task: StandardCollectTask
+    task: sk.TaskSubmission
     slot: TaskSlot
     request: ObservationRequest
     is_last_of_request: bool

@@ -32,7 +32,7 @@ from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.impl.device import DeviceImpl
 from sensorkit.core.impl.entity import EntityImpl
 from sensorkit.core.impl.program import ProgramImpl
-from sensorkit.core.task import ControllerTask
+from sensorkit.core.task import Task
 from sensorkit.core.trait import declare_archetype, declare_trait
 
 
@@ -107,7 +107,7 @@ async def test_service():
     svc_decl = Service("test", "0.1.0")
 
     async with asyncio.timeout(5.0):
-        os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+        os.environ["SENSORKIT_BACKEND"] = "fake"
         await svc_decl.start()
         await svc_decl.stop()
 
@@ -170,7 +170,7 @@ async def test_entity_class_include():
     assert instance.on_init in [func for kind, func in decl._associated_callbacks]
 
     async with asyncio.timeout(1.0):
-        os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+        os.environ["SENSORKIT_BACKEND"] = "fake"
         await svc_decl.start()
         await done.wait()
         await svc_decl.stop()
@@ -216,7 +216,7 @@ async def test_entity_class_inheritance():
     assert instance.on_init in [func for kind, func in decl._associated_callbacks]
 
     async with asyncio.timeout(1.0):
-        os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+        os.environ["SENSORKIT_BACKEND"] = "fake"
         await svc_decl.start()
 
         await done.wait()
@@ -245,7 +245,7 @@ async def test_declared_entity():
     svc_decl.add(ent)
 
     async with asyncio.timeout(1.0):
-        os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+        os.environ["SENSORKIT_BACKEND"] = "fake"
         await svc_decl.start()
 
         await init_done.wait()
@@ -296,7 +296,7 @@ async def test_declared_device():
     svc_decl.add(dev)
 
     async with asyncio.timeout(1.0):
-        os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+        os.environ["SENSORKIT_BACKEND"] = "fake"
         await svc_decl.start()
 
         cli = svc_decl.client.device("test_device")
@@ -364,7 +364,7 @@ async def test_declared_controller():
     async def on_deinit():
         assert ControllerImpl.current.get() is ctrl.impl
 
-    class TestTask(ControllerTask):
+    class TestTask(Task):
         task_type: Literal["test_task"] = "test_task"
         my_value: int
 
@@ -377,7 +377,7 @@ async def test_declared_controller():
     svc_decl.add(ctrl)
 
     async with asyncio.timeout(1.0):
-        os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+        os.environ["SENSORKIT_BACKEND"] = "fake"
         await svc_decl.start()
 
         cli = svc_decl.client.controller("test_controller")
@@ -422,7 +422,7 @@ async def test_declared_program():
     svc_decl.add(prog)
 
     async with asyncio.timeout(1.0):
-        os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+        os.environ["SENSORKIT_BACKEND"] = "fake"
         await svc_decl.start()
 
         cli = svc_decl.client.program("test_program")

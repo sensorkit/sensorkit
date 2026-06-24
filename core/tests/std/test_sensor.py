@@ -46,7 +46,7 @@ from sensorkit.std import (
 
 
 async def run_service(svc: Service):
-    os.environ["SENSORKIT_BACKEND"] = "sensorkit.backend.fake"
+    os.environ["SENSORKIT_BACKEND"] = "fake"
     svc_task = asyncio.create_task(svc.run())
     await svc.running
     return svc_task

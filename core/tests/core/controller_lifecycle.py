@@ -154,7 +154,7 @@ class LifecycleApp(App):
         async def _listen_for_controller_events(queue: asyncio.Queue):
             async for _, event in await controller.monitor(TaskExecutionState):
                 if event.executing and not event.aborting:
-                    await queue.put(f"{event.task.task_type} {event.task.task_id.hex[:8]}")
+                    await queue.put(f"{event.task.task.task_type} {event.task.task_id.hex[:8]}")
                 elif event.finished:
                     await queue.put(None)
 
