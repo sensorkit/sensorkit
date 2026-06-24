@@ -43,6 +43,7 @@ from sensorkit.models.devices import (
 )
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.thesky.device import (
+    CommandNotSupportedError,
     MountCommandInProgressError,
     ProcessAbortedError,
     TheSkyDevice,
@@ -335,19 +336,22 @@ class TheSkyTelescope(TheSkyDevice):
         await self.telescope_unpark()
         logger.debug("homing telescope")
 
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                try:
-                    await self.execute(
-                        """
-                        sky6RASCOMTele.FindHome();
-                        """
-                    )
-                    break
-                except MountCommandInProgressError:
-                    await asyncio.sleep(0.5)
+        try:
+            async with asyncio.timeout(self.config.timeout):
+                while True:
+                    try:
+                        await self.execute(
+                            """
+                            sky6RASCOMTele.FindHome();
+                            """
+                        )
+                        break
+                    except MountCommandInProgressError:
+                        await asyncio.sleep(0.5)
 
-        await self.poll("""sky6RASCOMTele.LastSlewError;""", "0")
+            await self.poll("""sky6RASCOMTele.LastSlewError;""", "0")
+        except CommandNotSupportedError:
+            logger.warning("Mount does not support FindHome; skipping homing")
 
         # Turn off sidereal tracking
         await self.execute(
@@ -620,6 +624,8 @@ class TheSkyTelescope(TheSkyDevice):
             """
             var LeoStatus = -1;
             try { LeoStatus = Raven3.trackLEOStatus; } catch (e) {}
+            var SlewComplete = -1;
+            try { SlewComplete = sky6RASCOMTele.IsSlewComplete; } catch (e) {}
             var Out;
             sky6RASCOMTele.GetRaDec();
             sky6RASCOMTele.GetAzAlt();
@@ -631,7 +637,7 @@ class TheSkyTelescope(TheSkyDevice):
                 sky6RASCOMTele.dDecTrackingRate,
                 sky6RASCOMTele.dAlt,
                 sky6RASCOMTele.dAz,
-                sky6RASCOMTele.IsSlewComplete,
+                SlewComplete,
                 sky6RASCOMTele.IsTracking,
                 LeoStatus
             ];
@@ -660,7 +666,10 @@ class TheSkyTelescope(TheSkyDevice):
         elif leo_status == LEO_TRACKING:
             is_slewing, is_tracking = False, True
         else:
-            is_slewing = not bool(slew_complete)
+            if slew_complete < 0:
+                is_slewing = False
+            else:
+                is_slewing = not bool(slew_complete)
             is_tracking = bool(tracking)
 
         device = sk.device()

@@ -233,6 +233,10 @@ class CommandConflictError(TheSkyError):
     code = 219
 
 
+class CommandNotSupportedError(TheSkyError):
+    code = 228
+
+
 class ObjectNotFoundError(TheSkyError):
     code = 250
 

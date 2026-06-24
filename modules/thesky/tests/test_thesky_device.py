@@ -6,6 +6,7 @@ import pytest
 from sensorkit.thesky.device import (
     SCRIPT_FOOTER,
     SCRIPT_HEADER,
+    CommandNotSupportedError,
     ProcessAbortedError,
     TheSkyDevice,
     TheSkyDeviceConfig,
@@ -90,6 +91,18 @@ def test_parse_thesky_response():
         parse_thesky_response(error_payload)
 
     assert isinstance(e.value, ProcessAbortedError)
+    assert e.value.code == error_code
+    assert e.value.args[0] == error_message
+
+    # Unsupported command (e.g. FindHome on a sim mount) maps to its typed error.
+    error_message = "This command is not supported by the selected device"
+    error_code = 228
+    error_payload = f"TypeError: {error_message}. Error = {error_code}.|{no_error}\n".encode()
+
+    with pytest.raises(TheSkyError) as e:
+        parse_thesky_response(error_payload)
+
+    assert isinstance(e.value, CommandNotSupportedError)
     assert e.value.code == error_code
     assert e.value.args[0] == error_message
 
