@@ -227,6 +227,13 @@ class OttoProgram:
             try:
                 yield task
                 logger.info(f"task ({task.task_id}) finished execution successfully.")
+                # Optional fixed gap after each completed task. Skipped on
+                # cancellation/failure so those propagate without delay.
+                if self.config.task.inter_task_delay_seconds > 0:
+                    logger.info(
+                        f"waiting {self.config.task.inter_task_delay_seconds}s before next task"
+                    )
+                    await asyncio.sleep(self.config.task.inter_task_delay_seconds)
             except asyncio.CancelledError as e:
                 logger.warning(f"Task ({task.task_id}) cancelled: {e}")
                 raise

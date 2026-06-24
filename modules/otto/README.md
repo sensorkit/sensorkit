@@ -24,6 +24,7 @@ value:
     tle_update_interval_hours: 4         # How often to poll Spacebook for new TLEs
     graylist_interval_minutes: 15        # How often to promote from graylist
     end_time_deadband_seconds: 3600      # Extra time added to task end time
+    inter_task_delay_seconds: 0          # Fixed pause after each completed task (0 = back-to-back)
   collect:
     altitude_min: 20                     # Minimum observing altitude (degrees)
     track_mode: rate_sidereal            # Collection mode [rate, sidereal, rate_sidereal]

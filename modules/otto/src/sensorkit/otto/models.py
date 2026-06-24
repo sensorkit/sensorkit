@@ -25,6 +25,7 @@ class TaskConfig(BaseModel):
     tle_update_interval_hours: int = 24
     graylist_interval_minutes: int = 300
     end_time_deadband_seconds: int = 60
+    inter_task_delay_seconds: float = 0.0
 
 
 class CollectConfig(BaseModel):

@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import make_task
@@ -138,6 +138,46 @@ class TestEndTimeRefresh:
 
         # Should have a fresh end_time: ~now + (5*2) + 30 = now + 40s
         assert result.end_time > datetime.now(UTC) + timedelta(seconds=35)
+
+
+class TestInterTaskDelay:
+    @pytest.mark.asyncio
+    async def test_sleeps_after_task_when_delay_configured(self, program):
+        """A configured delay should sleep after a task completes."""
+        program.config = MagicMock()
+        program.config.task.end_time_deadband_seconds = 60
+        program.config.task.inter_task_delay_seconds = 5.0
+        await program.task_queue.push_task(make_task())
+
+        gen = program.generate()
+        result = await gen.__anext__()
+        assert result is not None
+
+        # Resume past the yield so the post-task delay runs.
+        with patch(
+            "sensorkit.otto.program.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep:
+            with pytest.raises(StopAsyncIteration):
+                await gen.__anext__()
+            mock_sleep.assert_awaited_once_with(5.0)
+
+    @pytest.mark.asyncio
+    async def test_no_sleep_when_delay_zero(self, program):
+        """The default (0) delay should not sleep between tasks."""
+        program.config = MagicMock()
+        program.config.task.end_time_deadband_seconds = 60
+        program.config.task.inter_task_delay_seconds = 0.0
+        await program.task_queue.push_task(make_task())
+
+        gen = program.generate()
+        await gen.__anext__()
+
+        with patch(
+            "sensorkit.otto.program.asyncio.sleep", new_callable=AsyncMock
+        ) as mock_sleep:
+            with pytest.raises(StopAsyncIteration):
+                await gen.__anext__()
+            mock_sleep.assert_not_awaited()
 
 
 class TestObjectListManagement:
