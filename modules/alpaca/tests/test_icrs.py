@@ -5,6 +5,8 @@ import pytest
 from astropy.coordinates import EarthLocation
 from conftest import MockAlpacaSDKDevice
 
+from sensorkit.astro.coords import Geodetic
+
 from sensorkit.alpaca.telescope import (
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
@@ -87,6 +89,7 @@ def telescope():
     t._alignment_mode = None
     t._does_refraction = None
     t._location = EarthLocation(lat=-31.0 * u.deg, lon=149.0 * u.deg, height=1100.0 * u.m)
+    t._geodetic = Geodetic(lon=149.0, lat=-31.0, elev=1100.0)
     return t
 
 

@@ -9,6 +9,7 @@ from sensorkit.alpaca.telescope import (
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
 )
+from sensorkit.astro.coords import Geodetic
 from sensorkit.models.devices import FollowTarget
 
 
@@ -75,6 +76,7 @@ def telescope():
     t._can_move_axis = [False, False, False]
     t._tracking = False
     t._slewing = False
+    t._fast_status_task = None
     t._site_lat = -31.0
     t._site_lon = 149.0
     t._site_elev = 1100.0
@@ -86,6 +88,7 @@ def telescope():
     t._alignment_mode = None
     t._does_refraction = None
     t._location = EarthLocation(lat=-31.0 * u.deg, lon=149.0 * u.deg, height=1100.0 * u.m)
+    t._geodetic = Geodetic(lon=149.0, lat=-31.0, elev=1100.0)
     return t
 
 

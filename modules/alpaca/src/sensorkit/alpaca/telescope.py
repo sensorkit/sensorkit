@@ -23,6 +23,7 @@ from sensorkit.astro.common import SitePosition, AltAzPointing, RADecPointing
 from sensorkit.astro.coords import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
+    EphemerisTarget,
     FrameTarget,
     ICRSTarget,
     RateTarget,
@@ -433,18 +434,21 @@ class AlpacaTelescope(AlpacaDevice):
     async def telescope_follow_target(self, cmd: FollowTarget):
         await self.require_connected()
 
-        # target = await cmd.target.adapt(
-        #     ICRSTarget,
-        #     AltAzTarget,
-        #     (FrameTarget, ReferenceFrame.ICRF),
-        #     (FrameTarget, ReferenceFrame.ALTAZ),
-        #     TLETarget,
-        #     (RateTarget, ReferenceFrame.ICRF),
-        #     (RateTarget, ReferenceFrame.ICRF),
-        #     (EphemerisTarget, ReferenceFrame.ICRF),
-        #     observer=self._geodetic,
-        # )
-        target = cmd.target
+        # ASCOM/Alpaca has no path-follow primitive, only slew + constant offset
+        # rate, so we accept an ICRF EphemerisTarget and collapse it to a
+        # position-plus-rate below. Propagatable inputs (TLE, state vector) are
+        # normalized to that ephemeris by adapt(); a direct TLE still passes
+        # through to the native skyfield handler.
+        target = await cmd.target.adapt(
+            ICRSTarget,
+            AltAzTarget,
+            (FrameTarget, ReferenceFrame.ICRF),
+            (FrameTarget, ReferenceFrame.ALTAZ),
+            TLETarget,
+            (RateTarget, ReferenceFrame.ICRF),
+            (EphemerisTarget, ReferenceFrame.ICRF),
+            observer=self._geodetic,
+        )
 
         # Unpark if needed
         at_park = await self.get(self.telescope, "AtPark", False)
@@ -495,6 +499,8 @@ class AlpacaTelescope(AlpacaDevice):
                 logger.debug("following AltAz target")
 
             case TLETarget():
+                # FIXME: Leaving TLETarget for now because it has been tested against sdasim.
+                # Once EphemerisTarget has been tested, TLETarget can be adapted to it.
                 logger.debug("executing TLE follow")
 
                 ra_hours, dec_deg, ra_rate, dec_rate = await asyncio.to_thread(
@@ -575,6 +581,50 @@ class AlpacaTelescope(AlpacaDevice):
                 self._start_fast_status()
 
                 logger.debug("following Rate target")
+
+            case EphemerisTarget():
+                logger.debug("executing Ephemeris follow")
+
+                # No path-follow primitive in ASCOM, so collapse the precomputed
+                # path to an initial position plus a constant offset rate: slew to
+                # the sample nearest now and finite-difference the two adjacent
+                # samples for the instantaneous RA/Dec rate. Like the TLE case,
+                # this is a best-effort snapshot that drifts over time.
+                jds = target.jds
+                points = target.points
+                now_jd = Time.now().jd
+                i = min(range(len(jds) - 1), key=lambda j: abs(jds[j] - now_jd))
+
+                ra_hours = points[i].ra / 15.0
+                dec_deg = points[i].dec
+
+                dt_sec = (jds[i + 1] - jds[i]) * 86400.0
+                # Wrap the RA difference into [-180, 180] deg to survive 0/360 crossings.
+                dra_deg = (points[i + 1].ra - points[i].ra + 180.0) % 360.0 - 180.0
+                ddec_deg = points[i + 1].dec - points[i].dec
+
+                _UTC_TO_SIDEREAL = 1.00273791
+                ra_rate = dra_deg / dt_sec / 15.0 * 3600.0 * _UTC_TO_SIDEREAL
+                dec_rate = ddec_deg / dt_sec * 3600.0
+
+                # Tracking must be enabled before slewing
+                if self._can_set_tracking:
+                    await self.put(self.telescope, "Tracking", True)
+                    self._tracking = True
+
+                if self._can_slew_async:
+                    await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
+                elif self._can_slew:
+                    await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
+                await self._wait_for_telescope(tracking=True)
+
+                if self._can_set_right_ascension_rate:
+                    await self.put(self.telescope, "RightAscensionRate", ra_rate)
+                if self._can_set_declination_rate:
+                    await self.put(self.telescope, "DeclinationRate", dec_rate)
+                self._start_fast_status()
+
+                logger.debug("following Ephemeris target")
 
             case FrameTarget():
                 # Clear any non-sidereal offset rates
