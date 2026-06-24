@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import UTC, datetime
 from typing import Literal
 
 import pytest
 import uuid_utils.compat as uuid
 from pydantic import BaseModel
 
+from sensorkit.backend.event import Event
 from sensorkit.backend.request import CallError
 from sensorkit.common.keyword import declare_keyword
-from sensorkit.core.controller import ControllerDevice
+from sensorkit.core.controller import ControllerDevice, ControllerState, TaskExecutionState
 from sensorkit.core.device import DeviceClient
 from sensorkit.core.impl.controller import ControllerImpl
-from sensorkit.core.task import CollectTask, InitTask
+from sensorkit.core.task import CollectTask, InitTask, TaskExecution
 
 
 @pytest.mark.asyncio
@@ -291,3 +294,77 @@ async def test_controller_use_device(kit):
 
     # 9. stop_device_subscriptions()
     await controller.stop_device_subscriptions()
+
+
+# Legacy state migration: versions before the Task/TaskExecution split stored the executing
+# task as a flat ControllerTask on `execution_state.task`. A `mode="before"` validator on
+# TaskExecutionState upgrades that shape so old state from a NATS broker still loads.
+_LEGACY_TASK = {
+    "task_type": "init",
+    "task_id": "0192c3f4-5678-7abc-8def-0123456789ab",
+    "controller_id": "legacy-controller",
+    "context": None,
+    "end_time": "2026-01-01T00:00:00Z",
+}
+_LEGACY_TASK_ID = uuid.UUID(_LEGACY_TASK["task_id"])
+_LEGACY_EXPIRY = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def test_legacy_task_execution_state_migrates_flat_task():
+    """A legacy flat task on a TaskExecutionState is wrapped into a TaskExecution envelope."""
+    state = TaskExecutionState.model_validate(
+        {"executing": True, "task": dict(_LEGACY_TASK)}
+    )
+
+    assert isinstance(state.task, TaskExecution)
+    assert isinstance(state.task.task, InitTask)
+    assert state.task.task_id == _LEGACY_TASK_ID
+    assert state.task.controller_id == "legacy-controller"
+    # The legacy deadline becomes the envelope expiry; identity is lifted off the task.
+    assert state.task.expiry_time == _LEGACY_EXPIRY
+
+
+def test_legacy_controller_state_loads_from_kv_json():
+    """A full ControllerState snapshot persisted in the old shape deserialises without error."""
+    legacy = {
+        "enable_state": {"enabled": True},
+        "operating_state": {"current": "operate"},
+        "execution_state": {"executing": True, "task": dict(_LEGACY_TASK)},
+    }
+
+    state = ControllerState.model_validate_json(json.dumps(legacy))
+
+    assert isinstance(state.execution_state.task, TaskExecution)
+    assert isinstance(state.execution_state.task.task, InitTask)
+    assert state.execution_state.task.task_id == _LEGACY_TASK_ID
+    assert state.execution_state.task.expiry_time == _LEGACY_EXPIRY
+
+
+def test_legacy_task_execution_event_replays_through_registry():
+    """A legacy event on the durable stream is upgraded when narrowed via the Event registry."""
+    payload = {
+        "event_model": "TaskExecutionState",
+        "executing": True,
+        "task": dict(_LEGACY_TASK),
+    }
+
+    event = Event.model_validate_json(json.dumps(payload))
+
+    assert isinstance(event, TaskExecutionState)
+    assert isinstance(event.task, TaskExecution)
+    assert isinstance(event.task.task, InitTask)
+    assert event.task.task_id == _LEGACY_TASK_ID
+
+
+def test_current_task_execution_state_roundtrips_unchanged():
+    """Current-shape state passes through the migration validator as a no-op."""
+    execution = TaskExecution(
+        task=InitTask(), task_id=uuid.uuid7(), controller_id="ctl"
+    )
+    state = TaskExecutionState(executing=True, task=execution)
+
+    reloaded = TaskExecutionState.model_validate(state.model_dump())
+
+    assert isinstance(reloaded.task, TaskExecution)
+    assert isinstance(reloaded.task.task, InitTask)
+    assert reloaded.task.task_id == execution.task_id

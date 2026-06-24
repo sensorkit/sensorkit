@@ -54,6 +54,46 @@ class TaskExecutionState(Event):
     task: TaskExecution | None
     context: dict | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_task(cls, data: Any) -> Any:
+        """Upgrade events persisted by versions predating the Task/TaskExecution split.
+
+        Older controllers stored the executing task on ``task`` as a flat ``ControllerTask`` —
+        identity (``task_id``, ``controller_id``), ``context`` and the ``end_time`` deadline
+        embedded alongside the discriminated task fields. This version expects a ``TaskExecution``
+        envelope wrapping the semantic ``task``. Rewriting the legacy shape here covers both reads:
+        the KV ``ControllerState`` snapshot (whose ``execution_state`` is validated as this model)
+        and event-stream replay (where each event is validated through the registry). Without it,
+        state carried by a NATS broker from an older version would raise a ``ValidationError``.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        legacy = data.get("task")
+
+        # A legacy task is a flat ``ControllerTask``: it carries the discriminator at the top level
+        # and has no nested ``task`` envelope. A current ``TaskExecution`` always nests ``task``.
+        if not isinstance(legacy, dict) or "task_type" not in legacy or "task" in legacy:
+            return data
+
+        # Lift the envelope fields off the task; the remaining keys (``task_type`` plus domain
+        # fields) become the wrapped semantic task. The legacy ``end_time`` was the execution
+        # deadline, so it maps to the envelope's ``expiry_time``; task types that still declare
+        # ``end_time`` as a domain field (e.g. ``standard_collect``) keep their own copy because it
+        # is left in the wrapped task.
+        envelope = {
+            "task": {
+                k: v for k, v in legacy.items() if k not in ("task_id", "controller_id", "context")
+            },
+            "task_id": legacy.get("task_id"),
+            "controller_id": legacy.get("controller_id"),
+            "context": legacy.get("context"),
+            "expiry_time": legacy.get("end_time"),
+        }
+
+        return {**data, "task": envelope}
+
     @model_validator(mode="after")
     def _validate(self):
         if self.executing and self.task is None:
