@@ -4,7 +4,6 @@ import asyncio
 import collections
 import contextlib
 import functools
-import uuid
 from abc import abstractmethod
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Literal
@@ -19,7 +18,7 @@ from sensorkit.common.aio import AsyncObserver
 from sensorkit.common.keyword import KeywordDict, declare_keyword
 from sensorkit.core.entity import EntityClient, EntityInterface, EntityRef
 from sensorkit.core.executor import TaskFactoryFunc
-from sensorkit.core.task import TaskContexts
+from sensorkit.core.task import TaskContexts, TaskExecution
 
 if TYPE_CHECKING:
     from sensorkit.core.client import SensorKit
@@ -54,16 +53,21 @@ class ProgramActiveState(Event):
     contexts: dict[str, KeywordDict] = Field(default_factory=dict)
 
 
-class ProgramTaskingStatus(Event):
-    """Event indicating the Task a Program is currently executing, if any."""
-    executing_task_id: uuid.UUID | None = None
+class ProgramTaskingState(Event):
+    """Event indicating the Task a Program is currently executing, if any.
+
+    Carries the full `TaskExecution` envelope (not just an id) so observers see the same task shape
+    the controller publishes on its `TaskExecutionState`, including the controller-minted
+    `task_id`. `None` while the program is between tasks or idle.
+    """
+    executing_task: TaskExecution | None = None
 
 
 class ProgramState(BaseModel):
     """Internal state snapshot of a Program."""
     enable_state: ProgramEnableState
     active_state: ProgramActiveState
-    tasking_status: ProgramTaskingStatus
+    tasking_state: ProgramTaskingState
 
 
 class ProgramEnableStateRequest(BaseModel):

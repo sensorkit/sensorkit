@@ -24,11 +24,11 @@ from sensorkit.core.program import (
     ProgramInterface,
     ProgramOffering,
     ProgramState,
-    ProgramTaskingStatus,
+    ProgramTaskingState,
     set_active_state_request,
     set_enable_state_request,
 )
-from sensorkit.core.task import TaskContexts
+from sensorkit.core.task import TaskContexts, TaskExecution
 
 
 class ProgramOffers:
@@ -104,7 +104,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
         self._state = ProgramState(
             enable_state=ProgramEnableState(enabled=False),
             active_state=ProgramActiveState(active=False, origin="init"),
-            tasking_status=ProgramTaskingStatus(),
+            tasking_state=ProgramTaskingState(),
         )
         self._state_lock = asyncio.Lock()
         self._task_factory: TaskFactoryFunc | None = None
@@ -160,6 +160,12 @@ class ProgramImpl(EntityImpl, ProgramInterface):
 
         logger.debug(f"starting tasking loop with {contexts=}")
 
+        async def _on_task_change(execution: TaskExecution | None):
+            # Publish the program's current tasking state as the loop starts/finishes each task.
+            await self._update_state(
+                "tasking_state", ProgramTaskingState(executing_task=execution)
+            )
+
         # Create the tasking loop.
         self._task_loop = TaskingLoop(
             controller=self.sensorkit().controller(
@@ -168,6 +174,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             factory_func=self._task_factory,
             contexts=contexts,
             task_group=self.task_group,
+            on_task_change=_on_task_change,
         )
 
         # Start a background task to make sure the end states are properly handled whether the
@@ -181,6 +188,11 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             try:
                 await aio_task
             finally:
+                # Clear any lingering tasking state: the loop may have exited mid-task (error or
+                # abort), where clearing is intentionally deferred to teardown here.
+                if self._state.tasking_state.executing_task is not None:
+                    await self._update_state("tasking_state", ProgramTaskingState())
+
                 await self._update_state(
                     "active_state",
                     ProgramActiveState(active=False, origin="request")
