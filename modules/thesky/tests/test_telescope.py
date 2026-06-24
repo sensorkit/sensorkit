@@ -38,6 +38,22 @@ def home_unsupported_telescope(telescope):
     return telescope
 
 
+@pytest.fixture
+def tracking_unsupported_telescope(telescope):
+    """A telescope whose mount rejects Abort/SetTracking with TheSky error 228."""
+    real_execute = telescope.execute
+
+    async def execute(script):
+        if "SetTracking" in script or "Abort" in script:
+            raise CommandNotSupportedError(
+                message="This command is not supported by the selected device", code=228
+            )
+        return await real_execute(script)
+
+    telescope.execute = execute
+    return telescope
+
+
 @pytest.mark.asyncio
 async def test_telescope_connect(telescope):
     await telescope.telescope_connect(Connect())
@@ -87,6 +103,28 @@ async def test_telescope_home_unsupported(home_unsupported_telescope):
     assert telescope.state.has_been_homed is True
     resp = await telescope.execute("sky6RASCOMTele.IsTracking;")
     assert resp.strip() == "0"
+
+
+@pytest.mark.asyncio
+async def test_telescope_home_tracking_unsupported(tracking_unsupported_telescope):
+    telescope = tracking_unsupported_telescope
+    await telescope.telescope_connect(Connect())
+    await telescope.telescope_unpark()
+
+    # SetTracking raises 228; homing should still complete and mark state.
+    await telescope.telescope_home(Home())
+
+    assert telescope.state.has_been_homed is True
+
+
+@pytest.mark.asyncio
+async def test_telescope_stop_tracking_unsupported(tracking_unsupported_telescope):
+    telescope = tracking_unsupported_telescope
+    await telescope.telescope_connect(Connect())
+    await telescope.telescope_unpark()
+
+    # Abort/SetTracking raise 228; stop should not propagate the error.
+    await telescope.telescope_stop(Stop())
 
 
 @pytest.mark.asyncio

@@ -264,15 +264,18 @@ class TheSkyTelescope(TheSkyDevice):
         await self.telescope_unpark()
         logger.debug("stopping telescope")
 
-        await self.execute(
-            """
-            sky6RASCOMTele.Abort();
-            sky6RASCOMTele.SetTracking(0,1,0,0);
-            """
-        )
+        try:
+            await self.execute(
+                """
+                sky6RASCOMTele.Abort();
+                sky6RASCOMTele.SetTracking(0,1,0,0);
+                """
+            )
 
-        async with asyncio.timeout(self.config.timeout):
-            await self.poll("""sky6RASCOMTele.IsTracking;""", "0", interval=0.2)
+            async with asyncio.timeout(self.config.timeout):
+                await self.poll("""sky6RASCOMTele.IsTracking;""", "0", interval=0.2)
+        except CommandNotSupportedError:
+            logger.warning("Mount does not support Abort/SetTracking; skipping")
 
         self._stop_fast_status()
         logger.debug("stopped telescope")
@@ -351,17 +354,20 @@ class TheSkyTelescope(TheSkyDevice):
 
             await self.poll("""sky6RASCOMTele.LastSlewError;""", "0")
         except CommandNotSupportedError:
-            logger.warning("Mount does not support FindHome; skipping homing")
+            logger.warning("Mount does not support FindHome; skipping")
 
         # Turn off sidereal tracking
-        await self.execute(
-            """
-            sky6RASCOMTele.SetTracking(0,1,0,0);
-            """
-        )
+        try:
+            await self.execute(
+                """
+                sky6RASCOMTele.SetTracking(0,1,0,0);
+                """
+            )
 
-        async with asyncio.timeout(self.config.timeout):
-            await self.poll("""sky6RASCOMTele.IsTracking;""", "0")
+            async with asyncio.timeout(self.config.timeout):
+                await self.poll("""sky6RASCOMTele.IsTracking;""", "0")
+        except CommandNotSupportedError:
+            logger.warning("Mount does not support SetTracking; skipping")
 
         self.state.has_been_homed = True
         await sk.device().kv_put_model(self.state)
