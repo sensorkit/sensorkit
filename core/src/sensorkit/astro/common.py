@@ -52,6 +52,16 @@ class TLE:
         else:
             return [self.line1, self.line2]
 
+    @property
+    def norad_id(self):
+        raw = self.line1[2:7].strip()
+
+        return (
+            str((ord(raw[0].upper()) - ord("A") + 10) * 10000 + int(raw[1:]))
+            if raw and raw[0].isalpha()
+            else str(int(raw))
+        )
+
 
 @declare_keyword
 class SitePosition(BaseModel):
