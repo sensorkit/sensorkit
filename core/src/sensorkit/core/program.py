@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from intervaltree import Interval, IntervalTree
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from sensorkit.backend.event import Event
 from sensorkit.backend.request import ExtendedResponse, Request
@@ -62,12 +62,50 @@ class ProgramTaskingState(Event):
     """
     executing_task: TaskExecution | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_executing_task(cls, data: Any) -> Any:
+        """Upgrade state persisted before the executing task carried a full `TaskExecution`.
+
+        The pre-split `ProgramTaskingStatus` recorded only `executing_task_id` — a bare task id.
+        A bare id cannot be rehydrated into a `TaskExecution` envelope, so a legacy id collapses to
+        ``executing_task=None`` (equivalent to "idle"); observers of the old shape only ever saw the
+        id, which the program re-publishes the moment it next dispatches a task.
+        """
+        if not isinstance(data, dict) or "executing_task" in data:
+            return data
+
+        if "executing_task_id" in data:
+            data = {k: v for k, v in data.items() if k != "executing_task_id"}
+            data["executing_task"] = None
+
+        return data
+
 
 class ProgramState(BaseModel):
     """Internal state snapshot of a Program."""
     enable_state: ProgramEnableState
     active_state: ProgramActiveState
     tasking_state: ProgramTaskingState
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_tasking_state(cls, data: Any) -> Any:
+        """Upgrade KV snapshots persisted before `tasking_status` was renamed to `tasking_state`.
+
+        Versions predating the Task/TaskExecution split stored the program's executing task under a
+        ``tasking_status`` key (a `ProgramTaskingStatus` carrying ``executing_task_id``); this
+        version expects ``tasking_state``. Renaming the key here lets `ProgramTaskingState`'s own
+        ``before`` validator finish upgrading the inner shape, so a program starting against a NATS
+        broker holding older state no longer raises a `ValidationError`. A snapshot missing both
+        keys entirely is treated as idle.
+        """
+        if not isinstance(data, dict) or "tasking_state" in data:
+            return data
+
+        data = dict(data)
+        data["tasking_state"] = data.pop("tasking_status", {})
+        return data
 
 
 class ProgramEnableStateRequest(BaseModel):

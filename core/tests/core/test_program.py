@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import datetime, timedelta
 
 import pytest
 
-from sensorkit.core.program import ProgramOffering, ProgramTaskingState
+from sensorkit.core.program import ProgramOffering, ProgramState, ProgramTaskingState
 from sensorkit.core.impl.program import ProgramImpl
 from sensorkit.core.task import CollectTask
 
@@ -184,3 +185,63 @@ async def test_program_publishes_tasking_state(kit):
         await program_client.stop_tasking()
 
     await monitor_task
+
+
+# Legacy state migration: versions before the Task/TaskExecution split stored the program's
+# executing task under a `tasking_status` key (a `ProgramTaskingStatus` carrying only
+# `executing_task_id`). `mode="before"` validators on ProgramState and ProgramTaskingState upgrade
+# that shape so old state from a NATS broker still loads.
+def test_legacy_tasking_status_migrates_to_tasking_state():
+    """A snapshot with the renamed `tasking_status` key loads as an idle `tasking_state`."""
+    legacy = {
+        "enable_state": {"enabled": True, "controller": "mycontroller"},
+        "active_state": {"active": False, "origin": "init"},
+        "tasking_status": {"executing_task_id": str(uuid.uuid4())},
+    }
+
+    state = ProgramState.model_validate(legacy)
+
+    # A bare legacy id cannot rehydrate a TaskExecution envelope, so the program loads as idle.
+    assert isinstance(state.tasking_state, ProgramTaskingState)
+    assert state.tasking_state.executing_task is None
+
+
+def test_legacy_program_state_loads_from_kv_json():
+    """A full legacy ProgramState snapshot deserialises from JSON without error."""
+    legacy = {
+        "enable_state": {"enabled": True, "controller": "mycontroller"},
+        "active_state": {"active": False, "origin": "init"},
+        "tasking_status": {"executing_task_id": None},
+    }
+
+    state = ProgramState.model_validate_json(json.dumps(legacy))
+
+    assert state.tasking_state.executing_task is None
+
+
+def test_program_state_missing_tasking_key_defaults_to_idle():
+    """A snapshot predating the tasking field entirely is treated as idle rather than failing."""
+    legacy = {
+        "enable_state": {"enabled": False},
+        "active_state": {"active": False, "origin": "init"},
+    }
+
+    state = ProgramState.model_validate(legacy)
+
+    assert state.tasking_state.executing_task is None
+
+
+def test_current_program_state_roundtrips_unchanged():
+    """Current-shape state passes through the migration validators as a no-op."""
+    state = ProgramState.model_validate(
+        {
+            "enable_state": {"enabled": True, "controller": "mycontroller"},
+            "active_state": {"active": False, "origin": "init"},
+            "tasking_state": {"executing_task": None},
+        }
+    )
+
+    reloaded = ProgramState.model_validate(state.model_dump())
+
+    assert isinstance(reloaded.tasking_state, ProgramTaskingState)
+    assert reloaded.tasking_state.executing_task is None
