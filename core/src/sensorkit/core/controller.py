@@ -51,7 +51,7 @@ class TaskExecutionState(Event):
     executing: bool = False
     aborting: bool = False
     finished: TaskFinishInfo | None = None
-    task: TaskExecution | None
+    execution: TaskExecution | None
     context: dict | None = None
 
     @model_validator(mode="before")
@@ -59,10 +59,16 @@ class TaskExecutionState(Event):
     def _migrate_legacy_task(cls, data: Any) -> Any:
         """Upgrade events persisted by versions predating the Task/TaskExecution split.
 
-        Older controllers stored the executing task on ``task`` as a flat ``ControllerTask`` —
-        identity (``task_id``, ``controller_id``), ``context`` and the ``end_time`` deadline
-        embedded alongside the discriminated task fields. This version expects a ``TaskExecution``
-        envelope wrapping the semantic ``task``. Rewriting the legacy shape here covers both reads:
+        Two legacy shapes are upgraded here:
+
+        * Versions before the split stored the executing task on ``task`` as a flat
+          ``ControllerTask`` — identity (``task_id``, ``controller_id``), ``context`` and the
+          ``end_time`` deadline embedded alongside the discriminated task fields. This version
+          expects a ``TaskExecution`` envelope wrapping the semantic ``task``.
+        * Versions after the split but before ``task`` was renamed to ``execution`` stored the
+          envelope under the ``task`` key.
+
+        Both are carried onto ``execution``. Rewriting the legacy shape here covers both reads:
         the KV ``ControllerState`` snapshot (whose ``execution_state`` is validated as this model)
         and event-stream replay (where each event is validated through the registry). Without it,
         state carried by a NATS broker from an older version would raise a ``ValidationError``.
@@ -70,7 +76,13 @@ class TaskExecutionState(Event):
         if not isinstance(data, dict):
             return data
 
-        legacy = data.get("task")
+        # The pre-rename wire format carried the executing task (flat or enveloped) under ``task``.
+        # Lift it onto ``execution`` so the rest of the migration — and the model — see one key.
+        if "execution" not in data and "task" in data:
+            data = dict(data)
+            data["execution"] = data.pop("task")
+
+        legacy = data.get("execution")
 
         # A legacy task is a flat ``ControllerTask``: it carries the discriminator at the top level
         # and has no nested ``task`` envelope. A current ``TaskExecution`` always nests ``task``.
@@ -92,11 +104,11 @@ class TaskExecutionState(Event):
             "expiry_time": legacy.get("end_time"),
         }
 
-        return {**data, "task": envelope}
+        return {**data, "execution": envelope}
 
     @model_validator(mode="after")
     def _validate(self):
-        if self.executing and self.task is None:
+        if self.executing and self.execution is None:
             raise ValueError("inconsistent state fields: executing with no task")
 
         if self.aborting and not self.executing:
@@ -305,7 +317,7 @@ class ControllerClient(EntityClient):
         # FIXME: This is unreliable at present due to backend limitations.
         async for event in ControllerState.event_stream(self, TaskExecutionState):
             if task_id is not None:
-                if event.task is None or event.task.task_id != task_id:
+                if event.execution is None or event.execution.task_id != task_id:
                     return None
 
             if not event.executing:

@@ -205,7 +205,7 @@ async def test_wait_for_task(kit, with_id):
         assert not event.executing
 
         if with_id:
-            assert event.task.task_id == task_id
+            assert event.execution.task_id == task_id
 
         await exec_call
 
@@ -297,7 +297,7 @@ async def test_controller_use_device(kit):
 
 
 # Legacy state migration: versions before the Task/TaskExecution split stored the executing
-# task as a flat ControllerTask on `execution_state.task`. A `mode="before"` validator on
+# task as a flat ControllerTask on `execution_state.execution`. A `mode="before"` validator on
 # TaskExecutionState upgrades that shape so old state from a NATS broker still loads.
 _LEGACY_TASK = {
     "task_type": "init",
@@ -316,12 +316,12 @@ def test_legacy_task_execution_state_migrates_flat_task():
         {"executing": True, "task": dict(_LEGACY_TASK)}
     )
 
-    assert isinstance(state.task, TaskExecution)
-    assert isinstance(state.task.task, InitTask)
-    assert state.task.task_id == _LEGACY_TASK_ID
-    assert state.task.controller_id == "legacy-controller"
+    assert isinstance(state.execution, TaskExecution)
+    assert isinstance(state.execution.task, InitTask)
+    assert state.execution.task_id == _LEGACY_TASK_ID
+    assert state.execution.controller_id == "legacy-controller"
     # The legacy deadline becomes the envelope expiry; identity is lifted off the task.
-    assert state.task.expiry_time == _LEGACY_EXPIRY
+    assert state.execution.expiry_time == _LEGACY_EXPIRY
 
 
 def test_legacy_controller_state_loads_from_kv_json():
@@ -334,10 +334,10 @@ def test_legacy_controller_state_loads_from_kv_json():
 
     state = ControllerState.model_validate_json(json.dumps(legacy))
 
-    assert isinstance(state.execution_state.task, TaskExecution)
-    assert isinstance(state.execution_state.task.task, InitTask)
-    assert state.execution_state.task.task_id == _LEGACY_TASK_ID
-    assert state.execution_state.task.expiry_time == _LEGACY_EXPIRY
+    assert isinstance(state.execution_state.execution, TaskExecution)
+    assert isinstance(state.execution_state.execution.task, InitTask)
+    assert state.execution_state.execution.task_id == _LEGACY_TASK_ID
+    assert state.execution_state.execution.expiry_time == _LEGACY_EXPIRY
 
 
 def test_legacy_task_execution_event_replays_through_registry():
@@ -351,9 +351,9 @@ def test_legacy_task_execution_event_replays_through_registry():
     event = Event.model_validate_json(json.dumps(payload))
 
     assert isinstance(event, TaskExecutionState)
-    assert isinstance(event.task, TaskExecution)
-    assert isinstance(event.task.task, InitTask)
-    assert event.task.task_id == _LEGACY_TASK_ID
+    assert isinstance(event.execution, TaskExecution)
+    assert isinstance(event.execution.task, InitTask)
+    assert event.execution.task_id == _LEGACY_TASK_ID
 
 
 def test_current_task_execution_state_roundtrips_unchanged():
@@ -361,10 +361,24 @@ def test_current_task_execution_state_roundtrips_unchanged():
     execution = TaskExecution(
         task=InitTask(), task_id=uuid.uuid7(), controller_id="ctl"
     )
-    state = TaskExecutionState(executing=True, task=execution)
+    state = TaskExecutionState(executing=True, execution=execution)
 
     reloaded = TaskExecutionState.model_validate(state.model_dump())
 
-    assert isinstance(reloaded.task, TaskExecution)
-    assert isinstance(reloaded.task.task, InitTask)
-    assert reloaded.task.task_id == execution.task_id
+    assert isinstance(reloaded.execution, TaskExecution)
+    assert isinstance(reloaded.execution.task, InitTask)
+    assert reloaded.execution.task_id == execution.task_id
+
+
+def test_pre_rename_task_envelope_migrates_to_execution():
+    """State persisted after the split but before ``task`` was renamed loads onto ``execution``."""
+    execution = TaskExecution(
+        task=InitTask(), task_id=uuid.uuid7(), controller_id="ctl"
+    )
+    legacy = {"executing": True, "task": execution.model_dump()}
+
+    state = TaskExecutionState.model_validate(legacy)
+
+    assert isinstance(state.execution, TaskExecution)
+    assert isinstance(state.execution.task, InitTask)
+    assert state.execution.task_id == execution.task_id

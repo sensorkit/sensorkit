@@ -97,7 +97,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             self,
             enable_state=ControllerEnableState(enabled=True),
             operating_state=ControllerOperatingState(current=InternalControllerState.UNKNOWN),
-            execution_state=TaskExecutionState(task=None),
+            execution_state=TaskExecutionState(execution=None),
         )
 
     @override
@@ -237,7 +237,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         """
         current = self._state.execution_state
 
-        if not current.executing or current.task is None:
+        if not current.executing or current.execution is None:
             raise RuntimeError("no task executing")
 
         ctx = Context(base if base is not None else current.context)
@@ -252,7 +252,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             TaskExecutionState(
                 executing=current.executing,
                 aborting=current.aborting,
-                task=current.task,
+                execution=current.execution,
                 context=ctx,
             ),
         )
@@ -284,7 +284,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             return
 
         aio_task = self._task_asyncio
-        task_id = self._state.execution_state.task.task_id
+        task_id = self._state.execution_state.execution.task_id
 
         # If given, ensure the task_id matches what is running.
         if requested.task_id and task_id != requested.task_id:
@@ -299,7 +299,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             TaskExecutionState(
                 executing=True,
                 aborting=True,
-                task=self._state.execution_state.task
+                execution=self._state.execution_state.execution
             ),
         )
 
@@ -359,7 +359,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         try:
             # Interrupt the current task, if there is one.
             if self._task_asyncio:
-                logger.info(f"Interrupting {self._state.execution_state.task.task.task_type} task")
+                logger.info(f"Interrupting {self._state.execution_state.execution.task.task_type} task")
                 self._task_asyncio.cancel("Interrupted")
 
                 with contextlib.suppress(asyncio.CancelledError):
@@ -436,7 +436,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         # Emit the execution start event.
         await self._state.update(
             self,
-            TaskExecutionState(executing=True, task=execution),
+            TaskExecutionState(executing=True, execution=execution),
             self._state.operating_state.derive(target=task.target_state()),
         )
 
@@ -456,7 +456,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             try:
                 await self._state.update(
                     self,
-                    TaskExecutionState(finished=finish_info, task=execution),
+                    TaskExecutionState(finished=finish_info, execution=execution),
                     self._state.operating_state.derive(
                         current=ts if (ts := task.target_state()) is not None else ControllerOperatingState.NO_CHANGE,
                         target=None,
