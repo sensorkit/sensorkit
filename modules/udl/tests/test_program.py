@@ -151,6 +151,16 @@ class TestCollectedResponseActualTimes:
         assert call_kwargs["actual_start_time"] == "2026-03-21T07:18:47.000000Z"
         assert call_kwargs["actual_end_time"] == "2026-03-21T07:19:12.000000Z"
 
+    @pytest.mark.asyncio
+    async def test_request_id_is_propagated_in_submission_context(self, program):
+        request = MockCollectRequest.with_tle(id=str(uuid.uuid4()))
+        await program.queue.push_task(request)
+
+        gen = program.generate()
+        request_out = await gen.asend(None)
+        assert request_out is not None
+        assert request_out.context == {"collect_request_id": request.id}
+
 
 class TestTrackTypeTranslation:
     @pytest.mark.asyncio

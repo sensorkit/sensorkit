@@ -721,7 +721,11 @@ class UDLProgram:
             # (before slew … after the mount stop), which we report as the
             # CollectResponse's actual window. Per-exposure precision is carried
             # separately by SkyImagery's expStartTime/expEndTime.
-            result = await (yield task.submit(expiry_time=end_time))
+            execution = yield task.submit(
+                context=KeywordDict({"collect_request_id": request.id}),
+                expiry_time=end_time,
+            )
+            result = await execution
             logger.info(f"Task ({request.id}): finished execution successfully")
             # Stash the execution window so the COMPLETED response — sent later
             # from _publish_imagery once the imagery set finishes uploading — can
