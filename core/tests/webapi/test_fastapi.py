@@ -201,6 +201,40 @@ async def test_execute_controller_task(webapi_setup):
 
 
 @pytest.mark.asyncio
+async def test_execute_controller_task_with_submission_envelope(webapi_setup):
+    """A TaskSubmission envelope threads context and expiry_time onto the minted execution."""
+    _, _, _, controller, _, _, client = webapi_setup
+
+    seen: dict[str, object] = {}
+    done = asyncio.Event()
+
+    @controller.task_handler(InitTask)
+    async def handle(task: InitTask):
+        # The controller associates the execution before invoking the handler, so the
+        # client-supplied context and expiry are reachable here.
+        seen["context"] = dict(task.execution.get_context())
+        seen["expiry_time"] = task.execution.expiry_time
+        done.set()
+
+    resp = await client.post(
+        "/controller/mycontroller/execute",
+        json={
+            "task": {"task_type": "init"},
+            "context": {"program_name": "skyview", "FileNameTemplate": "{target}_{time}"},
+            "expiry_time": "2026-01-01T00:00:00Z",
+        },
+    )
+    assert resp.status_code == 200
+    assert uuid.UUID(resp.json()["task_id"])
+
+    async with asyncio.timeout(3.0):
+        await done.wait()
+
+    assert seen["context"] == {"program_name": "skyview", "FileNameTemplate": "{target}_{time}"}
+    assert seen["expiry_time"] is not None
+
+
+@pytest.mark.asyncio
 async def test_abort_controller_task(webapi_setup):
     _, _, _, controller, _, _, client = webapi_setup
 

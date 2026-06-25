@@ -241,11 +241,24 @@ class WebAPI:
                 return await self.kit.controller(controller_id).kv_get_model(ControllerState)
 
         @app.post("/controller/{controller_id}/execute", tags=["Controller"])
-        async def run_controller_task(controller_id: str, task: sk.Task):
-            """Execute a task on a controller."""
+        async def run_controller_task(controller_id: str, body: sk.TaskSubmission | sk.Task):
+            """Execute a task on a controller.
+
+            The body may be a bare task or a `TaskSubmission` envelope. The envelope carries the
+            client-supplied execution parameters (`context`, `expiry_time`) that the controller
+            records on the minted `TaskExecution` — for example the file-naming keywords a caller
+            needs threaded onto the execution. A bare task is equivalent to an envelope with no
+            parameters.
+            """
+            submission = body if isinstance(body, sk.TaskSubmission) else sk.TaskSubmission(task=body)
+
             with _error_handler():
                 # The controller mints the task_id; learn it from the returned execution.
-                execution = await self.kit.controller(controller_id).start_task(task)
+                execution = await self.kit.controller(controller_id).start_task(
+                    submission.task,
+                    context=submission.context,
+                    expiry_time=submission.expiry_time,
+                )
                 await execution
 
             return _status_ok(task_id=execution.task_id)
