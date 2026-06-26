@@ -177,6 +177,10 @@ var _sky6RASCOMTele = {
     SetTracking: function (on, b, c, d) {
         if (!this.IsConnected || this.IsParked()) throw false;
         this.IsTracking = on;
+        if (b === 0) {
+            this.dRaTrackingRate = c;
+            this.dDecTrackingRate = d;
+        }
         this.LastSlewError = 0;
     },
     SlewToRaDec: function (ra, dec, name) {

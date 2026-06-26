@@ -1,5 +1,6 @@
 import pytest
 
+from sensorkit.astro.coords import Geodetic
 from sensorkit.models.devices import FollowTarget
 from sensorkit.std import Connect
 from sensorkit.thesky.telescope import TheSkyTelescopeConfig, TheSkyTelescopeState
@@ -9,7 +10,7 @@ from sensorkit.thesky.telescope import TheSkyTelescopeConfig, TheSkyTelescopeSta
 def telescope(simulator):
     host, port = simulator
     config = TheSkyTelescopeConfig(
-        device_type="mount",
+        device_type="telescope",
         host=host,
         port=port,
         needs_homed=False,
@@ -18,6 +19,9 @@ def telescope(simulator):
     )
     m = config.create_device()
     m.state = TheSkyTelescopeState()
+    # Normally set during entity_init (on_attach) from TheSky's site info, which
+    # these connect-only tests bypass; the value is unused for pass-through adapts.
+    m._geodetic = Geodetic(lon=149.0, lat=-31.0, elev=1100.0)
     return m
 
 

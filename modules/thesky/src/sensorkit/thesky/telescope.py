@@ -23,7 +23,6 @@ from sensorkit.astro.target import (
     FrameTarget,
     ICRSTarget,
     RateTarget,
-    StateVectorTarget,
     TLETarget,
 )
 from sensorkit.astro.common import ReferenceFrame
@@ -58,6 +57,9 @@ from astropy.utils.iers import conf  # noqa: E402
 
 conf.auto_max_age = None
 LEO_WAITING, LEO_SLEWING, LEO_SETTLING, LEO_TRACKING = 3, 4, 5, 6
+# Max time to wait for a commanded slew to *start* before treating it as a
+# positional no-op.
+_MOUNT_ONSET_TIMEOUT = 2.0
 
 
 def radec_rates_to_altaz_rates(
@@ -275,7 +277,7 @@ class TheSkyTelescope(TheSkyDevice):
             async with asyncio.timeout(self.config.timeout):
                 await self.poll("""sky6RASCOMTele.IsTracking;""", "0", interval=0.2)
         except CommandNotSupportedError:
-            logger.warning("Mount does not support Abort/SetTracking; skipping")
+            logger.warning("Mount does not support SetTracking; skipping")
 
         self._stop_fast_status()
         logger.debug("stopped telescope")
@@ -385,8 +387,8 @@ class TheSkyTelescope(TheSkyDevice):
             (FrameTarget, ReferenceFrame.ICRF),
             (FrameTarget, ReferenceFrame.ALTAZ),
             TLETarget,
-            # (RateTarget, ReferenceFrame.ICRF),
-            # (EphemerisTarget, ReferenceFrame.ICRF),
+            (RateTarget, ReferenceFrame.ICRF),
+            (EphemerisTarget, ReferenceFrame.ICRF),
             observer=self._geodetic,
         )
 
@@ -404,8 +406,8 @@ class TheSkyTelescope(TheSkyDevice):
                     """
                 )
 
-                async with asyncio.timeout(self.config.timeout):
-                    await self.poll("""sky6RASCOMTele.IsTracking;""", "1", interval=0.2)
+                tracked = await self._set_tracking(1, 1, 0, 0)
+                await self._wait_for_mount(tracking=tracked)
                 self._start_fast_status()
 
                 logger.debug("following RADec target")
@@ -423,8 +425,7 @@ class TheSkyTelescope(TheSkyDevice):
                     """
                 )
 
-                async with asyncio.timeout(self.config.timeout):
-                    await self.poll("""sky6RASCOMTele.IsSlewComplete;""", "1", interval=0.2)
+                await self._wait_for_mount(tracking=False)
                 self._start_fast_status()
 
                 logger.debug("following AltAz target")
@@ -524,61 +525,73 @@ class TheSkyTelescope(TheSkyDevice):
                     """
                 )
 
-                async with asyncio.timeout(self.config.timeout):
-                    await self.poll("""sky6RASCOMTele.IsTracking;""", "1", interval=0.2)
-
                 # Apply custom offset rates (degrees/sec -> arcsec/sec)
                 ra_rate_arcsec = target.rates.ra * 3600
                 dec_rate_arcsec = target.rates.dec * 3600
-                await self.execute(
-                    f"""
-                    sky6RASCOMTele.SetTracking(1, 0, {ra_rate_arcsec}, {dec_rate_arcsec});
-                    """
-                )
+                tracked = await self._set_tracking(1, 0, ra_rate_arcsec, dec_rate_arcsec)
+                await self._wait_for_mount(tracking=tracked)
                 self._start_fast_status()
 
                 logger.debug("following rate target")
 
-            case StateVectorTarget():
-                logger.debug("executing StateVector follow")
-                # TODO: this will require PID control
-                raise RuntimeError("No StateVector support")
-
             case EphemerisTarget():
                 logger.debug("executing Ephemeris follow")
-                # TODO: this will require PID control
-                raise RuntimeError("No Ephemeris support")
+
+                # TheSky has no path-follow primitive, so collapse the precomputed
+                # path to an initial position plus a constant offset rate: slew to
+                # the sample nearest now and finite-difference the two adjacent
+                # samples for the instantaneous RA/Dec rate. Like the TLE case, this
+                # is a best-effort snapshot that drifts over time.
+                jds = target.jds
+                points = target.points
+                now_jd = Time.now().jd
+                i = min(range(len(jds) - 1), key=lambda j: abs(jds[j] - now_jd))
+
+                dt_sec = (jds[i + 1] - jds[i]) * 86400.0
+                # Wrap the RA difference into [-180, 180] deg to survive 0/360 crossings.
+                dra_deg = (points[i + 1].ra - points[i].ra + 180.0) % 360.0 - 180.0
+                ddec_deg = points[i + 1].dec - points[i].dec
+
+                # Slew to the sample nearest now
+                await self.execute(
+                    f"""
+                    sky6RASCOMTele.SlewToRaDec(
+                        {points[i].ra:0.6f},
+                        {points[i].dec:0.6f},
+                        "object"
+                    );
+                    """
+                )
+
+                # Apply offset rates (degrees/sec -> arcsec/sec), matching RateTarget
+                ra_rate_arcsec = dra_deg / dt_sec * 3600
+                dec_rate_arcsec = ddec_deg / dt_sec * 3600
+                tracked = await self._set_tracking(1, 0, ra_rate_arcsec, dec_rate_arcsec)
+                await self._wait_for_mount(tracking=tracked)
+                self._start_fast_status()
+
+                logger.debug("following Ephemeris target")
 
             case FrameTarget():
-                match cmd.target.frame:
+                match target.frame:
                     case ReferenceFrame.ALTAZ:
                         self._stop_fast_status()
                         logger.debug("disabling tracking")
-                        await self.execute(
-                            """
-                            sky6RASCOMTele.SetTracking(0,1,0,0);
-                            """
-                        )
-                        async with asyncio.timeout(self.config.timeout):
-                            await self.poll("""sky6RASCOMTele.IsTracking;""", "0")
+                        await self._set_tracking(0, 1, 0, 0)
+                        await self._wait_for_mount(tracking=False, await_onset=False)
                         logger.debug("disabled tracking")
                     case ReferenceFrame.ICRF:
                         logger.debug("enabling sidereal tracking")
-                        await self.execute(
-                            """
-                            sky6RASCOMTele.SetTracking(1,1,0,0);
-                            """
-                        )
-                        async with asyncio.timeout(self.config.timeout):
-                            await self.poll("""sky6RASCOMTele.IsTracking;""", "1", interval=0.2)
+                        tracked = await self._set_tracking(1, 1, 0, 0)
+                        await self._wait_for_mount(tracking=tracked, await_onset=False)
                         self._start_fast_status()
                         logger.debug("enabled sidereal tracking")
 
                     case _:
-                        raise RuntimeError(f"Need specific target to track {cmd.target.frame}")
+                        raise RuntimeError(f"Need specific target to track {target.frame}")
 
             case _:
-                track_type = type(cmd.target).__name__
+                track_type = type(target).__name__
                 raise NotImplementedError(f"{track_type} tracking via TheSky is not supported")
 
         try:
@@ -609,6 +622,62 @@ class TheSkyTelescope(TheSkyDevice):
 
         write_path.write_text("\n".join(lines) + "\n")
         return thesky_path
+
+    async def _wait_for_mount(
+        self,
+        *,
+        slewing: bool = False,
+        tracking: bool = False,
+        await_onset: bool = True,
+    ):
+        """Poll until IsSlewComplete/IsTracking match the target flags.
+
+        When ``await_onset`` (the default, for slewing commands)
+        first wait briefly for the slew to *start*; if none is seen within
+        _MOUNT_ONSET_TIMEOUT the command was a positional no-op and we fall
+        through to the settle check. Non-slewing commands (enable/disable
+        tracking) pass ``await_onset=False``. The settle wait is bounded by
+        config.timeout; both phases poll every 0.1 s.
+        """
+        flags = """var Out; Out=[sky6RASCOMTele.IsSlewComplete, sky6RASCOMTele.IsTracking];"""
+
+        if await_onset:
+            try:
+                async with asyncio.timeout(_MOUNT_ONSET_TIMEOUT):
+                    while True:
+                        slew_complete, _ = (await self.execute(flags)).split(",")
+                        if slew_complete.strip() != "1":
+                            break
+                        await asyncio.sleep(0.1)
+            except TimeoutError:
+                pass  # no slew observed -> positional no-op; fall through to settle
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                slew_complete, is_tracking = (await self.execute(flags)).split(",")
+                is_slewing = slew_complete.strip() != "1"
+                if is_slewing == slewing and (is_tracking.strip() == "1") == tracking:
+                    break
+                await asyncio.sleep(0.1)
+
+    async def _set_tracking(
+        self, on: int, ignore_rates: int, ra_rate: float = 0.0, dec_rate: float = 0.0
+    ) -> bool:
+        """Set tracking mode/rates. Returns True if applied, False only if the
+        mount doesn't implement SetTracking (error 228) -- in which case the
+        tracking degrades to a bare slew instead of crashing.
+        Any other error propagates.
+        """
+        try:
+            await self.execute(
+                f"""sky6RASCOMTele.SetTracking({on}, {ignore_rates}, {ra_rate}, {dec_rate});"""
+            )
+        except CommandNotSupportedError:
+            logger.warning(
+                "Mount does not support SetTracking; tracking no-op"
+            )
+            return False
+        return True
 
     def _start_fast_status(self):
         if self._fast_status_task is None or self._fast_status_task.done():
