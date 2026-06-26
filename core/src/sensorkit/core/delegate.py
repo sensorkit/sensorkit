@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
     from sensorkit.backend.event import Event
     from sensorkit.backend.request import ExtendedHandlerFunc, HandlerFunc, Request
-    from sensorkit.common.keyword import Keyword, KeywordDict
+    from sensorkit.common.keyword import Keyword
     from sensorkit.core.client import SensorKit
     from sensorkit.data.context import Context
     from sensorkit.data.graph import DataGraph
@@ -117,8 +117,8 @@ class ControllerDelegate(EntityDelegate, ControllerInterface):
         return await self.delegate_target.stop_device_subscriptions()
 
     @override
-    async def update_context(self, base: KeywordDict | None = None, **kwargs) -> Context:
-        return await self.delegate_target.update_context(base=base, **kwargs)
+    async def update_context(self, *args, **kwargs) -> Context:
+        return await self.delegate_target.update_context(*args, **kwargs)
 
     @override
     def task_handler(

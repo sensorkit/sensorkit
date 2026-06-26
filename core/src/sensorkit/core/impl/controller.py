@@ -11,7 +11,6 @@ from loguru import logger
 
 from sensorkit.backend.base import Entity
 from sensorkit.backend.request import CallContext
-from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.controller import (
     AbortRequestMessage,
     AbortResponseMessage,
@@ -198,7 +197,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
     @override
     async def update_context(
         self,
-        base: KeywordDict | None = None,
+        *args,
         **kwargs,
     ) -> Context:
         """Update the context of the currently executing task.
@@ -211,13 +210,11 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         incorporating the latest device state.
 
         Args:
-            base: Optional base context to merge. If not given, the current task
-                context is used as the base.
             **kwargs: Additional literal key-value pairs to include in the context.
 
         Returns:
             The newly updated `Context` containing (in precedence order,
-            highest-last): *base* or current task context, fresh device snapshots,
+            highest-last): current task context, fresh device snapshots,
             and *kwargs*.
 
         Raises:
@@ -240,11 +237,12 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         if not current.executing or current.execution is None:
             raise RuntimeError("no task executing")
 
-        ctx = Context(base if base is not None else current.context)
+        ctx = Context(current.context)
 
         for device in self._devices.values():
             device.subscription.snapshot(into=ctx)
 
+        ctx.set(*args)
         ctx.update(kwargs)
 
         await self._state.update(
@@ -433,10 +431,12 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         logger.debug(f"execution begun {execution=}")
         finish_info = TaskFinishInfo(aborted=True)
 
-        # Emit the execution start event.
+        # Emit the execution start event, seeding the executing state's context from the
+        # incoming execution context. This becomes the base layer that ``update_context``
+        # merges device snapshots onto and that is ultimately sent to downstream cameras.
         await self._state.update(
             self,
-            TaskExecutionState(executing=True, execution=execution),
+            TaskExecutionState(executing=True, execution=execution, context=execution.context),
             self._state.operating_state.derive(target=task.target_state()),
         )
 

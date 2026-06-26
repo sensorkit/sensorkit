@@ -394,7 +394,7 @@ class ControllerInterface(EntityInterface):
     @abstractmethod
     async def update_context(
         self,
-        base: KeywordDict | None = None,
+        *args,
         **kwargs,
     ) -> Context:
         """Update the context of the currently executing task."""

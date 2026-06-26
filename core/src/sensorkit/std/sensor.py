@@ -9,16 +9,7 @@ from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
-from sensorkit.astro.target import (
-    AltAzTarget,
-    CatalogTarget,
-    EphemerisTarget,
-    FrameTarget,
-    ICRSTarget,
-    RateTarget,
-    StateVectorTarget,
-    TLETarget,
-)
+from sensorkit.astro.target import CatalogTarget, FrameTarget, ICRSTarget, TLETarget
 from sensorkit.models.devices import (
     AxisRates,
     Deinit,
@@ -26,7 +17,7 @@ from sensorkit.models.devices import (
     Init,
     Stop,
 )
-from sensorkit.std.collect import StandardCollectTask
+from sensorkit.std.collect import Collect, StandardCollectTask
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.std.instrument import Binning, CameraCapture, ConfigureCameraSensor
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover, SetFilter
@@ -214,59 +205,24 @@ class SensorControl:
                 )
             )
 
-        # FIXME: Ad hoc context should be formalized as Keywords.
-        adhoc = dict(
-            binning_x=task.camera_params.binning_x,
-            binning_y=task.camera_params.binning_y,
-            elevation=self.config.site_position.altitude_km,
-            filter_name=task.camera_params.filter_name,
-            frame_count=task.camera_params.frame_count,
-            latitude=self.config.site_position.latitude_degrees,
-            longitude=self.config.site_position.longitude_degrees,
+        # Set base context for all frames.
+        await sk.controller().update_context(
+            self.config.site_position,
+            # FIXME: Ad hoc context should be formalized as Keywords.
             task_id=task.execution.task_id,
         )
-
-        # TLE fields default to None; only populated for TLE targets.
-        adhoc["tle_line0"] = None
-        adhoc["tle_line1"] = None
-        adhoc["tle_line2"] = None
-
-        match task.target:
-            case ICRSTarget():
-                adhoc["track_mode"] = "sidereal"
-                adhoc["target_id"] = "ICRSTarget"
-            case AltAzTarget():
-                adhoc["track_mode"] = "fixed"
-                adhoc["target_id"] = "AltAzTarget"
-            case TLETarget():
-                adhoc["track_mode"] = "rate"
-                adhoc["target_name"] = task.target.tle.line0
-                adhoc["target_id"] = task.target.tle.line0.split()[1]
-                adhoc["tle_line0"] = task.target.tle.line0
-                adhoc["tle_line1"] = task.target.tle.line1
-                adhoc["tle_line2"] = task.target.tle.line2
-            case RateTarget():
-                adhoc["track_mode"] = "rate"
-                adhoc["target_id"] = "RateTarget"
-            case EphemerisTarget():
-                adhoc["track_mode"] = "rate"
-                adhoc["target_id"] = "EphemerisTarget"
-            case StateVectorTarget():
-                adhoc["track_mode"] = "rate"
-                adhoc["target_id"] = "StateVectorTarget"
-            case CatalogTarget():
-                adhoc["track_mode"] = "sidereal"
-                adhoc["target_id"] = task.target.object
-            case FrameTarget():
-                adhoc["track_mode"] = str(task.target.frame.value)
-                adhoc["target_id"] = str(task.target.frame.value)
-            case _:
-                adhoc["track_mode"] = "unknown"
-                adhoc["target_id"] = "unknown"
-
-        await sk.controller().update_context(
-            task.execution.get_context(),
-            **adhoc,
+        collect = Collect(
+            target=task.target,
+            params=task.camera_params,
+            target_id=(
+                task.target_id
+                if task.target_id
+                else task.target.tle.norad_id
+                if isinstance(task.target, TLETarget)
+                else task.target.object
+                if isinstance(task.target, CatalogTarget)
+                else None
+            ),
         )
 
         # For inherently sidereal targets (stars), the initial FollowTarget already
@@ -277,26 +233,24 @@ class SensorControl:
 
         # Capture the requested frames.
         for frame_num in range(0, task.camera_params.frame_count):
+            collect.frame_number = frame_num
             want_sidereal = target_is_sidereal or frame_num in task.sidereal_frames
 
             if want_sidereal and not currently_sidereal:
                 # Hold the current RA/Dec under sidereal tracking.
                 logger.info(f"Frame #{frame_num+1} of {task.camera_params.frame_count}: switching to sidereal track")
-                await self.sensor.mount.command(
-                    FollowTarget(target=FrameTarget(frame=ReferenceFrame.ICRF))
-                )
+                collect.target = FrameTarget(frame=ReferenceFrame.ICRF)
+                await self.sensor.mount.command(FollowTarget(target=collect.target))
                 currently_sidereal = True
             elif not want_sidereal and currently_sidereal:
                 # Resume following the original target.
                 logger.info(f"Frame #{frame_num+1} of {task.camera_params.frame_count}: resuming target track")
-                await self.sensor.mount.command(FollowTarget(target=task.target))
+                collect.target = task.target
+                await self.sensor.mount.command(FollowTarget(target=collect.target))
                 currently_sidereal = False
 
             logger.info(f"Acquiring frame #{frame_num+1} of {task.camera_params.frame_count}")
-            context = await sk.controller().update_context(
-                frame_num=frame_num,
-                track_mode="sidereal" if want_sidereal else adhoc["track_mode"],
-            )
+            context = await sk.controller().update_context(collect)
             _add_compat_context(context)
 
             await self.sensor.camera.command(
@@ -464,7 +418,23 @@ def _add_compat_context(context: sk.Context):
         alt_rate="AxisRates.altitude.velocity * 3600",
         az="AltAzPointing.azimuth_degrees",
         az_rate="AxisRates.azimuth.velocity * 3600",
+        track_mode="Collect.track_mode",
+        target_id="Collect.target_id",
+        target_name="Collect.target.tle.line0 if Collect.target.target_type == 'tle' else target_id",
+        tle_line0="Collect.target.tle.line0 if Collect.target.target_type == 'tle' else None",
+        tle_line1="Collect.target.tle.line1 if Collect.target.target_type == 'tle' else None",
+        tle_line2="Collect.target.tle.line2 if Collect.target.target_type == 'tle' else None",
+        frame_num="Collect.frame_number",
+        frame_count="Collect.params.frame_count",
+        integration_time_seconds="Collect.params.integration_time_seconds",
+        binning_x="Collect.params.binning_x",
+        binning_y="Collect.params.binning_y",
+        filter_name="Collect.params.filter_name",
+        elevation="SitePosition.altitude_km",
+        latitude="SitePosition.latitude_degrees",
+        longitude="SitePosition.longitude_degrees",
     )
+
     for key, expr in compat.items():
         with contextlib.suppress(Exception):
             context[key] = context.eval(expr)
