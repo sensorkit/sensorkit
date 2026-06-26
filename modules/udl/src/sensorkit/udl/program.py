@@ -624,7 +624,7 @@ class UDLProgram:
             logger.info(f"Task ({request.id}): finished execution successfully")
             await self._send_response(
                 request,
-                ResponseStatus.COLLECTED,
+                ResponseStatus.COMPLETED,
                 actual_start_time=result.start_time if result else None,
                 actual_end_time=result.end_time if result else None,
             )

@@ -113,7 +113,7 @@ class TestSendResponse:
 class TestCollectedResponseActualTimes:
     @pytest.mark.asyncio
     async def test_collected_response_uses_task_execution_times(self, program):
-        """COLLECTED carries the TaskExecutionResult window (UDL-formatted, ...Z)."""
+        """COMPLETED carries the TaskExecutionResult window (UDL-formatted, ...Z)."""
         # task_id is a UUID on StandardCollectTask, so the request id must parse.
         request_id = str(uuid.uuid4())
         request = MockCollectRequest.with_tle(id=request_id)
@@ -141,12 +141,12 @@ class TestCollectedResponseActualTimes:
         execution.bind_result(future)
 
         # Sending the execution resumes past `result = await (yield ...)`; the generator
-        # sends COLLECTED and then completes (StopAsyncIteration).
+        # sends COMPLETED and then completes (StopAsyncIteration).
         with pytest.raises(StopAsyncIteration):
             await gen.asend(execution)
 
         call_kwargs = program.client.collect_responses.create.call_args.kwargs
-        assert call_kwargs["status"] == "COLLECTED"
+        assert call_kwargs["status"] == "COMPLETED"
         assert call_kwargs["actual_start_time"] == "2026-03-21T07:18:47.000000Z"
         assert call_kwargs["actual_end_time"] == "2026-03-21T07:19:12.000000Z"
 
