@@ -12,7 +12,7 @@ from sensorkit.udl.models import ResponseStatus
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileInfo
 from sensorkit.udl.models import UDLAPIConfig, UDLConfig
-from sensorkit.udl.program import UDLProgram
+from sensorkit.udl.program import UDLProgram, _PublishProgress
 
 
 def _frame_context(name="test.fits", **fields):
@@ -430,7 +430,7 @@ class TestCompletedResponse:
         program.client.collect_responses.create = AsyncMock()
         program._upload_skyimagery_zip = upload or AsyncMock()
         if stash_window:
-            program._task_windows[cls.TASK_ID] = cls.WINDOW
+            program._publish_progress[cls.TASK_ID] = _PublishProgress(window=cls.WINDOW)
         return request
 
     @classmethod

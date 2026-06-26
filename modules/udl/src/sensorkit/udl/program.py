@@ -6,6 +6,7 @@ import io
 import json
 import os
 import zipfile
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
@@ -41,6 +42,23 @@ class UDLState(BaseModel):
     """Persistent state for UDL program."""
 
     pending_tasks: List[Dict] = Field(default_factory=list)
+
+
+@dataclass
+class _PublishProgress:
+    """Per-task imagery-publishing bookkeeping used to finalize a collect.
+
+    attempted/uploaded count the frames the publisher has tried and landed in
+    UDL, used to detect set completion and whether anything was delivered.
+    window is the (start, end) execution window stashed by the task factory on
+    the success path, so the deferred COMPLETED response can stamp the same
+    actual times COLLECTED reported; it stays None until the collect succeeds,
+    which also gates whether COMPLETED is sent at all.
+    """
+
+    attempted: int = 0
+    uploaded: int = 0
+    window: tuple[datetime | None, datetime | None] | None = None
 
 
 @sk.declare_program
@@ -86,15 +104,9 @@ class UDLProgram:
         self.queue: TaskQueue | None = None
         self.tasks: Dict[str, CollectRequestFull] = {}
 
-        # Per-task publishing bookkeeping, cleared once the set completes or the
-        # task reference expires:
-        #   _task_windows: (start, end) execution window stashed by the task
-        #     factory so the publisher can stamp COMPLETED with the same actual
-        #     times COLLECTED reported.
-        #   _publish_counts: frames attempted/uploaded per task, used to detect
-        #     set completion and whether anything was actually delivered.
-        self._task_windows: Dict[str, tuple[datetime | None, datetime | None]] = {}
-        self._publish_counts: Dict[str, dict[str, int]] = {}
+        # Per-task publishing bookkeeping, keyed by request id and cleared once
+        # the set completes or the task reference expires.
+        self._publish_progress: Dict[str, _PublishProgress] = {}
 
         # Background tasks
         self._poller: asyncio.Task | None = None
@@ -486,11 +498,11 @@ class UDLProgram:
             zf.writestr(filename, data)
         zip_buffer.seek(0)
 
-        counts = self._publish_counts.setdefault(request.id, {"attempted": 0, "uploaded": 0})
-        counts["attempted"] += 1
+        progress = self._publish_progress.setdefault(request.id, _PublishProgress())
+        progress.attempted += 1
         try:
             await self._upload_skyimagery_zip(zip_buffer.getvalue())
-            counts["uploaded"] += 1
+            progress.uploaded += 1
             logger.debug(
                 f"task ({request.id}) uploaded skyimagery "
                 f"({sequence_id}/{image_set_length})"
@@ -504,11 +516,10 @@ class UDLProgram:
         # per-frame upload failures (including the final frame) are tolerated.
         # The window guard scopes COMPLETED to tasks that collected successfully
         # (the factory only stashes a window on the success path).
-        if counts["attempted"] >= image_set_length:
-            window = self._task_windows.pop(request.id, None)
-            self._publish_counts.pop(request.id, None)
-            if counts["uploaded"] > 0 and window is not None:
-                start_time, end_time = window
+        if progress.attempted >= image_set_length:
+            self._publish_progress.pop(request.id, None)
+            if progress.uploaded > 0 and progress.window is not None:
+                start_time, end_time = progress.window
                 await self._send_response(
                     request,
                     ResponseStatus.COMPLETED,
@@ -517,9 +528,9 @@ class UDLProgram:
                 )
                 logger.info(
                     f"task ({request.id}): sent COMPLETED "
-                    f"({counts['uploaded']}/{image_set_length} frames delivered)"
+                    f"({progress.uploaded}/{image_set_length} frames delivered)"
                 )
-            elif counts["uploaded"] == 0:
+            elif progress.uploaded == 0:
                 logger.warning(
                     f"task ({request.id}): all {image_set_length} frame uploads "
                     f"failed; COMPLETED not sent"
@@ -668,8 +679,10 @@ class UDLProgram:
             logger.info(f"Task ({request.id}): finished execution successfully")
             # Stash the execution window so the COMPLETED response — sent later
             # from _publish_imagery once the imagery set finishes uploading — can
-            # report the same actual times COLLECTED carries here.
-            self._task_windows[request.id] = (
+            # report the same actual times COLLECTED carries here. setdefault
+            # preserves any frame counts the publisher already recorded.
+            progress = self._publish_progress.setdefault(request.id, _PublishProgress())
+            progress.window = (
                 result.start_time if result else None,
                 result.end_time if result else None,
             )
@@ -697,15 +710,14 @@ class UDLProgram:
             raise
         finally:
             await self.queue.remove_task(request.id)
-            # Keep the task reference, execution window, and publish counters for
-            # imagery-publishing correlation, then drop them after a grace period
-            # (bounds leaks when a set never finishes, e.g. dropped frames).
+            # Keep the task reference and publish progress for imagery-publishing
+            # correlation, then drop them after a grace period (bounds leaks when
+            # a set never finishes, e.g. dropped frames).
             asyncio.get_event_loop().call_later(
                 300,
                 lambda rid=request.id: (
                     self.tasks.pop(rid, None),
-                    self._task_windows.pop(rid, None),
-                    self._publish_counts.pop(rid, None),
+                    self._publish_progress.pop(rid, None),
                 ),
             )
 
