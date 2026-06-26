@@ -1,10 +1,13 @@
 """Test SkyImagery metadata generation against the UDL schema."""
 
 import json
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import MockCollectRequest
+
+from sensorkit.udl.models import ResponseStatus
 
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileInfo
@@ -402,3 +405,89 @@ class TestImageryFiledropURL:
         """Unknown hosts (e.g. MACHINA) → fall back to the SDK."""
         program.config.api.base_url = "https://machina.example.mil"
         assert program._imagery_filedrop_url() is None
+
+
+class TestCompletedResponse:
+    """COMPLETED is sent from the publisher once a collect's imagery set has been
+    delivered. It fires on set completion *by count* (not on the final frame's
+    upload succeeding), so a partially-delivered set still reports COMPLETED; it
+    is suppressed only when nothing was delivered.
+    """
+
+    TASK_ID = "test-request-001"
+    WINDOW = (
+        datetime(2026, 3, 21, 7, 18, 47, tzinfo=UTC),
+        datetime(2026, 3, 21, 7, 19, 12, tzinfo=UTC),
+    )
+
+    @classmethod
+    def _arm(cls, program, *, num_frames, upload=None, stash_window=True):
+        """Wire a request, mocked client/upload, and (optionally) the COLLECTED
+        execution window so the publisher can finalize the set."""
+        request = MockCollectRequest.with_tle(id=cls.TASK_ID, num_frames=num_frames)
+        program.tasks[cls.TASK_ID] = request
+        program.client = MagicMock()
+        program.client.collect_responses.create = AsyncMock()
+        program._upload_skyimagery_zip = upload or AsyncMock()
+        if stash_window:
+            program._task_windows[cls.TASK_ID] = cls.WINDOW
+        return request
+
+    @classmethod
+    async def _publish_frames(cls, program, num_frames):
+        for frame_num in range(num_frames):
+            context = _frame_context(
+                task_id=cls.TASK_ID,
+                frame_num=frame_num,
+                date_obs="2026-03-21T07:18:47.082000",
+            )
+            await program._publish_imagery(context, b"\x00" * 100)
+
+    @pytest.mark.asyncio
+    async def test_no_completed_before_set_finishes(self, program):
+        self._arm(program, num_frames=3)
+        await self._publish_frames(program, 2)  # only 2 of 3 frames in
+        program.client.collect_responses.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_completed_after_full_set_carries_execution_window(self, program):
+        self._arm(program, num_frames=2)
+        await self._publish_frames(program, 2)
+
+        kwargs = program.client.collect_responses.create.call_args.kwargs
+        assert kwargs["status"] == ResponseStatus.COMPLETED.value
+        assert kwargs["actual_start_time"] == "2026-03-21T07:18:47.000000Z"
+        assert kwargs["actual_end_time"] == "2026-03-21T07:19:12.000000Z"
+
+    @pytest.mark.asyncio
+    async def test_completed_sent_when_final_frame_upload_fails(self, program):
+        """4/5 deliver, the 5th upload fails → still COMPLETED (the case RS raised)."""
+        upload = AsyncMock(side_effect=[None, None, None, None, RuntimeError("boom")])
+        self._arm(program, num_frames=5, upload=upload)
+        await self._publish_frames(program, 5)
+
+        kwargs = program.client.collect_responses.create.call_args.kwargs
+        assert kwargs["status"] == ResponseStatus.COMPLETED.value
+
+    @pytest.mark.asyncio
+    async def test_no_completed_when_all_uploads_fail(self, program):
+        upload = AsyncMock(side_effect=RuntimeError("boom"))
+        self._arm(program, num_frames=2, upload=upload, stash_window=False)
+        await self._publish_frames(program, 2)
+        program.client.collect_responses.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_completed_without_collected_window(self, program):
+        """No stashed window → the task didn't collect successfully → no COMPLETED."""
+        self._arm(program, num_frames=1, stash_window=False)
+        await self._publish_frames(program, 1)
+        program.client.collect_responses.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_completed_sent_once_per_set(self, program):
+        """A stray extra frame after the set finished must not re-send COMPLETED."""
+        self._arm(program, num_frames=2)
+        await self._publish_frames(program, 2)
+        # A duplicate/late frame for the same task arrives after finalization.
+        await self._publish_frames(program, 1)
+        assert program.client.collect_responses.create.call_count == 1
