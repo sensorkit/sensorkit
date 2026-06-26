@@ -156,7 +156,7 @@ class KeywordDict(dict[str, Any]):
     def set(self, *objs: Unpack[tuple[object, ...]]):
         """Insert one or more keyword objects, keying each by its registered keyword key."""
         for obj in objs:
-            self.__setitem__(_keyword_index[type(obj)].key, obj)
+            self[type(obj)] = obj
 
     @classmethod
     def _validate(cls, obj):
