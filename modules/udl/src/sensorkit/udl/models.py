@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 from unifieddatalibrary.types import CollectRequestFull, CollectResponseFull
 from unifieddatalibrary.types.shared import StateVectorFull
 
+import sensorkit.api as sk
+
 
 class ResponseStatus(StrEnum):
     """UDL CollectResponse status values."""
@@ -114,3 +116,12 @@ class UDLConfig(BaseModel):
             "Per-frame override is honored if the data graph context provides 'image_type'."
         ),
     )
+
+
+sk.declare_config_section(
+    "udl",
+    list[UDLConfig],
+    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
+    model_mapper=iter,
+    service_path="sensorkit.udl.service",
+)

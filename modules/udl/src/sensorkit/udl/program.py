@@ -296,10 +296,11 @@ class UDLProgram:
         """Poll UDL for CollectRequests assigned to our sensor."""
         try:
             now = datetime.now(UTC)
+            horizon = now + timedelta(days=1)
             page = await self.client.collect_requests.list(
-                start_time=f"<{_udl_ts(now)}",
+                start_time=f"<{_udl_ts(horizon)}",
                 extra_query={
-                    "origSensorId": self.config.api.id_sensor,
+                    "idSensor": self.config.api.id_sensor,
                     "endTime": f">{_udl_ts(now)}",
                 },
                 extra_headers=self._client_headers,
