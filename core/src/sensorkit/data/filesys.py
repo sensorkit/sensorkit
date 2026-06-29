@@ -149,7 +149,7 @@ class WriteFile(DataOp):
 
         # Resolve the configured base directory against context values (e.g. {program_name}).
         base = (
-            pathlib.Path(context.resolve(self.directory, as_type=str))
+            pathlib.Path(context.resolve(self.directory))
             if self.directory is not None
             else pathlib.Path.cwd()
         )
@@ -162,7 +162,7 @@ class WriteFile(DataOp):
             if template is None:
                 raise ValueError("WriteFile requires a FileInfo or FileNameTemplate in context")
 
-            info = FileInfo(path=pathlib.Path(context.resolve(template.template, as_type=str)))
+            info = FileInfo(path=pathlib.Path(context.resolve(template.template)))
             context.set(info)
 
         # Make sure we don't have two absolute paths.

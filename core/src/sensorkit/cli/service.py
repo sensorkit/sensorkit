@@ -90,6 +90,8 @@ async def service_run(name, spec, config_file, restart):
             "explicitly as 'python_module[:entrypoint]'"
         )
 
+    await sk.import_modules()
+
     try:
         entrypoints = {
             name: ServiceEntrypoint.from_spec(spec, load_file=True)

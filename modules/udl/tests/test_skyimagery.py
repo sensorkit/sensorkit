@@ -3,7 +3,7 @@
 
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import MockCollectRequest
@@ -46,6 +46,31 @@ def program():
 
 
 class TestSkyImageryMetadata:
+    @pytest.mark.asyncio
+    async def test_upload_internal_server_error_logs_warning(self, program):
+        request = MockCollectRequest.with_tle(id="06a3a178-2296-7d5f-8000-c657ed1b2de0")
+        program.tasks[request.id] = request
+
+        program.client = MagicMock()
+        program._upload_skyimagery_zip = AsyncMock(
+            side_effect=Exception("Internal Server Error")
+        )
+
+        context = _frame_context(
+            task_id=request.id,
+            frame_num=0,
+            date_obs="2026-03-21T07:18:47.082000",
+        )
+
+        with patch("sensorkit.udl.program.logger.warning") as warning:
+            await program._publish_imagery(context, b"\x00" * 100)
+
+        program._upload_skyimagery_zip.assert_awaited_once()
+        warning.assert_any_call(
+            "Task (06a3a178-2296-7d5f-8000-c657ed1b2de0) failed to upload "
+            "skyimagery: Internal Server Error"
+        )
+
     @pytest.mark.asyncio
     async def test_metadata_has_required_fields(self, program):
         """SkyImagery_Ingest requires: classificationMarking, imageType, expStartTime, source, dataMode."""
