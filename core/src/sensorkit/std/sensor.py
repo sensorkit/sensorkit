@@ -9,7 +9,13 @@ from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
-from sensorkit.astro.target import CatalogTarget, FrameTarget, ICRSTarget, TLETarget
+from sensorkit.astro.target import (
+    CatalogTarget,
+    EphemerisTarget,
+    FrameTarget,
+    ICRSTarget,
+    TLETarget,
+)
 from sensorkit.models.devices import (
     AxisRates,
     Deinit,
@@ -221,6 +227,8 @@ class SensorControl:
                 if isinstance(task.target, TLETarget)
                 else task.target.object
                 if isinstance(task.target, CatalogTarget)
+                else task.target.name
+                if isinstance(task.target, EphemerisTarget)
                 else None
             ),
         )

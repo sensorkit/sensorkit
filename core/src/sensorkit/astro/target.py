@@ -271,6 +271,11 @@ class EphemerisTarget(FrameTarget):
     target_type: Literal["ephemeris"] = "ephemeris"
     jds: Sequence[float]
     points: Sequence[Coordinates]
+    # Optional identifier for the object (e.g. a JPL Horizons designation). Carried so the
+    # collect can populate target_id for ephemeris targets, which — unlike TLE (NORAD id) or
+    # catalog (object name) — have no other inherent identifier. Callers should pass a value
+    # already safe for filenames/FITS cards (no whitespace); see CatalogTarget/ICRSTarget.name.
+    name: str | None = None
     # FIXME: Needs velocity too.
 
 
