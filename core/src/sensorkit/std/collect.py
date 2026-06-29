@@ -68,12 +68,16 @@ class Collect(BaseModel):
     @property
     def track_mode(self) -> Literal["fixed", "sidereal", "rate", "unknown"]:
         match self.target:
+            # Moving-target types must be matched before the ICRF catch-all below:
+            # EphemerisTarget/RateTarget/StateVectorTarget subclass FrameTarget and are
+            # built with frame=ICRF, so they would otherwise match the sidereal arm and be
+            # mislabeled (a JPL-Horizons ephemeris is rate-tracked, not sidereal).
+            case TLETarget() | RateTarget() | EphemerisTarget() | StateVectorTarget():
+                return "rate"
             case ICRSTarget() | FrameTarget(frame=ReferenceFrame.ICRF):
                 return "sidereal"
             case AltAzTarget() | FrameTarget(frame=ReferenceFrame.ALTAZ):
                 return "fixed"
-            case TLETarget() | RateTarget() | EphemerisTarget() | StateVectorTarget():
-                return "rate"
             case FrameTarget():
                 return "rate"
 
