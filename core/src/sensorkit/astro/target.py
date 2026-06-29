@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import collections
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -157,16 +158,27 @@ class BaseTarget(BaseModel, ABC):
                 def transform_to_output_frame(gcrs: SkyCoord):
                     return gcrs.transform_to(frame.to_astropy())
 
-        t = start_time
-        jds = []
-        points = []
+        # SGP4 sampling + per-step frame transforms (astropy) are CPU-bound and can take
+        # several seconds. Run them in a worker thread so we don't block the event loop —
+        # blocking it long enough starves in-flight NATS JetStream acks (the command-event
+        # publish times out at 5s), which aborts the very command that triggered this.
+        def _sample_series():
+            t = start_time
+            jds = []
+            points = []
+            last_coord = None
 
-        for _ in range(duration // step):
-            t += step
-            gcrs = trajectory.sample(epoch=t)
-            coord = transform_to_output_frame(gcrs)
-            jds.append(gcrs.obstime.jd)
-            points.append(Equatorial(ra=coord.ra.deg, dec=coord.dec.deg))
+            for _ in range(duration // step):
+                t += step
+                gcrs = trajectory.sample(epoch=t)
+                coord = transform_to_output_frame(gcrs)
+                jds.append(gcrs.obstime.jd)
+                points.append(Equatorial(ra=coord.ra.deg, dec=coord.dec.deg))
+                last_coord = coord
+
+            return jds, points, last_coord
+
+        jds, points, last_coord = await asyncio.to_thread(_sample_series)
 
         ephem = EphemerisTarget(
             frame=frame,
@@ -174,7 +186,7 @@ class BaseTarget(BaseModel, ABC):
             points=points,
         )
 
-        logger.debug(f"generated EphemerisTarget ending at ra={coord.ra} dec={coord.dec}")
+        logger.debug(f"generated EphemerisTarget ending at ra={last_coord.ra} dec={last_coord.dec}")
         return ephem
 
 
