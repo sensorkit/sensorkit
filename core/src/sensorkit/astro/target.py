@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import collections
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -157,25 +158,35 @@ class BaseTarget(BaseModel, ABC):
                 def transform_to_output_frame(gcrs: SkyCoord):
                     return gcrs.transform_to(frame.to_astropy())
 
-        t = start_time
-        jds = []
-        points = []
+        # Build the output by sampling the propagated trajectory. The heavy lifting should have
+        # already been done by the propagator, but the operations performed here can also amount to
+        # significant work depending on the number of samples, the reference frame transform
+        # being applied, and the details of the particular `sample()` implementation. We background
+        # the entire loop to be safe.
+        def _sample_series():
+            t = start_time
+            jds = []
+            points = []
+            coord = None
 
-        for _ in range(duration // step):
-            t += step
-            gcrs = trajectory.sample(epoch=t)
-            coord = transform_to_output_frame(gcrs)
-            jds.append(gcrs.obstime.jd)
-            points.append(Equatorial(ra=coord.ra.deg, dec=coord.dec.deg))
+            for _ in range(duration // step):
+                t += step
+                gcrs = trajectory.sample(epoch=t)
+                coord = transform_to_output_frame(gcrs)
+                jds.append(gcrs.obstime.jd)
+                points.append(Equatorial(ra=coord.ra.deg, dec=coord.dec.deg))
 
-        ephem = EphemerisTarget(
+            if coord:
+                logger.debug(f"generated EphemerisTarget ending at ra={coord.ra} dec={coord.dec}")
+
+            return jds, points
+
+        jds, points = await asyncio.to_thread(_sample_series)
+        return EphemerisTarget(
             frame=frame,
             jds=jds,
             points=points,
         )
-
-        logger.debug(f"generated EphemerisTarget ending at ra={coord.ra} dec={coord.dec}")
-        return ephem
 
 
 class CompositeTarget(BaseTarget):
