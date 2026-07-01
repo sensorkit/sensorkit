@@ -158,15 +158,16 @@ class BaseTarget(BaseModel, ABC):
                 def transform_to_output_frame(gcrs: SkyCoord):
                     return gcrs.transform_to(frame.to_astropy())
 
-        # SGP4 sampling + per-step frame transforms (astropy) are CPU-bound and can take
-        # several seconds. Run them in a worker thread so we don't block the event loop —
-        # blocking it long enough starves in-flight NATS JetStream acks (the command-event
-        # publish times out at 5s), which aborts the very command that triggered this.
+        # Build the output by sampling the propagated trajectory. The heavy lifting should have
+        # already been done by the propagator, but the operations performed here can also amount to
+        # significant work depending on the number of samples, the reference frame transform
+        # being applied, and the details of the particular `sample()` implementation. We background
+        # the entire loop to be safe.
         def _sample_series():
             t = start_time
             jds = []
             points = []
-            last_coord = None
+            coord = None
 
             for _ in range(duration // step):
                 t += step
@@ -174,20 +175,18 @@ class BaseTarget(BaseModel, ABC):
                 coord = transform_to_output_frame(gcrs)
                 jds.append(gcrs.obstime.jd)
                 points.append(Equatorial(ra=coord.ra.deg, dec=coord.dec.deg))
-                last_coord = coord
 
-            return jds, points, last_coord
+            if coord:
+                logger.debug(f"generated EphemerisTarget ending at ra={coord.ra} dec={coord.dec}")
 
-        jds, points, last_coord = await asyncio.to_thread(_sample_series)
+            return jds, points
 
-        ephem = EphemerisTarget(
+        jds, points = await asyncio.to_thread(_sample_series)
+        return EphemerisTarget(
             frame=frame,
             jds=jds,
             points=points,
         )
-
-        logger.debug(f"generated EphemerisTarget ending at ra={last_coord.ra} dec={last_coord.dec}")
-        return ephem
 
 
 class CompositeTarget(BaseTarget):
