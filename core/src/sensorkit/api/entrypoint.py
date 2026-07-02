@@ -32,7 +32,7 @@ class ServiceEntrypoint:
         self._version = version
 
     async def run(self, name: str):
-        """Start the service with *name* and return ``(service, task)`` once it is running."""
+        """Start the service with *name* and return `(service, task)` once it is running."""
         # Invoke the user entrypoint function passing in a new Service instance.
         service = Service(name, self._version)
         task = asyncio.create_task(self._func(service))

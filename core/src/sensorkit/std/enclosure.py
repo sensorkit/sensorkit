@@ -59,7 +59,7 @@ class MoveEnclosure(sk.DeviceCommand):
     """Rotate the enclosure and adjust its aperture to accommodate a target.
 
     This command rotates the enclosure to the specified azimuth position and, if the
-    ``ControlEnclosureAperture`` command is supported, centers the aperture to frame the target.
+    `ControlEnclosureAperture` command is supported, centers the aperture to frame the target.
     This is typically used to synchronize the enclosure position with a telescope mount's pointing
     direction.
 

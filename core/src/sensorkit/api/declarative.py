@@ -438,7 +438,7 @@ class Service:
     def include_module(self, **kwargs):
         """Add all entity declarations found in the calling module.
 
-        See the ``include`` method.
+        See the `include` method.
         """
         # Include decls from the module of the user code call site. We must check for None here
         # because in certain contexts there may be no calling module.
@@ -615,9 +615,9 @@ def declare_device(
 ):
     """Declare a Device to be implemented by a local service.
 
-    Can be used as a bare class decorator (``@sk.declare_device``), a keyword
-    decorator (``@sk.declare_device(type=..., traits=[...])``), or an explicit declaration
-    (``my_device = sk.declare_device(name="foo", type=..., traits=[...])``)
+    Can be used as a bare class decorator (`@sk.declare_device`), a keyword
+    decorator (`@sk.declare_device(type=..., traits=[...])`), or an explicit declaration
+    (`my_device = sk.declare_device(name="foo", type=..., traits=[...])`)
     """
     all_traits: list[Trait] | None = None
     if type is not None or traits:

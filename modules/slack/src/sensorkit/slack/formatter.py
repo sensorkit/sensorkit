@@ -125,7 +125,7 @@ def format_summary(
 ) -> tuple[list[dict], str]:
     """Format a nightly summary as Block Kit blocks.
 
-    ``health_events`` is a chronological list of (time, entity, state) records;
+    `health_events` is a chronological list of (time, entity, state) records;
     it is collapsed to transition counts so a night of status-loop republishes
     can't blow past Slack's message-size limit.
     """

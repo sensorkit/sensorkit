@@ -78,7 +78,7 @@ def declare_keyword[M](
 
 
 def get_keyword_info(obj: type | object) -> KeywordInfo | None:
-    """Return the ``KeywordInfo`` for a registered keyword type or instance, or ``None`` if not registered."""
+    """Return the `KeywordInfo` for a registered keyword type or instance, or `None` if not registered."""
     if not isinstance(obj, type):
         obj = type(obj)
 
@@ -91,17 +91,17 @@ def dump_keyword_json(obj: object):
 
 
 def validate_keyword(key: str, data: Any):
-    """Validate and deserialize ``data`` as the keyword type identified by ``key``."""
+    """Validate and deserialize `data` as the keyword type identified by `key`."""
     return _keyword_adapter.validate_python(data, context={ModelRegistry.DISCRIMINATOR_CONTEXT: key})
 
 
 def validate_keyword_json(key: str, json: bytes):
-    """Validate and deserialize a JSON byte string as the keyword type identified by ``key``."""
+    """Validate and deserialize a JSON byte string as the keyword type identified by `key`."""
     return _keyword_adapter.validate_json(json, context={ModelRegistry.DISCRIMINATOR_CONTEXT: key})
 
 
 def validated_items(dct: dict[str, object]) -> Iterable[tuple[str, object]]:
-    """Yield ``(key, value)`` pairs from ``dct``, deserializing dict values as keywords where possible."""
+    """Yield `(key, value)` pairs from `dct`, deserializing dict values as keywords where possible."""
     for k, v in dct.items():
         if isinstance(v, dict):
             try:

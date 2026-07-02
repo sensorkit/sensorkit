@@ -18,7 +18,7 @@ from sensorkit.astro.target import AltAzTarget, ICRSTarget, RateTarget, Target, 
 from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.std import CameraParameterSet, StandardCollectTask
 
-# Produces e.g. ``20260424T031530_photometric_standards_110-364_f0.fits``.
+# Produces e.g. `20260424T031530_photometric_standards_110-364_f0.fits`.
 _FILE_NAME_TEMPLATE = (
     'f"{datetime.now(UTC):%Y%m%dT%H%M%S}_{BurrContext.mode}_{BurrContext.targ}_f{frame_num}.fits"'
 )
@@ -28,28 +28,28 @@ _FILE_NAME_TEMPLATE = (
 class BurrContext(BaseModel):
     """Burr's identity keyword, attached to every SK collect task burr emits.
 
-    Rides in ``StandardCollectTask.context`` as a *declared* keyword (rather
+    Rides in `StandardCollectTask.context` as a *declared* keyword (rather
     than loose flat keys), so it round-trips on the wire as a typed object and
     is reachable from sensorkit FITS-header exprs and filename templates via
-    ``context.eval`` as ``BurrContext.<field>`` (e.g. ``BurrContext.seq``).
+    `context.eval` as `BurrContext.<field>` (e.g. `BurrContext.seq`).
     Being namespaced also stops these values from colliding with the generic
-    flat keys the std controller injects (``target_id``, ``track_mode``, ...),
+    flat keys the std controller injects (`target_id`, `track_mode`, ...),
     which otherwise override anything burr puts at the top level.
 
     Fields
     ------
     seq
         Per-exposure collect id — a fresh value for each entry in the
-        request's ``exposure_seconds``. Every SK task and every frame fanned
+        request's `exposure_seconds`. Every SK task and every frame fanned
         out from one exposure (e.g. the sidereal reference frame plus its rate
-        frames) shares one ``seq``; distinct exposures differ. This is the unit
+        frames) shares one `seq`; distinct exposures differ. This is the unit
         downstream fitting groups on ("I will fit this").
     targ
         Target name for this collect (filename-safe). The manager's best name
         for the thing observed — star name, satellite name, coverage pixel, etc.
     mode
-        The task source that produced the collect: ``coverage``, ``calsats``,
-        ``twilight_flats``, ``photometric_standards``, ``lunar_background``.
+        The task source that produced the collect: `coverage`, `calsats`,
+        `twilight_flats`, `photometric_standards`, `lunar_background`.
     """
 
     seq: str
@@ -64,7 +64,7 @@ def build_sk_tasks(
 ):
     """Translate an ObservationRequest into one or more StandardCollectTask instances.
 
-    Burr's nested frame model (``exposure_seconds`` × ``exposure_map``) maps
+    Burr's nested frame model (`exposure_seconds` × `exposure_map`) maps
     to one or more SK tasks per request:
 
     - **Uniform SIDEREAL**: one task per exposure, target=ICRSTarget,
@@ -72,16 +72,16 @@ def build_sk_tasks(
     - **Uniform RATE**: one task per exposure, target=RateTarget (concrete
       rates resolved for that exposure duration), frame_count=len(exposure_map).
     - **[RATE..., SIDEREAL...]** (rates first): one task per exposure,
-      target=RateTarget, ``sidereal_track_from_frame`` set to the first
+      target=RateTarget, `sidereal_track_from_frame` set to the first
       sidereal frame index. Generic controller switches to ICRF at that frame.
     - **[SIDEREAL..., RATE...]** (sidereal first): two tasks per exposure —
       N sidereal frames at ICRSTarget, then M rate frames at RateTarget.
-      The generic controller's ``sidereal_track_from_frame`` only switches
+      The generic controller's `sidereal_track_from_frame` only switches
       TO sidereal, so we can't express this with one task.
-    - Any other interleaving raises ``ValueError``.
+    - Any other interleaving raises `ValueError`.
 
     Targets feeding SIDEREAL frames are resolved through
-    ``to_sk_sidereal_target``, which freezes an AltAz/Lunar pointing to ICRS at
+    `to_sk_sidereal_target`, which freezes an AltAz/Lunar pointing to ICRS at
     emit time (sensorkit tracks AltAzTarget as fixed). OFF-only requests (flats)
     keep their AltAz target.
     """
@@ -118,15 +118,15 @@ def build_sk_tasks(
         # sidereal frame and the RateTarget rate frames of one sidereal-then-
         # rate collect carry the same seq — so downstream fitting regroups the
         # frames of one collect. Distinct exposure_seconds entries differ.
-        # The FileNameTemplate resolves the identity via ``BurrContext.<field>``
+        # The FileNameTemplate resolves the identity via `BurrContext.<field>`
         # when sensorkit's filesys.WriteFile renders it.
         exposure_context = sk.KeywordDict(
             BurrContext(seq=str(uuid.uuid4()), targ=targ, mode=mode),
             FileNameTemplate(template=_FILE_NAME_TEMPLATE),
         )
 
-        # The controller mints the task id; ``context`` and ``expiry_time`` are recorded on the
-        # minted execution. ``end_time`` is kept as a domain field for downstream scheduling.
+        # The controller mints the task id; `context` and `expiry_time` are recorded on the
+        # minted execution. `end_time` is kept as a domain field for downstream scheduling.
         def _emit(task: StandardCollectTask) -> sk.TaskSubmission:
             return task.submit(context=exposure_context, expiry_time=end_time)
 
@@ -255,11 +255,11 @@ def _to_sk_target(burr_target: obs.Target) -> Target:
         case obs.TLETarget():
             # Synthesize a line0 ("name line") from the NORAD catalog number
             # in line1[2:7]. SK's newer std controller (device-module-refactors
-            # branch) reads target_id via ``line0.split()[1]``, which crashes
+            # branch) reads target_id via `line0.split()[1]`, which crashes
             # with AttributeError on line0=None. The old controller read
             # NORAD directly from line1[2:7], which would be more robust —
             # flagged upstream. For now, giving line0 a two-token string
-            # (``NORAD <id>``) makes split()[1] yield the NORAD number.
+            # (`NORAD <id>`) makes split()[1] yield the NORAD number.
             norad_id = (
                 burr_target.tle_line1[2:7].strip()
                 if burr_target.tle_line1 and len(burr_target.tle_line1) >= 7
@@ -283,9 +283,9 @@ def _to_sk_sidereal_target(
 ) -> Target:
     """SK target for sidereal-tracked frames, freezing AltAz to ICRS.
 
-    RADec and TLE targets pass straight through ``to_sk_target``. AltAz/Lunar
-    targets are *frozen* to ICRS at ``initial_time`` (default now) using
-    ``site``: sensorkit tracks an ``AltAzTarget`` as **fixed** (alt/az held
+    RADec and TLE targets pass straight through `to_sk_target`. AltAz/Lunar
+    targets are *frozen* to ICRS at `initial_time` (default now) using
+    `site`: sensorkit tracks an `AltAzTarget` as **fixed** (alt/az held
     constant), which is wrong for a sidereal collect — the mount would hold the
     horizon coordinate and let the sky drift through the field. Converting the
     alt/az pointing to the RA/Dec it maps to *at emit time* makes the mount lock
@@ -293,7 +293,7 @@ def _to_sk_sidereal_target(
 
     Coverage and lunar both map in alt/az but want sidereal tracking, so they
     flow through here. Flats (tracking OFF) keep their alt/az target via
-    ``to_sk_target`` and are never passed to this function.
+    `to_sk_target` and are never passed to this function.
     """
     match burr_target:
         case obs.LunarTarget() | obs.AltAzTarget():
@@ -324,28 +324,28 @@ def _to_sk_ratetarget(
     site: SiteMetadata | None = None,
     frame: ReferenceFrame = ReferenceFrame.ICRF,
 ) -> RateTarget:
-    """Build a sensorkit ``RateTarget`` from a burr target + concrete rates.
+    """Build a sensorkit `RateTarget` from a burr target + concrete rates.
 
-    Initial position comes from ``burr_target``; rates are converted from
-    arcsec/s (burr's unit, stored in ``Rates``) to deg/s (sensorkit's
-    ``Coordinates`` unit convention). The frame label on the returned
-    ``RateTarget`` is set by ``frame``: ICRF is what pwi4 accepts, CIRF
+    Initial position comes from `burr_target`; rates are converted from
+    arcsec/s (burr's unit, stored in `Rates`) to deg/s (sensorkit's
+    `Coordinates` unit convention). The frame label on the returned
+    `RateTarget` is set by `frame`: ICRF is what pwi4 accepts, CIRF
     is what node_platform accepts. Picking the wrong one sends the
     target through sensorkit's BaseTarget.adapt() → to_ephemeris_target()
     path, which is unimplemented for RateTarget. AltAz/Lunar inputs are
-    converted using the provided ``site`` and ``initial_time``.
+    converted using the provided `site` and `initial_time`.
 
     Parameters
     ----------
     burr_target : TargetUnion
         The burr target whose *position* to use as the rate-follow
         origin. RADec is passed through directly; AltAz/Lunar are
-        converted to ICRS using ``site`` + ``initial_time``.
+        converted to ICRS using `site` + `initial_time`.
     rates : Rates
         RA/Dec rate vector in arcsec/s.
     initial_time : datetime, optional
-        UTC time at which ``initial_coords`` is valid. Defaults to
-        ``datetime.now(UTC)``.
+        UTC time at which `initial_coords` is valid. Defaults to
+        `datetime.now(UTC)`.
     site : SiteMetadata, optional
         Observer location. Required for AltAz/Lunar conversion; ignored
         for RADec inputs. When omitted for AltAz, raises ValueError.
@@ -418,12 +418,12 @@ def _altaz_to_equatorial(
 
 
 def _burr_identity(request: obs.ObservationRequest) -> tuple[str, str]:
-    """Resolve ``(targ, mode)`` for a request's BurrContext keyword.
+    """Resolve `(targ, mode)` for a request's BurrContext keyword.
 
-    ``mode`` is the task source name verbatim. ``targ`` is the best target
+    `mode` is the task source name verbatim. `targ` is the best target
     name the source supplied, picked from its metadata and sanitized for
     filesystem safety (spaces / path separators → underscores) since it also
-    lands in the FITS filename. Falls back to the request's ``task_id`` when a
+    lands in the FITS filename. Falls back to the request's `task_id` when a
     source supplies no name (e.g. flats, lunar).
     """
     metadata = request.metadata or {}
@@ -440,7 +440,7 @@ def _burr_identity(request: obs.ObservationRequest) -> tuple[str, str]:
 
 
 def _is_rates_then_nonrate(modes: list[TrackingMode]) -> bool:
-    """True iff ``modes`` starts with >=1 RATE followed by >=1 non-RATE frames."""
+    """True iff `modes` starts with >=1 RATE followed by >=1 non-RATE frames."""
     try:
         first_nonrate = next(i for i, m in enumerate(modes) if m != TrackingMode.RATE)
     except StopIteration:
@@ -451,7 +451,7 @@ def _is_rates_then_nonrate(modes: list[TrackingMode]) -> bool:
 
 
 def _is_nonrate_then_rates(modes: list[TrackingMode]) -> bool:
-    """True iff ``modes`` starts with >=1 non-RATE followed by >=1 RATE frames."""
+    """True iff `modes` starts with >=1 non-RATE followed by >=1 RATE frames."""
     try:
         first_rate = modes.index(TrackingMode.RATE)
     except ValueError:

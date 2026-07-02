@@ -250,7 +250,7 @@ class EntityRef[T: EntityClient = EntityClient]:
         """Create a reference from an entity name.
 
         Args:
-            name: the serialized entity name, or ``None`` for an unset reference.
+            name: the serialized entity name, or `None` for an unset reference.
         """
         self.name = name
         self._client: T | None = None
@@ -262,14 +262,14 @@ class EntityRef[T: EntityClient = EntityClient]:
     def resolve(self, kit: SensorKit) -> None:
         """Resolve this reference against a SensorKit instance.
 
-        If ``name`` is set, caches the corresponding entity client for later access via
-        `get`, `require`, or ``__call__``.
+        If `name` is set, caches the corresponding entity client for later access via
+        `get`, `require`, or `__call__`.
         """
         if self.name is not None:
             self._client = self._get_client(kit)
 
     def get(self) -> T | None:
-        """Return the resolved client, or ``None`` if the reference is unset.
+        """Return the resolved client, or `None` if the reference is unset.
 
         Raises:
             RuntimeError: if the reference has a name but has not yet been resolved.

@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
 
 class BaseTarget(BaseModel, ABC):
-    """Abstract base for all target types; discriminated on ``target_type``."""
+    """Abstract base for all target types; discriminated on `target_type`."""
     target_type: Literal[None]
 
     # FUTURE: When/if bounds for variadic generics are supported...
@@ -363,7 +363,7 @@ def sample_altaz_series(
     loc: EarthLocation,
     times: list[datetime],
 ) -> list[tuple[float, float]]:
-    """Return a list of ``(altitude_deg, azimuth_deg)`` tuples for the target at each time."""
+    """Return a list of `(altitude_deg, azimuth_deg)` tuples for the target at each time."""
     out: list[tuple[float, float]] = []
 
     match target:

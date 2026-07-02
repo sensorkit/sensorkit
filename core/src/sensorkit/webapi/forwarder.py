@@ -29,6 +29,13 @@ type RecordQueueSet = set[asyncio.Queue[SKRecord | None]]
 
 
 class Forwarder(ABC):
+    """Base class that caches backend updates and broadcasts them to target queues.
+
+    Subclasses implement `_monitor` to yield `SKRecord` updates from a particular
+    backend source; the base loop keeps a per-entity cache (treating a `None` payload
+    as a deletion) and fans each update out to every registered target queue.
+    """
+
     def __init__(self, *, targets: RecordQueueSet):
         self.targets = targets
         self.cache: dict[str, dict[str, SKRecord]] = collections.defaultdict(dict)

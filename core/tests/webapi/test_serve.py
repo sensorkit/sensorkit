@@ -245,7 +245,7 @@ async def test_product_forwarder_emits_initial_and_live(tmp_path):
 
 @pytest_asyncio.fixture
 async def product_api(kit, tmp_path):
-    """WebAPI serving a single FITS product under controller ``ctrlA``."""
+    """WebAPI serving a single FITS product under controller `ctrlA`."""
     # Include COMMENT/HISTORY cards: a raw fits.Header carrying these stalls JSON
     # serialization, so this guards the metadata/SSE routes against that regression.
     make_fits(
@@ -348,9 +348,9 @@ async def test_route_unknown_product_returns_404(product_api, suffix):
 
 
 async def _wait_for_products(client, url):
-    """Poll *url* until it returns at least one ``product`` record.
+    """Poll *url* until it returns at least one `product` record.
 
-    Records serialize as ``[kind, time, subject, payload]`` arrays (SKRecord is a
+    Records serialize as `[kind, time, subject, payload]` arrays (SKRecord is a
     NamedTuple). The ProductForwarder fills its cache from a background task, so a
     snapshot taken immediately after startup may not yet include the products; poll
     briefly instead.

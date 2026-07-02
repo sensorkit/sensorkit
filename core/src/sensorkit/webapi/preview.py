@@ -29,7 +29,7 @@ class PreviewJPEG:
 
     @classmethod
     async def from_fits(cls, raw_bytes: bytes) -> PreviewJPEG:
-        """Return a preview for ``raw_bytes``, rendering it off the event loop.
+        """Return a preview for `raw_bytes`, rendering it off the event loop.
 
         Cache bookkeeping runs on the event loop, so concurrent callers are
         serialized without a lock. Identical content in flight is rendered once

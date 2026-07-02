@@ -70,6 +70,12 @@ sk.declare_config_section(
 
 @sk.declare_program
 class BurrProgram:
+    """Scheduling program backed by the burr scheduler.
+
+    Builds burr task sources (sky coverage, calibration satellites, twilight flats,
+    lunar background, photometric standards), advertises observation intervals as
+    offers, and translates scheduled burr slots into sensorkit collect tasks.
+    """
 
     run: BurrRun | None = None
     sources: dict[str, TaskSource] | None = None
@@ -310,7 +316,7 @@ class BurrProgram:
 @dataclass
 class PendingTask:
     """A single SK task waiting to be handed to the executor, plus its
-    request-level bookkeeping so ``_next_task`` knows when to record
+    request-level bookkeeping so `_next_task` knows when to record
     completion."""
 
     task: sk.TaskSubmission

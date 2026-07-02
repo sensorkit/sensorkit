@@ -69,7 +69,7 @@ class ProgramTaskingState(Event):
 
         The pre-split `ProgramTaskingStatus` recorded only `executing_task_id` — a bare task id.
         A bare id cannot be rehydrated into a `TaskExecution` envelope, so a legacy id collapses to
-        ``executing_task=None`` (equivalent to "idle"); observers of the old shape only ever saw the
+        `executing_task=None` (equivalent to "idle"); observers of the old shape only ever saw the
         id, which the program re-publishes the moment it next dispatches a task.
         """
         if not isinstance(data, dict) or "executing_task" in data:
@@ -94,9 +94,9 @@ class ProgramState(BaseModel):
         """Upgrade KV snapshots persisted before `tasking_status` was renamed to `tasking_state`.
 
         Versions predating the Task/TaskExecution split stored the program's executing task under a
-        ``tasking_status`` key (a `ProgramTaskingStatus` carrying ``executing_task_id``); this
-        version expects ``tasking_state``. Renaming the key here lets `ProgramTaskingState`'s own
-        ``before`` validator finish upgrading the inner shape, so a program starting against a NATS
+        `tasking_status` key (a `ProgramTaskingStatus` carrying `executing_task_id`); this
+        version expects `tasking_state`. Renaming the key here lets `ProgramTaskingState`'s own
+        `before` validator finish upgrading the inner shape, so a program starting against a NATS
         broker holding older state no longer raises a `ValidationError`. A snapshot missing both
         keys entirely is treated as idle.
         """

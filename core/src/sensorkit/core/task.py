@@ -117,9 +117,9 @@ class Task(RegistryBaseModel):
     ) -> TaskSubmission:
         """Bundle this task with execution parameters into a `TaskSubmission`.
 
-        A convenience for task factories: ``yield task.submit(expiry_time=...)`` reads more fluently
+        A convenience for task factories: `yield task.submit(expiry_time=...)` reads more fluently
         than constructing a `TaskSubmission` by hand. Yielding a bare task is equivalent to
-        ``task.submit()`` with no parameters.
+        `task.submit()` with no parameters.
 
         Args:
             context: Optional keyword context to attach to the execution.
@@ -276,9 +276,9 @@ class TaskSubmission(BaseModel):
 class TaskContexts(BaseModel, extra="allow"):
     """Per-task-type keyword context bundles passed to a Program when starting tasking.
 
-    The ``all`` field provides keywords that apply to every task type.  Additional fields
-    (``init``, ``standby``, ``shutdown``, or any custom task type name) provide
-    type-specific overrides.  Extra fields (via ``extra="allow"``) support custom task types.
+    The `all` field provides keywords that apply to every task type.  Additional fields
+    (`init`, `standby`, `shutdown`, or any custom task type name) provide
+    type-specific overrides.  Extra fields (via `extra="allow"`) support custom task types.
     """
 
     all: KeywordDict = Field(default_factory=KeywordDict)
@@ -288,7 +288,7 @@ class TaskContexts(BaseModel, extra="allow"):
     __pydantic_extra__: dict[str, KeywordDict] = Field(init=False)
 
     def propagate(self, into: TaskContexts):
-        """Merge this context into ``into``, without overwriting keys already present in ``into``."""
+        """Merge this context into `into`, without overwriting keys already present in `into`."""
         for field, context in self:
             if context is self.all:
                 continue

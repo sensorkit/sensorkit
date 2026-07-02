@@ -371,7 +371,7 @@ def test_current_task_execution_state_roundtrips_unchanged():
 
 
 def test_pre_rename_task_envelope_migrates_to_execution():
-    """State persisted after the split but before ``task`` was renamed loads onto ``execution``."""
+    """State persisted after the split but before `task` was renamed loads onto `execution`."""
     execution = TaskExecution(
         task=InitTask(), task_id=uuid.uuid7(), controller_id="ctl"
     )

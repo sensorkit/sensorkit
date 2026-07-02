@@ -12,7 +12,7 @@ from sensorkit.std.collect import StandardCollectTask
 class QueuedTask:
     """A queued collect task paired with a client-side id for queue bookkeeping.
 
-    The controller mints the execution ``task_id`` only at dispatch, so the queue keeps its own
+    The controller mints the execution `task_id` only at dispatch, so the queue keeps its own
     stable id for offer tracking, removal, and operator-facing references while a task waits.
 
     Attributes:

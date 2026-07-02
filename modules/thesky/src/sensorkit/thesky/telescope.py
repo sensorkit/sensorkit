@@ -632,11 +632,11 @@ class TheSkyTelescope(TheSkyDevice):
     ):
         """Poll until IsSlewComplete/IsTracking match the target flags.
 
-        When ``await_onset`` (the default, for slewing commands)
+        When `await_onset` (the default, for slewing commands)
         first wait briefly for the slew to *start*; if none is seen within
         _MOUNT_ONSET_TIMEOUT the command was a positional no-op and we fall
         through to the settle check. Non-slewing commands (enable/disable
-        tracking) pass ``await_onset=False``. The settle wait is bounded by
+        tracking) pass `await_onset=False`. The settle wait is bounded by
         config.timeout; both phases poll every 0.1 s.
         """
         flags = """var Out; Out=[sky6RASCOMTele.IsSlewComplete, sky6RASCOMTele.IsTracking];"""

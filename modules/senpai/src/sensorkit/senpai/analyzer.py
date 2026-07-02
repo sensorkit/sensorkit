@@ -23,10 +23,10 @@ _OWN_HANDLER_LIBS = ("astropy", "astroquery")
 def redirect_engine_logging(path: str = DEFAULT_ENGINE_LOG_PATH) -> None:
     """Route the SENPAI engine's stdlib logging — and its astro deps — to a file.
 
-    Importing ``senpai`` runs its ``setup_logging()``, which attaches a console
-    handler to the *root* logger; ``astropy``/``astroquery`` additionally bolt
+    Importing `senpai` runs its `setup_logging()`, which attaches a console
+    handler to the *root* logger; `astropy`/`astroquery` additionally bolt
     their own stderr handlers on import. The net effect is that every stdlib
-    record — ``senpai.*``, ``astroeasy.*``, ``astroquery``, and ``astropy``
+    record — `senpai.*`, `astroeasy.*`, `astroquery`, and `astropy`
     WCS/fit warnings — echoes onto the console beside SensorKit's loguru output.
     Funnel all of it into a dedicated rotating file and leave the console to
     loguru. SensorKit's own logging is loguru and is untouched. Idempotent.

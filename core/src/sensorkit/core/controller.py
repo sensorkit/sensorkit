@@ -61,38 +61,38 @@ class TaskExecutionState(Event):
 
         Two legacy shapes are upgraded here:
 
-        * Versions before the split stored the executing task on ``task`` as a flat
-          ``ControllerTask`` — identity (``task_id``, ``controller_id``), ``context`` and the
-          ``end_time`` deadline embedded alongside the discriminated task fields. This version
-          expects a ``TaskExecution`` envelope wrapping the semantic ``task``.
-        * Versions after the split but before ``task`` was renamed to ``execution`` stored the
-          envelope under the ``task`` key.
+        * Versions before the split stored the executing task on `task` as a flat
+          `ControllerTask` — identity (`task_id`, `controller_id`), `context` and the
+          `end_time` deadline embedded alongside the discriminated task fields. This version
+          expects a `TaskExecution` envelope wrapping the semantic `task`.
+        * Versions after the split but before `task` was renamed to `execution` stored the
+          envelope under the `task` key.
 
-        Both are carried onto ``execution``. Rewriting the legacy shape here covers both reads:
-        the KV ``ControllerState`` snapshot (whose ``execution_state`` is validated as this model)
+        Both are carried onto `execution`. Rewriting the legacy shape here covers both reads:
+        the KV `ControllerState` snapshot (whose `execution_state` is validated as this model)
         and event-stream replay (where each event is validated through the registry). Without it,
-        state carried by a NATS broker from an older version would raise a ``ValidationError``.
+        state carried by a NATS broker from an older version would raise a `ValidationError`.
         """
         if not isinstance(data, dict):
             return data
 
-        # The pre-rename wire format carried the executing task (flat or enveloped) under ``task``.
-        # Lift it onto ``execution`` so the rest of the migration — and the model — see one key.
+        # The pre-rename wire format carried the executing task (flat or enveloped) under `task`.
+        # Lift it onto `execution` so the rest of the migration — and the model — see one key.
         if "execution" not in data and "task" in data:
             data = dict(data)
             data["execution"] = data.pop("task")
 
         legacy = data.get("execution")
 
-        # A legacy task is a flat ``ControllerTask``: it carries the discriminator at the top level
-        # and has no nested ``task`` envelope. A current ``TaskExecution`` always nests ``task``.
+        # A legacy task is a flat `ControllerTask`: it carries the discriminator at the top level
+        # and has no nested `task` envelope. A current `TaskExecution` always nests `task`.
         if not isinstance(legacy, dict) or "task_type" not in legacy or "task" in legacy:
             return data
 
-        # Lift the envelope fields off the task; the remaining keys (``task_type`` plus domain
-        # fields) become the wrapped semantic task. The legacy ``end_time`` was the execution
-        # deadline, so it maps to the envelope's ``expiry_time``; task types that still declare
-        # ``end_time`` as a domain field (e.g. ``standard_collect``) keep their own copy because it
+        # Lift the envelope fields off the task; the remaining keys (`task_type` plus domain
+        # fields) become the wrapped semantic task. The legacy `end_time` was the execution
+        # deadline, so it maps to the envelope's `expiry_time`; task types that still declare
+        # `end_time` as a domain field (e.g. `standard_collect`) keep their own copy because it
         # is left in the wrapped task.
         envelope = {
             "task": {

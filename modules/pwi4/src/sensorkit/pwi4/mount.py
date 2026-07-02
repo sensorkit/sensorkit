@@ -651,7 +651,7 @@ class PWI4Mount(PWI4Device):
     ):
         """Poll /status until mount.is_slewing and mount.is_tracking both match.
 
-        When ``await_onset`` (the default, for commands that slew), first wait
+        When `await_onset` (the default, for commands that slew), first wait
         briefly for the mount to *start* slewing. Without this, a command whose
         target flags already equal the current flags (e.g. re-following while
         already tracking) would match the stale pre-command state and return
@@ -659,7 +659,7 @@ class PWI4Mount(PWI4Device):
         the command was a positional no-op, and we fall through to the settle check.
 
         Non-slewing commands (stop, enable/disable tracking) must pass
-        ``await_onset=False``: they never raise is_slewing, so onset would
+        `await_onset=False`: they never raise is_slewing, so onset would
         otherwise burn the full timeout on every call.
 
         The settle wait is bounded by config.timeout; both phases poll every 0.2 s.

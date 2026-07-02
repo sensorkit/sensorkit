@@ -145,7 +145,7 @@ class ContextSubscription:
     """Subscribe to device keyword updates and produce Context snapshots.
 
     Monitors one or more keyword types on EntityClients, caching the latest
-    value of each.  A ``snapshot`` merges the cached keyword models with an
+    value of each.  A `snapshot` merges the cached keyword models with an
     optional base context and additional key-value pairs.
 
     The cached keyword models are stored as-is in the context, preserving

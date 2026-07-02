@@ -1,14 +1,14 @@
 """sdasim rendering engine.
 
-``SdasimEngine`` wraps a reusable sdasim ``Scene``: it is built once (parsing the
+`SdasimEngine` wraps a reusable sdasim `Scene`: it is built once (parsing the
 satellite catalog, if enabled) and reused across exposures, with pointing, mount
-rate, and observation time passed as per-frame ``render()`` overrides. The Scene
+rate, and observation time passed as per-frame `render()` overrides. The Scene
 is rebuilt only when the pointing drifts past a threshold or the exposure
 changes (the star field and exposure are baked in at construction).
 
-``sdasim`` and ``torch`` are imported lazily inside the methods that need them so
+`sdasim` and `torch` are imported lazily inside the methods that need them so
 this module (and the rest of SensorKit) can be imported without the optional
-``sdasim`` extra installed.
+`sdasim` extra installed.
 """
 
 from __future__ import annotations
@@ -22,12 +22,12 @@ from loguru import logger
 
 
 class SdasimEngine:
-    """Reusable sdasim ``Scene`` wrapper for the camera device.
+    """Reusable sdasim `Scene` wrapper for the camera device.
 
-    The ``Scene`` (and its satellite catalog, when enabled) is built once and
-    reused; pointing, mount rate, and time are per-frame ``render()`` overrides.
+    The `Scene` (and its satellite catalog, when enabled) is built once and
+    reused; pointing, mount rate, and time are per-frame `render()` overrides.
     The Scene is rebuilt only when the pointing center drifts past
-    ``rebuild_threshold_deg`` or the exposure changes -- the star field and
+    `rebuild_threshold_deg` or the exposure changes -- the star field and
     exposure are fixed at construction.
     """
 
@@ -107,14 +107,14 @@ class SdasimEngine:
     ) -> tuple[np.ndarray, dict]:
         """Render one frame at the given pointing, mount rate, and time.
 
-        Pointing, mount rate, and time are passed as ``render()`` overrides, so a
+        Pointing, mount rate, and time are passed as `render()` overrides, so a
         sequence of exposures at (roughly) the same pointing reuses the same Scene
-        and its already-parsed catalog. sdasim's ``apparent_rate = object_rate -
-        mount_rate`` model handles sidereal vs rate track from the mount rate
+        and its already-parsed catalog. sdasim's `apparent_rate = object_rate -
+        mount_rate` model handles sidereal vs rate track from the mount rate
         alone: (0, 0) == sidereal (sharp stars, streaking satellites); nonzero ==
         rate track (the tracked object becomes a point, stars streak).
 
-        For CCD sensors (``is_cmos=False``) with binning > 1, read noise is
+        For CCD sensors (`is_cmos=False`) with binning > 1, read noise is
         deferred so charge is summed on-chip before one read-noise + A/D pass per
         superpixel; CMOS sensors apply read noise per pixel before binning.
 
@@ -128,9 +128,9 @@ class SdasimEngine:
             bin_factor: Symmetric NxN binning factor.
 
         Returns:
-            ``(image, metadata)`` -- a 2D ``np.uint16`` array and sdasim's render
-            metadata (``num_targets``, ``target_positions``,
-            ``target_velocities``, ...), useful as truth labels.
+            `(image, metadata)` -- a 2D `np.uint16` array and sdasim's render
+            metadata (`num_targets`, `target_positions`,
+            `target_velocities`, ...), useful as truth labels.
         """
         if self._base_config is None:
             raise RuntimeError("sdasim engine not initialized")

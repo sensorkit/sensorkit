@@ -10,10 +10,10 @@ class AcquireData(sk.DeviceCommand):
     """Control instrument data acquisition.
 
     While nothing stops a device from implementing this command directly, typically commands
-    derived from it, such as ``CameraCapture``, which add fields and specialize the command
+    derived from it, such as `CameraCapture`, which add fields and specialize the command
     semantics for a particular device archetype, are implemented instead.
 
-    Four distinct actions are defined here, indicated by the ``action`` field:
+    Four distinct actions are defined here, indicated by the `action` field:
 
     - *acquire* - Executes a single, self-contained acquisition cycle. This is used for
       one-shot data collection operations where the device performs a complete measurement
@@ -21,8 +21,8 @@ class AcquireData(sk.DeviceCommand):
       The command returns when the acquisition is complete.
 
     - *start* - Initiates a passive acquisition process. This begins an ongoing operation where
-      the device continuously collects data until explicitly stopped by another ``AcquireData``
-      command (graceful), by an ``Abort`` command (forcible), or an error occurs. The context
+      the device continuously collects data until explicitly stopped by another `AcquireData`
+      command (graceful), by an `Abort` command (forcible), or an error occurs. The context
       parameter allows implementation-specific configuration passthrough and provides metadata for
       data products in the case where the implementation outputs data products continuously. The
       command returns once the acquisition has successfully begun.
@@ -38,7 +38,7 @@ class AcquireData(sk.DeviceCommand):
 
     Note that the storage or transfer of the acquired data is outside the scope of this command.
     Typically, the device implementing the command will also be the receiver of the acquired data
-    and will write it to a configured ``DataGraph``, but it is also possible for data to be handled
+    and will write it to a configured `DataGraph`, but it is also possible for data to be handled
     differently, e.g., received by a different entity or even handled entirely out-of-band of
     SensorKit.
 
@@ -103,7 +103,7 @@ class ConfigureCameraCooler(sk.DeviceCommand):
 
     Attributes:
         enable: whether the cooler should be enabled
-        setpoint: the target ``CameraSensorTemperature``
+        setpoint: the target `CameraSensorTemperature`
     """
 
     enable: bool

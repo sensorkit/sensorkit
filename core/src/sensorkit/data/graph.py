@@ -162,9 +162,9 @@ class DataFlow:
         self,
         kind: ReceiveKind = None,
     ) -> tuple[Context, StreamReader | Buffer]:
-        """Wait for the producer to send data and return ``(context, data)``.
+        """Wait for the producer to send data and return `(context, data)`.
 
-        *kind* controls whether data is delivered as a buffer or stream; ``None`` defers to
+        *kind* controls whether data is delivered as a buffer or stream; `None` defers to
         the producer's choice.  May only be called once per edge instance.
         """
         if self.receive_ready.is_set():

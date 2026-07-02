@@ -201,12 +201,12 @@ class SdasimCamera:
     async def _start_subscriptions(self):
         """Subscribe to the configured mount/rotator entities for live pointing.
 
-        ``ContextSubscription`` caches each entity's latest keywords; the camera
+        `ContextSubscription` caches each entity's latest keywords; the camera
         reads them at capture time. Mount RA/Dec rates are consumed as published:
-        with an ICRF ``AxisRates`` producer (the alpaca telescope) a sidereal
+        with an ICRF `AxisRates` producer (the alpaca telescope) a sidereal
         track reports (0, 0) and a rate track reports the tracked object's
-        apparent rate -- exactly what sdasim's ``apparent_rate = object_rate -
-        mount_rate`` model wants, no conversion.
+        apparent rate -- exactly what sdasim's `apparent_rate = object_rate -
+        mount_rate` model wants, no conversion.
         """
         kit = sk.device().sensorkit()
 

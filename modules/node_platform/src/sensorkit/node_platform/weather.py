@@ -37,8 +37,8 @@ class OperationMode(BaseModel):
 
 @sk.declare_keyword
 class Safety(BaseModel):
-    """Node Platform extended safety status. The summary ``is_safe`` flag is published
-    separately via ``BasicSafety``; this keyword carries the breakdown."""
+    """Node Platform extended safety status. The summary `is_safe` flag is published
+    separately via `BasicSafety`; this keyword carries the breakdown."""
     is_weather_safe: bool
     is_all_sky_safe: bool
     is_night: bool

@@ -454,7 +454,7 @@ class NodePlatformMount(NodePlatformDevice):
     ):
         """Poll v2_get_mount_status until is_slewing and is_tracking both match.
 
-        When ``await_onset`` (the default, for commands that slew), first wait
+        When `await_onset` (the default, for commands that slew), first wait
         briefly for the mount to *start* slewing. Without this, a command whose
         target flags already equal the current flags (e.g. re-following while
         already tracking) would match the stale pre-command state and return
@@ -462,7 +462,7 @@ class NodePlatformMount(NodePlatformDevice):
         the command was a positional no-op, and we fall through to the settle check.
 
         Non-slewing commands (stop, enable/disable tracking) must pass
-        ``await_onset=False``: they never raise is_slewing, so onset would
+        `await_onset=False`: they never raise is_slewing, so onset would
         otherwise burn the full timeout on every call.
 
         The settle wait is bounded by config.timeout; both phases poll at 0.1 s.
@@ -683,7 +683,7 @@ class NodePlatformMount(NodePlatformDevice):
         the vectors, so they need only be finite and nonzero.
 
         Raises ValueError if the target is below the horizon at t0 or stays up for
-        less than ``min_coverage`` seconds (the Node Platform rejects paths with
+        less than `min_coverage` seconds (the Node Platform rejects paths with
         under 60 s of trackable coverage).
         """
         times_s = np.arange(0.0, max_window + step, step)
@@ -737,7 +737,7 @@ class NodePlatformMount(NodePlatformDevice):
         frame: ReferenceFrame,
         obstimes: Time,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Topocentric ENU from equatorial angles (degrees) in ``frame``.
+        """Topocentric ENU from equatorial angles (degrees) in `frame`.
 
         The direction is built as a unit vector (finite for any dec, so motion
         through the pole folds correctly) and rotated to topocentric by astropy.

@@ -10,21 +10,22 @@ from typing import AsyncContextManager, ClassVar, overload
 
 
 def scoped_waiter[T](aw: Awaitable[T]) -> AsyncContextManager[asyncio.Future[T]]:
-    """
-    Creates an asynchronous context manager for an awaitable object, producing an
-    `asyncio.Future` that can be managed within the `async with` block.
+    """Create an async context manager wrapping an awaitable in a scoped `asyncio.Future`.
 
-    This utility ensures proper cancellation of the future if it is not completed
-    before exiting the context or if an exception occurs in the `async with` block.
+    The future is cancelled if it has not completed before the `async with` block
+    exits or if an exception propagates out of the block.
 
-    **Important:** Any exceptions raised by the awaitable are silently discarded.
-    This makes `scoped_waiter` suitable only for "waiter" type tasks where exceptions
-    either won't occur or are not meaningful to handle (e.g., background monitoring
-    tasks, optional notifications, or advisory operations).
+    Important:
+        Any exceptions raised by the awaitable are silently discarded. This makes
+        `scoped_waiter` suitable only for "waiter" type tasks where exceptions either
+        won't occur or are not meaningful to handle (e.g. background monitoring tasks,
+        optional notifications, or advisory operations).
 
-    :param aw: The awaitable object to be wrapped in an `asyncio.Future`.
-    :return: An asynchronous context manager that provides an `asyncio.Future` corresponding
-             to the given awaitable.
+    Args:
+        aw: The awaitable object to be wrapped in an `asyncio.Future`.
+
+    Returns:
+        An async context manager that yields the `asyncio.Future` for the awaitable.
     """
     return _scoped_waiter(aw)
 

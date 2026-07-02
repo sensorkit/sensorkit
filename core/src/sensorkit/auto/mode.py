@@ -68,7 +68,7 @@ class Criterion(BaseModel, ABC):
 
     @abstractmethod
     def evaluate(self, context: dict[str, Any]) -> IntervalList:
-        """Evaluate this criterion and return valid ``(start, end)`` datetime interval tuples."""
+        """Evaluate this criterion and return valid `(start, end)` datetime interval tuples."""
         ...
 
     @model_validator(mode="before")

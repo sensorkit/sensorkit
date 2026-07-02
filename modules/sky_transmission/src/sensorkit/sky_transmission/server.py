@@ -13,7 +13,7 @@ async def start_image_server(host: str, port: int, state: FrameState):
     published as a keyword (surfaced by the webapi), and raw/processed image
     viewing is handled by the webapi, so there are no /status or /latest.* HTTP
     endpoints. SensorView's Streams tab consumes this directly as an MJPEG
-    source (``multipart/x-mixed-replace``) at ``http://<host>:<port>/stream``.
+    source (`multipart/x-mixed-replace`) at `http://<host>:<port>/stream`.
     """
     from fastapi import FastAPI
     from fastapi.responses import StreamingResponse

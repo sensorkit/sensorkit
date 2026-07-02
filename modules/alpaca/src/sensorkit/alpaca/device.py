@@ -45,7 +45,7 @@ class AlpacaDevice:
         """Async wrapper around the Alpyca SDK.
 
         The SDK is synchronous, so every call is dispatched
-        via ``asyncio.to_thread`` to avoid blocking the event loop.
+        via `asyncio.to_thread` to avoid blocking the event loop.
         """
 
         method = getattr(device, attr)

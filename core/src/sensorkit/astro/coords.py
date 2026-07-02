@@ -62,7 +62,7 @@ class Equatorial:
 
     @property
     def ra_hms(self):
-        """Right ascension formatted as a ``"H M S"`` string."""
+        """Right ascension formatted as a `"H M S"` string."""
         ra = self.ra / 15
         hr = int(ra)
         fractional = abs(ra - hr)
@@ -72,7 +72,7 @@ class Equatorial:
 
     @property
     def dec_dms(self):
-        """Declination formatted as a ``"D M S"`` string."""
+        """Declination formatted as a `"D M S"` string."""
         deg = int(self.dec)
         fractional = abs(self.dec - deg)
         arcmin = int(fractional * 60)
@@ -122,7 +122,7 @@ class StateVector:
     v: Cartesian
 
     def to_numpy(self):
-        """Return a 6-element numpy array ``[rx, ry, rz, vx, vy, vz]``."""
+        """Return a 6-element numpy array `[rx, ry, rz, vx, vy, vz]`."""
         return np.array([self.r.x, self.r.y, self.r.z, self.v.x, self.v.y, self.v.z])
 
     @classmethod

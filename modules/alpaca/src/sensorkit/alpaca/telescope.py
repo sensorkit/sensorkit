@@ -666,17 +666,17 @@ class AlpacaTelescope(AlpacaDevice):
     ):
         """Poll the telescope until Slewing and Tracking both match.
 
-        When ``await_onset`` (the default, for commands that slew), first wait
+        When `await_onset` (the default, for commands that slew), first wait
         briefly for the mount to *start* slewing. Without this, a command whose
         target flags already equal the current flags (e.g. re-following while
         already tracking) would match the stale pre-command state and return
         before motion begins. If no slew is observed within
-        ``_TELESCOPE_ONSET_TIMEOUT``, the command was a positional no-op and we
-        fall through to the settle check (this replaces the old manual ``sleep(1)``
+        `_TELESCOPE_ONSET_TIMEOUT`, the command was a positional no-op and we
+        fall through to the settle check (this replaces the old manual `sleep(1)`
         after each slew).
 
         Non-slewing commands (stop, enable/disable tracking) must pass
-        ``await_onset=False``: they never raise Slewing, so onset would otherwise
+        `await_onset=False`: they never raise Slewing, so onset would otherwise
         burn the full onset timeout on every call.
 
         The settle wait is bounded by config.timeout; both phases poll every 0.1 s.

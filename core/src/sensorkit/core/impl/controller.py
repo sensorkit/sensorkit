@@ -120,10 +120,10 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
         Registers a device that this controller interacts with. Optionally subscribes to
         specific keyword types published by the device. Subscribed keywords are automatically
-        cached and made available in contexts via ``update_context()``.
+        cached and made available in contexts via `update_context()`.
 
         Note:
-            Subscriptions remain inactive until ``start_device_subscriptions()`` is called.
+            Subscriptions remain inactive until `start_device_subscriptions()` is called.
             When using the declarative API, this occurs automatically after initialization.
 
         Args:
@@ -134,12 +134,12 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
         Returns:
             A client instance for interacting with the registered device.
-                Access the subscription object via ``get_device(name).subscription`` to
+                Access the subscription object via `get_device(name).subscription` to
                 retrieve cached values directly.
 
         Raises:
-            KeyError: If attempting to access a device via ``get_device(name)`` that
-                hasn't been registered with ``use_device()``.
+            KeyError: If attempting to access a device via `get_device(name)` that
+                hasn't been registered with `use_device()`.
 
         Examples:
             Basic device registration without subscriptions:
@@ -175,7 +175,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
     @override
     async def start_device_subscriptions(self):
-        """Start all keyword subscriptions registered via ``use_device``.
+        """Start all keyword subscriptions registered via `use_device`.
 
         This is called automatically by the declarative API after init
         callbacks have run.  It may also be called manually if the
@@ -186,7 +186,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
     @override
     async def stop_device_subscriptions(self):
-        """Stop all keyword subscriptions registered via ``use_device``.
+        """Stop all keyword subscriptions registered via `use_device`.
 
         Called automatically by the declarative API before deinit
         callbacks run.
@@ -425,14 +425,14 @@ class ControllerImpl(EntityImpl, ControllerInterface):
                         await aio_task
 
     async def _execute_task(self, execution: TaskExecution):
-        # Associate the envelope with the task so the handler can reach it via ``task.execution``.
+        # Associate the envelope with the task so the handler can reach it via `task.execution`.
         task = execution.task
         task.associate_execution(execution)
         logger.debug(f"execution begun {execution=}")
         finish_info = TaskFinishInfo(aborted=True)
 
         # Emit the execution start event, seeding the executing state's context from the
-        # incoming execution context. This becomes the base layer that ``update_context``
+        # incoming execution context. This becomes the base layer that `update_context`
         # merges device snapshots onto and that is ultimately sent to downstream cameras.
         await self._state.update(
             self,

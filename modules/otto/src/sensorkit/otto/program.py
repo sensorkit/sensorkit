@@ -38,6 +38,14 @@ class TLECache(BaseModel):
 
 @sk.declare_program
 class OttoProgram:
+    """Satellite tasking program.
+
+    Maintains a TLE cache and whitelist/graylist/blacklist object lists, generates
+    collect tasks for visible satellites, and publishes the resulting imagery. State
+    is persisted to the KV store so tasking survives restarts and upstream TLE
+    rate limits.
+    """
+
     def __init__(self):
         self.task_queue: TaskQueue | None = None
 
@@ -226,8 +234,8 @@ class OttoProgram:
             )
 
             try:
-                # ``end_time`` is the domain scheduling deadline; pass it through as the
-                # execution ``expiry_time`` so the controller enforces the same deadline. Await the
+                # `end_time` is the domain scheduling deadline; pass it through as the
+                # execution `expiry_time` so the controller enforces the same deadline. Await the
                 # yielded execution so completion (and any failure) surfaces here.
                 await (yield task.submit(expiry_time=task.end_time))
                 logger.info(f"task ({queued.id}) finished execution successfully.")
@@ -257,10 +265,10 @@ class OttoProgram:
         """Build a list of whitelist objects ordered for a single-flip sky walk.
 
         Targets are sorted by hour angle so the scan walks the sky continuously,
-        crossing the meridian exactly once. ``eastward`` (default) emits in
+        crossing the meridian exactly once. `eastward` (default) emits in
         descending HA — starting at the far western horizon, walking east
-        through the meridian and continuing into the east. ``westward`` is the
-        symmetric reverse. All whitelist objects above ``altitude_min`` are
+        through the meridian and continuing into the east. `westward` is the
+        symmetric reverse. All whitelist objects above `altitude_min` are
         included.
         """
         direction = self.config.collect.scan_direction or "eastward"

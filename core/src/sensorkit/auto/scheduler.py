@@ -153,8 +153,8 @@ def create_schedule(
 ):
     """Build a combined schedule from evaluated mode intervals and program offer trees.
 
-    Returns ``(combined_offers, schedule)`` where *schedule* is an IntervalTree whose
-    intervals carry ``ScheduleIntent`` objects with the active mode and candidate programs.
+    Returns `(combined_offers, schedule)` where *schedule* is an IntervalTree whose
+    intervals carry `ScheduleIntent` objects with the active mode and candidate programs.
     """
     # Combine each set of intervals by stacking them in order, removing overlap regions.
     # The result is that operate modes take precedence over standby modes. We also set the

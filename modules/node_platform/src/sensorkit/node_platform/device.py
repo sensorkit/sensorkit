@@ -73,7 +73,7 @@ class NodePlatformAPI:
     """Async wrapper around the OurSky Node Platform SDK.
 
     The SDK is synchronous (urllib3-backed), so every call is dispatched
-    via ``asyncio.to_thread`` to avoid blocking the event loop.
+    via `asyncio.to_thread` to avoid blocking the event loop.
     """
 
     def __init__(
@@ -96,7 +96,7 @@ class NodePlatformAPI:
     async def call(self, method_name: str, *args, **kwargs) -> Any:
         """Call an SDK method asynchronously.
 
-        The ``lineage_id`` keyword is injected automatically when not
+        The `lineage_id` keyword is injected automatically when not
         explicitly provided.
         """
 

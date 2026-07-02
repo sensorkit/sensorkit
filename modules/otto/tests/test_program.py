@@ -14,7 +14,7 @@ from sensorkit.otto.task_queue import TaskQueue
 def _resolved_execution():
     """An already-resolved awaitable standing in for the dispatched execution.
 
-    The task factory resumes with ``await (yield ...)``, awaiting the execution the tasking loop
+    The task factory resumes with `await (yield ...)`, awaiting the execution the tasking loop
     sends back; in these unit tests we drive the generator directly and feed it a settled future.
     """
     fut = asyncio.get_running_loop().create_future()

@@ -299,7 +299,7 @@ class DemandProc(ABC):
 
     @final
     def future(self) -> asyncio.Future[None]:
-        """Return the underlying asyncio.Task for use as an awaitable or in ``asyncio.wait``."""
+        """Return the underlying asyncio.Task for use as an awaitable or in `asyncio.wait`."""
         return self._aio_task
 
 
