@@ -7,7 +7,7 @@ import ourskyai_node_platform_api as osapi
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.models.devices import Stop
 from sensorkit.std import Connected
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
@@ -37,8 +37,6 @@ class NodePlatformM3(NodePlatformDevice):
 
         self.m3_port: int | None = None
 
-        # Initialize the M3
-        await self.m3_init(Init())
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -52,15 +50,6 @@ class NodePlatformM3(NodePlatformDevice):
         await self.stop_status_loop()
         await self.api.close()
         await sk.device().kv_put_model(self.state)
-
-    @sk.command_handler
-    async def m3_init(self, cmd: Init):
-        pass
-
-    @sk.command_handler
-    async def m3_deinit(self, cmd: Deinit):
-        await self.require_connected()
-        await self.m3_stop(Stop())
 
     @sk.command_handler
     async def m3_stop(self, cmd: Stop):

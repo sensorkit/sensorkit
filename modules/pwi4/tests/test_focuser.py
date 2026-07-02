@@ -31,7 +31,7 @@ class TestPWI4Focuser:
         config = PWI4FocuserConfig()
         focuser = PWI4Focuser(config=config, client=client)
 
-        await focuser.focuser_init(MagicMock())
+        await focuser._initialize()
 
         connect_reqs = client.find_requests("/focuser/connect")
         enable_reqs = client.find_requests("/focuser/enable")
@@ -85,7 +85,7 @@ class TestPWI4Focuser:
         focuser = PWI4Focuser(config=config, client=client)
         focuser.device_connected = True
 
-        await focuser.focuser_deinit(MagicMock())
+        await focuser._deinitialize()
 
         stop_reqs = client.find_requests("/focuser/stop")
         disable_reqs = client.find_requests("/focuser/disable")

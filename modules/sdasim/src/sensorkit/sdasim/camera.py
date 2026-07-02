@@ -15,7 +15,7 @@ import sensorkit.api as sk
 from sensorkit.astro.common import RADecPointing
 from sensorkit.data.context import ContextSubscription
 from sensorkit.data.fits import ArrayInfo
-from sensorkit.models.devices import AxisRates, Deinit, Init, Stop
+from sensorkit.models.devices import AxisRates, Stop
 from sensorkit.sdasim.engine import SdasimEngine
 from sensorkit.std import (
     Binning,
@@ -131,7 +131,7 @@ class SdasimCamera:
         self._capture_lock = asyncio.Lock()
         self._capture_task: asyncio.Task | None = None
 
-        await self.camera_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -145,8 +145,7 @@ class SdasimCamera:
         self.state.bin_y = self._bin_y
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def camera_init(self, cmd: Init):
+    async def _initialize(self):
         # Load the sdasim scene config (CPU-bound; off the event loop).
         await asyncio.to_thread(self._engine.initialize)
 
@@ -162,10 +161,6 @@ class SdasimCamera:
         await sk.device().publish(
             CameraSensorSize(x=self._engine.sensor_width, y=self._engine.sensor_height)
         )
-
-    @sk.command_handler
-    async def camera_deinit(self, cmd: Deinit):
-        await self.camera_abort(sk.Abort())
 
     @sk.command_handler
     async def camera_stop(self, cmd: Stop):

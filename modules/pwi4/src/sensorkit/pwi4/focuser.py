@@ -6,7 +6,7 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.models.devices import Stop
 from sensorkit.std import Connect, Connected, Disconnect, Enabled
 from sensorkit.pwi4.device import PWI4Client, PWI4Device, PWI4DeviceConfig, PWI4DeviceState
 from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
@@ -34,7 +34,7 @@ class PWI4Focuser(PWI4Device):
         self.focuser_position: float | None = None
 
         # Initialize the focuser
-        await self.focuser_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -49,15 +49,13 @@ class PWI4Focuser(PWI4Device):
         await self.focuser_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def focuser_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.focuser_connect(Connect())
         await self.focuser_connect(Connect())
         await self.focuser_enable(sk.Enable())
 
-    @sk.command_handler
-    async def focuser_deinit(self, cmd: Deinit):
+    async def _deinitialize(self):
         await self.focuser_stop(Stop())
         await self.focuser_disable(sk.Disable())
 

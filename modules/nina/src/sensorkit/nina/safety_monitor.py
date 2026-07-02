@@ -6,7 +6,6 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.safety import BasicSafety
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
@@ -32,7 +31,7 @@ class NinaSafetyMonitor(NinaDevice):
             self.state = NinaSafetyMonitorState()
 
         # Initialize the safety monitor
-        await self.safety_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -42,14 +41,9 @@ class NinaSafetyMonitor(NinaDevice):
         await self.safety_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def safety_init(self, cmd: Init):
+    async def _initialize(self):
         self._reconnect = lambda: self.safety_connect(Connect())
         await self.safety_connect(Connect())
-
-    @sk.command_handler
-    async def safety_deinit(self, cmd: Deinit):
-        pass
 
     @sk.command_handler
     async def safety_connect(self, cmd: Connect):

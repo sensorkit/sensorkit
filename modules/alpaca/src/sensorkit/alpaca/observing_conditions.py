@@ -13,7 +13,6 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Deinit, Init
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.weather import BasicWeather, StandardWeather
 
@@ -53,7 +52,7 @@ class AlpacaObservingConditions(AlpacaDevice):
             self.state = AlpacaObservingConditionsState()
 
         # Initialize the observing conditions
-        await self.observing_conditions_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -63,8 +62,7 @@ class AlpacaObservingConditions(AlpacaDevice):
         await self.observing_conditions_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def observing_conditions_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.observing_conditions_connect(Connect())
         self.oc = ObservingConditions(
@@ -78,10 +76,6 @@ class AlpacaObservingConditions(AlpacaDevice):
                 await self.put(self.oc, "AveragePeriod", self.config.average_period)
             except Exception:
                 logger.warning("Unable to set AveragePeriod")
-
-    @sk.command_handler
-    async def observing_conditions_deinit(self, cmd: Deinit):
-        pass
 
     @sk.command_handler
     async def observing_conditions_connect(self, cmd: Connect):

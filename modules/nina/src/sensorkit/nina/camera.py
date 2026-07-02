@@ -19,7 +19,7 @@ from sensorkit.nina.device import (
     NinaDeviceConfig,
     NinaDeviceState,
 )
-from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.models.devices import Stop
 from sensorkit.std import (
     Binning,
     CameraCapture,
@@ -142,7 +142,7 @@ class NinaCamera(NinaDevice):
             self.state = NinaCameraState()
 
         # Initialize the camera
-        await self.camera_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -152,8 +152,7 @@ class NinaCamera(NinaDevice):
         await self.camera_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def camera_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.camera_connect(Connect())
         await self.camera_connect(Connect())
@@ -172,10 +171,6 @@ class NinaCamera(NinaDevice):
                 ),
             )
         )
-
-    @sk.command_handler
-    async def camera_deinit(self, cmd: Deinit):
-        await self.camera_abort(sk.Abort())
 
     @sk.command_handler
     async def camera_connect(self, cmd: Connect):

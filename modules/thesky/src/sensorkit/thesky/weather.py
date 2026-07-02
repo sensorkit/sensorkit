@@ -6,7 +6,6 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.safety import BasicSafety, StandardSafety
 from sensorkit.thesky.device import (
@@ -36,7 +35,7 @@ class TheSkyWeather(TheSkyDevice):
             self.state = TheSkyWeatherState()
 
         # Initialize the weather
-        await self.weather_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -45,15 +44,10 @@ class TheSkyWeather(TheSkyDevice):
         await self.stop_status_loop()
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def weather_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.weather_connect(Connect())
         await self.weather_connect(Connect())
-
-    @sk.command_handler
-    async def weather_deinit(self, cmd: Deinit):
-        pass
 
     @sk.command_handler
     async def weather_connect(self, cmd: Connect):

@@ -9,7 +9,6 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init
 from sensorkit.std import Connected
 from sensorkit.std.safety import BasicSafety, StandardSafety
 from sensorkit.node_platform.device import (
@@ -69,7 +68,7 @@ class NodePlatformWeather(NodePlatformDevice):
             self.state = NodePlatformWeatherState()
 
         # Initialize the weather
-        await self.weather_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
         async with asyncio.timeout(self.config.timeout):
@@ -83,8 +82,7 @@ class NodePlatformWeather(NodePlatformDevice):
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def weather_init(self, cmd: Init):
+    async def _initialize(self):
         # Discover which weather metric names are available on this node
         self._weather_metric_names: list[str] = []
         try:
@@ -111,10 +109,6 @@ class NodePlatformWeather(NodePlatformDevice):
         else:
             await self.api.call("v1_enable_manual_operation")
             logger.debug("set Node Platform to MANUAL mode")
-
-    @sk.command_handler
-    async def weather_deinit(self, cmd: Deinit):
-        pass
 
     async def status_publish(self):
         while True:

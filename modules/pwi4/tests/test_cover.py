@@ -30,7 +30,7 @@ class TestPWI4Cover:
         config = PWI4CoverConfig()
         cover = PWI4Cover(config=config, client=client)
 
-        await cover.cover_init(MagicMock())
+        await cover._initialize()
 
         reqs = client.find_requests("/mirrorcover/connect")
         assert len(reqs) == 1
@@ -93,7 +93,7 @@ class TestPWI4Cover:
         cover = PWI4Cover(config=config, client=client)
         cover.device_connected = True
 
-        await cover.cover_deinit(MagicMock())
+        await cover._deinitialize()
 
         stop_reqs = client.find_requests("/mirrorcover/stop")
         disconnect_reqs = client.find_requests("/mirrorcover/disconnect")

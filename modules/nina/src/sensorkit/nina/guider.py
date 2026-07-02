@@ -13,7 +13,6 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 
@@ -69,7 +68,7 @@ class NinaGuider(NinaDevice):
             self.state = NinaGuiderState()
 
         # Initialize the guider
-        await self.guider_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -79,14 +78,9 @@ class NinaGuider(NinaDevice):
         await self.guider_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def guider_init(self, cmd: Init):
+    async def _initialize(self):
         self._reconnect = lambda: self.guider_connect(Connect())
         await self.guider_connect(Connect())
-
-    @sk.command_handler
-    async def guider_deinit(self, cmd: Deinit):
-        await self.client.get("/equipment/guider/stop")
 
     @sk.command_handler
     async def guider_connect(self, cmd: Connect):

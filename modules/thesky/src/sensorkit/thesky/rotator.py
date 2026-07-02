@@ -6,7 +6,6 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
 from sensorkit.thesky.device import (
@@ -38,7 +37,7 @@ class TheSkyRotator(TheSkyDevice):
         self.rotator_position: float | None = None
 
         # Initialize the rotator
-        await self.rotator_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -53,15 +52,10 @@ class TheSkyRotator(TheSkyDevice):
         await self.rotator_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def rotator_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.rotator_connect(Connect())
         await self.rotator_connect(Connect())
-
-    @sk.command_handler
-    async def rotator_deinit(self, cmd: Deinit):
-        pass
 
     @sk.command_handler
     async def rotator_connect(self, cmd: Connect):

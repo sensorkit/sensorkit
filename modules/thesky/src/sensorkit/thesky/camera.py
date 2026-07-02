@@ -11,7 +11,7 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ArrayInfo
-from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.models.devices import Stop
 from sensorkit.std import (
     Binning,
     CameraCapture,
@@ -83,7 +83,7 @@ class TheSkyCamera(TheSkyDevice):
             self.state = TheSkyCameraState()
 
         # Initialize the camera
-        await self.camera_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -93,8 +93,7 @@ class TheSkyCamera(TheSkyDevice):
         await self.camera_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def camera_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.camera_connect(Connect())
         await self.camera_connect(Connect())
@@ -108,10 +107,6 @@ class TheSkyCamera(TheSkyDevice):
                 ),
             )
         )
-
-    @sk.command_handler
-    async def camera_deinit(self, cmd: Deinit):
-        await self.camera_abort(sk.Abort())
 
     @sk.command_handler
     async def camera_connect(self, cmd: Connect):

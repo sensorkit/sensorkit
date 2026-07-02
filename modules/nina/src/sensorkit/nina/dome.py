@@ -7,7 +7,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Home, Init, MoveToPark, Opened, Stop
+from sensorkit.models.devices import Home, MoveToPark, Opened, Stop
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.astro.common import AltAzPointing
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
@@ -44,7 +44,7 @@ class NinaDome(NinaDevice):
             self.state = NinaDomeState()
 
         # Initialize the dome
-        await self.dome_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -54,8 +54,7 @@ class NinaDome(NinaDevice):
         await self.dome_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def dome_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.dome_connect(Connect())
         await self.dome_connect(Connect())
@@ -63,12 +62,6 @@ class NinaDome(NinaDevice):
         # Home, as needed
         if not self.state.has_been_homed:
             await self.dome_home(Home())
-
-    @sk.command_handler
-    async def dome_deinit(self, cmd: Deinit):
-        await self.dome_stop(Stop())
-        await self.dome_close(CloseEnclosure())
-        await self.dome_park(MoveToPark())
 
     @sk.command_handler
     async def dome_connect(self, cmd: Connect):

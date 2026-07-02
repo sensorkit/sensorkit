@@ -13,7 +13,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.models.devices import Stop
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
 
@@ -53,7 +53,7 @@ class AlpacaRotator(AlpacaDevice):
         self.rotator_position: float | None = None
 
         # Initialize the rotator
-        await self.rotator_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -68,8 +68,7 @@ class AlpacaRotator(AlpacaDevice):
         await self.rotator_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def rotator_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.rotator_connect(Connect())
         self.rotator = Rotator(self.address, self.config.device_number, self.config.protocol)
@@ -78,10 +77,6 @@ class AlpacaRotator(AlpacaDevice):
         # Read capabilities
         self._can_reverse = await self.get(self.rotator, "CanReverse", False)
         self._step_size = await self.get(self.rotator, "StepSize", None)
-
-    @sk.command_handler
-    async def rotator_deinit(self, cmd: Deinit):
-        await self.rotator_stop(Stop())
 
     @sk.command_handler
     async def rotator_connect(self, cmd: Connect):

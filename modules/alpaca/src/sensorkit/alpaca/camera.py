@@ -20,7 +20,7 @@ from sensorkit.alpaca.device import (
 )
 from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ArrayInfo
-from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.models.devices import Stop
 from sensorkit.std import (
     Binning,
     CameraCapture,
@@ -175,18 +175,23 @@ class AlpacaCamera(AlpacaDevice):
             self.state = AlpacaCameraState()
 
         # Initialize the camera
-        await self.camera_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
         await self.stop_status_loop()
+
+        # Drain in-flight image-processing tasks so their DataGraph writes
+        # complete before we tear down.
+        if data_tasks := getattr(self, "_data_tasks", None):
+            await asyncio.gather(*data_tasks, return_exceptions=True)
+
         await self.camera_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def camera_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.camera_connect(Connect())
         self.camera = Camera(self.address, self.config.device_number, self.config.protocol)
@@ -245,12 +250,6 @@ class AlpacaCamera(AlpacaDevice):
                 ),
             )
         )
-
-    @sk.command_handler
-    async def camera_deinit(self, cmd: Deinit):
-        await self.camera_abort(sk.Abort())
-        if self._data_tasks:
-            await asyncio.gather(*self._data_tasks, return_exceptions=True)
 
     @sk.command_handler
     async def camera_connect(self, cmd: Connect):

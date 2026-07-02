@@ -9,7 +9,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Home, Init, Opened, Stop
+from sensorkit.models.devices import Home, Opened, Stop
 from sensorkit.std import Connected
 from sensorkit.astro.common import AltAzPointing
 from sensorkit.node_platform.device import (
@@ -77,7 +77,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
         async with asyncio.timeout(self.config.timeout):
             while self.device_connected is None:
                 await asyncio.sleep(self.config.status_frequency)
-        await self.enclosure_init(Init())
+        await self._initialize()
 
     @sk.on_detach
     async def entity_deinit(self):
@@ -86,8 +86,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def enclosure_init(self, cmd: Init):
+    async def _initialize(self):
         # Ensure synchronization with the mount
         await self.api.call("v1_sync_enclosure_rotator_with_mount")
         await self.api.call("v1_sync_enclosure_window_with_mount")
@@ -105,8 +104,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
             )
             logger.debug(f"turned on all enclosure fans: {[r.value for r in all_fan_roles]}")
 
-    @sk.command_handler
-    async def enclosure_deinit(self, cmd: Deinit):
+    async def _deinitialize(self):
         await self.enclosure_stop(Stop())
         await self.enclosure_close(CloseEnclosure())
 

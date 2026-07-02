@@ -7,7 +7,6 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 
@@ -44,7 +43,7 @@ class NinaSwitch(NinaDevice):
             self.state = NinaSwitchDeviceState()
 
         # Initialize the switch
-        await self.switch_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -54,14 +53,9 @@ class NinaSwitch(NinaDevice):
         await self.switch_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def switch_init(self, cmd: Init):
+    async def _initialize(self):
         self._reconnect = lambda: self.switch_connect(Connect())
         await self.switch_connect(Connect())
-
-    @sk.command_handler
-    async def switch_deinit(self, cmd: Deinit):
-        pass
 
     @sk.command_handler
     async def switch_connect(self, cmd: Connect):

@@ -13,7 +13,6 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Deinit, Init
 from sensorkit.std import Connect, Connected, Disconnect
 
 
@@ -61,7 +60,7 @@ class AlpacaSwitch(AlpacaDevice):
         self._max_switch: int = 0
 
         # Initialize the switch
-        await self.switch_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -71,8 +70,7 @@ class AlpacaSwitch(AlpacaDevice):
         await self.switch_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def switch_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.switch_connect(Connect())
         self.switch = Switch(self.address, self.config.device_number, self.config.protocol)
@@ -80,10 +78,6 @@ class AlpacaSwitch(AlpacaDevice):
 
         # Read capabilities
         self._max_switch = await self.get(self.switch, "MaxSwitch", 0)
-
-    @sk.command_handler
-    async def switch_deinit(self, cmd: Deinit):
-        await self.stop_status_loop()
 
     @sk.command_handler
     async def switch_connect(self, cmd: Connect):

@@ -6,7 +6,6 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std.optics import Filter, Filters, SetFilter
@@ -34,7 +33,7 @@ class NinaFilterWheel(NinaDevice):
         self.filter_wheel_position: int | None = None
 
         # Initialize the filter wheel
-        await self.filter_wheel_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -49,8 +48,7 @@ class NinaFilterWheel(NinaDevice):
         await self.filter_wheel_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def filter_wheel_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.filter_wheel_connect(Connect())
         await self.filter_wheel_connect(Connect())
@@ -72,10 +70,6 @@ class NinaFilterWheel(NinaDevice):
                 ]
             )
         )
-
-    @sk.command_handler
-    async def filter_wheel_deinit(self, cmd: Deinit):
-        pass
 
     @sk.command_handler
     async def filter_wheel_connect(self, cmd: Connect):

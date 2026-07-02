@@ -7,7 +7,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.models.devices import Stop
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
@@ -44,7 +44,7 @@ class NinaFocuser(NinaDevice):
         self.focuser_position: float | None = None
 
         # Initialize the focuser
-        await self.focuser_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -59,15 +59,10 @@ class NinaFocuser(NinaDevice):
         await self.focuser_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def focuser_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.focuser_connect(Connect())
         await self.focuser_connect(Connect())
-
-    @sk.command_handler
-    async def focuser_deinit(self, cmd: Deinit):
-        await self.focuser_stop(Stop())
 
     @sk.command_handler
     async def focuser_connect(self, cmd: Connect):

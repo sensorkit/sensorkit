@@ -6,7 +6,6 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std.weather import BasicWeather, StandardWeather
@@ -33,7 +32,7 @@ class NinaWeather(NinaDevice):
 
         # Initialize the weather
         self.start_status_loop(self.status_publish())
-        await self.weather_init(Init())
+        await self._initialize()
 
     @sk.on_detach
     async def entity_deinit(self):
@@ -42,15 +41,10 @@ class NinaWeather(NinaDevice):
         await self.weather_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def weather_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.weather_connect(Connect())
         await self.weather_connect(Connect())
-
-    @sk.command_handler
-    async def weather_deinit(self, cmd: Deinit):
-        pass
 
     @sk.command_handler
     async def weather_connect(self, cmd: Connect):

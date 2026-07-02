@@ -233,7 +233,7 @@ class TestArchetype:
     def test_camera_capture_handler_exists(self):
         # CameraCapture handler exists so the StandardCamera archetype is satisfied.
         assert hasattr(SdasimCamera, "camera_capture")
-        assert hasattr(SdasimCamera, "camera_init")
+        assert hasattr(SdasimCamera, "_initialize")
 
     def test_connect_disconnect_handlers_removed(self):
         # Connect/Disconnect are optional on the StandardCamera archetype; the

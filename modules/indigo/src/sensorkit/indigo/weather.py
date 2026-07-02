@@ -13,7 +13,6 @@ from sensorkit.indigo.device import (
     IndigoDeviceState,
     IndigoProperty,
 )
-from sensorkit.models.devices import Deinit, Init
 from sensorkit.std import Connected
 from sensorkit.std.weather import BasicWeather, StandardWeather
 
@@ -114,7 +113,7 @@ class IndigoWeather(IndigoDevice):
             self.state = IndigoWeatherState()
 
         # Initialize the weather
-        await self.weather_init(Init())
+        await self._initialize()
 
     @sk.on_detach
     async def entity_deinit(self):
@@ -122,8 +121,7 @@ class IndigoWeather(IndigoDevice):
         await sk.device().publish(Connected(is_connected=False))
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def weather_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect WebSocket to INDIGO server
         await self.connect_to_server()
 
@@ -151,10 +149,6 @@ class IndigoWeather(IndigoDevice):
                 f"AUX_WEATHER property not received within {self.config.timeout}s; "
                 "will publish when it arrives"
             )
-
-    @sk.command_handler
-    async def weather_deinit(self, cmd: Deinit):
-        pass
 
     async def _on_connection_update(self, prop: IndigoProperty, msg_type: str):
         """Track device connection state from INDIGO CONNECTION property."""

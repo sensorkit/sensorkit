@@ -6,7 +6,7 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init, Opened
+from sensorkit.models.devices import Opened
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 from sensorkit.thesky.device import (
@@ -37,7 +37,7 @@ class TheSkyOTA(TheSkyDevice):
             self.state = TheSkyOTAState()
 
         # Initialize the OTA
-        await self.ota_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -47,15 +47,10 @@ class TheSkyOTA(TheSkyDevice):
         await self.ota_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def ota_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.ota_connect(Connect())
         await self.ota_connect(Connect())
-
-    @sk.command_handler
-    async def ota_deinit(self, cmd: Deinit):
-        await self.ota_close(CloseMirrorCover())
 
     @sk.command_handler
     async def ota_connect(self, cmd: Connect):

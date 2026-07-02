@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing
-from sensorkit.models.devices import Deinit, Home, Init, MoveToPark, Opened, Stop
+from sensorkit.models.devices import Home, MoveToPark, Opened, Stop
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
 from sensorkit.thesky.device import (
@@ -54,7 +54,7 @@ class TheSkyDome(TheSkyDevice):
             self.state = TheSkyDomeState()
 
         # Initialize the dome
-        await self.dome_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -64,8 +64,7 @@ class TheSkyDome(TheSkyDevice):
         await self.dome_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def dome_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.dome_connect(Connect())
         await self.dome_connect(Connect())
@@ -73,19 +72,6 @@ class TheSkyDome(TheSkyDevice):
         # Home, as needed
         if not self.state.has_been_homed:
             self._home_task = asyncio.create_task(self.dome_home(Home()))
-
-    @sk.command_handler
-    async def dome_deinit(self, cmd: Deinit):
-        await self.dome_stop(Stop())
-
-        if self._home_task is not None:
-            self._home_task.cancel()
-
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._home_task
-
-        await self.dome_close(CloseEnclosure())
-        await self.dome_park(MoveToPark())
 
     @sk.command_handler
     async def dome_connect(self, cmd: Connect):

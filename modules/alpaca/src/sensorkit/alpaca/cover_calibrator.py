@@ -13,7 +13,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Deinit, Init, Opened, Stop
+from sensorkit.models.devices import Opened, Stop
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 
@@ -84,7 +84,7 @@ class AlpacaCoverCalibrator(AlpacaDevice):
             self.state = AlpacaCoverCalibratorState()
 
         # Initialize the cover calibrator
-        await self.cover_calibrator_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
     @sk.on_detach
@@ -94,8 +94,7 @@ class AlpacaCoverCalibrator(AlpacaDevice):
         await self.cover_calibrator_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def cover_calibrator_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.cover_calibrator_connect(Connect())
         self.cover_calibrator = CoverCalibrator(
@@ -105,11 +104,6 @@ class AlpacaCoverCalibrator(AlpacaDevice):
 
         # Read capabilities
         self._max_brightness = await self.get(self.cover_calibrator, "MaxBrightness", None)
-
-    @sk.command_handler
-    async def cover_calibrator_deinit(self, cmd: Deinit):
-        await self.cover_calibrator_stop(Stop())
-        await self.cover_calibrator_close(CloseMirrorCover())
 
     @sk.command_handler
     async def cover_calibrator_connect(self, cmd: Connect):

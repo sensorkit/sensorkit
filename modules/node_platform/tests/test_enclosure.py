@@ -9,7 +9,7 @@ from conftest import (
     make_safety_status,
 )
 
-from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.models.devices import Stop
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.enclosure import (
     NodePlatformEnclosure,
@@ -105,7 +105,7 @@ class TestEnclosureInit:
         api.set_response("v1_home_enclosure_shutters", None)
         enclosure.shutter_state = Shutter.CLOSED
 
-        await enclosure.enclosure_init(Init())
+        await enclosure._initialize()
 
         assert len(api.find_calls("v1_home_enclosure_shutters")) == 1
         assert len(api.find_calls("v1_sync_enclosure_rotator_with_mount")) == 1
@@ -115,7 +115,7 @@ class TestEnclosureInit:
     async def test_init_skips_home_if_already_homed(self, enclosure, api):
         enclosure.state.has_been_homed = True
 
-        await enclosure.enclosure_init(Init())
+        await enclosure._initialize()
 
         assert len(api.find_calls("v1_home_enclosure_shutters")) == 0
 
@@ -124,7 +124,7 @@ class TestEnclosureInit:
         install_shutter(api, Shutter.OPENED)
         install_mode(api, "MANUAL")
 
-        await enclosure.enclosure_deinit(Deinit())
+        await enclosure._deinitialize()
 
         assert len(api.find_calls("v1_halt_enclosure_shutters")) == 1
         assert len(api.find_calls("v1_halt_enclosure_window")) == 1

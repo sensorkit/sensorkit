@@ -369,13 +369,13 @@ class PWI4Mount(PWI4Device):
         logger.debug("homing mount")
         await self.client.request("/mount/find_home")
 
-        async with asyncio.timeout(self.config.timeout):
-            await self.client.poll(
-                lambda s: (
-                    self.client.get_bool(s, "mount.axis0.is_position_initialized")
-                    and self.client.get_bool(s, "mount.axis1.is_position_initialized")
-                ),
-            )
+        # async with asyncio.timeout(self.config.timeout):
+        #     await self.client.poll(
+        #         lambda s: (
+        #             self.client.get_bool(s, "mount.axis0.is_position_initialized")
+        #             and self.client.get_bool(s, "mount.axis1.is_position_initialized")
+        #         ),
+        #     )
 
         logger.debug("homed mount")
 

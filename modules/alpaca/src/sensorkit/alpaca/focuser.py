@@ -13,7 +13,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Deinit, Init, Stop
+from sensorkit.models.devices import Stop
 from sensorkit.std import Connect, Connected, Disconnect, Temperature, TemperatureUnit
 from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
 
@@ -55,7 +55,7 @@ class AlpacaFocuser(AlpacaDevice):
         self.focuser_position: float | None = None
 
         # Initialize the focuser
-        await self.focuser_init(Init())
+        await self._initialize()
         self.start_status_loop(self.status_publish())
 
         # Ensure we have a position
@@ -70,8 +70,7 @@ class AlpacaFocuser(AlpacaDevice):
         await self.focuser_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
-    @sk.command_handler
-    async def focuser_init(self, cmd: Init):
+    async def _initialize(self):
         # Connect to the hardware
         self._reconnect = lambda: self.focuser_connect(Connect())
         self.focuser = Focuser(self.address, self.config.device_number, self.config.protocol)
@@ -85,10 +84,6 @@ class AlpacaFocuser(AlpacaDevice):
         self._max_increment = await self.get(f, "MaxIncrement", 100000)
         self._step_size = await self.get(f, "StepSize", None)
         self._temp_comp_available = await self.get(f, "TempCompAvailable", False)
-
-    @sk.command_handler
-    async def focuser_deinit(self, cmd: Deinit):
-        await self.focuser_stop(Stop())
 
     @sk.command_handler
     async def focuser_connect(self, cmd: Connect):

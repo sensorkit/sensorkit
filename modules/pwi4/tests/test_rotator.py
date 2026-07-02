@@ -30,7 +30,7 @@ class TestPWI4Rotator:
         config = PWI4RotatorConfig()
         rotator = PWI4Rotator(config=config, client=client)
 
-        await rotator.rotator_init(MagicMock())
+        await rotator._initialize()
 
         connect_reqs = client.find_requests("/rotator/connect")
         enable_reqs = client.find_requests("/rotator/enable")
@@ -84,7 +84,7 @@ class TestPWI4Rotator:
         rotator = PWI4Rotator(config=config, client=client)
         rotator.device_connected = True
 
-        await rotator.rotator_deinit(MagicMock())
+        await rotator._deinitialize()
 
         stop_reqs = client.find_requests("/rotator/stop")
         disable_reqs = client.find_requests("/rotator/disable")
