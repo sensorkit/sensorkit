@@ -306,6 +306,14 @@ class ModelRegistryView[T](ModelRegistryBase[T]):
             if type(data) is not model_type:
                 raise ValueError(f"model {model_type.__name__} does not match tag: {tag}")
 
+        # Strip the discriminator context, if any. This is necessary to prevent downstream
+        # registry-backed fields from receiving and interpreting this themselves.
+        # FIXME: discriminator-from-context should be reviewed, as it may be avoidable by doing
+        #        namespace lookups against the registry, e.g. in `validate_keyword`. This is
+        #        slightly more complicated than it sounds to ensure views/namespaces are folded in.
+        if tag_from_context:
+            del info.context[self.DISCRIMINATOR_CONTEXT]
+
         return self._registry.type_adapter(model_type).validate_python(data, context=info.context)
 
     def __contains__(self, val: type[T]) -> bool:
