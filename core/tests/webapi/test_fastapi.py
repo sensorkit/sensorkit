@@ -212,7 +212,7 @@ async def test_execute_controller_task_with_submission_envelope(webapi_setup):
     async def handle(task: InitTask):
         # The controller associates the execution before invoking the handler, so the
         # client-supplied context and expiry are reachable here.
-        seen["context"] = dict(task.execution.get_context())
+        seen["context"] = dict(task.execution.context)
         seen["expiry_time"] = task.execution.expiry_time
         done.set()
 
@@ -230,7 +230,9 @@ async def test_execute_controller_task_with_submission_envelope(webapi_setup):
     async with asyncio.timeout(3.0):
         await done.wait()
 
-    assert seen["context"] == {"program_name": "skyview", "FileNameTemplate": "{target}_{time}"}
+    # The controller injects a TaskInfo keyword alongside the client-supplied context.
+    assert seen["context"]["program_name"] == "skyview"
+    assert seen["context"]["FileNameTemplate"] == "{target}_{time}"
     assert seen["expiry_time"] is not None
 
 

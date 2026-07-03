@@ -70,12 +70,12 @@ data_flow:
             BSCALE: 1
             BITPIX: =bitpix
             BZERO: =bzero
-            TASKID: =task_id
-            FRAMENUM: =frame_num
-            CENTAZ: =az
-            CENTALT: =alt
-            RADEG: =ra
-            DECDEG: =dec
+            TASKID: =str(TaskInfo.task_id)
+            FRAMENUM: =Collect.frame_number
+            CENTAZ: =AltAzPointing.azimuth_degrees
+            CENTALT: =AltAzPointing.altitude_degrees
+            RADEG: =RADecPointing.right_ascension_hours * 15
+            DECDEG: =RADecPointing.declination_degrees
         - op: array_to_fits
         - op: write_file
           directory: /Temp/SimulatedSensor

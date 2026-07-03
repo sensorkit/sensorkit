@@ -34,7 +34,7 @@ from sensorkit.core.controller import (
 from sensorkit.core.device import DeviceClient
 from sensorkit.core.entity import ControllerDetails, EntityInfo
 from sensorkit.core.impl.entity import EntityImpl
-from sensorkit.core.task import Task, TaskExecution
+from sensorkit.core.task import Task, TaskExecution, TaskInfo
 from sensorkit.data.context import Context, ContextSubscription
 
 
@@ -330,27 +330,34 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             context=msg.context,
             expiry_time=msg.expiry_time,
         )
+
+        # Inject information about this task execution into the task context.
+        execution.context.set(
+            TaskInfo(
+                task=task,
+                task_id=execution.task_id,
+                controller_id=execution.controller_id,
+            )
+        )
+
+        # Send the initial response.
         response = ExecuteResponseMessage(execution=execution)
 
-        # Reject if we aren't ready.
         if not self._state.enable_state.enabled:
-            logger.warning(f"Rejecting {type(task)} task: Controller is disabled")
+            logger.warning(f"Rejecting {task.task_type} task: Controller is disabled")
             call.reject(response=response)
             return
 
-        # Reject if there's already a Task in work.
         if not msg.interrupt and self.task_running():
-            logger.warning(f"Rejecting {type(task)} task: Task already in progress")
+            logger.warning(f"Rejecting {task.task_type} task: Task already in progress")
             call.reject(response=response)
             return
 
-        # Ensure we have a handler defined.
         if type(task) not in self._task_handlers:
-            logger.warning(f"Rejecting {type(task)} task: No handler registered")
+            logger.warning(f"Rejecting {task.task_type} task: No handler registered")
             call.reject(response=response)
             return
 
-        # Accept the task execution request.
         call.accept(response=response)
         aio_task: asyncio.Task | None = None
 

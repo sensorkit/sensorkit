@@ -206,11 +206,6 @@ class SensorControl:
             )
 
         # Set base context for all frames.
-        await sk.controller().update_context(
-            self.config.site_position,
-            # FIXME: Ad hoc context should be formalized as Keywords.
-            task_id=task.execution.task_id,
-        )
         collect = Collect(
             target=task.target,
             params=task.camera_params,
@@ -224,6 +219,7 @@ class SensorControl:
                 else None
             ),
         )
+        await sk.controller().update_context(self.config.site_position, collect)
 
         # For inherently sidereal targets (stars), the initial FollowTarget already
         # establishes sidereal tracking — mark as sidereal from the start so the frame
@@ -406,7 +402,7 @@ async def sensor_control_service(service: sk.Service):
 
 
 def _add_compat_context(context: sk.Context):
-    # FIXME: temporary for compat
+    # FIXME: Temporary to avoid breaking existing deployed config.
     compat = dict(
         ra="RADecPointing.right_ascension_hours * 15",
         ra_hms="RADecPointing.ra_hms",
@@ -433,6 +429,7 @@ def _add_compat_context(context: sk.Context):
         elevation="SitePosition.altitude_km",
         latitude="SitePosition.latitude_degrees",
         longitude="SitePosition.longitude_degrees",
+        task_id="TaskInfo.task_id",
     )
 
     for key, expr in compat.items():

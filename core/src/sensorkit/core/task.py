@@ -4,11 +4,11 @@ import asyncio
 import uuid
 from collections.abc import Generator
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, override
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, override
 
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, BeforeValidator, Field, PrivateAttr
 
-from sensorkit.common.keyword import KeywordDict
+from sensorkit.common.keyword import KeywordDict, declare_keyword
 from sensorkit.common.model import ModelRegistry, RegistryBaseModel
 
 if TYPE_CHECKING:
@@ -185,6 +185,14 @@ class CollectTask(Task):
     task_type: Literal["collect"] = "collect"
 
 
+@declare_keyword
+class TaskInfo(BaseModel):
+    """Keyword describing a task that has been executed on a controller."""
+    task: Task
+    task_id: uuid.UUID
+    controller_id: str
+
+
 class TaskExecution(BaseModel):
     """Execution envelope wrapping a `Task`.
 
@@ -196,7 +204,11 @@ class TaskExecution(BaseModel):
     task: Task
     task_id: uuid.UUID
     controller_id: str
-    context: KeywordDict | None = None
+    context: Annotated[
+        KeywordDict,
+        BeforeValidator(lambda v: KeywordDict() if v is None else v),
+        Field(default_factory=KeywordDict),
+    ]
     expiry_time: datetime | None = None
 
     # Live result future, bound only in the context that owns the in-flight call (the client
@@ -238,25 +250,6 @@ class TaskExecution(BaseModel):
     def result(self) -> TaskExecutionResult:
         """Return the final result, raising if the execution has not yet completed."""
         return self._require_result().result()
-
-    def set_context(self, context: KeywordDict):
-        """Merge keyword context into this execution.
-
-        Args:
-            context: Keyword context to merge into any context already present.
-        """
-        if self.context is None:
-            self.context = context
-        else:
-            self.context.update(context)
-
-    def get_context(self) -> KeywordDict:
-        """Return the keyword context associated with this execution.
-
-        Returns:
-            The associated context, or an empty `KeywordDict` if none is set.
-        """
-        return self.context or KeywordDict()
 
 
 class TaskSubmission(BaseModel):

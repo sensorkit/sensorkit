@@ -74,6 +74,7 @@ from sensorkit.core.task import (
     StandbyTask,
     Task,
     TaskExecution,
+    TaskInfo,
     TaskSubmission,
 )
 from sensorkit.core.trait import Archetype, Trait, declare_archetype, declare_trait
