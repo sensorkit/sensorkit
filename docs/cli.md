@@ -1,188 +1,152 @@
 # CLI reference
 
 ```
-sensorkit <command> [options] [args]
+sensorkit <group> <command> [options] [args]
 ```
+
+The CLI talks to a running system over NATS (`NATS_URL`, default `nats://127.0.0.1:4222`). A `.env` file in the working directory is loaded automatically, so it's a good place for `NATS_URL` and `SENSORKIT_CONFIG`.
+
+Every command supports `--help`.
 
 ---
 
-## service
-
-Manage running services.
+## `config` — unified configuration
 
 ```bash
-# Start a service
-sensorkit service run <module> <name> [-r]
+sensorkit config load FILE [-n] [-f] [-v]
+```
 
-# List all registered services
+Validate a unified config file and write it to the configuration store. Only changed keys are written by default.
+
+| Flag              | Description                                        |
+|-------------------|----------------------------------------------------|
+| `-n, --dry-run`   | Validate and show the diff; write nothing          |
+| `-f, --force`     | Write all keys, even unchanged ones                |
+| `-v`              | Verbose: list each entity/key and its status (`-vv` includes values) |
+
+---
+
+## `go` — run everything
+
+```bash
+sensorkit go [-c FILE] [-l] [--log-file FILE] [--log-level LEVEL] [--shutdown-timeout SECONDS]
+```
+
+Launch and supervise **all** services defined in the unified config — both explicit `services:` entries and those implied by config sections (device services, sensors, the agent, the web API). Streams combined, color-coded log output; services restart automatically on failure.
+
+| Flag                 | Description                                                             |
+|----------------------|-------------------------------------------------------------------------|
+| `-c FILE`            | Config file (default: `$SENSORKIT_CONFIG`, then `./sensorkit.yaml`)     |
+| `-l, --load-config`  | Load the configuration before starting services                         |
+| `--log-file FILE`    | Where the debug log goes (a default location is used otherwise)         |
+| `--log-file-append`  | Append to the log file (default) rather than overwrite                  |
+| `--log-level LEVEL`  | Console log level: `DEBUG`, `INFO` (default), `WARNING`, `ERROR`        |
+| `--shutdown-timeout` | Max seconds per service for graceful shutdown (default 180). Set it to comfortably cover your slowest hardware deinit — dome close, mount park. |
+
+---
+
+## `service` — individual services
+
+```bash
+# Run one service by name; implementation resolved from config
+sensorkit service run NAME [python_module[:entrypoint]] [-c FILE] [-r]
+
+# List registered services and their online status
 sensorkit service ls
 ```
 
-`<module>` is a dotted Python import path (e.g. `sensorkit.std.sensor`) or a path to a `.py` file. If the module has multiple entrypoints, append the function name: `module:function`.
-
-`-r` / `--restart` — restart the service automatically if it exits.
-
-**Examples:**
+If a config file is available, `NAME` alone is enough — the module is looked up from configuration. Without config, supply the module explicitly:
 
 ```bash
-sensorkit service run sensorkit.ascom.service ascom-service
-sensorkit service run sensorkit.std.sensor my-sensor -r
-sensorkit service run sensorkit.auto.agent my-agent -r
+sensorkit service run MySensor                              # from config
+sensorkit service run MySensor sensorkit.std.sensor         # explicit
+sensorkit service run MyProgram programs/my_program.py -r   # a .py file works too
 ```
+
+| Flag             | Description                                            |
+|------------------|--------------------------------------------------------|
+| `-c FILE`        | Config file to resolve the implementation from         |
+| `-r, --restart`  | Restart the service automatically if it exits          |
 
 ---
 
-## go
-
-Launch and supervise multiple services from a config file.
+## `controller` — drive a sensor
 
 ```bash
-sensorkit go [-c FILE] [-l] [-r] [--log-file FILE] [--log-level LEVEL]
-             [--add-service name:module[:entrypoint] ...]
-             [--shutdown-timeout SECONDS]
-```
-
-`sensorkit go` looks for `sensorkit.yaml` (unified format), then `services.yaml`, in the current directory.
-
-**Config file formats:**
-
-*Unified config (`sensorkit.yaml`)* — holds service definitions alongside all other configuration (sensors, devices, automation, data flow). Use `-l` to automatically load configuration into NATS before starting:
-
-```bash
-sensorkit go -c sensorkit.yaml -l
-```
-
-*Services manifest (`services.yaml`)* — lists only service definitions:
-
-```yaml
-services:
-  - name: alpaca-service
-    module: sensorkit.alpaca.service
-  - name: pwi4-service
-    module: sensorkit.pwi4.service
-  - name: my-sensor
-    module: sensorkit.std.sensor
-  - name: my-agent
-    module: sensorkit.auto.agent
-    func: agent_service        # optional: explicit entrypoint function
-```
-
-**Options:**
-
-| Flag | Description |
-|---|---|
-| `-c FILE` | Path to config file (default: `sensorkit.yaml`, then `services.yaml`) |
-| `-l` / `--load-config` | Automatically load configuration before starting (unified format only) |
-| `-r` / `--restart` | Restart services automatically on exit |
-| `--log-file FILE` | Write combined log output to a file |
-| `--log-file-append` | Append to log file instead of overwriting (default: true) |
-| `--log-level LEVEL` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`) |
-| `--add-service name:module` | Add a service without editing the config file |
-| `--shutdown-timeout SECONDS` | Max seconds per service for graceful shutdown (default: `180`) |
-
----
-
-## kv
-
-Manage the NATS key-value store.
-
-```bash
-# Load config records from YAML files
-sensorkit kv load [--no-clobber] [FILES...]
-
-# List all KV entries
-sensorkit kv ls [-e ENTITY]
-
-# Read a single key
-sensorkit kv get -e ENTITY KEY
-
-# Write a value
-sensorkit kv put -e ENTITY KEY VALUE
-
-# Delete a key, or all keys for an entity
-sensorkit kv delete -e ENTITY [KEY]
-```
-
-`FILES` accepts glob patterns. If no files are given, reads from stdin.
-
-`--no-clobber` / `-n` — skip keys that already have a value.
-
----
-
-## controller
-
-Send tasks and commands to a sensor controller.
-
-```bash
-# Initialize (connect devices and bring the sensor to ready state)
-sensorkit controller init -e ENTITY [-f]
-
-# Shut down (close everything down)
+sensorkit controller init     -e ENTITY [-f]
 sensorkit controller shutdown -e ENTITY [-f]
-
-# Abort the currently running task
-sensorkit controller abort -e ENTITY
-
-# Run a collect task
-sensorkit controller collect -e ENTITY \
-    -t TARGET_JSON \
-    [-i INTEGRATION_SECONDS] \
-    [-c FRAME_COUNT] \
-    [-b BINNING]
+sensorkit controller abort    -e ENTITY
+sensorkit controller collect  -e ENTITY -t TARGET_JSON [-i SECONDS] [-c COUNT] [-b BINNING]
 ```
 
-`-f` / `--force` — interrupt the current task before running the new one.
+`-f / --force` interrupts the currently running task first.
 
 **Target JSON for `collect`:**
 
 ```bash
-# ICRS (fixed celestial target)
--t '{"target_type": "icrs", "right_ascension_hours": 5.58, "declination_degrees": -5.39}'
+# Fixed alt/az (degrees)
+-t '{"target_type": "fixed", "frame": "altaz", "coords": {"az": 180.0, "alt": 60.0}}'
 
-# Alt/Az (fixed horizon position)
--t '{"target_type": "altaz", "azimuth_degrees": 180.0, "altitude_degrees": 45.0}'
+# Fixed ICRS (RA/Dec in degrees)
+-t '{"target_type": "fixed", "frame": "icrf", "coords": {"ra": 83.82, "dec": -5.39}}'
 
-# TLE (satellite)
--t '{"target_type": "tle", "line0": "ISS", "line1": "1 25544U ...", "line2": "2 25544 ..."}'
+# Satellite TLE
+-t '{"target_type": "tle", "tle": {"line0": "ISS", "line1": "1 25544U ...", "line2": "2 25544 ..."}}'
 ```
+
+| Flag                              | Default | Description                 |
+|-----------------------------------|---------|-----------------------------|
+| `-i, --integration-time-seconds`  | 1.0     | Exposure time per frame     |
+| `-c, --frame-count`               | 1       | Number of frames            |
+| `-b, --binning`                   | 1       | Camera binning (n×n)        |
 
 ---
 
-## device
-
-Send commands directly to a device.
+## `device` — poke hardware directly
 
 ```bash
 sensorkit device connect    -e ENTITY
 sensorkit device disconnect -e ENTITY
-sensorkit device abort      -e ENTITY
+sensorkit device abort      -e ENTITY     # stop in-progress motion
 ```
 
 ---
 
-## agent
-
-Control the automation agent.
+## `agent` — autonomous control
 
 ```bash
-# Enable or disable global autonomous control
+# Master switch for all autonomous action
 sensorkit agent global-control {on|off} [-e AGENT]
 
-# Enable or disable control for one controller
+# Per-controller control gate
 sensorkit agent control CONTROLLER {on|off} [-e AGENT]
 
-# Force a controller up, down, or let the election decide
+# Force a controller up/down; 'none' returns it to the election
 sensorkit agent override CONTROLLER {up|down|none} [-e AGENT]
 
-# Enable or disable the scheduler
+# Scheduler on/off
 sensorkit agent scheduling {on|off} [-e AGENT]
 
-# Add or remove a program from scheduling
-sensorkit agent include PROGRAM [-e AGENT]
+# Exclude/re-include a program from scheduling
 sensorkit agent exclude PROGRAM [-e AGENT]
+sensorkit agent include PROGRAM [-e AGENT]
 
-# View current status
+# Full status: switches, votes, elected state, upcoming schedule
 sensorkit agent status [-e AGENT]
 ```
 
-`-e` defaults to `agent` if omitted.
+`-e` defaults to `agent`.
+
+---
+
+## `kv` — the raw key-value store
+
+```bash
+sensorkit kv ls [-e ENTITY]                  # list entries (all, or one entity)
+sensorkit kv get -e ENTITY KEY               # read one key (pretty-printed JSON)
+sensorkit kv put -e ENTITY KEY VALUE         # write a raw value
+sensorkit kv delete -e ENTITY [KEY]          # delete a key, or ALL keys for the entity
+sensorkit kv load [-e ENTITY] [-n] [FILES...]  # load entity/key/value records from YAML or stdin
+```
+
+`kv load` accepts glob patterns and multi-document YAML in the low-level record format (`entity:` / `key:` / `value:`); `-n / --no-clobber` skips keys whose stored value already matches. For normal configuration work, prefer `sensorkit config load`.
