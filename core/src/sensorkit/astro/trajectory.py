@@ -43,7 +43,7 @@ class OrbitalTrajectory(Trajectory):
         )
         return OrbitalTrajectory(
             StateVector(
-                result.time.datetime(),
+                result.time.as_datetime(),
                 Cartesian(*result.pos),
                 Cartesian(*result.vel),
             ),
