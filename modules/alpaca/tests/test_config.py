@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for Alpaca service configuration models."""
 
 from sensorkit.alpaca.camera import AlpacaCameraConfig

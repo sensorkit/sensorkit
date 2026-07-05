@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Async utilities: scoped futures, value latches, and observer queues."""
 
 from __future__ import annotations

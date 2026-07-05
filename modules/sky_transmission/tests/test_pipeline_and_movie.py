@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for AllClearPipeline header parsing and MovieBuilder encoding."""
 
 from __future__ import annotations

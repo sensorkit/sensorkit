@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncclick as click
 
 from sensorkit.auto.agent import AgentControllerInfo, AgentState

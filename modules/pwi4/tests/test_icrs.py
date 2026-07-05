@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Test mount FollowTarget with ICRSTarget (RA/Dec J2000 goto)."""
 
 import pytest

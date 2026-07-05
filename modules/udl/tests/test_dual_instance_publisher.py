@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 Tests for dual UDL endpoint support (poll from one, upload imagery to another).
 

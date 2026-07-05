@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for NATS backend specifics not covered by the generic backend suite.
 
 Integration tests require Docker (via testcontainers) and are skipped when

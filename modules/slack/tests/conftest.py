@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared test fixtures for the Slack module."""
 
 from __future__ import annotations

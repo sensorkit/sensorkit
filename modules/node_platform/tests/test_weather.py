@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for Node Platform weather device."""
 
 from datetime import UTC, datetime

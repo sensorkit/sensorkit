@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared fixtures and mocks for Alpaca device tests."""
 
 from unittest.mock import AsyncMock, MagicMock, patch

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """NINA Guider device implementation.
 
 SensorKit does not yet have a standard guider archetype, so this is a custom entity

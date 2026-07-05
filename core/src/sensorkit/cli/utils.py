@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import functools
 from contextlib import contextmanager
 from typing import Any, Callable

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for Otto's data models."""
 
 from sensorkit.otto.models import (

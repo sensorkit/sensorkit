@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import sensorkit.api as sk
 from sensorkit.senpai.analyzer import SenpaiAnalyzer
 from sensorkit.senpai.models import SenpaiConfig

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import pytest
 
 from sensorkit.models.devices import Home, MoveToPark, Stop

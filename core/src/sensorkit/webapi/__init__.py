@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import sensorkit.api as sk
 from sensorkit.backend.base import KeyNotFound
 

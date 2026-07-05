@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Condition types for threshold and change-detection logic over value streams."""
 
 from __future__ import annotations

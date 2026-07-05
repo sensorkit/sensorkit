@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Utilities for dynamic module loading and object resolution from string specifiers."""
 
 import importlib

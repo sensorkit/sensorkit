@@ -3,6 +3,7 @@ name = "sensorkit"
 dynamic = ["version"]
 description = "SensorKit"
 readme = "README.md"
+license = "Apache-2.0"
 authors = [
     { name = "Erik Small", email = "erik.small@ensc.dev" },
     { name = "David Zeleniak", email = "david.zeleniak@e-o.solutions" },

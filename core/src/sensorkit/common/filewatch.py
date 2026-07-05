@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Async-friendly filesystem watching over watchdog.
 
 Wraps watchdog's threaded, callback-based API in an asyncio-native, async-generator

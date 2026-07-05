@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """System tests for ControllerLifecycle driving the full tasking flow.
 
 Tests the critical path: service registration → lifecycle enable →

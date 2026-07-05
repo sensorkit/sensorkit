@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for Node Platform mount device."""
 
 from unittest.mock import MagicMock

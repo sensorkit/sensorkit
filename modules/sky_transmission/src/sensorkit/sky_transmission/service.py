@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import sensorkit.api as sk
 from sensorkit.sky_transmission.analyzer import SkyTransmissionAnalyzer
 from sensorkit.sky_transmission.models import SkyTransmissionConfig

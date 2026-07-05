@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """sdasim rendering engine.
 
 `SdasimEngine` wraps a reusable sdasim `Scene`: it is built once (parsing the

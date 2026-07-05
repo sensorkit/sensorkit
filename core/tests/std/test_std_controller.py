@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """System tests for SensorControl (std controller) with mock device services.
 
 Tests the actual SensorControl class with mock mount/camera/dome/mirror_cover

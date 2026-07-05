@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for NINA service configuration models."""
 
 from sensorkit.nina.camera import NinaCameraConfig

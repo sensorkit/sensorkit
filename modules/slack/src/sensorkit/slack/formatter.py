@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Block Kit message formatting for Slack notifications."""
 
 from __future__ import annotations

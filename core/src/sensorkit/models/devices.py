@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import enum
 from dataclasses import dataclass
 from typing import Literal

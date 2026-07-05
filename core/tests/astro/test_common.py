@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from datetime import UTC, datetime
 
 import numpy as np

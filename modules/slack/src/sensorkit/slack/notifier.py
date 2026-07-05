@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Slack notification entity that watches events and state changes."""
 
 from __future__ import annotations

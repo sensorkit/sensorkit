@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Test mount FollowTarget with FrameTarget (sidereal on/off)."""
 
 import pytest

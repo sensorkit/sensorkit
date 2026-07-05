@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Engine and telemetry-bridge tests for the sdasim module."""
 
 from __future__ import annotations

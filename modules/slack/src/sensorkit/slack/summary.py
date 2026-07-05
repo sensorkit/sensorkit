@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Nightly summary accumulator for observatory operations."""
 
 from __future__ import annotations

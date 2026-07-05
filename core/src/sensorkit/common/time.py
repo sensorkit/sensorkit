@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Time range parsing utilities supporting symbolic and absolute time specifications."""
 
 import functools

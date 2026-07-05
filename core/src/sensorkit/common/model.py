@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pydantic model registry infrastructure for discriminated-union validation."""
 
 from __future__ import annotations

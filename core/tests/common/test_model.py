@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import random
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, Union

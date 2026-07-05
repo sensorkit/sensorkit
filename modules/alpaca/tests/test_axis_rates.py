@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Regression tests for the alt/az AxisRates derived in _publish_telescope_status.
 
 radec_rates_to_altaz_rates() advances obstime by dt, so it captures the full

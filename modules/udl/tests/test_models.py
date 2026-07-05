@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from sensorkit.udl.models import ResponseStatus, UDLAPIConfig, UDLConfig, UDLReferenceFrame
 
 

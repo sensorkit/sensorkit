@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Shared fixtures for PWI4 unit tests."""
 
 from __future__ import annotations

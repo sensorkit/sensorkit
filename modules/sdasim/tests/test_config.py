@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Config parsing and registration tests for the sdasim module."""
 
 from __future__ import annotations

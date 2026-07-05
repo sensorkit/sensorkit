@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta

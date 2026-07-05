@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Utilities for constructing, combining, and visualizing interval trees."""
 
 import collections

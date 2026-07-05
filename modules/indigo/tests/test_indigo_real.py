@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """test_indigo_real.py — Test the indigo service against a running indigo_service with real hardware.
 
 Connects to the running SensorKit backend (NATS) and interacts with the

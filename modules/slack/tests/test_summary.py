@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the nightly summary accumulator."""
 
 from __future__ import annotations

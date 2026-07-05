@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Standard mount-related traits and archetype."""
 
 import sensorkit.api as sk

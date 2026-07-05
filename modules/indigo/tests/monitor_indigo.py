@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """monitor_indigo.py — Print live data published by the indigo_service.
 
 Connects to the running SensorKit backend and monitors all keywords

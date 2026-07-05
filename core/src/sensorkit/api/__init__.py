@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # ruff: noqa: F401 E402
 from importlib.metadata import version as _pkg_version
 

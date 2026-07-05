@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A simple TheSky simulator for dukpy.
 //
 // There are two forms of input to this script:

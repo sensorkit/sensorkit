@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """System tests for VirtualOperator driving election, demand, and lifecycle.
 
 Tests the agent layer: VirtualOperator with election, demand evaluation,

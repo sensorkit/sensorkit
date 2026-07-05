@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Device trait infrastructure.
 
 Traits are high-level interfaces that describe device capabilities by specifying

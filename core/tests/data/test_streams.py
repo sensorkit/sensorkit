@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import pytest
 
 from sensorkit.data.streams import BufferReader, BufferWriter, create_connected_streams

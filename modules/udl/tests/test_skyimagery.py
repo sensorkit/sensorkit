@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Test SkyImagery metadata generation against the UDL schema."""
 
 import json
