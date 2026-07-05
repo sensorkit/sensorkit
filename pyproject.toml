@@ -1,15 +1,35 @@
 [project]
 name = "sensorkit"
 dynamic = ["version"]
-description = "SensorKit"
+description = "Autonomous observatory control for space domain awareness and time-domain astronomy: hardware drivers, satellite tracking, scheduling, and safety automation, distributed over NATS."
 readme = "README.md"
 license = "Apache-2.0"
 authors = [
     { name = "Erik Small", email = "erik.small@ensc.dev" },
+    { name = "Ryan Swindle", email = "ryanswindle@odysseyconsult.com" },
     { name = "David Zeleniak", email = "david.zeleniak@e-o.solutions" },
-    { name = "Ryan Swindle", email = "ryanswindle@odysseyconsult.com" }
 ]
 requires-python = ">=3.13"
+keywords = [
+    "astronomy",
+    "observatory",
+    "telescope",
+    "automation",
+    "space-domain-awareness",
+    "satellite-tracking",
+    "ascom",
+    "alpaca",
+    "nats",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: AsyncIO",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
 dependencies = [
     "aiofile>=3.9.0",
     "astropy>=7.1.0",
@@ -33,6 +53,11 @@ dependencies = [
     "watchdog>=6.0.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/sensorkit/sensorkit"
+Repository = "https://github.com/sensorkit/sensorkit"
+Issues = "https://github.com/sensorkit/sensorkit/issues"
+
 [project.scripts]
 sensorkit = "sensorkit.cli.__main__:root"
 
@@ -43,7 +68,7 @@ alpaca = [
     "numpy>=1.24.0",
 ]
 burr = [
-    "astro-burr @ git+https://github.com/zgazak/burr.git@main",
+    "astro-burr",
 ]
 indigo = [
     "websockets>=14.0",
@@ -111,11 +136,6 @@ dev = [
     "testcontainers[nats]>=4.9.0",
     "zensical>=0.0.1",
 ]
-
-[tool.uv.sources]
-# The orbital API the sdasim module uses (ObjectConfig / objects / tracking /
-# SiteConfig) lives on the `orbital` branch of github.com/zgazak/sdasim.
-sdasim = { git = "https://github.com/zgazak/sdasim.git", branch = "orbital" }
 
 [[tool.uv.dependency-metadata]]
 name = "systemd-python"
@@ -186,6 +206,17 @@ allow-direct-references = true
 [tool.hatch.version]
 source = "vcs"
 
+[tool.hatch.build.targets.sdist]
+include = [
+    "core",
+    "hatch_build.py",
+    "README.md",
+    "LICENSE",
+]
+
+[tool.hatch.build.targets.sdist.force-include]
+"modules" = "modules"
+
 [tool.hatch.build.targets.wheel]
 packages = ["core/src/sensorkit"]
 dev-mode-dirs = [
@@ -225,5 +256,5 @@ modules = [
 subpackage-path = "modules/{module}/src/sensorkit/{module}"
 
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling>=1.27", "hatch-vcs"]
 build-backend = "hatchling.build"
