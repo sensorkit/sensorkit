@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Device trait infrastructure.
 
 Traits are high-level interfaces that describe device capabilities by specifying
@@ -18,8 +19,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sensorkit.core.entity import DeviceDetails
     from sensorkit.core.device import DeviceCommand
+    from sensorkit.core.entity import DeviceDetails
 
 # Global registries, auto-populated by declare_trait() and declare_archetype().
 _trait_registry: set[Trait] = set()
@@ -28,18 +29,27 @@ _archetype_registry: set[Archetype] = set()
 
 @dataclass(frozen=True, eq=False)
 class Trait:
-    """A named set of required commands that a device may structurally satisfy."""
+    """A named set of required commands and/or keywords that a device may structurally satisfy."""
 
     name: str
-    required_commands: tuple[type[DeviceCommand], ...]
+    required_commands: tuple[type[DeviceCommand], ...] = ()
+    required_keywords: tuple[str, ...] = ()
 
     def effective_command_ids(self) -> frozenset[str]:
         """Return all command IDs required by this trait."""
         return frozenset(cmd.model_tag() for cmd in self.required_commands)
 
+    def effective_keyword_ids(self) -> frozenset[str]:
+        """Return all keyword IDs required by this trait."""
+        return frozenset(self.required_keywords)
+
     def match(self, details: DeviceDetails) -> bool:
-        """Return True if the given device details satisfy this trait."""
-        return self.effective_command_ids() <= details.supported_commands
+        """Return True if the given device details satisfy this trait's commands and keywords."""
+        if not (self.effective_command_ids() <= details.supported_commands):
+            return False
+        if not (self.effective_keyword_ids() <= details.published_keywords):
+            return False
+        return True
 
     def __hash__(self):
         return hash(self.name)
@@ -71,6 +81,15 @@ class Archetype(Trait):
             )
         )
 
+    def effective_keyword_ids(self) -> frozenset[str]:
+        """Return all keyword IDs required by this archetype and its required sub-traits."""
+        return frozenset(
+            itertools.chain(
+                self.required_keywords,
+                *(sub_trait.effective_keyword_ids() for sub_trait in self.required_traits),
+            )
+        )
+
     def __repr__(self):
         return f"Archetype({self.name!r})"
 
@@ -79,9 +98,14 @@ def declare_trait(
     name: str,
     *,
     required_commands: tuple[type[DeviceCommand], ...] = (),
+    required_keywords: tuple[str, ...] = (),
 ) -> Trait:
     """Declare a device trait and add it to the global registry."""
-    trait = Trait(name=name, required_commands=required_commands)
+    trait = Trait(
+        name=name,
+        required_commands=required_commands,
+        required_keywords=required_keywords,
+    )
     _trait_registry.add(trait)
     return trait
 
@@ -90,6 +114,7 @@ def declare_archetype(
     name: str,
     *,
     required_commands: tuple[type[DeviceCommand], ...] = (),
+    required_keywords: tuple[str, ...] = (),
     required_traits: tuple[Trait, ...] = (),
     optional_commands: tuple[type[DeviceCommand], ...] = (),
 ) -> Archetype:
@@ -107,6 +132,7 @@ def declare_archetype(
     archetype = Archetype(
         name=name,
         required_commands=required_commands,
+        required_keywords=required_keywords,
         required_traits=required_traits,
         optional_commands=optional_commands,
     )
@@ -127,9 +153,26 @@ def get_registered_archetypes() -> frozenset[Archetype]:
     return frozenset(_archetype_registry)
 
 
-def match_traits(details: DeviceDetails, traits: Iterable[Trait]) -> list[Trait]:
+def match_traits(
+    details: DeviceDetails,
+    traits: Iterable[Trait] | None = None,
+    *,
+    exclude_archetypes: bool = False,
+) -> list[Trait]:
     """Return all traits from the given iterable that the device satisfies."""
-    return [t for t in traits if t.match(details)]
+    if traits is None:
+        traits = _trait_registry
+
+    output = []
+
+    for trait in traits:
+        if exclude_archetypes and isinstance(trait, Archetype):
+            continue
+
+        if trait.match(details):
+            output.append(trait)
+
+    return output
 
 
 def match_archetype(details: DeviceDetails) -> Archetype | None:

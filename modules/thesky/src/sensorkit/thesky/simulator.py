@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 import functools
 import json
@@ -6,7 +7,7 @@ import time
 from collections.abc import Sequence
 from typing import Any, TypedDict, cast
 
-import click
+import asyncclick as click
 import dukpy
 from loguru import logger
 
@@ -19,6 +20,11 @@ TEMPLATE_MARKER = b"//USER_SCRIPT"
 class SimulationState(TypedDict):
     ccdsoftCamera: dict[str, Any]
     sky6RASCOMTele: dict[str, Any]
+    sky6Dome: dict[str, Any]
+    OpticalTubeAssembly: dict[str, Any]
+    WeatherUtil: dict[str, Any]
+    sky6StarChart: dict[str, Any]
+    Raven3: dict[str, Any]
 
 
 class Simulation(TypedDict):
@@ -56,7 +62,15 @@ class TheSkySimulator:
     def __init__(self, host: str = "127.0.0.1", port: int = 3040):
         self.host = host
         self.port = port
-        self._state = SimulationState(ccdsoftCamera={}, sky6RASCOMTele={})
+        self._state = SimulationState(
+            ccdsoftCamera={},
+            sky6RASCOMTele={},
+            sky6Dome={},
+            OpticalTubeAssembly={},
+            WeatherUtil={},
+            sky6StarChart={},
+            Raven3={},
+        )
 
     @staticmethod
     def _simulate(js: bytes, state: SimulationState):
@@ -139,9 +153,9 @@ class TheSkySimulator:
 @click.command()
 @click.option("--host", default="127.0.0.1", help="Host address to bind to")
 @click.option("--port", default=3040, help="Port to listen on", type=int)
-def main(host, port):
+async def main(host, port):
     simulator = TheSkySimulator(host=host, port=port)
-    asyncio.run(simulator.run())
+    await simulator.run()
 
 
 if __name__ == "__main__":

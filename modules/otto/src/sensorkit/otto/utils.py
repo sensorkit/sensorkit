@@ -1,6 +1,7 @@
-from datetime import datetime, UTC
+# SPDX-License-Identifier: Apache-2.0
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Tuple
 
 import httpx
 from loguru import logger
@@ -97,15 +98,15 @@ async def fetch_tles(
     return tles, status_code
 
 
-def check_satellite_visibility(
+def calculate_satellite_position(
         tles: dict[str, dict[str, str]],
         object: str,
         latitude: float,
         longitude: float,
         elevation: float,
-) -> tuple[float, bool] | None:
+) -> tuple[float, float, bool, float] | None:
     """
-    Check if a satellite is visible.
+    Calculate a satellite's current position relative to an observer.
 
     Args:
         tles: Dictionary of TLEs keyed by NORAD ID
@@ -115,13 +116,14 @@ def check_satellite_visibility(
         elevation: Observer elevation in meters
 
     Returns:
-        Tuple of (altitude, is_rising) or None if no TLE found
+        Tuple of (altitude, azimuth, is_rising, hour_angle) or None if no TLE found
         - altitude: Current altitude in degrees
-        - rising: True/False
+        - azimuth: Current azimuth in degrees
+        - rising: True if satellite altitude is increasing
+        - hour_angle: Hours; negative = east of meridian, positive = west of meridian
     """
     # Check if we have TLE for this object
     if object not in tles:
-        logger.warning(f"No TLE found for object {object}")
         return None
 
     tle_data = tles[object]
@@ -150,6 +152,13 @@ def check_satellite_visibility(
         alt, az, distance = topocentric.altaz()
 
         altitude = alt.degrees
+        azimuth = az.degrees
+
+        # Hour angle: HA = LST - RA, wrapped to [-12, 12). Negative = east of
+        # meridian, positive = west.
+        ra, _dec, _ = topocentric.radec()
+        last_hours = (now.gast + longitude / 15.0) % 24.0
+        hour_angle = ((last_hours - ra.hours + 12.0) % 24.0) - 12.0
 
         # Calculate position one minute in the future to determine if rising/falling
         future = ts.from_datetime(datetime.now(UTC).replace(microsecond=0))
@@ -162,7 +171,7 @@ def check_satellite_visibility(
         # Determine if rising or falling
         rising = future_altitude > altitude
 
-        return altitude, rising
+        return altitude, azimuth, rising, hour_angle
 
     except Exception as e:
         logger.exception(f"Error calculating satellite position for {object}: {e}")

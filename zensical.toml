@@ -1,19 +1,15 @@
 [project]
 site_name = "SensorKit"
-site_description = ""
+site_description = "An open-source control system for autonomous observatories, built for space domain awareness and time-domain astronomy."
 site_author = ""
 docs_dir = "docs"
 site_dir = "site"
 
 nav = [
   { "Home" = "index.md" },
-  { "Installation" = "installation.md" },
-  { "Configuration" = "configuration.md" },
-  { "Device services" = "devices.md" },
-  { "Sensor controller" = "sensor.md" },
-  { "Agent" = "agent.md" },
-  { "CLI reference" = "cli.md" },
-  { "API reference" = "api.md" },
+  { "Getting started" = [ { "Quick start" = "quickstart.md" }, { "Installation" = "installation.md" } ] },
+  { "Guides" = [ { "Configuration" = "configuration.md" }, { "Device services" = "devices.md" }, { "Sensor controller" = "sensor.md" }, { "Observing programs" = "programs.md" }, { "The agent" = "agent.md" } ] },
+  { "Reference" = [ { "CLI reference" = "cli.md" }, { "API reference" = "api.md" } ] },
 ]
 
 [project.theme]

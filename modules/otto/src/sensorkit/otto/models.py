@@ -1,7 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
 import os
-from typing import List
+from typing import List, Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+import sensorkit.api as sk
 
 
 class EnvResolvingModel(BaseModel):
@@ -23,6 +26,7 @@ class TaskConfig(BaseModel):
     tle_update_interval_hours: int = 24
     graylist_interval_minutes: int = 300
     end_time_deadband_seconds: int = 60
+    inter_task_delay_seconds: float = 0.0
 
 
 class CollectConfig(BaseModel):
@@ -30,6 +34,8 @@ class CollectConfig(BaseModel):
     track_mode: str
     dither: bool = False
     dither_amount_arcsec: float = 0.0
+    scan_mode: bool = False
+    scan_direction: Literal["eastward", "westward"] | None = None
     filters: List[str] = Field(default_factory=list)
     exposure_min: int = 1
     exposure_max: int = 10
@@ -64,16 +70,17 @@ class PublishConfig(EnvResolvingModel):
     udl: UDLPublishConfig | None = None
 
 
-class ServerConfig(BaseModel):
-    host: str
-    port: int = 8000
-    log_level: str | None = None
-
-
 class OttoConfig(BaseModel):
-    entity: str
     controller: str
     task: TaskConfig
     collect: CollectConfig
     publish: PublishConfig
-    server: ServerConfig
+
+
+sk.declare_config_section(
+    "otto",
+    list[OttoConfig],
+    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
+    model_mapper=iter,
+    service_path="sensorkit.otto.program",
+)

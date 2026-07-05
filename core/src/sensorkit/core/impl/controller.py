@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
@@ -6,11 +7,11 @@ from _contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Callable, ClassVar, Collection, Mapping, override
 
+import uuid_utils.compat as uuid
 from loguru import logger
 
 from sensorkit.backend.base import Entity
 from sensorkit.backend.request import CallContext
-from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.controller import (
     AbortRequestMessage,
     AbortResponseMessage,
@@ -34,7 +35,7 @@ from sensorkit.core.controller import (
 from sensorkit.core.device import DeviceClient
 from sensorkit.core.entity import ControllerDetails, EntityInfo
 from sensorkit.core.impl.entity import EntityImpl
-from sensorkit.core.task import ControllerTask
+from sensorkit.core.task import Task, TaskExecution, TaskInfo
 from sensorkit.data.context import Context, ContextSubscription
 
 
@@ -70,9 +71,9 @@ class ControllerImpl(EntityImpl, ControllerInterface):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        self._enable_hooks: set[Callable[[], None]] = set()
-        self._disable_hooks: set[Callable[[], None]] = set()
-        self._task_handlers: dict[type[ControllerTask], TaskHandlerCallback] = {}
+        self._enable_hooks: list[Callable[[], None]] = []
+        self._disable_hooks: list[Callable[[], None]] = []
+        self._task_handlers: dict[type[Task], TaskHandlerCallback] = {}
         self._task_asyncio: asyncio.Task | None = None
         self._devices = ControllerDeviceMap()
 
@@ -82,12 +83,12 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
     @override
     def on_enable(self, func: Callable[[], None]):
-        self._enable_hooks.add(func)
+        self._enable_hooks.append(func)
         return func
 
     @override
     def on_disable(self, func: Callable[[], None]):
-        self._disable_hooks.add(func)
+        self._disable_hooks.append(func)
         return func
 
     @override
@@ -96,9 +97,11 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             self,
             enable_state=ControllerEnableState(enabled=True),
             operating_state=ControllerOperatingState(current=InternalControllerState.UNKNOWN),
-            execution_state=TaskExecutionState(task=None),
+            execution_state=TaskExecutionState(execution=None),
         )
 
+    @override
+    async def attach_impl(self):
         if self._state.enable_state.enabled:
             await self._call_with_context(self._enable_hooks)
 
@@ -106,16 +109,22 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         await self.handle_request(abort_task_request, self._abort_request)
         await self.handle_request(execute_task_request, self._execute_request)
 
+        await self.start_device_subscriptions()
+
+    @override
+    async def detach_impl(self):
+        await self.stop_device_subscriptions()
+
     @override
     def use_device(self, name: str, *, subscribe: list[type] | None = None) -> DeviceClient:
         """Register a controlled device and return a client for it.
 
         Registers a device that this controller interacts with. Optionally subscribes to
         specific keyword types published by the device. Subscribed keywords are automatically
-        cached and made available in contexts built via ``build_context()``.
+        cached and made available in contexts via `update_context()`.
 
         Note:
-            Subscriptions remain inactive until ``start_device_subscriptions()`` is called.
+            Subscriptions remain inactive until `start_device_subscriptions()` is called.
             When using the declarative API, this occurs automatically after initialization.
 
         Args:
@@ -126,12 +135,12 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
         Returns:
             A client instance for interacting with the registered device.
-                Access the subscription object via ``get_device(name).subscription`` to
+                Access the subscription object via `get_device(name).subscription` to
                 retrieve cached values directly.
 
         Raises:
-            KeyError: If attempting to access a device via ``get_device(name)`` that
-                hasn't been registered with ``use_device()``.
+            KeyError: If attempting to access a device via `get_device(name)` that
+                hasn't been registered with `use_device()`.
 
         Examples:
             Basic device registration without subscriptions:
@@ -167,7 +176,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
     @override
     async def start_device_subscriptions(self):
-        """Start all keyword subscriptions registered via ``use_device``.
+        """Start all keyword subscriptions registered via `use_device`.
 
         This is called automatically by the declarative API after init
         callbacks have run.  It may also be called manually if the
@@ -178,7 +187,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
     @override
     async def stop_device_subscriptions(self):
-        """Stop all keyword subscriptions registered via ``use_device``.
+        """Stop all keyword subscriptions registered via `use_device`.
 
         Called automatically by the declarative API before deinit
         callbacks run.
@@ -187,31 +196,66 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             await device.subscription.stop()
 
     @override
-    def build_context(
+    async def update_context(
         self,
-        base: KeywordDict | None = None,
+        *args,
         **kwargs,
     ) -> Context:
-        """Build a Context from all device keyword subscriptions.
+        """Update the context of the currently executing task.
 
-        Merges cached keyword models from every subscription registered
-        via ``use_device(subscribe=...)`` with an optional *base* context
-        and additional key-value pairs.
+        Merges the base context with fresh snapshots from all device keyword
+        subscriptions and additional provided values. The updated context is
+        persisted to the execution state and returned.
+
+        This method allows task handlers to refresh their context mid-execution,
+        incorporating the latest device state.
 
         Args:
-            base: Optional base context (e.g. from a task) to include.
-            **kwargs: Additional literal key-value pairs to include.
+            **kwargs: Additional literal key-value pairs to include in the context.
 
         Returns:
-            A new :class:`Context` containing (in precedence order,
-            highest-last): *base*, cached keyword models, and *kwargs*.
+            The newly updated `Context` containing (in precedence order,
+            highest-last): current task context, fresh device snapshots,
+            and *kwargs*.
+
+        Raises:
+            RuntimeError: If called when no task is currently executing.
+
+        Examples:
+            Update context with latest device data during task execution:
+
+            >>> async def my_task_handler(self, task):
+            ...     # ... some work ...
+            ...     ctx = await self.update_context()
+            ...     pointing = ctx.get(AltAzPointing)
+
+            Add custom values while updating:
+
+            >>> ctx = await self.update_context(iteration=5, timestamp=time.time())
         """
-        ctx = Context(base)
+        current = self._state.execution_state
+
+        if not current.executing or current.execution is None:
+            raise RuntimeError("no task executing")
+
+        ctx = Context(current.context)
 
         for device in self._devices.values():
             device.subscription.snapshot(into=ctx)
 
+        ctx.set(*args)
         ctx.update(kwargs)
+
+        await self._state.update(
+            self,
+            TaskExecutionState(
+                executing=current.executing,
+                aborting=current.aborting,
+                execution=current.execution,
+                context=ctx,
+            ),
+        )
+
         return ctx
 
     async def _set_enable_state(self, request: ControllerEnableStateRequest):
@@ -239,7 +283,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             return
 
         aio_task = self._task_asyncio
-        task_id = self._state.execution_state.task.task_id
+        task_id = self._state.execution_state.execution.task_id
 
         # If given, ensure the task_id matches what is running.
         if requested.task_id and task_id != requested.task_id:
@@ -254,7 +298,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             TaskExecutionState(
                 executing=True,
                 aborting=True,
-                task=self._state.execution_state.task
+                execution=self._state.execution_state.execution
             ),
         )
 
@@ -278,32 +322,50 @@ class ControllerImpl(EntityImpl, ControllerInterface):
     ):
         task = msg.task
 
-        # Reject if we aren't ready.
+        # Mint the execution envelope: the controller owns identity (task_id, controller_id) and
+        # records the client-supplied execution parameters (context, end_time).
+        execution = TaskExecution(
+            task=task,
+            task_id=uuid.uuid7(),
+            controller_id=str(self.entity),
+            context=msg.context,
+            expiry_time=msg.expiry_time,
+        )
+
+        # Inject information about this task execution into the task context.
+        execution.context.set(
+            TaskInfo(
+                task=task,
+                task_id=execution.task_id,
+                controller_id=execution.controller_id,
+            )
+        )
+
+        # Send the initial response.
+        response = ExecuteResponseMessage(execution=execution)
+
         if not self._state.enable_state.enabled:
-            logger.warning(f"Rejecting {type(task)} task: Controller is disabled")
-            call.reject(response=ExecuteResponseMessage(task_id=task.task_id))
+            logger.warning(f"Rejecting {task.task_type} task: Controller is disabled")
+            call.reject(response=response)
             return
 
-        # Reject if there's already a Task in work.
         if not msg.interrupt and self.task_running():
-            logger.warning(f"Rejecting {type(task)} task: Task already in progress")
-            call.reject(response=ExecuteResponseMessage(task_id=task.task_id))
+            logger.warning(f"Rejecting {task.task_type} task: Task already in progress")
+            call.reject(response=response)
             return
 
-        # Ensure we have a handler defined.
         if type(task) not in self._task_handlers:
-            logger.warning(f"Rejecting {type(task)} task: No handler registered")
-            call.reject(response=ExecuteResponseMessage(task_id=task.task_id))
+            logger.warning(f"Rejecting {task.task_type} task: No handler registered")
+            call.reject(response=response)
             return
 
-        # Accept the task execution request.
-        call.accept(response=ExecuteResponseMessage(task_id=task.task_id))
+        call.accept(response=response)
         aio_task: asyncio.Task | None = None
 
         try:
             # Interrupt the current task, if there is one.
             if self._task_asyncio:
-                logger.info(f"Interrupting {self._state.execution_state.task.task_type} task")
+                logger.info(f"Interrupting {self._state.execution_state.execution.task.task_type} task")
                 self._task_asyncio.cancel("Interrupted")
 
                 with contextlib.suppress(asyncio.CancelledError):
@@ -314,11 +376,11 @@ class ControllerImpl(EntityImpl, ControllerInterface):
                     )
 
             # Execute the task.
-            logger.info(f"Executing {task.task_type} task")
             start_time = datetime.now(UTC)
 
             with self.enter_context():
-                aio_task = asyncio.create_task(self._execute_task(task))
+                logger.info(f"Executing {task.task_type} task")
+                aio_task = asyncio.create_task(self._execute_task(execution))
 
             self._task_asyncio = aio_task
 
@@ -330,17 +392,31 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
             end_time = datetime.now(UTC)
         except asyncio.CancelledError:
-            logger.warning(f"Execution of {task.task_type} task cancelled")
-            await call.fail()
+            with self.enter_context():
+                logger.warning(f"Execution of {task.task_type} task cancelled")
+
+            try:
+                await call.fail()
+            except Exception as e:
+                logger.warning(f"Error logging cancelled task event ({type(e).__name__})")
+
+            raise
         except Exception as e:
-            logger.error(f"Error executing {task.task_type} task")
-            logger.opt(exception=e).debug(f"{task.task_type} ({task.task_id}) failed")
-            await call.fail()
+            with self.enter_context():
+                logger.error(f"Error executing {task.task_type} task")
+                logger.opt(exception=e).debug(f"{task.task_type} ({execution.task_id}) failed")
+
+            try:
+                await call.fail()
+            except Exception:
+                logger.warning(f"Error logging failed task event ({type(e).__name__})")
         else:
-            logger.info(f"Finished {task.task_type} task")
+            with self.enter_context():
+                logger.info(f"Finished {task.task_type} task")
+
             await call.succeed(
                 result=TaskExecutionResult(
-                    task_id=task.task_id,
+                    task_id=execution.task_id,
                     start_time=start_time,
                     end_time=end_time,
                 )
@@ -356,14 +432,19 @@ class ControllerImpl(EntityImpl, ControllerInterface):
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await aio_task
 
-    async def _execute_task(self, task: ControllerTask):
-        logger.debug(f"execution begun {task=}")
-        finish_info: TaskFinishInfo | None = None
+    async def _execute_task(self, execution: TaskExecution):
+        # Associate the envelope with the task so the handler can reach it via `task.execution`.
+        task = execution.task
+        task.associate_execution(execution)
+        logger.debug(f"execution begun {execution=}")
+        finish_info = TaskFinishInfo(aborted=True)
 
-        # Emit the execution start event.
+        # Emit the execution start event, seeding the executing state's context from the
+        # incoming execution context. This becomes the base layer that `update_context`
+        # merges device snapshots onto and that is ultimately sent to downstream cameras.
         await self._state.update(
             self,
-            TaskExecutionState(executing=True, task=task),
+            TaskExecutionState(executing=True, execution=execution, context=execution.context),
             self._state.operating_state.derive(target=task.target_state()),
         )
 
@@ -374,31 +455,26 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
             # Run the task handler.
             await handler(task)
-        except asyncio.CancelledError:
-            finish_info = TaskFinishInfo(aborted=True)
-            raise
         except Exception as e:
             finish_info = TaskFinishInfo(error=str(e))
             raise
         else:
             finish_info = TaskFinishInfo()
         finally:
-            assert finish_info is not None
-
             try:
                 await self._state.update(
                     self,
-                    TaskExecutionState(finished=finish_info, task=task),
+                    TaskExecutionState(finished=finish_info, execution=execution),
                     self._state.operating_state.derive(
                         current=ts if (ts := task.target_state()) is not None else ControllerOperatingState.NO_CHANGE,
                         target=None,
                     ),
                 )
-            except Exception:
-                logger.exception("Failed to update execution state after task completion")
+            except Exception as e:
+                logger.warning(f"Error logging final task execution state ({type(e).__name__})")
 
     @override
-    def task_handler[T: ControllerTask](self, task_model: type[T]):
+    def task_handler[T: Task](self, task_model: type[T]):
         def decorator(func: TaskHandlerCallback[T]):
             if task_model in self._task_handlers:
                 raise RuntimeError("multiple handlers for task type")
@@ -409,16 +485,14 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         return decorator
 
     @override
-    async def publish_entity_info(self) -> EntityInfo:
-        info = EntityInfo(
+    def entity_info(self) -> EntityInfo:
+        return EntityInfo(
             entity_type="controller",
             details=ControllerDetails(
                 supported_tasks=[t.__name__ for t in self._task_handlers.keys()],
                 controlled_devices=list(self._devices.keys()),
             ),
         )
-        await self.kv_put_model(info)
-        return info
 
     @override
     async def set_internal_state(self, state: InternalControllerState):

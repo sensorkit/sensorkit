@@ -1,11 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
 import io
 from abc import ABC, abstractmethod
-from pathlib import Path
 
 from loguru import logger
+
+from sensorkit.data.filesys import FileInfo
 
 
 class Publisher(ABC):
@@ -13,20 +15,28 @@ class Publisher(ABC):
 
     @property
     @abstractmethod
-    def name(self) -> str: ...
+    def name(self) -> str:
+        """Identifies this publisher in logs and error messages."""
 
     @abstractmethod
-    async def publish(self, context: dict, data: bytes) -> None: ...
+    async def publish(self, context: dict, data: bytes) -> None:
+        """Deliver one frame to the destination.
+
+        Args:
+            context: DataGraph sink metadata (task_id, frame_num, FileInfo, …).
+            data: Raw FITS bytes from the sink's async stream.
+        """
 
     async def close(self) -> None:
+        """Release connections and resources after all frames are published."""
         pass
 
 
 def _filename_from_context(context: dict) -> str:
     """Derive a filename from the DataGraph context."""
-    file_path = context.get("file_path")
-    if file_path:
-        return Path(file_path).name
+    info = context.get(FileInfo)
+    if info:
+        return info.path.name
     task_id = context.get("task_id", "unknown")
     frame_num = context.get("frame_num", 0)
     return f"{task_id}_{frame_num}.fits"
@@ -120,4 +130,5 @@ class UDLPublisher(Publisher):
         raise NotImplementedError("UDL publisher not yet implemented — see udl module branch")
 
     async def close(self) -> None:
+        # NYI.
         pass

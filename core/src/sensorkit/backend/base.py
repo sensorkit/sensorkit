@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
@@ -194,11 +195,11 @@ class RequestResponseContext(BaseContext):
 class StreamContext(BaseContext):
     """Exposes stream methods of a backend implementation."""
 
-    def list_keys(self) -> Coroutine:
+    async def list_keys(self):
         """Return a coroutine that resolves to the list of stream subject keys for this entity."""
-        return self.impl.stream_list(self.entity)
+        return await self.impl.stream_list(self.entity)
 
-    def consume(
+    async def consume(
         self,
         key: str = None,
         *,
@@ -206,25 +207,25 @@ class StreamContext(BaseContext):
         from_sequence: int | None = None,
         from_time: datetime | None = None,
         include_latest: bool = False,
-    ) -> Coroutine:
+    ):
         """Return a coroutine that resolves to an async iterator of StreamMessages.
 
         If key is None, all properties for the entity are consumed.
         """
-        return self.impl.stream_consume(
+        return await self.impl.stream_consume(
             self.entity.subject(key if key else SpecialProperty.ALL_PROPERTIES),
             durable_name=durable_name,
             start_at=from_time or from_sequence,
             include_latest=include_latest,
         )
 
-    def publish(self, key: str, payload: bytes) -> Coroutine:
+    async def publish(self, key: str, payload: bytes):
         """Return a coroutine that publishes payload to the named stream subject."""
-        return self.impl.stream_publish(self.entity.subject(key), payload)
+        return await self.impl.stream_publish(self.entity.subject(key), payload)
 
-    def publish_event(self, payload: bytes) -> Coroutine:
+    async def publish_event(self, payload: bytes):
         """Return a coroutine that publishes payload to the entity's event stream subject."""
-        return self.impl.stream_publish(self.entity.subject(SpecialProperty.EVENTS), payload)
+        return await self.impl.stream_publish(self.entity.subject(SpecialProperty.EVENTS), payload)
 
 
 @dataclass(slots=True, frozen=True)
@@ -328,12 +329,12 @@ class KVEntry:
     value: bytes
     revision: int
 
-    DELETED: ClassVar[bytes] = b"DELETED"
+    DELETE_MARKER: ClassVar[bytes] = b"DELETED"
     """Sentinel value denoting a deleted KV entry."""
 
     def deleted(self):
         """Return True if this entry has been marked as deleted."""
-        return self.value is KVEntry.DELETED
+        return self.value is KVEntry.DELETE_MARKER
 
 
 class KVError(BackendError):

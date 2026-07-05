@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
@@ -25,6 +26,7 @@ from sensorkit.common.keyword import (
     get_keyword_info,
     validate_keyword_json,
 )
+from sensorkit.core.trait import match_archetype, match_traits
 from sensorkit.data.graph import DataGraph
 
 if TYPE_CHECKING:
@@ -33,19 +35,22 @@ if TYPE_CHECKING:
 type EntityType = Literal["generic", "device", "controller", "program"]
 
 
-@declare_keyword
-class EntityInfo(BaseModel):
-    """Keyword describing an entity's type and capability details, stored in the KV backend."""
-
-    entity_type: EntityType
-    details: DeviceDetails | ControllerDetails | None
-
-
 class DeviceDetails(BaseModel):
     """Device info."""
 
-    supported_commands: set[str]
+    supported_commands: frozenset[str]
     """Identifiers of each command supported by this device."""
+
+    published_keywords: frozenset[str]
+    """Identifiers of each keyword this device declares it publishes."""
+
+    @functools.cached_property
+    def archetype(self):
+        return match_archetype(self)
+
+    @functools.cached_property
+    def traits(self):
+        return match_traits(self, exclude_archetypes=True)
 
 
 class ControllerDetails(BaseModel):
@@ -55,6 +60,14 @@ class ControllerDetails(BaseModel):
     """Identifiers of each task supported by this controller."""
     controlled_devices: list[str]
     """Names of each device commanded by this controller."""
+
+
+@declare_keyword
+class EntityInfo(BaseModel):
+    """Keyword describing an entity's type and capability details, stored in the KV backend."""
+
+    entity_type: EntityType
+    details: DeviceDetails | ControllerDetails | None
 
 
 class EntityBase:
@@ -92,6 +105,15 @@ class EntityBase:
         """Fetch and deserialise a model from the KV store by its class name."""
         entry = await self._kv.get(model_type.__name__)
         return model_type.model_validate_json(entry.value)
+
+    async def kv_monitor_model[M: BaseModel](self, model_type: type[M]):
+        """Monitor changes to a model in the KV store by its class name."""
+        stream = await self._kv.monitor(model_type.__name__)
+
+        async for entry in stream:
+            if not entry.deleted():
+                with contextlib.suppress(ValidationError):
+                    yield model_type.model_validate_json(entry.value)
 
 
 class EntityClient(EntityBase):
@@ -229,22 +251,26 @@ class EntityRef[T: EntityClient = EntityClient]:
         """Create a reference from an entity name.
 
         Args:
-            name: the serialized entity name, or ``None`` for an unset reference.
+            name: the serialized entity name, or `None` for an unset reference.
         """
         self.name = name
         self._client: T | None = None
 
+    def _get_client(self, kit: SensorKit) -> T:
+        """Return the client of the appropriate type for this reference."""
+        return kit.entity(self.name)
+
     def resolve(self, kit: SensorKit) -> None:
         """Resolve this reference against a SensorKit instance.
 
-        If ``name`` is set, caches the corresponding entity client for later access via
-        `get`, `require`, or ``__call__``.
+        If `name` is set, caches the corresponding entity client for later access via
+        `get`, `require`, or `__call__`.
         """
         if self.name is not None:
-            self._client = kit.device(self.name)
+            self._client = self._get_client(kit)
 
     def get(self) -> T | None:
-        """Return the resolved client, or ``None`` if the reference is unset.
+        """Return the resolved client, or `None` if the reference is unset.
 
         Raises:
             RuntimeError: if the reference has a name but has not yet been resolved.

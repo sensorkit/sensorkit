@@ -1,6 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 import concurrent.futures
 import contextlib
+import os
 import signal
 import time
 from collections.abc import Callable, Coroutine, Mapping
@@ -10,10 +12,12 @@ from typing import Any
 from loguru import logger
 
 from sensorkit.api.declarative import Service
-from sensorkit.common.aio import scoped_waiter
+from sensorkit.common.aio import cleanup_future, scoped_waiter
 from sensorkit.common.importutil import obj_from_spec
 
 type ServiceEntrypointFunc = Callable[[Service], Coroutine[Any, Any, None]]
+
+FORCE_QUIT_INTERRUPTS = 3
 
 
 class ServiceEntrypoint:
@@ -29,27 +33,12 @@ class ServiceEntrypoint:
         self._version = version
 
     async def run(self, name: str):
-        """Start the service with *name* and return ``(service, task)`` once it is running."""
+        """Start the service with *name* and return `(service, task)` once it is running."""
         # Invoke the user entrypoint function passing in a new Service instance.
         service = Service(name, self._version)
         task = asyncio.create_task(self._func(service))
 
         try:
-            # Make sure the entrypoint function is proper and actually starts the service.
-            await asyncio.wait(
-                [service.started, task],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            if not service.started.done():
-                if e := task.exception():
-                    logger.debug(f"Service '{name}' failed to start: {type(e).__name__}: {e}")
-                    raise e
-                else:
-                    raise RuntimeError(f"Entrypoint '{self._func.__name__}' did not start the service!")
-
-            await service.started
-
             # Wait for the service to start up or for the task to fail.
             await asyncio.wait(
                 [service.running, task],
@@ -57,8 +46,13 @@ class ServiceEntrypoint:
             )
 
             if not service.running.done():
-                raise task.exception() or RuntimeError("Task ended before service inited")
+                if e := task.exception():
+                    logger.debug(f"Service '{name}' failed to start: {type(e).__name__}: {e}")
+                    raise e
+                else:
+                    raise RuntimeError(f"Entrypoint '{self._func.__name__}' did not start the service!")
 
+            # If the service raised, propagate the exception.
             await service.running
 
             return service, task
@@ -67,8 +61,13 @@ class ServiceEntrypoint:
 
             try:
                 await task
+            except asyncio.CancelledError:
+                pass
             except Exception as e:
                 logger.opt(exception=e).debug("exception during service shutdown")
+
+            for fut in (service.running, service.shutdown):
+                cleanup_future(fut)
 
             raise
 
@@ -94,13 +93,30 @@ async def run_services(
     **kwargs,
 ):
     """Run a set of service entrypoints."""
+    interrupt_count = 0
+
     # We have to use a `concurrent.futures.Future` here so it can be used by different event loops
     # running on different threads.
     shutdown = concurrent.futures.Future()
 
     def signal_shutdown(sig=None, _frame=None):
-        if sig:
-            logger.debug(f"Caught shutdown signal {sig}")
+        nonlocal interrupt_count
+
+        match sig:
+            case signal.SIGTERM:
+                logger.info("Service process received shutdown signal")
+            case signal.SIGINT:
+                interrupt_count += 1
+                remaining = FORCE_QUIT_INTERRUPTS - interrupt_count
+
+                if interrupt_count == 1:
+                    logger.warning("Service process received interrupt signal")
+                elif remaining > 0:
+                    times = "one more time" if remaining == 1 else f"{remaining} more times"
+                    logger.warning(f"Interrupt {times} to force exit")
+                else:
+                    logger.error("Forced exit")
+                    os._exit(130)
 
         if not shutdown.done():
             shutdown.set_exception(ShutdownSignal())
@@ -124,45 +140,63 @@ async def run_services(
         raise
 
 
-def _service_loop(
-    name: str,
-    entrypoint: ServiceEntrypoint,
-    shutdown_signal: concurrent.futures.Future,
-    max_restarts: int = -1,
+def _restart_loop(
+    wait_fn: Callable[[float], bool],
+    *,
+    max_restarts: int | None = None,
     startup_failure_threshold: float = 30.0,
     restart_backoff_min: float = 5.0,
     restart_backoff_max: float = 300.0,
     restart_backoff_random: float = 5.0,
     restart_backoff_factor: float = 1.8,
-    startup_timeout: float = 30.0,
-    shutdown_timeout: float = 5.0,
 ):
+    """Restart loop generator. Yields once per iteration; caller runs the service body.
+
+    wait_fn(seconds) must return True to continue or False for graceful shutdown, and
+    raise to signal an abnormal stop.
+    """
     restarts = 0
     backoff = 0.0
+
+    while max_restarts is None or restarts <= max_restarts:
+        if not wait_fn(backoff):
+            return
+
+        start = time.monotonic()
+        yield
+        elapsed = time.monotonic() - start
+
+        if elapsed < startup_failure_threshold:
+            restarts += 1
+            backoff = backoff * restart_backoff_factor + random() * restart_backoff_random
+            backoff = min(max(backoff, restart_backoff_min), restart_backoff_max)
+        else:
+            restarts = 1
+            backoff = 0.0
+
+
+def _service_loop(
+    name: str,
+    entrypoint: ServiceEntrypoint,
+    shutdown_signal: concurrent.futures.Future,
+    startup_timeout: float = 300.0,
+    shutdown_timeout: float = 5.0,
+    **kwargs,
+):
     last_err: Exception | None = None
 
+    def _wait_for_shutdown(timeout: float) -> bool:
+        if timeout > 0.0 and not shutdown_signal.done():
+            logger.info(f"Waiting {timeout:1.0f} sec before restarting {name} ...")
+        try:
+            shutdown_signal.result(timeout=timeout)
+            return False
+        except concurrent.futures.TimeoutError:
+            return True
+
     try:
-        # Loop while we have not had too many consecutive failed restarts.
-        while max_restarts == -1 or restarts <= max_restarts:
-            # Backoff if required, waking early if the shutdown signal fires.
-            if backoff > 0.0:
-                logger.info(f"Waiting {backoff:1.0f} sec before restarting {name} ...")
-
-            try:
-                # Check for the shutdown signal, performing backoff wait as necessary. If this does
-                # not raise, the service stopped gracefully.
-                shutdown_signal.result(timeout=backoff)
-                break
-            except concurrent.futures.TimeoutError:
-                pass
-            except Exception as e:
-                # The service stopped abnormally.
-                last_err = e
-                break
-
-            # Run the service in a fresh event loop.
+        for _ in _restart_loop(_wait_for_shutdown, **kwargs):
             logger.info(f"Starting {name}")
-            start_time = time.monotonic()
             last_err = None
 
             try:
@@ -174,20 +208,8 @@ def _service_loop(
             except Exception as e:
                 logger.error(f"Service {name} exited due to {type(e).__name__}")
                 last_err = e
-
-            # Decide whether the previous run was a failure.
-            prev_elapsed = time.monotonic() - start_time
-
-            if prev_elapsed < startup_failure_threshold:
-                # Increment our restart counter and calculate exponential backoff.
-                restarts += 1
-                backoff = backoff * restart_backoff_factor + random() * restart_backoff_random
-                backoff = min(max(backoff, restart_backoff_min), restart_backoff_max)
-            else:
-                # This wasn't considered a failed startup, so reset our consecutive restart counter
-                # and zero out the backoff wait.
-                restarts = 1
-                backoff = 0.0
+    except ShutdownSignal as e:
+        last_err = e
     except Exception as e:
         logger.error(f"Terminating {name} service loop due to {type(e).__name__}")
         last_err = e
@@ -253,11 +275,6 @@ async def _service_proc(
             with contextlib.suppress(Exception):
                 async with asyncio.timeout(shutdown_timeout):
                     await service.stop()
-
-        # Clean up any service tasks remaining, in case of abnormal shutdown.
-        with contextlib.suppress(Exception):
-            async with asyncio.timeout(shutdown_timeout):
-                await service.cleanup()
 
         # Kill the user entrypoint task.
         if service_task and not service_task.done():

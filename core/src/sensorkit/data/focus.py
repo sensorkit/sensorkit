@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 import io
 from typing import Literal
@@ -122,7 +123,7 @@ class AnalyzeFocusStars(DataOp):
         if not mask.any():
             return None
 
-        positions = np.where(mask)
+        positions = np.nonzero(mask)
         fluxes = img[mask]
         total_flux = fluxes.sum()
 
@@ -396,53 +397,54 @@ class FocusInfoToFITS(DataOp):
             await outgoing[0].send(context, buffer)
             return
 
-        def update_fits_headers(
-            buffer: bytes,
-            focus: FocusInfo | None,
-            fft: FocusFFTInfo | None,
-            conv: FocusConvolutionResults | None
-        ) -> bytes:
-            bio_in = io.BytesIO(buffer)
-            bio_out = io.BytesIO()
-
-            with fits.open(bio_in) as hdul:
-                header = hdul[0].header
-
-                # Star-based focus metrics
-                if focus:
-                    if focus.hfr is not None:
-                        header['FOCHFR'] = (focus.hfr, 'Half-Flux Radius in pixels')
-                    if focus.fwhm is not None:
-                        header['FOCFWHM'] = (focus.fwhm, 'Full Width Half Maximum in pixels')
-                    if focus.star_count is not None:
-                        header['FOCSTR'] = (focus.star_count, 'Number of detected stars')
-                    if focus.focus_score is not None:
-                        header['FOCSCR'] = (focus.focus_score, 'Focus score (star-based)')
-
-                # FFT-based focus metrics
-                if fft:
-                    header['FOCFFT'] = (fft.focus_score, 'Focus score (FFT)')
-                    header['FOCFFTR'] = (fft.high_freq_ratio, 'High-frequency ratio')
-                    header['FOCFFTT'] = (fft.high_freq_threshold, 'FFT high-freq threshold')
-
-                # Convolution-based focus metrics
-                if conv and conv.results:
-                    for method_name, info in conv.results.items():
-                        # Use method abbreviations for FITS keywords (8 char limit)
-                        prefix = {
-                            'variance_laplacian': 'FOCVLAP',
-                            'laplacian': 'FOCLAP',
-                            'sobel': 'FOCSOB'
-                        }.get(method_name, f'FOC{method_name[:3].upper()}')
-
-                        header[prefix] = (info.focus_score, f'Focus score ({method_name})')
-                        header[f'{prefix}R'] = (info.raw_metric, f'{method_name} raw metric')
-
-                hdul.writeto(bio_out)
-
-            return bio_out.getvalue()
-
         updated_buffer = await asyncio.to_thread(
-            update_fits_headers, buffer, focus_info, fft_info, conv_results
+            self._update_fits_headers, buffer, focus_info, fft_info, conv_results
         )
         await outgoing[0].send(context, updated_buffer)
+
+    @staticmethod
+    def _update_fits_headers(
+        buffer: bytes,
+        focus: FocusInfo | None,
+        fft: FocusFFTInfo | None,
+        conv: FocusConvolutionResults | None
+    ) -> bytes:
+        bio_in = io.BytesIO(buffer)
+        bio_out = io.BytesIO()
+
+        with fits.open(bio_in) as hdul:
+            header = hdul[0].header
+
+            # Star-based focus metrics
+            if focus:
+                if focus.hfr is not None:
+                    header['FOCHFR'] = (focus.hfr, 'Half-Flux Radius in pixels')
+                if focus.fwhm is not None:
+                    header['FOCFWHM'] = (focus.fwhm, 'Full Width Half Maximum in pixels')
+                if focus.star_count is not None:
+                    header['FOCSTR'] = (focus.star_count, 'Number of detected stars')
+                if focus.focus_score is not None:
+                    header['FOCSCR'] = (focus.focus_score, 'Focus score (star-based)')
+
+            # FFT-based focus metrics
+            if fft:
+                header['FOCFFT'] = (fft.focus_score, 'Focus score (FFT)')
+                header['FOCFFTR'] = (fft.high_freq_ratio, 'High-frequency ratio')
+                header['FOCFFTT'] = (fft.high_freq_threshold, 'FFT high-freq threshold')
+
+            # Convolution-based focus metrics
+            if conv and conv.results:
+                for method_name, info in conv.results.items():
+                    # Use method abbreviations for FITS keywords (8 char limit)
+                    prefix = {
+                        'variance_laplacian': 'FOCVLAP',
+                        'laplacian': 'FOCLAP',
+                        'sobel': 'FOCSOB'
+                    }.get(method_name, f'FOC{method_name[:3].upper()}')
+
+                    header[prefix] = (info.focus_score, f'Focus score ({method_name})')
+                    header[f'{prefix}R'] = (info.raw_metric, f'{method_name} raw metric')
+
+            hdul.writeto(bio_out)
+
+        return bio_out.getvalue()

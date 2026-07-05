@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Time range parsing utilities supporting symbolic and absolute time specifications."""
 
 import functools
@@ -35,9 +36,9 @@ def clear_timezone_cache():
 
 
 def get_tzinfo(name: str | None, offset: int = None):
-    """Resolve a timezone name and optional UTC offset (in seconds) to a ``tzinfo`` object.
+    """Resolve a timezone name and optional UTC offset (in seconds) to a `tzinfo` object.
 
-    Returns the local timezone when both arguments are absent. Raises ``TimeRangeError`` for
+    Returns the local timezone when both arguments are absent. Raises `TimeRangeError` for
     unrecognized timezone names.
     """
     if not name and offset is None:
@@ -59,9 +60,9 @@ def get_tzinfo(name: str | None, offset: int = None):
 
 
 def parse_time_of_day(spec: str, range_min: datetime, range_max: datetime):
-    """Parse a time-of-day string into the first matching ``datetime`` within ``[range_min, range_max]``.
+    """Parse a time-of-day string into the first matching `datetime` within `[range_min, range_max]`.
 
-    Raises ``TimeRangeParseError`` if ``spec`` contains a date component, or ``TimeRangeError`` if
+    Raises `TimeRangeParseError` if `spec` contains a date component, or `TimeRangeError` if
     the resolved time falls outside the allowed range.
     """
     # Parse the input spec.
@@ -88,7 +89,7 @@ def parse_time_of_day(spec: str, range_min: datetime, range_max: datetime):
 
 
 def parse_time_delta(spec: str):
-    """Parse a time-of-day string as a ``timedelta`` relative to midnight of the reference date."""
+    """Parse a time-of-day string as a `timedelta` relative to midnight of the reference date."""
     # Use a default reference datetime to extract the delta.
     delta_dt = parse_datetime(spec, default=_ref_dt)
 
@@ -105,10 +106,10 @@ def parse_spec(
     symbol_handlers: dict[str, SymbolParseHandler] = None,
     latest_match: bool = False,
 ) -> datetime:
-    """Resolve a time spec string to a ``datetime`` within a one-day window.
+    """Resolve a time spec string to a `datetime` within a one-day window.
 
     The spec may be an absolute time-of-day string or a symbol (optionally followed by a
-    ``+``/``-`` delta). Symbol resolution is delegated to ``symbol_handlers``.
+    `+`/`-` delta). Symbol resolution is delegated to `symbol_handlers`.
     """
     assert range_max - range_min <= timedelta(days=1)
 
@@ -154,10 +155,10 @@ def parse_time_range(
     time_ref: datetime = None,
     symbol_handlers: dict[str, SymbolParseHandler] = None,
 ):
-    """Parse a start and end spec into a ``(start_dt, end_dt)`` tuple relative to ``time_ref``.
+    """Parse a start and end spec into a `(start_dt, end_dt)` tuple relative to `time_ref`.
 
-    The end time is the earliest match within one day after ``time_ref``; the start time is the
-    latest match within one day before the resolved end time. ``time_ref`` defaults to the current
+    The end time is the earliest match within one day after `time_ref`; the start time is the
+    latest match within one day before the resolved end time. `time_ref` defaults to the current
     UTC time if not provided.
     """
     if time_ref:

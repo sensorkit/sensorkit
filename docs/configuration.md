@@ -1,90 +1,229 @@
 # Configuration
 
-SensorKit services read their configuration from the NATS key-value store at startup. Configuration is not stored in files on disk — you write YAML files locally, load them into NATS once, and services pick them up when they start.
+A SensorKit system is described by **one YAML file** — conventionally `sensorkit.yaml` — that declares everything: which modules to load, your devices, sensors, automation rules, data flow, and services. You load this file into SensorKit's configuration store (backed by the NATS key-value store), and services read their piece of it when they start.
 
-## Config record format
+This page covers the file format, how to load and update configuration, and the lower-level KV tools.
 
-Every config record is a YAML object with three fields:
+## The unified config file
 
-```yaml
-entity: <service-name>     # which entity's KV namespace to write to
-key: <ModelName>           # the key within that namespace
-value:                     # the configuration data
-  field_one: ...
-  field_two: ...
-```
-
-A single file can hold multiple records separated by `---`:
+A minimal but realistic example:
 
 ```yaml
-entity: ascom-service
-key: AscomConfig
-value:
-  endpoints:
-    - host: 192.168.1.10
-      port: 32323
-      devices:
-        - entity: my-mount
-          device_type: telescope
----
-entity: my-sensor
-key: SensorConfig
-value:
-  controller_name: my-sensor
-  devices:
-    mount: my-mount
-    camera: my-camera
-  site_position:
-    latitude_degrees: 34.05
-    longitude_degrees: -118.25
-    altitude_km: 0.3
+version: 1
+
+sensorkit:
+  imports:
+    - sensorkit.alpaca.service
+    - sensorkit.pwi4.service
+
+# Device services (one section per driver module)
+alpaca:
+  - id: Alpaca
+    endpoints:
+      - host: localhost
+        port: 32323
+        devices:
+          MyCamera:
+            device_type: camera
+          MyDome:
+            device_type: dome
+          MyWeather:
+            device_type: observing_conditions
+
+pwi4:
+  - id: PlaneWave
+    endpoints:
+      - host: localhost
+        port: 8220
+        devices:
+          MyMount:
+            device_type: mount
+
+# The sensor controller: devices composed into one instrument
+sensors:
+  - id: MySensor
+    devices:
+      mount: MyMount
+      camera: MyCamera
+      dome: MyDome
+    site_position:
+      latitude_degrees: 34.05
+      longitude_degrees: -118.25
+      altitude_km: 0.3
+
+# The automation agent
+automation:
+  controllers:
+    MySensor:
+      modes:
+        - name: nighttime
+          state: operate
+          criteria:
+            - when: time_range
+              start: sunset
+              end: sunrise
+      constraints:
+        - kind: weather
+          provider: MyWeather
+          humidity_max: 85.0
+          wind_max: 15.0
+          rain_max: 0.0
+      tasking:
+        - program: MyProgram
+          priority: 5
+
+# Where camera data goes
+data_flow:
+  - entity: MyCamera
+    producer:
+      simple:
+        - op: app_source
+        - op: array_to_fits
+        - op: write_file
+          directory: /data/mysensor
+
+# Your own services
+services:
+  - id: MyProgram
+    python_module: programs/my_program.py
 ```
 
-## Loading config into NATS
+Each top-level section is handled by the component that owns it — `sensors` by the sensor controller, `automation` by the agent, `alpaca` by the Alpaca module, and so on. Modules register their own sections, so the set of valid sections grows with the modules you import. An unknown section name is an error at load time, which catches typos early.
 
-```bash
-# Load a single file
-sensorkit kv load config.yaml
+### Core sections
 
-# Load all files in a directory
-sensorkit kv load configs/*.yaml
+| Section      | Owner                                | Purpose                                                             |
+|--------------|--------------------------------------|---------------------------------------------------------------------|
+| `sensorkit`  | bootstrap                            | Global settings: `imports` (modules to load), `backend`             |
+| `sensors`    | [sensor controller](sensor.md)       | Device composition, site position, operating policies              |
+| `automation` | [agent](agent.md)                    | Modes, constraints, scheduling                                     |
+| `data_flow`  | data pipeline (below)                | Per-device data processing graphs                                  |
+| `webapi`     | web API service                      | HTTP API port and served data products                             |
+| `services`   | `sensorkit go` / `service run`       | Your own program/service definitions                               |
+| `config`     | —                                    | Free-form per-entity keyword values (escape hatch)                 |
 
-# Skip keys that already exist (do not overwrite)
-sensorkit kv load --no-clobber config.yaml
+### Module sections
+
+Installed modules add their own: `alpaca`, `pwi4`, `thesky`, `node_platform`, `indigo`, `otto`, `udl`, `slack`, `sky_transmission`, and others. These are documented in [Device services](devices.md). For a module's section to be recognized, the module must appear in `sensorkit.imports`.
+
+### Services, implicit and explicit
+
+Entries under `services` name a service and point at your Python code:
+
+```yaml
+services:
+  - id: MyProgram
+    python_module: programs/my_program.py   # a file path or dotted module path
 ```
 
-Config must be loaded before the service that reads it is started. Services read their config once at startup; if you change a value, restart the service.
+Many sections *imply* a service automatically — declaring an `alpaca` section registers an Alpaca device service under its `id`, `sensors` entries register sensor controller services, `automation` registers the agent. You don't list those under `services`; `sensorkit go` finds and launches all of them.
 
-## Inspecting the KV store
+## Loading configuration
 
 ```bash
-# List all entries
+sensorkit config load sensorkit.yaml
+```
+
+This validates the whole file against each section's schema, compares against what's already stored, and writes only the keys that changed:
+
+```bash
+sensorkit config load sensorkit.yaml -n     # dry run: validate and diff, write nothing
+sensorkit config load sensorkit.yaml -v     # show each entity and key with its status
+sensorkit config load sensorkit.yaml -f     # write everything, even unchanged keys
+```
+
+!!! warning "Config changes need a service restart"
+
+    Presently, all services read their configuration **once at startup**. `config load` updates the store, not running services — after changing a value, load and then restart the affected service. (In a future release, some configuration will become hot-reloadable for some services.)
+
+`sensorkit go -l` performs the load automatically before starting services, which is the usual workflow during setup:
+
+```bash
+sensorkit go -c sensorkit.yaml -l
+```
+
+## Data flow
+
+The `data_flow` section defines what happens to data a device produces — most commonly, turning camera frames into FITS files on disk. Each entry attaches a pipeline of operations to an entity:
+
+```yaml
+data_flow:
+  - entity: MyCamera
+    producer:
+      simple:
+        - op: app_source              # frames enter from the camera driver
+        - op: fits_header             # add/override FITS header cards
+          define:
+            TASKID:   =str(TaskInfo.task_id)
+            FRAMENUM: =Collect.frame_number
+            CENTAZ:   =AltAzPointing.azimuth_degrees
+            CENTALT:  =AltAzPointing.altitude_degrees
+            RADEG:    =RADecPointing.right_ascension_hours * 15
+            DECDEG:   =RADecPointing.declination_degrees
+        - op: array_to_fits           # encode the raw array as FITS
+        - op: write_file
+          directory: /data/mysensor
+```
+
+Values beginning with `=` are expressions evaluated against the task's **context** — a typed snapshot of live system state (current pointing, site position, task identity, frame number) that the sensor controller assembles and passes along with every frame. This is how FITS headers get accurate per-frame telescope state without the camera driver knowing anything about the mount.
+
+Built-in operations include:
+
+| Op                  | Purpose                                                        |
+|---------------------|----------------------------------------------------------------|
+| `app_source` / `app_sink` | Enter/exit point connecting the pipeline to the device code |
+| `fits_header`       | Define or override FITS header cards, with `=` context expressions |
+| `array_to_fits`     | Encode a raw image array as a FITS file                        |
+| `compress_fits`     | FITS tile compression                                          |
+| `apply_dark`        | Subtract a dark frame                                          |
+| `context_from_fits` | Populate context from an existing FITS header                  |
+| `write_file` / `read_file` | Write to / read from disk                               |
+| `watch_directory`   | Source files appearing in a directory                          |
+
+Output naming is controlled by the `FileNameTemplate` context value, typically set under `automation.contexts` so it applies to every collect task:
+
+```yaml
+automation:
+  contexts:
+    standard_collect:
+      FileNameTemplate:
+        template: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-f{frame_num}.fits"
+```
+
+Analysis modules extend the same pipeline mechanism — e.g. focus estimation ops (`analyze_focus_stars`, `analyze_focus_fft`) or handing frames to astrometry/photometry services.
+
+## Web API
+
+The `webapi` section enables an HTTP/JSON service that exposes entities, device details, controller and agent state, live event streams (server-sent events), and data products such as FITS files with JPEG previews:
+
+```yaml
+webapi:
+  id: WebAPI
+  port: 8000
+  serve_data_products:
+    - kind: local_fits
+      root_directory: /data/mysensor
+      controller_id: from_path
+```
+
+This is the integration point for dashboards and remote monitoring.
+
+## Under the hood: the KV store
+
+Everything `config load` writes lands in the NATS key-value store, namespaced by entity. Each entity (a device, sensor, program, or the agent) has its own keyspace, and each key holds one typed record — `SensorConfig` for a sensor, `AgentConfig` for the agent, and so on. Runtime state (controller state, agent decisions, offers) lives in the same store, which is what makes the system inspectable:
+
+```bash
+# Everything, or one entity's keys
 sensorkit kv ls
+sensorkit kv ls -e MySensor
 
-# List entries for one entity
-sensorkit kv ls -e my-sensor
+# Read one key
+sensorkit kv get -e MySensor SensorConfig
 
-# Read a specific key
-sensorkit kv get -e my-sensor SensorConfig
-
-# Write a value directly
-sensorkit kv put -e my-sensor SomeKey '{"field": "value"}'
-
-# Delete a key
-sensorkit kv delete -e my-sensor SomeKey
-
-# Delete all keys for an entity
-sensorkit kv delete -e my-sensor
+# Write or delete directly (surgical changes; prefer `config load` for config)
+sensorkit kv put -e MySensor SomeKey '{"field": "value"}'
+sensorkit kv delete -e MySensor SomeKey
+sensorkit kv delete -e MySensor            # all keys for the entity
 ```
 
-## Applying a config change
-
-To update a service's configuration:
-
-```bash
-# Overwrite the key with the new value
-sensorkit kv load new-config.yaml
-
-# Then restart the service
-sensorkit service run sensorkit.std.sensor my-sensor
-```
+`sensorkit kv load` also accepts raw record files in `entity`/`key`/`value` form for low-level seeding — useful in scripts, but the unified file plus `config load` is the recommended path.

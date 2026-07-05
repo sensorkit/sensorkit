@@ -1,43 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Literal, override
 
+import ourskyai_node_platform_api as osapi
 from loguru import logger
 from pydantic import BaseModel
 
-import ourskyai_node_platform_api as osapi
-
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected
+from sensorkit.std import Connected
+from sensorkit.std.safety import BasicSafety, StandardSafety
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
     NodePlatformDeviceState,
 )
+from sensorkit.std.weather import BasicWeather, StandardWeather
 
-
-# Map Node Platform system metric names to sk.BasicWeather() field names.
+# Map Node Platform system metric names to BasicWeather() field names.
 _METRIC_FIELD_MAP: dict[str, str] = {
-    "node_controller.weather_monitor.air_temperature":          "temperature",
-    "node_controller.weather_monitor.air_humidity":             "humidity",
-    "node_controller.weather_monitor.wind_speed_average":       "wind_speed",
-    "node_controller.weather_monitor.wind_direction_average":   "wind_direction",
-    "node_controller.weather_monitor.air_pressure":             "pressure",
-    "node_controller.weather_monitor.rainfall_intensity":       "rain_rate",
+    "node_controller.weather_monitor.air_temperature": "temperature",
+    "node_controller.weather_monitor.air_humidity": "humidity",
+    "node_controller.weather_monitor.wind_speed_average": "wind_speed",
+    "node_controller.weather_monitor.wind_direction_average": "wind_direction",
+    "node_controller.weather_monitor.air_pressure": "pressure",
+    "node_controller.weather_monitor.rainfall_intensity": "rain_rate",
 }
 
 
 @sk.declare_keyword
+class OperationMode(BaseModel):
+    mode: str
+
+
+@sk.declare_keyword
 class Safety(BaseModel):
-    is_safe: bool
+    """Node Platform extended safety status. The summary `is_safe` flag is published
+    separately via `BasicSafety`; this keyword carries the breakdown."""
     is_weather_safe: bool
     is_all_sky_safe: bool
     is_night: bool
 
 
-@sk.declare_device
+@sk.declare_device(traits=[StandardWeather, StandardSafety])
 class NodePlatformWeather(NodePlatformDevice):
     """Node Platform Weather Station implementation.
 
@@ -45,112 +52,108 @@ class NodePlatformWeather(NodePlatformDevice):
     Combines live sensor metrics with the Node Platform safety status to
     provide a unified weather picture for observatory automation.
     """
+
     config: NodePlatformWeatherConfig
     device_name = "Weather"
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore state, discover available metrics, start publishing, put the mount into ASSISTED mode."""
         device = sk.device()
 
-        # Restore last known state
+        # Restore state
         try:
             self.state = await device.kv_get_model(NodePlatformWeatherState)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformWeatherState()
 
+        # Initialize the weather
+        await self._initialize()
+        self.start_status_loop(self.status_publish())
+
+        async with asyncio.timeout(self.config.timeout):
+            while self.device_connected is None:
+                await asyncio.sleep(self.config.status_frequency)
+
+    @sk.on_detach
+    async def entity_deinit(self):
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
+        await self.api.close()
+        await sk.device().kv_put_model(self.state)
+
+    async def _initialize(self):
         # Discover which weather metric names are available on this node
         self._weather_metric_names: list[str] = []
         try:
             names_resp = await self.api.call("v1_get_system_metric_names")
             all_names = names_resp.metric_names if names_resp.metric_names else []
-            self._weather_metric_names = [
-                n for n in all_names if n in _METRIC_FIELD_MAP
-            ]
+            self._weather_metric_names = [n for n in all_names if n in _METRIC_FIELD_MAP]
             logger.debug(f"discovered weather metrics: {self._weather_metric_names}")
         except Exception as e:
             logger.warning(f"Could not discover metric names: {e}")
 
-        # Ensure we are in ASSISTED mode. Per the API:
-        """
-        Switches the telescope system to assisted operation mode. In this mode, the system provides automation
-        support while keeping the operator in the control loop for key decisions. Use this endpoint when supervised
-        remote operation is needed with operator oversight for safety-critical actions and observation approval.
-        """
-        # In practice, it means that the NodePlatform controls the opening/closing of shutters based on its internal
-        # safety status, which is published here to SensorKit along with the operation mode, and where both are used as
+        # Set the configured operation mode on the Node Platform.
+        #
+        # ASSISTED mode: the Node Platform closes the shutter on unsafe conditions,
+        # but does NOT auto-open on safe — the enclosure module temporarily
+        # switches to MANUAL to perform opens/closes, then restores ASSISTED (if configured)
+        # so unsafe-close still works. SensorKit publishes safety/mode keywords for
         # agent constraints.
-        await self.api.call("v1_enable_assisted_operation")
-
-        # Start weather status publishing
-        logger.debug("starting node_platform weather status loop")
-        self._status_task = asyncio.create_task(self.status_publish())
-
-        # Wait for initial connected status
-        async with asyncio.timeout(self.config.timeout):
-            while self.device_connected is None:
-                await asyncio.sleep(self.config.status_frequency)
-
-    @sk.command_handler
-    async def weather_init(self, cmd: sk.Init):
-        """Nothing to do."""
-        pass
-
-    @sk.command_handler
-    async def weather_deinit(self, cmd: sk.Deinit):
-        """Nothing to do."""
-        pass
-
-    @sk.on_detach
-    async def entity_deinit(self):
-        """Stop status publishing, save state, put the mount back into MANUAL mode."""
-        logger.debug("stopping node_platform weather status loop")
-        if hasattr(self, "_status_task"):
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
-
-        await sk.device().kv_put_model(self.state)
+        #
+        # MANUAL mode: SensorKit is fully responsible for opening/closing the
+        # shutter via its own constraint monitoring.
+        if self.config.operation_mode == "assisted":
+            await self.api.call("v1_enable_assisted_operation")
+            logger.debug("set Node Platform to ASSISTED mode")
+        else:
+            await self.api.call("v1_enable_manual_operation")
+            logger.debug("set Node Platform to MANUAL mode")
 
     async def status_publish(self):
         while True:
             try:
-                weather_kw = await self._build_weather_keywords()
+                weather_kw, basic_safety_kw, safety_kw = await self._build_weather_keywords()
                 if weather_kw is not None:
                     device = sk.device()
                     await device.publish(Connected(is_connected=True))
 
-                    # Safety status (independent of BasicWeather)
+                    if basic_safety_kw is not None:
+                        # Standard go/no-go signal — what the StandardSafety archetype
+                        # asserts and what WeatherConstraint / SafetyConstraint consume.
+                        await device.publish(basic_safety_kw)
+
+                    if safety_kw is not None:
+                        # Node Platform's breakdown of the safety signal (weather vs.
+                        # all-sky vs. day/night). Supplementary to BasicSafety.
+                        await device.publish(safety_kw)
+
+                    # Operation mode (allows agent to constrain on mode changes)
                     try:
-                        safety: osapi.V1SafetyStatus = await self.api.call(
-                            "v1_get_safety_status"
+                        op_status: osapi.V1SystemOperationStatus = await self.api.call(
+                            "v1_get_system_operation_status"
                         )
                         await device.publish(
-                            Safety(
-                                is_safe=safety.is_safe,
-                                is_weather_safe=safety.is_weather_safe,
-                                is_all_sky_safe=safety.is_all_sky_safe,
-                                is_night=safety.is_night
-                            )
+                            OperationMode(mode=op_status.system_operation_mode.value)
                         )
                     except Exception as e:
-                        logger.warning(f"Safety status unavailable: {e}")
+                        logger.warning(f"Operation mode unavailable: {e}")
 
                     await device.publish(weather_kw)
                 else:
                     await sk.device().publish(Connected(is_connected=False))
             except Exception as e:
                 logger.exception(f"Error in status_publish get: {e}")
+                await asyncio.sleep(self.config.status_frequency)
+                continue
 
             await asyncio.sleep(self.config.status_frequency)
 
     async def _build_weather_keywords(self):
-        """Collect weather data from the Node Platform and build a keyword model."""
         fields: dict[str, float | bool | None] = {}
+        basic_safety_kw: BasicSafety | None = None
+        safety_kw: Safety | None = None
 
         # 1. Weather station connected check
         try:
@@ -159,11 +162,11 @@ class NodePlatformWeather(NodePlatformDevice):
             )
             self.device_connected = ws_status.connected
             if not ws_status.connected:
-                return None
+                return None, None, None
         except Exception as e:
             logger.debug(f"Weather station status unavailable: {e}")
             self.device_connected = False
-            return None
+            return None, None, None
 
         # 2. Live weather metrics via system metrics endpoint
         try:
@@ -207,23 +210,44 @@ class NodePlatformWeather(NodePlatformDevice):
         except Exception as e:
             logger.debug(f"System metrics unavailable: {e}")
 
+        # 3. Safety status (independent of BasicWeather). The summary go/no-go flag
+        # goes into BasicSafety (the SK-standard keyword); the per-source breakdown
+        # goes into our local Safety keyword.
+        try:
+            safety: osapi.V1SafetyStatus = await self.api.call("v1_get_safety_status")
+            basic_safety_kw = BasicSafety(is_safe=safety.is_safe)
+            safety_kw = Safety(
+                is_weather_safe=safety.is_weather_safe,
+                is_all_sky_safe=safety.is_all_sky_safe,
+                is_night=safety.is_night,
+            )
+        except Exception as e:
+            logger.warning(f"Safety status unavailable: {e}")
+
         status_parts = [f"connected={self.device_connected}"]
         status_parts.extend(f"{k}={v:.3f}" for k, v in fields.items())
+        if basic_safety_kw is not None:
+            status_parts.append(f"is_safe={basic_safety_kw.is_safe}")
+        if safety_kw is not None:
+            status_parts.extend(
+                f"{k}={v}" for k, v in safety_kw.model_dump().items()
+            )
         logger.debug(f"NodePlatform weather status: {', '.join(status_parts)}")
 
         try:
-            return sk.BasicWeather(**fields)
+            return BasicWeather(**fields), basic_safety_kw, safety_kw
         except Exception as e:
             logger.warning(f"Failed to build BasicWeather model: {e}")
-            return None
+            return None, basic_safety_kw, safety_kw
 
 
 class NodePlatformWeatherConfig(NodePlatformDeviceConfig[NodePlatformWeather]):
     """Node Platform Weather configuration."""
+
     device_type: Literal["weather"] = "weather"
     metric_lookback_seconds: float = 300.0
-    timeout: float = 30.0
     status_frequency: float = 30.0
+    timeout: float = 30.0
 
     @override
     def create_device(self):
@@ -232,4 +256,5 @@ class NodePlatformWeatherConfig(NodePlatformDeviceConfig[NodePlatformWeather]):
 
 class NodePlatformWeatherState(NodePlatformDeviceState):
     """Node Platform Weather state."""
+
     device_type: Literal["weather"] = "weather"

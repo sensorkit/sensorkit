@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
@@ -8,7 +9,8 @@ from astropy.coordinates import GCRS
 from astropy.time import Time
 from astropy.units import Unit
 
-from sensorkit.astro.common import TLE, Cartesian, StateVector
+from sensorkit.astro.common import TLE
+from sensorkit.astro.coords import Cartesian, StateVector
 
 METERS = Unit("m")
 SEC = Unit("s")
@@ -42,7 +44,7 @@ class OrbitalTrajectory(Trajectory):
         )
         return OrbitalTrajectory(
             StateVector(
-                result.time.datetime(),
+                result.time.as_datetime(),
                 Cartesian(*result.pos),
                 Cartesian(*result.vel),
             ),

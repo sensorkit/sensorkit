@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the device trait infrastructure."""
 
 from __future__ import annotations
@@ -20,12 +21,11 @@ from sensorkit.core.trait import (
     match_traits,
 )
 from sensorkit.models.devices import (
-    Connect,
-    Disconnect,
     FollowTarget,
     Init,
     Stop,
 )
+from sensorkit.std import Connect, Disconnect
 
 
 @pytest.fixture(autouse=True)
@@ -43,23 +43,23 @@ def _clean_trait_registries():
 class TestTraitMatching:
     def test_simple_trait_matches(self):
         t = declare_trait("t_simple_match", required_commands=(Stop,))
-        details = DeviceDetails(supported_commands={"Stop", "Init"})
+        details = DeviceDetails(supported_commands={"Stop", "Init"}, published_keywords=frozenset())
         assert t.match(details)
 
     def test_simple_trait_no_match(self):
         t = declare_trait("t_simple_no_match", required_commands=(Stop,))
-        details = DeviceDetails(supported_commands={"Init"})
+        details = DeviceDetails(supported_commands={"Init"}, published_keywords=frozenset())
         assert not t.match(details)
 
     def test_empty_trait_matches_anything(self):
         t = declare_trait("t_empty")
-        details = DeviceDetails(supported_commands={"Init"})
+        details = DeviceDetails(supported_commands={"Init"}, published_keywords=frozenset())
         assert t.match(details)
 
     def test_multiple_commands_required(self):
         t = declare_trait("t_multi_cmd", required_commands=(Connect, Disconnect))
-        details_ok = DeviceDetails(supported_commands={"Connect", "Disconnect", "Init"})
-        details_partial = DeviceDetails(supported_commands={"Connect"})
+        details_ok = DeviceDetails(supported_commands={"Connect", "Disconnect", "Init"}, published_keywords=frozenset())
+        details_partial = DeviceDetails(supported_commands={"Connect"}, published_keywords=frozenset())
         assert t.match(details_ok)
         assert not t.match(details_partial)
 
@@ -72,7 +72,7 @@ class TestArchetypeMatching:
             required_commands=(Init, FollowTarget),
             required_traits=(can_stop,),
         )
-        details = DeviceDetails(supported_commands={"Init", "FollowTarget", "Stop"})
+        details = DeviceDetails(supported_commands={"Init", "FollowTarget", "Stop"}, published_keywords=frozenset())
         assert arch.match(details)
 
     def test_archetype_missing_sub_trait_command(self):
@@ -82,7 +82,7 @@ class TestArchetypeMatching:
             required_commands=(Init, FollowTarget),
             required_traits=(can_stop,),
         )
-        details = DeviceDetails(supported_commands={"Init", "FollowTarget"})
+        details = DeviceDetails(supported_commands={"Init", "FollowTarget"}, published_keywords=frozenset())
         assert not arch.match(details)
 
     def test_optional_commands_do_not_affect_matching(self):
@@ -91,7 +91,7 @@ class TestArchetypeMatching:
             required_commands=(Init,),
             optional_commands=(Stop,),
         )
-        details = DeviceDetails(supported_commands={"Init"})
+        details = DeviceDetails(supported_commands={"Init"}, published_keywords=frozenset())
         assert arch.match(details)
 
 
@@ -141,7 +141,7 @@ class TestMatchHelpers:
         t1 = declare_trait("t_mh_1", required_commands=(Stop,))
         t2 = declare_trait("t_mh_2", required_commands=(Init,))
         t3 = declare_trait("t_mh_3", required_commands=(FollowTarget,))
-        details = DeviceDetails(supported_commands={"Stop", "Init"})
+        details = DeviceDetails(supported_commands={"Stop", "Init"}, published_keywords=frozenset())
         matched = match_traits(details, [t1, t2, t3])
         assert t1 in matched
         assert t2 in matched
@@ -154,12 +154,12 @@ class TestMatchHelpers:
             required_commands=(Init, FollowTarget),
             required_traits=(can_stop,),
         )
-        details = DeviceDetails(supported_commands={"Init", "FollowTarget", "Stop"})
+        details = DeviceDetails(supported_commands={"Init", "FollowTarget", "Stop"}, published_keywords=frozenset())
         assert match_archetype(details) == arch
 
     def test_match_archetype_no_match(self):
         # With no matching archetype for this device, should return None.
-        details = DeviceDetails(supported_commands={"SomeUnknownCommand"})
+        details = DeviceDetails(supported_commands={"SomeUnknownCommand"}, published_keywords=frozenset())
         assert match_archetype(details) is None
 
 

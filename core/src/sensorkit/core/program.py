@@ -1,17 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
 import collections
 import contextlib
 import functools
-import uuid
 from abc import abstractmethod
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from intervaltree import Interval, IntervalTree
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from sensorkit.backend.event import Event
 from sensorkit.backend.request import ExtendedResponse, Request
@@ -19,7 +19,7 @@ from sensorkit.common.aio import AsyncObserver
 from sensorkit.common.keyword import KeywordDict, declare_keyword
 from sensorkit.core.entity import EntityClient, EntityInterface, EntityRef
 from sensorkit.core.executor import TaskFactoryFunc
-from sensorkit.core.task import TaskContexts
+from sensorkit.core.task import TaskContexts, TaskExecution
 
 if TYPE_CHECKING:
     from sensorkit.core.client import SensorKit
@@ -54,16 +54,59 @@ class ProgramActiveState(Event):
     contexts: dict[str, KeywordDict] = Field(default_factory=dict)
 
 
-class ProgramTaskingStatus(Event):
-    """Event indicating the Task a Program is currently executing, if any."""
-    executing_task_id: uuid.UUID | None = None
+class ProgramTaskingState(Event):
+    """Event indicating the Task a Program is currently executing, if any.
+
+    Carries the full `TaskExecution` envelope (not just an id) so observers see the same task shape
+    the controller publishes on its `TaskExecutionState`, including the controller-minted
+    `task_id`. `None` while the program is between tasks or idle.
+    """
+    executing_task: TaskExecution | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_executing_task(cls, data: Any) -> Any:
+        """Upgrade state persisted before the executing task carried a full `TaskExecution`.
+
+        The pre-split `ProgramTaskingStatus` recorded only `executing_task_id` — a bare task id.
+        A bare id cannot be rehydrated into a `TaskExecution` envelope, so a legacy id collapses to
+        `executing_task=None` (equivalent to "idle"); observers of the old shape only ever saw the
+        id, which the program re-publishes the moment it next dispatches a task.
+        """
+        if not isinstance(data, dict) or "executing_task" in data:
+            return data
+
+        if "executing_task_id" in data:
+            data = {k: v for k, v in data.items() if k != "executing_task_id"}
+            data["executing_task"] = None
+
+        return data
 
 
 class ProgramState(BaseModel):
     """Internal state snapshot of a Program."""
     enable_state: ProgramEnableState
     active_state: ProgramActiveState
-    tasking_status: ProgramTaskingStatus
+    tasking_state: ProgramTaskingState
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_tasking_state(cls, data: Any) -> Any:
+        """Upgrade KV snapshots persisted before `tasking_status` was renamed to `tasking_state`.
+
+        Versions predating the Task/TaskExecution split stored the program's executing task under a
+        `tasking_status` key (a `ProgramTaskingStatus` carrying `executing_task_id`); this
+        version expects `tasking_state`. Renaming the key here lets `ProgramTaskingState`'s own
+        `before` validator finish upgrading the inner shape, so a program starting against a NATS
+        broker holding older state no longer raises a `ValidationError`. A snapshot missing both
+        keys entirely is treated as idle.
+        """
+        if not isinstance(data, dict) or "tasking_state" in data:
+            return data
+
+        data = dict(data)
+        data["tasking_state"] = data.pop("tasking_status", {})
+        return data
 
 
 class ProgramEnableStateRequest(BaseModel):
@@ -184,6 +227,9 @@ class ProgramClient(EntityClient):
 class ProgramRef(EntityRef[ProgramClient]):
     """A serializable reference to a program client."""
 
+    def _get_client(self, kit: SensorKit) -> ProgramClient:
+        return kit.program(self.name)
+
 
 class ControllerOffers:
     """Monitor published offers for all Programs associated with a Controller."""
@@ -270,13 +316,25 @@ class ProgramDiscovery:
 
     async def _discover_programs(self, initial_update: asyncio.Event):
         tasks: dict[str, asyncio.Task] = {}
+        kv = self.client.backend.key_value()
+
+        # Programs present in the initial snapshot. We're "ready" once each of them
+        # has been discovered and reported its initial enable state — or immediately
+        # if there are none.
+        pending = {
+            str(entry.key.entity())
+            for entry in await kv.get_all(deep=True)
+            if entry.key.prop == "ProgramState"
+        }
+        if not pending:
+            initial_update.set()
 
         # Monitor all registered Programs.
         # FIXME: Need an alternate way to do this without firehose. Cannot assume the backend
         #        allows prefix wildcards to capture '*.ProgramState' (and NATS, in fact, does not).
         #        This most likely means we need to define a dedicated KV prefix for system info,
         #        where we can define keys to explicitly indicate existence, like EntityLease.
-        monitor = await self.client.backend.key_value().monitor_all(deep=True)
+        monitor = await kv.monitor_all(deep=True)
 
         async for entry in monitor:
             if entry.key.prop != "ProgramState":
@@ -300,7 +358,11 @@ class ProgramDiscovery:
 
             # Wait for the initial enablement status of each discovered program.
             await asyncio.gather(*(event.wait() for event in events), return_exceptions=True)
-            initial_update.set()
+
+            # Signal ready once every program from the initial snapshot has been seen.
+            pending.discard(program)
+            if not pending:
+                initial_update.set()
 
     async def _monitor_task(self, client: ProgramClient, initial_update: asyncio.Event):
         monitor = client.monitor_enable_state()

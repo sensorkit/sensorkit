@@ -1,4 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
+import logging
+import os
 from datetime import datetime
 from enum import StrEnum
 from typing import override
@@ -31,6 +34,10 @@ from sensorkit.common.aio import cleanup_future
 
 SUBJECT_PREFIX = "sensorkit"
 DELETE_OPS = (KV_DEL, KV_PURGE)
+
+logging.getLogger("nats").setLevel(
+    logging.WARNING if os.environ.get("SENSORKIT_DEBUG") else logging.CRITICAL
+)
 
 
 class Method(StrEnum):
@@ -78,7 +85,7 @@ def _subject_from_nats(method: Method, subject: str):
 def _kv_entry(entry: KeyValue.Entry, *, key: Subject = None):
     return KVEntry(
         key=key if key else _subject_from_nats(Method.KV, entry.key),
-        value=entry.value if entry.operation not in DELETE_OPS else KVEntry.DELETED,
+        value=entry.value if entry.operation not in DELETE_OPS else KVEntry.DELETE_MARKER,
         revision=entry.revision,
     )
 
@@ -88,9 +95,18 @@ class NATSBackendImpl(BackendImpl):
 
     @override
     @classmethod
-    async def create(cls, *args, **kwargs):
+    async def create(cls, servers: str | list[str] | None = None, **kwargs):
+        if servers is None:
+            servers = os.environ.get("NATS_URL", os.environ.get("SENSORKIT_BACKEND_ARG"))
+
+        if isinstance(servers, str):
+            servers = servers.split(",")
+
+        if servers is not None:
+            kwargs["servers"] = servers
+
         # Connect to the NATS broker.
-        nc = await nats.connect(*args, **kwargs)
+        nc = await nats.connect(**kwargs)
 
         # Create JetStream resources.
         js = nc.jetstream()

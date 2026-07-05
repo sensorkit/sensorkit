@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 import functools
 from datetime import datetime
@@ -27,8 +28,16 @@ class EarthObserver:
         """Load the skyfield timescale and ephemeris data if not already loaded."""
         async with EarthObserver._bootstrap_lock:
             if EarthObserver.timescale is None:
-                EarthObserver.timescale = await asyncio.to_thread(skyfield.load.timescale)
-                EarthObserver.ephem = await asyncio.to_thread(skyfield.load, "de421.bsp")
+                # Load both before publishing either. `timescale` is the gate variable
+                # checked by get(); assign it LAST so "timescale set" always implies
+                # "ephem loaded". Otherwise a concurrent get() can observe timescale set
+                # while the slow de421.bsp load is still in flight and construct with
+                # ephem=None. The two assignments have no await between them, so no other
+                # task can interleave (this also makes bootstrap cancellation-atomic).
+                timescale = await asyncio.to_thread(skyfield.load.timescale)
+                ephem = await asyncio.to_thread(skyfield.load, "de421.bsp")
+                EarthObserver.ephem = ephem
+                EarthObserver.timescale = timescale
 
     @classmethod
     async def get(cls, *args, **kwargs):

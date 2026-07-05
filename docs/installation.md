@@ -2,35 +2,53 @@
 
 ## Requirements
 
-- Python 3.13+
-- [uv](https://docs.astral.sh/uv/) package manager
-- A running NATS server with JetStream enabled
+- **Python 3.13 or newer**
+- **A NATS server with JetStream enabled** — this is the message bus and configuration store that every SensorKit service connects to. It's a single small binary (or container) and takes under a minute to set up.
 
 ## Install SensorKit
 
 ```bash
-uv pip install sensorkit
+pip install sensorkit
 ```
 
-To include a specific hardware module (ASCOM, PWI4, etc.):
+Hardware and feature support ships as optional extras, so you only install what your site uses:
 
 ```bash
-uv pip install "sensorkit[ascom]"
-uv pip install "sensorkit[pwi4]"
-uv pip install "sensorkit[ascom,pwi4]"
+pip install "sensorkit[alpaca]"          # ASCOM Alpaca devices
+pip install "sensorkit[pwi4]"            # PlaneWave PWI4
+pip install "sensorkit[alpaca,pwi4]"     # both
+```
+
+| Extra              | Provides                                        |
+|--------------------|-------------------------------------------------|
+| `alpaca`           | ASCOM Alpaca devices                            |
+| `pwi4`             | PlaneWave PWI4 mount, focuser, rotator          |
+| `thesky`           | Software Bisque TheSky/SkyX                     |
+| `node-platform`    | Observable Space Node Platform                  |
+| `indigo`           | INDIGO devices                                  |
+| `nina`             | NINA integration                                |
+| `otto`             | Otto — standalone satellite observation program |
+| `udl`              | Unified Data Library observing program          |
+| `senpai`           | Astrometry and photometry analysis              |
+| `sky-transmission` | All-sky camera analysis                         |
+| `slack`            | Slack notifications                             |
+
+If you're working from a clone of the repository instead, [uv](https://docs.astral.sh/uv/) sets up everything at once:
+
+```bash
+uv sync --all-extras
+uv run sensorkit --help
 ```
 
 ## Start NATS
 
-SensorKit requires NATS JetStream. The simplest way to run it locally is with Docker:
+The simplest way to run NATS locally is Docker:
 
 ```bash
-docker run -d --name nats \
-  -p 4222:4222 \
-  nats:alpine -js
+docker run -d --name nats -p 4222:4222 nats:alpine -js
 ```
 
-Or with Docker Compose, add this to your `docker-compose.yml`:
+Or in a `docker-compose.yml`:
 
 ```yaml
 services:
@@ -42,84 +60,100 @@ services:
     restart: unless-stopped
 ```
 
-## Connect to NATS
+!!! warning "JetStream is required"
 
-SensorKit reads the NATS URL from the `SENSORKIT_BACKEND_ARG` environment variable:
+    The `-js` flag enables JetStream. Without it NATS runs fine, but SensorKit can't create its streams or KV store — nothing will work.
+
+## Point SensorKit at NATS
+
+SensorKit reads the server address from the `NATS_URL` environment variable:
 
 ```bash
-export SENSORKIT_BACKEND_ARG=nats://localhost:4222
+export NATS_URL=nats://localhost:4222
 ```
 
-For remote NATS servers, substitute the hostname or IP. If this variable is not set, SensorKit defaults to `nats://127.0.0.1:4222`.
+If unset, it defaults to `nats://127.0.0.1:4222`. SensorKit also reads a `.env` file from the working directory, which is a convenient place to keep this alongside your config.
 
-## Verify the connection
+Verify the connection:
 
 ```bash
 sensorkit kv ls
 ```
 
-This lists all KV entries. On a fresh install the output will be empty, which confirms that the connection succeeded.
+On a fresh system this prints an empty listing — which confirms the connection worked.
 
-## Load configuration
+## Write a configuration
 
-Before starting any services, their configuration must be loaded into the KV store. Write a YAML config file (see [Configuration](configuration.md)) and load it:
+SensorKit is driven by a single unified YAML file, conventionally named `sensorkit.yaml`, that declares your devices, sensors, automation rules, and data flow. The [Configuration](configuration.md) page covers the format; `deploy/simulated/sensorkit.yaml` in the repository is a complete working example.
 
-```bash
-sensorkit kv load config.yaml
-```
-
-## Start services
-
-### Single service
+Load it into the system:
 
 ```bash
-sensorkit service run <module> <name>
+sensorkit config load sensorkit.yaml
 ```
 
-For example:
+`config load` validates the file, shows what changed, and only writes keys whose values differ — so it's safe to re-run after every edit.
+
+## Run services
+
+### Everything at once: `sensorkit go`
+
+For evaluation and development, `sensorkit go` launches every service defined in your config in one supervised process, with combined color-coded logs:
 
 ```bash
-sensorkit service run sensorkit.ascom.service ascom-service
-sensorkit service run sensorkit.std.sensor my-sensor
-sensorkit service run sensorkit.auto.agent my-agent
+sensorkit go -c sensorkit.yaml -l
 ```
 
-Add `-r` to restart the service automatically if it exits:
+The `-l` flag loads the configuration first, so this single command takes you from YAML file to running observatory. Logs also stream to a debug log file (`--log-file` to choose where; `--log-level DEBUG` for more console detail).
+
+### One service at a time: `sensorkit service run`
+
+In production you'll typically run each service under its own supervisor (Docker/Podman containers or systemd units). Each service is started by name; the implementation is resolved from your configuration:
 
 ```bash
-sensorkit service run sensorkit.std.sensor my-sensor -r
+sensorkit service run my-sensor
+sensorkit service run agent
 ```
 
-### Multiple services from a manifest
-
-Create a `services.yaml` file:
-
-```yaml
-services:
-  - name: ascom-service
-    module: sensorkit.ascom.service
-  - name: my-sensor
-    module: sensorkit.std.sensor
-  - name: my-agent
-    module: sensorkit.auto.agent
-```
-
-Then launch all services in one command:
+If no config file is available to the process, supply the Python module explicitly:
 
 ```bash
-sensorkit go
+sensorkit service run my-sensor sensorkit.std.sensor
+sensorkit service run agent sensorkit.auto.agent -r
 ```
 
-By default, `sensorkit go` looks for `services.yaml` in the current directory. Pass `-c` to use a different file:
+`-r` restarts the service automatically if it exits.
 
-```bash
-sensorkit go -c /etc/sensorkit/services.yaml -r
-```
-
-The `go` command streams combined log output from all services. Add `--log-file path/to/file.log` to also write logs to disk.
-
-## Check running services
+### Check what's running
 
 ```bash
 sensorkit service ls
+```
+
+Lists every registered service and whether it is currently online.
+
+## Environment variables
+
+| Variable            | Purpose                                                              | Default                  |
+|---------------------|----------------------------------------------------------------------|--------------------------|
+| `NATS_URL`          | NATS server address                                                  | `nats://127.0.0.1:4222`  |
+| `SENSORKIT_CONFIG`  | Path to the unified config file                                      | `./sensorkit.yaml`       |
+| `SENSORKIT_IMPORTS` | Comma-separated extra modules to import (e.g. `sensorkit.alpaca.service`) | —                   |
+| `SENSORKIT_BACKEND` | Backend implementation (`nats` or `fake` for tests)                  | `nats`                   |
+
+Module imports are usually configured in the `sensorkit.imports` section of your config file rather than the environment — see [Configuration](configuration.md).
+
+## Trying it against simulators
+
+You can run SensorKit natively on your machine against the containerized hardware simulators — useful when developing:
+
+```bash
+# 1. Start just NATS and the simulators
+docker compose -f deploy/simulated/docker-compose.yml up --build -d nats planewave-sim ascom-sim
+
+# 2. Copy deploy/simulated/sensorkit.yaml and adjust paths for your machine
+#    (in particular, the output directory in the data_flow section)
+
+# 3. Load config and launch everything
+sensorkit go -c sensorkit.yaml -l --log-level DEBUG
 ```

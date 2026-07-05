@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Utilities for constructing, combining, and visualizing interval trees."""
 
 import collections
@@ -10,30 +11,25 @@ from intervaltree import Interval, IntervalTree
 type IntervalLike[T] = tuple[T, T] | tuple[T, T, Any]
 
 
-def combine_interval_trees(  # noqa: C901
+def combine_interval_trees(
     *inputs: Iterable[IntervalLike],
-    data: Iterable[Any] = None,
-    target: IntervalTree = None,
+    data: Iterable[Any] | None = None,
+    target: IntervalTree | None = None,
 ):
     """Construct an IntervalTree combining the data fields of all input interval collections.
 
     Each collection of intervals must be disjoint and sorted in ascending order. Assuming the
     inputs are IntervalTrees, this can be achieved using the `merge_overlaps()` method.
     """
-    if target is None:
-        target = IntervalTree()
+    target = IntervalTree() if target is None else target
 
-    if not inputs:
-        return target
-
-    if data is None:
-        data = tuple(None for _ in range(len(inputs)))
-
-    # Make sure the data iterable is materialized for random access.
     match data:
+        case None:
+            data = tuple(None for _ in range(len(inputs)))
         case Sequence():
             pass
         case _:
+            # Make sure the data iterable is materialized for random access.
             data = tuple(data)
 
     # Line sweep, making sure to preserve the input ordering.
@@ -82,20 +78,16 @@ def combine_interval_trees(  # noqa: C901
     return target
 
 
-def intersect_interval_trees(  # noqa: C901
+def intersect_interval_trees(
     *inputs: Iterable[IntervalLike],
-    target: IntervalTree = None,
+    target: IntervalTree | None = None,
 ):
     """Construct an IntervalTree containing the intersection of all input interval collections.
 
     Each collection of intervals must be disjoint and sorted in ascending order. Assuming the
     inputs are IntervalTrees, this can be achieved using the `merge_overlaps()` method.
     """
-    if target is None:
-        target = IntervalTree()
-
-    if not inputs:
-        return target
+    target = IntervalTree() if target is None else target
 
     # Line sweep.
     events: list[tuple[Any, bool]] = []
@@ -116,17 +108,14 @@ def intersect_interval_trees(  # noqa: C901
     depth = 0
 
     for event in events:
-        if event[1]:
-            depth += 1
-        else:
-            depth -= 1
+        depth += 1 if event[1] else -1
 
         if depth == len(inputs):
-            if next_start is None:
-                next_start = event[0]
+            next_start = event[0] if next_start is None else next_start
+        elif next_start is not None and next_start < event[0]:
+            target.addi(next_start, event[0])
+            next_start = None
         elif next_start is not None:
-            if next_start < event[0]:
-                target.addi(next_start, event[0])
             next_start = None
 
     return target
@@ -134,8 +123,8 @@ def intersect_interval_trees(  # noqa: C901
 
 def stack_interval_trees(
     *inputs: Iterable[IntervalLike],
-    data: Iterable[Any] = None,
-    target: IntervalTree = None,
+    data: Iterable[Any] | None = None,
+    target: IntervalTree | None = None,
 ):
     """Add each input interval collection to an IntervalTree, splitting existing intervals."""
     if target is None:
@@ -191,13 +180,8 @@ def print_interval_tree(  # noqa: C901
     line = [no_interval_char] * width
     char_counter = ord("A")
     chars = {}
-
-    if start_from is None:
-        start_from = tree.begin()
-
-    if end_at is None:
-        end_at = tree.end()
-
+    start_from = tree.begin() if start_from is None else start_from
+    end_at = tree.end() if end_at is None else end_at
     span = end_at - start_from
     incr = span / width
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
@@ -5,7 +6,6 @@ import asyncio
 import pytest
 
 from sensorkit.backend.base import (
-    Backend,
     Entity,
     KeyNotFound,
     RemoteRequestError,

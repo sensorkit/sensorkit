@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
@@ -24,11 +25,11 @@ from sensorkit.core.program import (
     ProgramInterface,
     ProgramOffering,
     ProgramState,
-    ProgramTaskingStatus,
+    ProgramTaskingState,
     set_active_state_request,
     set_enable_state_request,
 )
-from sensorkit.core.task import TaskContexts
+from sensorkit.core.task import TaskContexts, TaskExecution
 
 
 class ProgramOffers:
@@ -104,7 +105,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
         self._state = ProgramState(
             enable_state=ProgramEnableState(enabled=False),
             active_state=ProgramActiveState(active=False, origin="init"),
-            tasking_status=ProgramTaskingStatus(),
+            tasking_state=ProgramTaskingState(),
         )
         self._state_lock = asyncio.Lock()
         self._task_factory: TaskFactoryFunc | None = None
@@ -131,14 +132,13 @@ class ProgramImpl(EntityImpl, ProgramInterface):
                 ProgramActiveState(active=False, origin="init"),
             )
 
-        # Run the enable hook if we restored an enabled state.
+    @override
+    async def attach_impl(self):
         if self._state.enable_state.enabled:
             await self._call_with_context(self._enable_hooks)
 
-        # Attach request handlers.
         await self.handle_request(set_enable_state_request, self._set_enable_state)
         await self.handle_request(set_active_state_request, self._set_active_state)
-
 
     @override
     def on_enable(self, func: Callable[[], None]):
@@ -161,6 +161,12 @@ class ProgramImpl(EntityImpl, ProgramInterface):
 
         logger.debug(f"starting tasking loop with {contexts=}")
 
+        async def _on_task_change(execution: TaskExecution | None):
+            # Publish the program's current tasking state as the loop starts/finishes each task.
+            await self._update_state(
+                "tasking_state", ProgramTaskingState(executing_task=execution)
+            )
+
         # Create the tasking loop.
         self._task_loop = TaskingLoop(
             controller=self.sensorkit().controller(
@@ -169,6 +175,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             factory_func=self._task_factory,
             contexts=contexts,
             task_group=self.task_group,
+            on_task_change=_on_task_change,
         )
 
         # Start a background task to make sure the end states are properly handled whether the
@@ -182,6 +189,11 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             try:
                 await aio_task
             finally:
+                # Clear any lingering tasking state: the loop may have exited mid-task (error or
+                # abort), where clearing is intentionally deferred to teardown here.
+                if self._state.tasking_state.executing_task is not None:
+                    await self._update_state("tasking_state", ProgramTaskingState())
+
                 await self._update_state(
                     "active_state",
                     ProgramActiveState(active=False, origin="request")
@@ -267,7 +279,8 @@ class ProgramImpl(EntityImpl, ProgramInterface):
         request: ProgramActiveStateRequest,
         call: CallContext[None, None],
     ):
-        logger.info(f"Requested to {request.action} the tasking loop")
+        with self.enter_context():
+            logger.info(f"Requested to {request.action} the tasking loop")
 
         if request.action == "start":
             # Cannot activate tasking if we aren't enabled with a target Controller configured.
@@ -281,6 +294,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             ):
                 # Don't support restart-with-different-context in a single request.
                 call.reject(response=None)
+                return
 
         call.accept(response=None)
 
@@ -293,7 +307,8 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             match request.action:
                 case "start":
                     # Start a new tasking loop.
-                    await self._start_loop(request.contexts)
+                    with self.enter_context():
+                        await self._start_loop(request.contexts)
                 case "stop":
                     # Stop the tasking loop gracefully.
                     # TODO: add backstop timeout reflecting maximum task time
@@ -304,9 +319,12 @@ class ProgramImpl(EntityImpl, ProgramInterface):
                     )
                 case "abort":
                     # Abort the tasking loop immediately.
-                    await self._stop_loop(timeout=0)
+                    with self.enter_context():
+                        await self._stop_loop(timeout=0)
         except Exception as e:
-            logger.exception("Error setting active state")
+            with self.enter_context():
+                logger.exception("Error setting active state")
+
             await call.fail(f"{type(e).__name__} setting active state ({e})")
         else:
             await call.succeed(result=None)
@@ -342,7 +360,5 @@ class ProgramImpl(EntityImpl, ProgramInterface):
         self._offers.clear()
 
     @override
-    async def publish_entity_info(self) -> EntityInfo:
-        info = EntityInfo(entity_type="program", details=None)
-        await self.kv_put_model(info)
-        return info
+    def entity_info(self) -> EntityInfo:
+        return EntityInfo(entity_type="program", details=None)

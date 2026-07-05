@@ -1,8 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
 import glob
+import io
 import json
 import sys
 from typing import Any, TextIO
 
+import aiofile
 import asyncclick as click
 from pydantic import BaseModel, ValidationError
 from rich import print_json
@@ -206,20 +209,7 @@ async def load_kv_command(kit, entity: str | None, no_clobber: bool, files: tupl
     """
     from sensorkit.backend.base import Entity, KVError
 
-    configurations: list[KVRecord]
-
-    if len(files) == 0:
-        configurations = load_kv_records(sys.stdin)
-    else:
-        configurations = []
-        for path in expand_files(files):
-            try:
-                with open(path, "r") as f:
-                    configurations.extend(
-                        load_kv_records(f)
-                    )
-            except FileNotFoundError:
-                console.print(f"[bold red]ERROR: file not found {path}[/bold red]")
+    configurations = await _read_configs(files)
 
     for item in configurations:
         if entity and entity != item.entity:
@@ -244,3 +234,21 @@ async def load_kv_command(kit, entity: str | None, no_clobber: bool, files: tupl
 
         await context.update(item.key, json.dumps(item.value).encode())
         console.print(f'[bold white]SUCCESS: kv put for {item.entity=} {item.key=} {item.value=}[/bold white]')
+
+
+async def _read_configs(files: tuple[str, ...]) -> list[KVRecord]:
+    if len(files) == 0:
+        return load_kv_records(sys.stdin)
+
+    configurations = []
+
+    for path in expand_files(files):
+        try:
+            async with aiofile.async_open(path, "r") as f:
+                configurations.extend(
+                    load_kv_records(io.StringIO(await f.read()))
+                )
+        except FileNotFoundError:
+            console.print(f"[bold red]ERROR: file not found {path}[/bold red]")
+
+    return configurations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -68,7 +69,7 @@ class Criterion(BaseModel, ABC):
 
     @abstractmethod
     def evaluate(self, context: dict[str, Any]) -> IntervalList:
-        """Evaluate this criterion and return valid ``(start, end)`` datetime interval tuples."""
+        """Evaluate this criterion and return valid `(start, end)` datetime interval tuples."""
         ...
 
     @model_validator(mode="before")

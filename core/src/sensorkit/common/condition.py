@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Condition types for threshold and change-detection logic over value streams."""
 
 from __future__ import annotations
@@ -40,7 +41,7 @@ def _coerce_to_threshold_type(value: object, threshold: float | str | bool | Non
 
 
 class Condition(BaseModel, ABC):
-    """Abstract condition evaluated against a value stream. Discriminated on ``kind``."""
+    """Abstract condition evaluated against a value stream. Discriminated on `kind`."""
 
     kind: str
 
@@ -54,12 +55,12 @@ class Condition(BaseModel, ABC):
         """Evaluate the condition.
 
         Returns:
-            A ``(should_notify, is_active)`` tuple.
+            A `(should_notify, is_active)` tuple.
 
-            *should_notify* -- ``True`` if a notification should be sent this
+            *should_notify* -- `True` if a notification should be sent this
             tick.
 
-            *is_active* -- ``True`` if the condition is currently in an "active"
+            *is_active* -- `True` if the condition is currently in an "active"
             zone (used for deadband/hysteresis tracking).  For conditions
             without deadband the two values are identical.
         """
@@ -73,7 +74,7 @@ class ChangesCondition(Condition):
 
     @override
     def evaluate(self, current, previous, was_active):
-        """Return ``(True, True)`` when ``current != previous``, otherwise ``(False, False)``."""
+        """Return `(True, True)` when `current != previous`, otherwise `(False, False)`."""
         fired = current != previous
         return (fired, fired)
 

@@ -1,36 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
 from typing import Literal, override
 
+import ourskyai_node_platform_api as osapi
 from loguru import logger
 
-import ourskyai_node_platform_api as osapi
-
 import sensorkit.api as sk
-from sensorkit.models.devices import Connected, FocusPosition
+from sensorkit.models.devices import Stop
+from sensorkit.std import Connected, FocusPosition
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
     NodePlatformDeviceState,
 )
+from sensorkit.std.optics import ChangeFocusPosition
 
 
 @sk.declare_device
 class NodePlatformFocuser(NodePlatformDevice):
     """Node Platform Focuser implementation."""
+
     config: NodePlatformFocuserConfig
     device_name = "Focuser"
 
     @sk.on_attach
     async def entity_init(self):
-        """Restore last known state and start status publishing."""
         device = sk.device()
 
-        # Restore last known state
+        # Restore state
         try:
             self.state = await device.kv_get_model(NodePlatformFocuserState)
-            logger.debug(f"restoring state for {device.entity}")
+            logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = NodePlatformFocuserState()
@@ -38,50 +40,31 @@ class NodePlatformFocuser(NodePlatformDevice):
         self.focuser_position: float | None = None
         self.focuser_moving: bool | None = None
 
-        # Start focuser status publishing
-        logger.debug("starting node_platform focuser status loop")
-        self._status_task = asyncio.create_task(self.status_publish())
+        self.start_status_loop(self.status_publish())
 
-        # Wait for initial position
+        # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
             while self.focuser_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
-    @sk.command_handler
-    async def focuser_init(self, cmd: sk.Init):
-        """Nothing to do."""
-        pass
-
-    @sk.command_handler
-    async def focuser_deinit(self, cmd: sk.Deinit):
-        """Nothing to do."""
-        pass
-
     @sk.on_detach
     async def entity_deinit(self):
-        """Save current state and stop status publishing."""
-        logger.debug("stopping node_platform focuser status loop")
-        if hasattr(self, "_status_task"):
-            self._status_task.cancel()
-            try:
-                await self._status_task
-            except asyncio.CancelledError:
-                pass
-
-        await sk.device().kv_put_model(self.state)
+        await asyncio.sleep(self.config.status_frequency)
+        await self.stop_status_loop()
         await self.api.close()
+        await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
-    async def focuser_stop(self, cmd: sk.Stop):
-        self.require_connected()
-        logger.debug("stopping node_platform focuser")
+    async def focuser_stop(self, cmd: Stop):
+        await self.require_connected()
+        logger.debug("stopping focuser")
         await self.api.call("v1_halt_focuser")
-        logger.debug("stopped node_platform focuser")
+        logger.debug("stopped focuser")
 
     @sk.command_handler
-    async def focuser_move(self, cmd: sk.ChangeFocusPosition):
-        self.require_connected()
-        logger.debug(f"moving node_platform focuser position to {cmd.position}")
+    async def focuser_change(self, cmd: ChangeFocusPosition):
+        await self.require_connected()
+        logger.debug(f"changed focuser position to {cmd.position}")
 
         req = osapi.V1GoToFocuserPositionRequest(
             position=cmd.position,
@@ -90,12 +73,14 @@ class NodePlatformFocuser(NodePlatformDevice):
         await self.api.call("v1_go_to_focuser_position", req)
         await asyncio.sleep(0.1)
 
-        # Wait for the focus move to complete
         async with asyncio.timeout(self.config.timeout):
-            while self.focuser_moving is None or self.focuser_moving:
-                await asyncio.sleep(self.config.status_frequency)
+            while True:
+                status: osapi.V1FocuserStatus = await self.api.call("v1_get_focuser_status")
+                if not status.moving:
+                    break
+                await asyncio.sleep(0.5)
 
-        logger.debug(f"moved node_platform focuser position to {cmd.position}")
+        logger.debug(f"changed focuser position to {cmd.position}")
 
     async def status_publish(self):
         while True:
@@ -114,10 +99,10 @@ class NodePlatformFocuser(NodePlatformDevice):
                 if status.position is not None:
                     self.focuser_position = float(status.position.zaxis_microns)
 
-                logger.debug(
-                    f"NodePlatform focuser status: connected={status.connected}, "
-                    f"moving={status.moving}, position={self.focuser_position}"
-                )
+                # logger.debug(
+                #     f"NodePlatform focuser status: connected={status.connected}, "
+                #     f"moving={status.moving}, position={self.focuser_position}"
+                # )
 
                 device = sk.device()
                 await device.publish(Connected(is_connected=status.connected))
@@ -126,6 +111,7 @@ class NodePlatformFocuser(NodePlatformDevice):
 
             except Exception as e:
                 logger.warning(f"Failed to update Node Platform focuser status ({e})")
+                await asyncio.sleep(self.config.status_frequency)
                 continue
 
             await asyncio.sleep(self.config.status_frequency)
@@ -133,9 +119,10 @@ class NodePlatformFocuser(NodePlatformDevice):
 
 class NodePlatformFocuserConfig(NodePlatformDeviceConfig[NodePlatformFocuser]):
     """Node Platform Focuser configuration."""
+
     device_type: Literal["focuser"] = "focuser"
-    timeout: float = 60.0
     status_frequency: float = 1.0
+    timeout: float = 60.0
 
     @override
     def create_device(self):
@@ -144,4 +131,5 @@ class NodePlatformFocuserConfig(NodePlatformDeviceConfig[NodePlatformFocuser]):
 
 class NodePlatformFocuserState(NodePlatformDeviceState):
     """Node Platform Focuser state."""
+
     device_type: Literal["focuser"] = "focuser"

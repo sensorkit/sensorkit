@@ -1,0 +1,196 @@
+version: 1
+
+sensorkit:
+  imports:
+    - sensorkit.otto.models
+    - sensorkit.alpaca.service
+    - sensorkit.pwi4.service
+    - sensorkit.webapi
+
+automation:
+  first_run:
+    operate_all: true
+    enable_scheduling: true
+
+  controllers:
+    SimulatedSensor:
+      estimated_startup_time: 60
+
+      modes:
+        - name: default
+          description: Operational mode
+          state: operate
+          criteria:
+            - when: tasking_available
+
+        - name: keepalive
+          description: Standby mode
+          state: operate
+          criteria:
+            - when: after_activity
+              duration: 1m
+
+      constraints:
+        - kind: weather
+          hold: 5.0
+          provider: SimulatedWeather
+          humidity_max: 75.0
+          humidity_deadband: 1.0
+          wind_max: 12.0
+          wind_deadband: 1.0
+        - kind: conditional
+          hold: 10.0
+          optional: true
+          entity: SimulatedWeather
+          keyword: BasicWeather
+          field: humidity
+          condition:
+            kind: above
+            threshold: 75.0
+            deadband: 2.0
+
+      tasking:
+        - program: SimulatedProgram
+          priority: 5
+        - program: Burr
+          priority: 7
+
+  contexts:
+    standard_collect:
+      FileNameTemplate:
+        template: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-f{frame_num}.fits"
+
+data_flow:
+  - entity: SimulatedCamera
+    producer:
+      simple:
+        - op: app_source
+        - op: fits_header
+          define:
+            BSCALE: 1
+            BITPIX: =bitpix
+            BZERO: =bzero
+            TASKID: =str(TaskInfo.task_id)
+            FRAMENUM: =Collect.frame_number
+            CENTAZ: =AltAzPointing.azimuth_degrees
+            CENTALT: =AltAzPointing.altitude_degrees
+            RADEG: =RADecPointing.right_ascension_hours * 15
+            DECDEG: =RADecPointing.declination_degrees
+        - op: array_to_fits
+        - op: write_file
+          directory: /Temp/SimulatedSensor
+
+sensors:
+  - id: SimulatedSensor
+
+    devices:
+      mount: SimulatedMount
+      camera: SimulatedCamera
+      dome: SimulatedDome
+      filter_wheel: SimulatedFilterWheel
+      rotator: SimulatedRotator
+      focuser: SimulatedFocuser
+
+    site_position:
+      latitude_degrees: 36.063067
+      longitude_degrees: -115.144828
+      altitude_km: .05
+
+    policies:
+      concurrent_dome_and_mount_init: false
+      concurrent_dome_and_mount_deinit: false
+      dome_open_close_timeout: 120.0
+      concurrent_mount_and_mirror_cover_init: false
+      mirror_cover_open_close_timeout: 60.0
+      mount_init_timeout: 30.0
+      mount_home_timeout: 300.0
+
+    controller_name: ""
+
+otto:
+  - id: Otto
+    entity: Otto
+    controller: SimulatedSensor
+    task:
+      objects: [ "21639" ]
+      tle_update_interval_hours: 4
+      graylist_interval_minutes: 15
+      end_time_deadband_seconds: 300
+    collect:
+      altitude_min: 20
+      track_mode: rate_sidereal
+      dither: false
+      dither_amount_arcsec: 500
+      filters: [ ]
+      exposure_min: 4
+      exposure_max: 5
+      exposure_delta: 1
+      binning: [ 2 ]
+      num_frames: 3
+    publish:
+      upload: true
+      sensor_name: "SK-TEST"
+
+alpaca:
+  - id: Alpaca
+    endpoints:
+      - host: localhost
+        port: 30000
+        protocol: http
+        devices:
+          SimulatedCamera:
+            device_type: camera
+            device_number: 0
+            status_frequency: 1.0
+          SimulatedDome:
+            device_type: dome
+            device_number: 0
+            status_frequency: 1.0
+          SimulatedFilterWheel:
+            device_type: filter_wheel
+            device_number: 0
+            status_frequency: 1.0
+          SimulatedRotator:
+            device_type: rotator
+            device_number: 0
+            status_frequency: 1.0
+          SimulatedFocuser:
+            device_type: focuser
+            device_number: 0
+            status_frequency: 1.0
+          SimulatedWeather:
+            device_type: observing_conditions
+            device_number: 0
+            status_frequency: 1.0
+
+pwi4:
+  - id: PlaneWave
+    endpoints:
+    - host: localhost
+      port: 8220
+      devices:
+        SimulatedMount:
+          device_type: mount
+          status_frequency: 1.0
+          park_absolute: true
+          park_axis0_degrees: 30
+          park_axis1_degrees: 0
+
+webapi:
+  id: WebAPI
+  port: 8000
+  serve_data_products:
+    - kind: local_fits
+      root_directory: /Temp/SimulatedSensor
+      controller_id: from_path
+
+config:
+  SimulatedSensor:
+    SitePosition:
+      latitude_degrees: 36.063067
+      longitude_degrees: -115.144828
+      altitude_km: .05
+
+services:
+  - id: SimulatedProgram
+    python_module: deploy/simulated/program.py

@@ -1,12 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import datetime, timedelta
 
 import pytest
 
-from sensorkit.core.program import ProgramOffering
+from sensorkit.core.program import ProgramOffering, ProgramState, ProgramTaskingState
 from sensorkit.core.impl.program import ProgramImpl
 from sensorkit.core.task import CollectTask
 
@@ -74,7 +76,7 @@ async def test_program_tasking(kit):
 
         if not done.is_set():
             assert not task_ran
-            yield task_obj
+            await (yield task_obj)
             assert task_ran
             done.set()
 
@@ -122,3 +124,125 @@ async def test_program_tasking(kit):
         await deactivated.wait()
         await program_client.disable()
         await disabled.wait()
+
+
+@pytest.mark.asyncio
+async def test_program_publishes_tasking_state(kit):
+    """While tasking, the program publishes a ProgramTaskingState carrying the live execution,
+    then clears it (executing_task=None) once the task completes."""
+    async with asyncio.timeout(1.0):
+        sc = await kit.register_service("testservice", "0.1.0")
+        controller = await sc.register_controller("mycontroller")
+        program = await sc.register_program("myprogram")
+
+    task_obj = CollectTask()
+    done = asyncio.Event()
+
+    @program.task_factory
+    async def program_tasker():
+        if not done.is_set():
+            await (yield task_obj)
+            done.set()
+
+    @controller.task_handler(CollectTask)
+    async def run_task(task: CollectTask):
+        pass
+
+    ready = asyncio.Event()
+    cleared = asyncio.Event()
+    program_client = kit.program("myprogram")
+    executing: asyncio.Future[ProgramTaskingState] = asyncio.get_running_loop().create_future()
+
+    async def monitor():
+        stream = await program_client.monitor_event(ProgramTaskingState)
+        ready.set()
+
+        async for event in stream:
+            if event.executing_task is not None:
+                if not executing.done():
+                    executing.set_result(event)
+            elif executing.done():
+                # The clear must follow an executing state, never precede it.
+                cleared.set()
+                break
+
+    monitor_task = asyncio.create_task(monitor())
+
+    async with asyncio.timeout(2.0):
+        await kit.controller("mycontroller").enable()
+        await ready.wait()
+        await program_client.enable("mycontroller")
+        await program_client.start_tasking()
+
+        event = await executing
+        execution = event.executing_task
+        # The published state carries the full TaskExecution envelope, not just an id.
+        assert execution.task == task_obj
+        assert execution.task_id is not None
+        assert execution.controller_id == "mycontroller"
+
+        await done.wait()
+        await cleared.wait()
+        await program_client.stop_tasking()
+
+    await monitor_task
+
+
+# Legacy state migration: versions before the Task/TaskExecution split stored the program's
+# executing task under a `tasking_status` key (a `ProgramTaskingStatus` carrying only
+# `executing_task_id`). `mode="before"` validators on ProgramState and ProgramTaskingState upgrade
+# that shape so old state from a NATS broker still loads.
+def test_legacy_tasking_status_migrates_to_tasking_state():
+    """A snapshot with the renamed `tasking_status` key loads as an idle `tasking_state`."""
+    legacy = {
+        "enable_state": {"enabled": True, "controller": "mycontroller"},
+        "active_state": {"active": False, "origin": "init"},
+        "tasking_status": {"executing_task_id": str(uuid.uuid4())},
+    }
+
+    state = ProgramState.model_validate(legacy)
+
+    # A bare legacy id cannot rehydrate a TaskExecution envelope, so the program loads as idle.
+    assert isinstance(state.tasking_state, ProgramTaskingState)
+    assert state.tasking_state.executing_task is None
+
+
+def test_legacy_program_state_loads_from_kv_json():
+    """A full legacy ProgramState snapshot deserialises from JSON without error."""
+    legacy = {
+        "enable_state": {"enabled": True, "controller": "mycontroller"},
+        "active_state": {"active": False, "origin": "init"},
+        "tasking_status": {"executing_task_id": None},
+    }
+
+    state = ProgramState.model_validate_json(json.dumps(legacy))
+
+    assert state.tasking_state.executing_task is None
+
+
+def test_program_state_missing_tasking_key_defaults_to_idle():
+    """A snapshot predating the tasking field entirely is treated as idle rather than failing."""
+    legacy = {
+        "enable_state": {"enabled": False},
+        "active_state": {"active": False, "origin": "init"},
+    }
+
+    state = ProgramState.model_validate(legacy)
+
+    assert state.tasking_state.executing_task is None
+
+
+def test_current_program_state_roundtrips_unchanged():
+    """Current-shape state passes through the migration validators as a no-op."""
+    state = ProgramState.model_validate(
+        {
+            "enable_state": {"enabled": True, "controller": "mycontroller"},
+            "active_state": {"active": False, "origin": "init"},
+            "tasking_state": {"executing_task": None},
+        }
+    )
+
+    reloaded = ProgramState.model_validate(state.model_dump())
+
+    assert isinstance(reloaded.tasking_state, ProgramTaskingState)
+    assert reloaded.tasking_state.executing_task is None

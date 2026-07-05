@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from typing import Annotated
 
 from pydantic import BaseModel, Discriminator, Field, model_validator
@@ -7,8 +8,8 @@ from sensorkit.thesky.camera import TheSkyCameraConfig
 from sensorkit.thesky.dome import TheSkyDomeConfig
 from sensorkit.thesky.filter_wheel import TheSkyFilterWheelConfig
 from sensorkit.thesky.focuser import TheSkyFocuserConfig
-from sensorkit.thesky.mirror_cover import TheSkyMirrorCoverConfig
-from sensorkit.thesky.mount import TheSkyMountConfig
+from sensorkit.thesky.ota import TheSkyOTAConfig
+from sensorkit.thesky.telescope import TheSkyTelescopeConfig
 from sensorkit.thesky.rotator import TheSkyRotatorConfig
 from sensorkit.thesky.weather import TheSkyWeatherConfig
 
@@ -17,8 +18,8 @@ type TheSkyDeviceConfigs = Annotated[
     | TheSkyDomeConfig
     | TheSkyFocuserConfig
     | TheSkyFilterWheelConfig
-    | TheSkyMirrorCoverConfig
-    | TheSkyMountConfig
+    | TheSkyOTAConfig
+    | TheSkyTelescopeConfig
     | TheSkyRotatorConfig
     | TheSkyWeatherConfig,
     Discriminator("device_type"),
@@ -36,15 +37,22 @@ class TheSkyServerConfig(BaseModel):
         if isinstance(data, dict):
             if devices := data.get("devices"):
                 for device in devices.values():
-                    assert "host" not in device and "port" not in device
-                    device["host"] = data.get("host")
-                    device["port"] = data.get("port")
+                    device.setdefault("host", data.get("host"))
+                    device.setdefault("port", data.get("port", 3040))
 
         return data
 
 
 class TheSkyConfig(BaseModel):
     endpoints: list[TheSkyServerConfig] = []
+
+sk.declare_config_section(
+    "thesky",
+    list[TheSkyConfig],
+    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
+    model_mapper=iter,
+    service_path=__name__,
+)
 
 
 @sk.service_entrypoint(version=sk.VERSION)

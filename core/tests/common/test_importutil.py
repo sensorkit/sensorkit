@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import pathlib
 import sys
 import types

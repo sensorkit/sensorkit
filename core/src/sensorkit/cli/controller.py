@@ -1,6 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
 import datetime as dt
 import json
-import uuid
 
 import asyncclick as click
 
@@ -28,11 +28,9 @@ async def startup(kit, entity: str, force: bool):
     from sensorkit.core.task import InitTask
 
     await kit.controller(entity).execute_task(
-        InitTask(
-            task_id=uuid.uuid1(),
-            controller_id=entity,
-            end_time=dt.datetime.now(dt.UTC)+dt.timedelta(minutes=10)),
-        interrupt=force
+        InitTask(),
+        expiry_time=dt.datetime.now(dt.UTC) + dt.timedelta(minutes=10),
+        interrupt=force,
     )
 
 
@@ -45,12 +43,9 @@ async def shutdown(kit, entity: str, force: bool):
     from sensorkit.core.task import ShutdownTask
 
     await kit.controller(entity).execute_task(
-        ShutdownTask(
-            task_id=uuid.uuid1(),
-            controller_id=entity,
-            end_time=dt.datetime.now(dt.UTC)+dt.timedelta(minutes=10)
-        ), 
-        interrupt=force
+        ShutdownTask(),
+        expiry_time=dt.datetime.now(dt.UTC) + dt.timedelta(minutes=10),
+        interrupt=force,
     )
 
 @controller_group.command("collect")
@@ -75,9 +70,6 @@ async def collect(
 
     data = json.loads(target)
     collect_task = StandardCollectTask(
-        task_id=uuid.uuid1(),
-        controller_id=entity,
-        end_time=dt.datetime.now(dt.UTC)+dt.timedelta(minutes=10),
         target=data,
         camera_params=CameraParameterSet(
             integration_time_seconds=integration_time_seconds,
@@ -87,4 +79,7 @@ async def collect(
         )
     )
 
-    await ctl.execute_task(collect_task)
+    await ctl.execute_task(
+        collect_task,
+        expiry_time=dt.datetime.now(dt.UTC) + dt.timedelta(minutes=10),
+    )

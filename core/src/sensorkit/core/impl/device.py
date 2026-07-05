@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
@@ -29,23 +30,28 @@ from sensorkit.core.impl.entity import EntityImpl
 class DeviceImpl(EntityImpl, DeviceInterface):
     """Helper for implementing server-side functionality of a Device."""
 
-    current: ClassVar[ContextVar[DeviceImpl | None]] = ContextVar("current_program", default=None)
+    current: ClassVar[ContextVar[DeviceImpl | None]] = ContextVar("current_device", default=None)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        self._enable_hooks: set[Callable[[], None]] = set()
-        self._disable_hooks: set[Callable[[], None]] = set()
+        self._enable_hooks: list[Callable[[], None]] = []
+        self._disable_hooks: list[Callable[[], None]] = []
         self._handlers: dict[str, CommandHandlerCallback] = {}
+        self._published_keywords: set[str] = set()
+
+    def declare_published_keyword(self, keyword_id: str):
+        """Declare that this device publishes a keyword."""
+        self._published_keywords.add(keyword_id)
 
     @override
     def on_enable(self, func: Callable[[], None]):
-        self._enable_hooks.add(func)
+        self._enable_hooks.append(func)
         return func
 
     @override
     def on_disable(self, func: Callable[[], None]):
-        self._disable_hooks.add(func)
+        self._disable_hooks.append(func)
         return func
 
     @override
@@ -55,10 +61,11 @@ class DeviceImpl(EntityImpl, DeviceInterface):
             enable_state=DeviceEnableState(enabled=True),
         )
 
+    @override
+    async def attach_impl(self):
         if self._state.enable_state.enabled:
             await self._call_with_context(self._enable_hooks)
 
-        # Set up the command request handler.
         await self.handle_request(set_enable_state_request, self._set_enable_state)
         await self.handle_request(run_command_request, self._command_request)
 
@@ -126,13 +133,16 @@ class DeviceImpl(EntityImpl, DeviceInterface):
             await call.succeed(result=CommandResult(data=task.result()))
         finally:
             # Emit the command end event.
-            await self.emit_event(
-                CommandDone(
-                    command_id=command_id,
-                    call_id=call.call_id,
-                    success=success,
+            try:
+                await self.emit_event(
+                    CommandDone(
+                        command_id=command_id,
+                        call_id=call.call_id,
+                        success=success,
+                    )
                 )
-            )
+            except Exception as e:
+                logger.warning(f"Error logging command done event ({type(e).__name__})")
 
     @override
     def command_handler(self, command_type: type[DeviceCommand]):
@@ -145,10 +155,11 @@ class DeviceImpl(EntityImpl, DeviceInterface):
         return decorator
 
     @override
-    async def publish_entity_info(self) -> EntityInfo:
-        info = EntityInfo(
+    def entity_info(self) -> EntityInfo:
+        return EntityInfo(
             entity_type="device",
-            details=DeviceDetails(supported_commands=set(self._handlers.keys())),
+            details=DeviceDetails(
+                supported_commands=frozenset(self._handlers.keys()),
+                published_keywords=frozenset(self._published_keywords),
+            ),
         )
-        await self.kv_put_model(info)
-        return info

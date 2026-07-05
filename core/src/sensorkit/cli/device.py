@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncclick as click
 
 from sensorkit.cli.utils import entity_option, with_kit

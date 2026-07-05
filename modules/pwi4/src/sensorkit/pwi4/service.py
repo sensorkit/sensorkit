@@ -1,69 +1,67 @@
-from typing import Annotated, Union
+# SPDX-License-Identifier: Apache-2.0
+from typing import Annotated
 
-from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Discriminator, Field, model_validator
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Capabilities
-from sensorkit.pwi4.api import PWI4, PWI4Connection
-from sensorkit.pwi4.focuser import FocuserConfig, FocuserDevice
-from sensorkit.pwi4.mirrorcover import MirrorCoverConfig, MirrorCoverDevice
-from sensorkit.pwi4.mount import MountConfig, MountDevice
-from sensorkit.pwi4.rotator import RotatorConfig, RotatorDevice
+from sensorkit.pwi4.cover import PWI4CoverConfig
+from sensorkit.pwi4.device import PWI4Client
+from sensorkit.pwi4.focuser import PWI4FocuserConfig
+from sensorkit.pwi4.mount import PWI4MountConfig
+from sensorkit.pwi4.rotator import PWI4RotatorConfig
 
-# Discriminated union of all device configs
-PWI4DeviceConfig = Annotated[
-    Union[MountConfig, FocuserConfig, RotatorConfig, MirrorCoverConfig],
-    Field(discriminator="device_type")
+type PWI4DeviceConfigs = Annotated[
+    PWI4MountConfig | PWI4FocuserConfig | PWI4RotatorConfig | PWI4CoverConfig,
+    Discriminator("device_type"),
 ]
 
-device_map = {
-    "mount": MountDevice,
-    "focuser": FocuserDevice,
-    "rotator": RotatorDevice,
-    "mirrorcover": MirrorCoverDevice,
-}
 
 class PWI4ServerConfig(BaseModel):
     host: str = "localhost"
     port: int = 8220
-    devices: list[PWI4DeviceConfig] = Field(default_factory=list)
+    timeout: float = 60.0
+    devices: dict[str, PWI4DeviceConfigs] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _propagate_connection(cls, data):
+        if isinstance(data, dict):
+            if devices := data.get("devices"):
+                for device in devices.values():
+                    device.setdefault("host", data.get("host", "localhost"))
+                    device.setdefault("port", data.get("port", 8220))
+        return data
+
 
 class PWI4Config(BaseModel):
-    endpoints: list[PWI4ServerConfig]
+    endpoints: list[PWI4ServerConfig] = []
+
+
+sk.declare_config_section(
+    "pwi4",
+    list[PWI4Config],
+    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
+    model_mapper=iter,
+    service_path=__name__,
+)
+
 
 @sk.service_entrypoint(version=sk.VERSION)
 async def pwi4_service(service: sk.Service):
     await service.register()
 
-    objs = []
-
-    # Retrieve config from kv
     config = await service.context.kv_get_model(PWI4Config)
-    logger.debug(f"Retrieved config for {service.name}: {config=}")
+    clients: list[PWI4Client] = []
 
     for server in config.endpoints:
-        pwi_conn = PWI4Connection(server.host, server.port, request_timeout=10)
-        pwi = PWI4(connection=pwi_conn)
-        for device in server.devices:
-            cls = device_map[device.device_type]
-            instance = cls(pwi, config=device)
-            service.include(
-                instance,
-                name=device.entity,
-            )
-            objs.append(instance)
-
-    await service.start()
-
-    # TODO: Remove in favor of built-in DeviceInfo once UI is updated.
-    for obj in objs:
-        decl: sk.DeclaredDevice = sk.decl_for_instance(obj)
-        await decl.kv_put_model(
-            Capabilities(
-                device_type=obj.config.device_type,
-                commands=[name for name in decl.impl._handlers.keys()],
-            )
+        client = PWI4Client(
+            host=server.host,
+            port=server.port,
+            timeout=server.timeout,
         )
+        clients.append(client)
 
-    await service.shutdown
+        for entity, device_config in server.devices.items():
+            service.include(device_config.create_device(client), name=entity)
+
+    await service.run()

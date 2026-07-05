@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
@@ -6,19 +7,20 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
-from typing import Any, Awaitable, Literal, final, overload, override
+from typing import Any, Literal, final, overload, override
 
 from loguru import logger
 
 from sensorkit.common.aio import AsyncValueLatch
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.controller import ControllerClient, ControllerState, InternalControllerState
 from sensorkit.core.program import ProgramClient
 from sensorkit.core.task import (
-    ControllerTask,
     InitTask,
     RecoverTask,
     ShutdownTask,
     StandbyTask,
+    Task,
     TaskContexts,
 )
 
@@ -82,10 +84,11 @@ class ControllerStateMonitor:
 
 
 class DemandProcError(Exception):
-    """Raised by a DemandProc to signal a lifecycle error with a categorised origin."""
-    type Kind = Literal["program", "controller", "internal"]
+    """Raised by a DemandProc to signal a lifecycle error with a categorized origin."""
 
-    def __init__(self, *args, kind: Kind = "internal", **kwargs):
+    type ErrorKind = Literal["program", "controller", "internal"]
+
+    def __init__(self, *args, kind: ErrorKind = "internal", **kwargs):
         super().__init__(*args, **kwargs)
         self.kind = kind
 
@@ -124,8 +127,13 @@ class DemandProc(ABC):
                 # Run the user logic. Initially this is the main state driving logic, but after
                 # an interrupt this is stop or abort logic.
                 await logic_coro
-            except asyncio.CancelledError as e:
-                prereq_coro, logic_coro = self._demand_proc_cancelled(e)
+            except asyncio.CancelledError:
+                if next_stage := self._demand_proc_cancelled():
+                    # Managed cancellation. Loop to the next stage.
+                    prereq_coro, logic_coro = next_stage
+                else:
+                    logger.debug(f"{self.demand.state} procedure exiting due to hard cancel")
+                    raise
             except BaseException as e:
                 logger.debug(f"{self.demand.state} procedure exiting due to error ({e})")
                 raise
@@ -133,7 +141,7 @@ class DemandProc(ABC):
                 logger.warning(f"{self.demand.state} procedure exiting without raising")
                 break
 
-    def _demand_proc_cancelled(self, err: asyncio.CancelledError):
+    def _demand_proc_cancelled(self) -> tuple[asyncio.Future, asyncio.Future] | None:
         if self._aio_task.cancelling() > self._interrupt_count:
             # This means the task was externally cancelled coincident with a stop or abort!
             # Fall through to a hard cancel.
@@ -143,7 +151,7 @@ class DemandProc(ABC):
             case 1:
                 logger.debug(f"{self.demand.state} is stopping gracefully")
 
-                while self._aio_task.cancelled():
+                while self._aio_task.cancelling() > 0:
                     self._aio_task.uncancel()
 
                 # Gracefully stop awaitables and SK tasks.
@@ -160,7 +168,7 @@ class DemandProc(ABC):
             case 2:
                 logger.debug(f"{self.demand.state} procedure is aborting immediately")
 
-                while self._aio_task.cancelled():
+                while self._aio_task.cancelling() > 0:
                     self._aio_task.uncancel()
 
                 # Forcefully stop awaitables and SK tasks.
@@ -177,8 +185,7 @@ class DemandProc(ABC):
                 # Run the user abort logic at the next iteration.
                 logic_coro = self.abort_logic()
             case _:
-                logger.debug(f"{self.demand.state} procedure exiting due to hard cancel")
-                raise err
+                return None
 
         self._interrupt_count = 0
         self._interrupt_level = 0
@@ -187,13 +194,6 @@ class DemandProc(ABC):
 
         return prereq_coro, logic_coro
 
-    @contextlib.contextmanager
-    def cleanup_task_on_interrupt(self, task: ControllerTask):
-        """Context manager that registers *task* for graceful or forced cleanup on interrupt."""
-        self._cleanup_tasks.add(task.task_id)
-        yield
-        self._cleanup_tasks.discard(task.task_id)
-
     async def shield_with_cleanup[T](self, fut: asyncio.Future[T]):
         """Awaits the input Future while shielding it from cancellation and handling stop/abort."""
         self._cleanup_futures.add(fut)
@@ -201,9 +201,33 @@ class DemandProc(ABC):
         self._cleanup_futures.discard(fut)
         return result
 
-    def run_with_cleanup[T](self, aw: Awaitable[T]):
-        """Awaits the input Future with the same semantics as `shield_with_cleanup`."""
-        return self.shield_with_cleanup(asyncio.ensure_future(aw))
+    def run_with_cleanup(self, task: Task, *, context: KeywordDict | None = None):
+        """Dispatch *task* (interrupting any current task) and await its completion under cleanup.
+
+        The execution future is registered for graceful/forced cleanup *synchronously*, before any
+        cancellable await, so the dispatch and completion happen inside the shielded region: a
+        demand change that cancels the procedure cannot slip in between dispatch and registration.
+        The controller-minted task id is registered for forced abort as soon as it is known.
+
+        Args:
+            task: The lifecycle task to execute.
+            context: Optional keyword context to attach to the execution.
+
+        Returns:
+            An awaitable yielding the final task execution result.
+        """
+        async def _execute():
+            execution = await self.lifecycle.controller.start_task(
+                task, context=context, interrupt=True
+            )
+            self._cleanup_tasks.add(execution.task_id)
+
+            try:
+                return await execution
+            finally:
+                self._cleanup_tasks.discard(execution.task_id)
+
+        return self.shield_with_cleanup(asyncio.ensure_future(_execute()))
 
     @abstractmethod
     async def state_logic(self):
@@ -214,6 +238,19 @@ class DemandProc(ABC):
 
     async def abort_logic(self):
         """Immediate abort logic for this demand procedure."""
+
+    @final
+    async def interrupt_no_raise(self, msg: Any | None = None, *, abort: bool = False):
+        """Interrupt the current demand procedure and return any exceptions that occurred."""
+        try:
+            if abort:
+                await self.abort()
+            else:
+                await self.stop()
+        except Exception as e:
+            return e
+
+        return None
 
     @final
     async def stop(self, msg: Any | None = None):
@@ -263,7 +300,7 @@ class DemandProc(ABC):
 
     @final
     def future(self) -> asyncio.Future[None]:
-        """Return the underlying asyncio.Task for use as an awaitable or in ``asyncio.wait``."""
+        """Return the underlying asyncio.Task for use as an awaitable or in `asyncio.wait`."""
         return self._aio_task
 
 
@@ -383,82 +420,12 @@ class ControllerLifecycle:
                 # demand state change or a passive error to occur.
                 demand_proc = None
 
-            # Build a list of futures that capture when:
-            #   a) the demand procedure, if there is one, ends
-            #     - it should have raised; this is considered an active error
-            #     - if it did not raise, this is a bug
-            #   b) a demand state change is detected
-            #   c) the Controller explicitly reports an error
-            futures: list[asyncio.Future[None]] = [
-                asyncio.create_task(self._demand.wait_until_pending()),
-                asyncio.create_task(self._monitor.wait()),
-                *([demand_proc.future()] if demand_proc else []),
-            ]
-
             try:
-                # Wait for any of the above conditions to occur.
-                await asyncio.wait(futures, return_when=asyncio.FIRST_COMPLETED)
-
-                # Determine whether we are in an error state.
-                active_error: BaseException | None = None
-
-                if demand_proc:
-                    if demand_proc.done():
-                        # The demand procedure has ended. This can only happen through cancellation
-                        # or by an error occurring, so by contract it must have raised.
-                        active_error = demand_proc.error()
-                        assert active_error, "demand procedures must raise"
-                    elif self._demand.pending_change():
-                        # The demand procedure is still executing and our demand has changed. Stop
-                        # it according to the interrupt policy of the incoming demand.
-                        try:
-                            if self._demand.pending_value.interrupt:
-                                await demand_proc.abort()
-                            else:
-                                await demand_proc.stop()
-                        except Exception as e:
-                            active_error = e
-                    else:
-                        # The demand procedure is still executing and a passive error was detected.
-                        # In this case we always send a hard abort.
-                        assert self._monitor.in_error()
-
-                        try:
-                            await demand_proc.abort()
-                        except Exception as e:
-                            active_error = e
-
-                error_kind: DemandProcError.Kind | None = None
-
-                if self._monitor.in_error():
-                    error_kind = "controller"
-                elif isinstance(active_error, DemandProcError):
-                    error_kind = active_error.kind
-                elif active_error:
-                    error_kind = "internal"
-
-                match error_kind:
-                    case "controller":
-                        # Run the recovery loop if the controller is in an error state.
-                        logger.error(f"Controller lifecycle error: {active_error or '<passive>'}")
-
-                        try:
-                            await self._error_recovery()
-                        except Exception:
-                            # If we were unable to recover from the error state, the controller is
-                            # inoperable!
-                            # FIXME: This will be replaced by blacklisting/backoff, and throwing in
-                            #        the towel will be left as a higher-level decision.
-                            logger.critical("Controller is inoperable!")
-                            self._can_operate.clear()
-                    case "program":
-                        logger.error(f"Program lifecycle error: {active_error}")
-                        # TODO: Handle retry counting and blacklisting via ProgramStateManager.
-
-                # Sleep to avoid thrashing, but only when there was an error.
-                if error_kind is not None:
-                    await asyncio.sleep(5.0)
+                # Wait for our procedure to complete or an error to occur.
+                error_kind = await self._lifecycle_reactor(demand_proc)
             except asyncio.CancelledError:
+                logger.debug(f"{self.controller.entity} lifecycle loop cancelled")
+
                 if demand_proc:
                     # We were externally cancelled with our demand procedure potentially still
                     # running. Await successful cancellation of the task and re-raise.
@@ -466,10 +433,81 @@ class ControllerLifecycle:
                         await demand_proc.abort()
 
                 raise
-            finally:
-                # Clean up tasks.
-                for future in futures:
-                    future.cancel()
+
+            # Sleep to avoid thrashing, but only when there was an error.
+            if error_kind is not None:
+                await asyncio.sleep(5.0)
+
+    async def _lifecycle_reactor(self, demand_proc: DemandProc | None):
+        # Build a list of futures that capture when:
+        #   a) the demand procedure, if there is one, ends
+        #     - it should have raised; this is considered an active error
+        #     - if it did not raise, this is a bug
+        #   b) a demand state change is detected
+        #   c) the Controller explicitly reports an error
+        futures: list[asyncio.Future[None]] = [
+            asyncio.create_task(self._demand.wait_until_pending()),
+            asyncio.create_task(self._monitor.wait()),
+            *([demand_proc.future()] if demand_proc else []),
+        ]
+
+        try:
+            # Wait for any of the above conditions to occur.
+            await asyncio.wait(futures, return_when=asyncio.FIRST_COMPLETED)
+
+            # Determine whether we are in an error state.
+            active_error: BaseException | None = None
+
+            if demand_proc:
+                if demand_proc.done():
+                    # The demand procedure has ended. This can only happen through cancellation
+                    # or by an error occurring, so by contract it must have raised.
+                    active_error = demand_proc.error()
+                elif self._demand.pending_change():
+                    # The demand procedure is still executing and our demand has changed. Stop
+                    # it according to the interrupt policy of the incoming demand.
+                    active_error = await demand_proc.interrupt_no_raise(
+                        abort=self._demand.pending_value.interrupt
+                    )
+                else:
+                    # The demand procedure is still executing and a passive error was detected.
+                    # In this case we always send a hard abort.
+                    assert self._monitor.in_error()
+                    active_error = await demand_proc.interrupt_no_raise(abort=True)
+
+            error_kind = (
+                "controller"
+                if self._monitor.in_error()
+                else active_error.kind
+                if isinstance(active_error, DemandProcError)
+                else "internal"
+                if active_error
+                else None
+            )
+
+            match error_kind:
+                case "controller":
+                    # Run the recovery loop if the controller is in an error state.
+                    logger.error(f"Controller lifecycle error: {active_error or '<passive>'}")
+
+                    try:
+                        await self._error_recovery()
+                    except Exception:
+                        # If we were unable to recover from the error state, the controller is
+                        # inoperable!
+                        # FIXME: This will be replaced by blacklisting/backoff, and throwing in
+                        #        the towel will be left as a higher-level decision.
+                        logger.critical("Controller is inoperable!")
+                        self._can_operate.clear()
+                case "program":
+                    logger.opt(exception=active_error).error(f"Program lifecycle error: {active_error}")
+                    # TODO: Handle retry counting and blacklisting via ProgramStateManager.
+
+            return error_kind
+        finally:
+            # Clean up tasks.
+            for future in futures:
+                future.cancel()
 
     async def _error_recovery(self):
         self.belief_state = InternalControllerState.ERROR
@@ -489,10 +527,7 @@ class ControllerLifecycle:
                 try:
                     async with asyncio.timeout(recover_timeout):
                         await self.controller.execute_task(
-                            RecoverTask(
-                                task_id=uuid.uuid1(),
-                                controller_id=str(self.controller.entity),
-                            ),
+                            RecoverTask(),
                             interrupt=True,
                         )
 
@@ -511,10 +546,7 @@ class ControllerLifecycle:
             try:
                 async with asyncio.timeout(shutdown_timeout):
                     await self.controller.execute_task(
-                        ShutdownTask(
-                            task_id=uuid.uuid1(),
-                            controller_id=str(self.controller.entity),
-                        ),
+                        ShutdownTask(),
                         interrupt=True,
                     )
             except Exception as e:
@@ -546,16 +578,10 @@ class ControllerLifecycle:
             self.lifecycle.step = LifecycleStep.INIT
 
             logger.info(f"Preparing to operate ({controller})")
-            task = InitTask(
-                task_id=uuid.uuid1(),
-                controller_id=controller,
-                context=self.demand.contexts.get("init") if self.demand.contexts else None,
-            )
+            task = InitTask()
+            context = self.demand.contexts.get("init") if self.demand.contexts else None
 
-            with self.cleanup_task_on_interrupt(task):
-                await self.run_with_cleanup(
-                    self.lifecycle.controller.execute_task(task, interrupt=True)
-                )
+            await self.run_with_cleanup(task, context=context)
 
             # Init was successful.
             self.lifecycle.belief_state = InternalControllerState.OPERATE
@@ -629,16 +655,10 @@ class ControllerLifecycle:
             self.lifecycle.step = LifecycleStep.STANDBY
 
             logger.info(f"Entering standby mode ({controller})")
-            task = StandbyTask(
-                task_id=uuid.uuid1(),
-                controller_id=str(self.lifecycle.controller.entity),
-                context=self.demand.contexts.get("standby") if self.demand.contexts else None,
-            )
+            task = StandbyTask()
+            context = self.demand.contexts.get("standby") if self.demand.contexts else None
 
-            with self.cleanup_task_on_interrupt(task):
-                await self.run_with_cleanup(
-                    self.lifecycle.controller.execute_task(task, interrupt=True)
-                )
+            await self.run_with_cleanup(task, context=context)
 
             # Standby was successful.
             self.lifecycle.belief_state = InternalControllerState.STANDBY
@@ -663,16 +683,12 @@ class ControllerLifecycle:
             #        belief state. Then, the no-op below should be safe.
             if self.lifecycle.belief_state != InternalControllerState.SHUTDOWN:
                 logger.info(f"Commencing shutdown ({controller})")
-                task = ShutdownTask(
-                    task_id=uuid.uuid1(),
-                    controller_id=str(self.lifecycle.controller.entity),
-                    context=self.demand.contexts.get("shutdown") if self.demand.contexts else None,
+                task = ShutdownTask()
+                context = (
+                    self.demand.contexts.get("shutdown") if self.demand.contexts else None
                 )
 
-                with self.cleanup_task_on_interrupt(task):
-                    await self.run_with_cleanup(
-                        self.lifecycle.controller.execute_task(task, interrupt=True)
-                    )
+                await self.run_with_cleanup(task, context=context)
 
             # Shutdown was successful.
             self.lifecycle.belief_state = InternalControllerState.SHUTDOWN

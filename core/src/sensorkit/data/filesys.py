@@ -1,39 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 import contextlib
 import os
 import pathlib
-from collections import deque
 from collections.abc import AsyncGenerator
 from fnmatch import fnmatch
 from typing import Literal
 
 import aiofile
 from loguru import logger
-from watchdog.events import (
-    FileCreatedEvent,
-    FileMovedEvent,
-    FileSystemEventHandler,
-)
-from watchdog.observers import Observer
+from pydantic import BaseModel
 
+import sensorkit.api as sk
+from sensorkit.common.aio import cleanup_future
+from sensorkit.common.filewatch import FileEventKind, watch_dir, wait_for_file
 from sensorkit.data.graph import Context, DataFlow, DataOp, SourceOp
 from sensorkit.data.streams import StreamReader, StreamWriter
 
 
-def _resolve_template(template: str, context: Context) -> str:
-    """Resolve a template string against a Context.
+@sk.declare_keyword
+class FileNameTemplate(BaseModel):
+    """Template for file naming."""
+    template: str
 
-    Supports f-string syntax (e.g. ``f"{capture_time:%Y%m%dT%H%M%S}"``) which is
-    evaluated as a Python expression, or plain ``format_map`` syntax
-    (e.g. ``"{program_name}"``).
-    """
-    if template.startswith(('f"', "f'")):
-        return str(context.eval(template))
-    return template.format_map(context)
+
+@sk.declare_keyword
+class FileInfo(BaseModel):
+    """Information about a file on disk."""
+    path: pathlib.Path
+    size: int | None = None
+    create_time: float | None = None
+    access_time: float | None = None
+    change_time: float | None = None
+
+    @classmethod
+    async def from_path(cls, path: pathlib.Path, **other):
+        """Create a FileInfo from a local path.
+
+        Populates: path, size, create_time, access_time, change_time.
+        Additional fields can be provided via keyword arguments.
+        """
+        stat = await asyncio.to_thread(path.stat)
+
+        return cls.model_construct(
+            path=path,
+            size=stat.st_size,
+            create_time=stat.st_ctime,
+            access_time=stat.st_atime,
+            change_time=stat.st_mtime,
+            **other,
+        )
 
 
 class WatchDirectory(SourceOp):
-    """DataGraph source that watches a directory and triggers a run for each new file."""
+    """DataGraph source that triggers a run for each new file in a directory.
+
+    Watches a directory with a filesystem observer and, for every newly appeared file
+    whose name matches, starts one graph run seeded with a fresh Context describing that
+    file.
+
+    Attributes:
+        directory: Path of the directory to watch. Created if it does not exist.
+        match: Glob pattern a filename must match to trigger a run.
+        recursive: Whether to watch subdirectories as well.
+
+    Supplies context:
+        FileInfo: Describes the appeared file, with path and stat metadata populated
+            from disk.
+    """
     op: Literal["watch_directory"] = "watch_directory"
     directory: str
     match: str = "*"
@@ -41,12 +75,13 @@ class WatchDirectory(SourceOp):
 
     async def graph_source(self) -> AsyncGenerator[None, DataFlow]:
         logger.debug(f"starting WatchDirectory source at {self.directory}")
-        pathlib.Path(self.directory).mkdir(parents=True, exist_ok=True)
-        queue: asyncio.Queue[pathlib.Path] = asyncio.Queue()
-        handler = FileAppearedHandler(queue)
-        observer = Observer()
-        observer.schedule(handler, self.directory, recursive=self.recursive)
-        observer.start()
+        await asyncio.to_thread(pathlib.Path(self.directory).mkdir, parents=True, exist_ok=True)
+
+        events = await watch_dir(
+            self.directory,
+            recursive=self.recursive,
+            kinds=(FileEventKind.CREATED, FileEventKind.MOVED),
+        )
 
         try:
             while True:
@@ -54,31 +89,54 @@ class WatchDirectory(SourceOp):
                 edge = yield
 
                 # Wait for a matching file to appear.
-                while True:
-                    path = await queue.get()
-
-                    # Make sure the filename matches the pattern.
-                    if fnmatch(path.name, self.match):
+                async for event in events:
+                    if fnmatch(event.path.name, self.match):
+                        path = event.path
                         break
 
                 logger.debug(f"file {path} appeared")
 
                 try:
                     await edge.send(
-                        Context(file_path=path),
+                        Context(await FileInfo.from_path(path)),
                         b"",
                     )
                 except Exception:
                     logger.exception("error sending file path to graph")
-
-                queue.task_done()
         finally:
-            observer.stop()
-            queue.shutdown(True)
+            await events.aclose()
 
 
 class WriteFile(DataOp):
-    """DataGraph node that writes incoming stream data to a file on disk."""
+    """DataGraph node that writes incoming stream data to a file on disk.
+
+    If an outgoing edge is connected, the data is forwarded to it as well.
+
+    Attributes:
+        directory: Base output directory, resolved against context (e.g.
+            "{program_name}"). When None, relative paths and templates resolve under the
+            current working directory.
+        max_chunk_size: Maximum number of bytes read from the stream per chunk.
+
+    Expects context:
+        FileInfo (optional): An explicit or pre-resolved output path. A relative path is
+            taken under `directory`; an absolute path is used as-is, and is an error if
+            `directory` is also set.
+        FileNameTemplate (optional): A naming template resolved into a name under
+            `directory`, used only when no FileInfo is present.
+
+        One of FileInfo or FileNameTemplate must be present.
+
+    Supplies context:
+        FileInfo: Created from FileNameTemplate when no FileInfo was present.
+
+    Mutates context:
+        FileInfo: Path rewritten to the resolved output location.
+
+    Raises:
+        ValueError: If neither FileInfo nor FileNameTemplate is present, or if
+            the resolved path is absolute while `directory` is also set.
+    """
     op: Literal["write_file"] = "write_file"
     directory: str | None = None
     max_chunk_size: int = 2**16
@@ -89,14 +147,40 @@ class WriteFile(DataOp):
         # Read incoming data as a stream.
         context, reader = await incoming[0].receive("stream")
 
-        # Resolve the output directory against context values (e.g. "{program_name}").
-        directory = pathlib.Path(_resolve_template(self.directory, context))
-        directory.mkdir(parents=True, exist_ok=True)
-        file_name = _resolve_template(context["file_name"], context)
-        context["file_path"] = directory / file_name
+        # Resolve the configured base directory against context values (e.g. {program_name}).
+        base = (
+            pathlib.Path(context.resolve(self.directory, as_type=str))
+            if self.directory is not None
+            else pathlib.Path.cwd()
+        )
+        info = context.get(FileInfo)
+
+        if info is None:
+            # No FileInfo, so look for a FileNameTemplate to resolve the name.
+            template = context.get(FileNameTemplate)
+
+            if template is None:
+                raise ValueError("WriteFile requires a FileInfo or FileNameTemplate in context")
+
+            info = FileInfo(path=pathlib.Path(context.resolve(template.template, as_type=str)))
+            context.set(info)
+
+        # Make sure we don't have two absolute paths.
+        if info.path.is_absolute():
+            if self.directory is not None:
+                raise ValueError(
+                    f"ambiguous write location: FileInfo.path is absolute ({info.path}) "
+                    f"but WriteFile.directory is also set ({self.directory!r})"
+                )
+        else:
+            # Update the path, applying our base directory.
+            info.path = base / info.path
+
+        # Ensure the output directory exists before opening the writer.
+        await asyncio.to_thread(info.path.parent.mkdir, parents=True, exist_ok=True)
 
         # Get the file writer.
-        writers: list[StreamWriter] = [await get_file_writer(context["file_path"])]
+        writers: list[StreamWriter] = [await get_file_writer(info.path)]
 
         if outgoing:
             # If there is a single outgoing edge, write to that too.
@@ -120,7 +204,23 @@ class WriteFile(DataOp):
 
 
 class ReadFile(DataOp):
-    """DataGraph node that reads a file from disk and passes it as a stream to the next node."""
+    """DataGraph node that reads a file from disk into a downstream stream.
+
+    Opens the file named by FileInfo.path and streams its contents to the single
+    outgoing edge. The incoming data is expected to be empty.
+
+    Attributes:
+        max_chunk_size: Maximum number of bytes read from the file per chunk.
+        wait_for_file: Whether to wait for the file to appear before reading.
+        wait_for_file_timeout: Seconds to wait for the file when `wait_for_file` is set.
+
+    Expects context:
+        FileInfo: Provides path, the location of the file to read.
+
+    Mutates context:
+        FileInfo: Replaced with stat metadata (size and timestamps) read from disk when
+            FileInfo.size was not already populated.
+    """
     op: Literal["read_file"] = "read_file"
     max_chunk_size: int = 2**16
     wait_for_file: bool = False
@@ -134,15 +234,19 @@ class ReadFile(DataOp):
         assert len(buffer) == 0
 
         # The path to the file must be present in context.
-        # FIXME Formalization of context keywords is pending.
-        path = pathlib.Path(context["file_path"])
+        info = context[FileInfo]
 
         # Get the file reader.
         reader = await get_file_reader(
-            path,
+            info.path,
             self.max_chunk_size,
             wait_until_exists=self.wait_for_file_timeout if self.wait_for_file else None,
         )
+
+        # Populate stat metadata if it has not been determined yet. The file is known to
+        # exist at this point, since get_file_reader has opened (or waited for) it.
+        if info.size is None:
+            context.set(await FileInfo.from_path(info.path))
 
         # Send to the graph.
         writer = await outgoing[0].send(context)
@@ -153,65 +257,9 @@ class ReadFile(DataOp):
             read_count += len(chunk)
             writer.write(chunk)
 
-        logger.debug(f"ReadFile read {read_count//1024} KB from {path}")
+        logger.debug(f"ReadFile read {read_count//1024} KB from {info.path}")
         writer.close()
         await writer.wait_closed()
-
-
-class FileAppearedHandler(FileSystemEventHandler):
-    """Watchdog event handler that enqueues new file paths as they appear in a directory."""
-
-    def __init__(
-        self,
-        queue: asyncio.Queue[pathlib.Path],
-        /,
-        *,
-        match_suffix: str | None = None,
-        seen_capacity: int = 10,
-    ):
-        self._match_suffix = match_suffix
-        self._queue = queue
-        self._seen: deque[str] = deque(maxlen=seen_capacity)
-
-    def _enqueue_path(self, path_str: str):
-        if path_str in self._seen:
-            return
-        self._seen.append(path_str)
-
-        try:
-            path = pathlib.Path(path_str)
-            self._queue.put_nowait(path)
-        except Exception:
-            logger.exception("error putting file path in queue")
-
-    def on_created(self, event: FileCreatedEvent):
-        if self._match_suffix and not event.src_path.endswith(self._match_suffix):
-            return
-        self._enqueue_path(event.src_path)
-
-    def on_moved(self, event: FileMovedEvent):
-        if self._match_suffix and not event.dest_path.endswith(self._match_suffix):
-            return
-        self._enqueue_path(event.dest_path)
-
-
-
-async def wait_file_exists(path: pathlib.Path):
-    """Suspend until the given path exists, using a filesystem watcher to avoid polling."""
-    if not os.path.exists(path):
-        logger.debug(f"waiting for {path} to exist...")
-        queue = asyncio.Queue()
-        handler = FileAppearedHandler(queue, match_suffix=path.name)
-        observer = Observer()
-        observer.schedule(handler, path.parent)
-        observer.start()
-
-        try:
-            if not os.path.exists(path):
-                await queue.get()
-                queue.task_done()
-        finally:
-            observer.stop()
 
 
 async def get_file_reader(
@@ -226,7 +274,7 @@ async def get_file_reader(
     if wait_until_exists is not None:
         async with asyncio.timeout(wait_until_exists):
             # Wait until the file exists before opening.
-            await wait_file_exists(path)
+            await wait_for_file(path)
 
     ctx = contextlib.AsyncExitStack()
     f = await ctx.enter_async_context(aiofile.async_open(path, "rb"))
@@ -245,7 +293,9 @@ async def get_file_reader(
             reader.feed_eof()
 
     # Start feeding data in the background.
-    asyncio.create_task(feed_data())
+    task = asyncio.create_task(feed_data())
+    task.add_done_callback(cleanup_future)
+    ctx.callback(lambda: task)  # Prevent task GC until done
 
     return reader
 
@@ -295,8 +345,6 @@ class FileAsyncWriter:
                 # Set the drained signal as appropriate.
                 if self._queue.empty():
                     self._drained.set()
-        except asyncio.CancelledError:
-            pass
         except Exception:
             logger.exception("error writing to file")
         finally:

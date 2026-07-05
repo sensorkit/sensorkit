@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Pydantic model registry infrastructure for discriminated-union validation."""
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ class ModelRegistryBase[T](ABC):
 
     @abstractmethod
     def validate(self, data: Any, *, info: ValidationInfo | None = None) -> T:
-        """Validate ``data`` and return a typed model instance from this registry."""
+        """Validate `data` and return a typed model instance from this registry."""
         ...
 
     @abstractmethod
@@ -57,7 +58,7 @@ class ModelRegistryBase[T](ABC):
 
 
 def extract_field_default_value(type_: type, field: str | None):
-    """Return the default value of ``field`` on ``type_``, checking class dict and pydantic field info."""
+    """Return the default value of `field` on `type_`, checking class dict and pydantic field info."""
     if not field:
         return None
 
@@ -80,7 +81,7 @@ def extract_field_default_value(type_: type, field: str | None):
 class ModelRegistry[T](ModelRegistryBase[T]):
     """A mutable collection of pydantic models.
 
-    Types register here at import time via ``__init_subclass__`` hooks or decorators, with
+    Types register here at import time via `__init_subclass__` hooks or decorators, with
     optional namespace metadata.
 
     Operations are not thread-safe.
@@ -153,7 +154,7 @@ class ModelRegistry[T](ModelRegistryBase[T]):
 
     @property
     def entries(self):
-        """A read-only mapping of registered model types to their ``RegistryEntry`` metadata."""
+        """A read-only mapping of registered model types to their `RegistryEntry` metadata."""
         return MappingProxyType(self._entries)
 
     def get_tags(self):
@@ -167,11 +168,11 @@ class ModelRegistry[T](ModelRegistryBase[T]):
         return ()
 
     def get_type(self, tag: str, namespace: str | None = None):
-        """Return the model type registered under ``tag`` in the given ``namespace``, or ``None``."""
+        """Return the model type registered under `tag` in the given `namespace`, or `None`."""
         return self._tag_index[tag].get(namespace)
 
     def create_resolved_view(self, namespace_precedence: Iterable[str]) -> ModelRegistryView:
-        """Create a ``ModelRegistryView`` of this registry with key conflict resolution."""
+        """Create a `ModelRegistryView` of this registry with key conflict resolution."""
         return ModelRegistryView(self, namespace_precedence)
 
     @functools.cached_property
@@ -179,7 +180,7 @@ class ModelRegistry[T](ModelRegistryBase[T]):
         return self.create_resolved_view(namespace_precedence=())
 
     def discriminator(self):
-        """Return a ``RegistryDiscriminator`` pydantic annotation backed by this registry."""
+        """Return a `RegistryDiscriminator` pydantic annotation backed by this registry."""
         return RegistryDiscriminator(self)
 
     @functools.cache
@@ -306,10 +307,18 @@ class ModelRegistryView[T](ModelRegistryBase[T]):
             if type(data) is not model_type:
                 raise ValueError(f"model {model_type.__name__} does not match tag: {tag}")
 
+        # Strip the discriminator context, if any. This is necessary to prevent downstream
+        # registry-backed fields from receiving and interpreting this themselves.
+        # FIXME: discriminator-from-context should be reviewed, as it may be avoidable by doing
+        #        namespace lookups against the registry, e.g. in `validate_keyword`. This is
+        #        slightly more complicated than it sounds to ensure views/namespaces are folded in.
+        if tag_from_context:
+            del info.context[self.DISCRIMINATOR_CONTEXT]
+
         return self._registry.type_adapter(model_type).validate_python(data, context=info.context)
 
     def __contains__(self, val: type[T]) -> bool:
-        """Return ``True`` if ``val`` is a model type resolved by this view."""
+        """Return `True` if `val` is a model type resolved by this view."""
         return val in self._index
 
     @contextlib.contextmanager
@@ -410,7 +419,7 @@ class RegistryBaseModel(BaseModel, ABC):
     @classmethod
     @abstractmethod
     def model_registry(cls) -> ModelRegistry[Self]:
-        """Return the ``ModelRegistry`` that this model class family registers into."""
+        """Return the `ModelRegistry` that this model class family registers into."""
         raise NotImplementedError
 
     @classmethod

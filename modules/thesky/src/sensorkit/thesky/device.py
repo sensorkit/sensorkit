@@ -1,9 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import ClassVar, Literal
 
+from loguru import logger
 from pydantic import BaseModel
 
 SCRIPT_HEADER = b"/* Java Script */\n/* Socket Start Packet */\n"
@@ -16,8 +20,12 @@ _script_locks: dict[tuple[str, int], asyncio.Lock] = {}
 
 def _get_script_lock(host: str, port: int) -> asyncio.Lock:
     """Get or create a shared lock for a TheSky server connection."""
+
     key = (host, port)
-    if key not in _script_locks:
+    try:
+        lock = _script_locks[key]
+        lock._get_loop()  # Raises RuntimeError if bound to a different loop
+    except (KeyError, RuntimeError):
         _script_locks[key] = asyncio.Lock()
     return _script_locks[key]
 
@@ -50,7 +58,7 @@ def parse_thesky_response(response: bytes):
                 if code == 0:
                     return left[:sep].decode(errors="ignore")
                 else:
-                    raise TheSkyError(message=left[sep+1:].decode(errors="ignore"), code=code)
+                    raise TheSkyError(message=left[sep + 1 :].decode(errors="ignore"), code=code)
         case (left, middle, _):
             sep = middle.find(b"|")
             code = int(float(middle[:sep]))
@@ -65,40 +73,61 @@ def parse_thesky_response(response: bytes):
 @dataclass
 class TheSkyDevice:
     """Generic TheSky device."""
+
     config: TheSkyDeviceConfig
 
     device_connected: bool | None = field(default=None, init=False)
-    device_name: str = "Device"
+    device_name: ClassVar[str] = "Device"
+    _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
+    _reconnect: Callable[[], Coroutine] | None = field(default=None, init=False, repr=False)
 
-    def require_connected(self):
-        """Raise DeviceConnectionError if device is not connected."""
-        if not self.device_connected:
+    async def require_connected(self):
+        """Verify the device is connected, attempting to reconnect if not."""
+
+        if self.device_connected:
+            return
+        if self._reconnect is not None:
+            logger.warning(f"{self.device_name} not connected, attempting reconnect")
+            try:
+                async with asyncio.timeout(self.config.timeout):
+                    await self._reconnect()
+            except Exception as e:
+                raise DeviceConnectionError(
+                    message=f"{self.device_name} reconnect failed: {e}", code=-1
+                ) from e
+        else:
             raise DeviceConnectionError(message=f"{self.device_name} not connected", code=-1)
 
-    async def execute(
-        self,
-        script: str
-    ):
-        """Execute a TheSky script.
+    async def execute(self, script: str):
+        """Execute a TheSky script, serialized behind the shared script lock."""
 
-        Parameters
-        ----------
-        script : str
-            The JavaScript to execute.
-        """
         lock = _get_script_lock(self.config.host, self.config.port)
 
         async with lock:
-            response = await send_thesky_script(self.config.host, self.config.port, script.encode())
+            response = await send_thesky_script(
+                self.config.host, self.config.port, script.encode()
+            )
             return parse_thesky_response(response)
 
-    async def poll(
-        self,
-        script: str,
-        expected: str,
-        delay: float = 0.1,
-        interval: float = 1.0
-    ):
+    def start_status_loop(self, coro):
+        """Start a background status publishing task, cancelling any existing one."""
+
+        if self._status_task is not None and not self._status_task.done():
+            self._status_task.cancel()
+        self._status_task = asyncio.create_task(coro)
+
+    async def stop_status_loop(self):
+        """Cancel the background status publishing task."""
+
+        if self._status_task is not None:
+            self._status_task.cancel()
+
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._status_task
+
+            self._status_task = None
+
+    async def poll(self, script: str, expected: str, delay: float = 0.1, interval: float = 1.0):
         """Poll TheSky for script completion.
 
         Parameters
@@ -112,6 +141,7 @@ class TheSkyDevice:
         interval : float
             How often to poll [sec].
         """
+
         await asyncio.sleep(delay)
         while True:
             resp = await self.execute(script)
@@ -122,9 +152,11 @@ class TheSkyDevice:
 
 class TheSkyDeviceConfig[T: TheSkyDevice = TheSkyDevice](BaseModel):
     """Generic TheSky device configuration."""
+
     device_type: Literal[None]
     host: str
     port: int = 3040
+    timeout: float = 60.0
 
     def create_device(self) -> T:
         return TheSkyDevice(self)
@@ -132,10 +164,13 @@ class TheSkyDeviceConfig[T: TheSkyDevice = TheSkyDevice](BaseModel):
 
 class TheSkyDeviceState(BaseModel):
     """Generic TheSky device state."""
+
     device_type: Literal[None]
 
 
 class TheSkyError(Exception):
+    """Base exception for TheSky device errors."""
+
     subtypes: ClassVar[dict[int, type[TheSkyError]]] = {}
     code: int = 0
 
@@ -161,6 +196,10 @@ class FilterWheelCommandInProgressError(TheSkyError):
 
 class FocuserCommandInProgressError(TheSkyError):
     code = 117
+
+
+class OTACommandInProgressError(TheSkyError):
+    code = 118
 
 
 class CameraCommandInProgressError(TheSkyError):
@@ -195,9 +234,21 @@ class CommandConflictError(TheSkyError):
     code = 219
 
 
+class CommandNotSupportedError(TheSkyError):
+    code = 228
+
+
 class ObjectNotFoundError(TheSkyError):
     code = 250
 
 
 class UnknownCommandError(TheSkyError):
     code = 303
+
+
+class BadWeatherError(TheSkyError):
+    code = 737
+
+
+class TargetLostError(TheSkyError):
+    code = 7501

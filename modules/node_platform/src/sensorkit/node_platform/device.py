@@ -1,45 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 from dataclasses import dataclass, field
-from pydantic import BaseModel
 from typing import Any, ClassVar, Literal
 
 import ourskyai_node_platform_api as osapi
+from dotenv import dotenv_values
+from pydantic import BaseModel
 
 
 @dataclass
 class NodePlatformDevice:
     """Generic Node Platform device."""
+
     config: NodePlatformDeviceConfig
     _api: NodePlatformAPI | None = field(default=None, init=False)
 
     device_connected: bool | None = field(default=None, init=False)
-    device_name: str = "Device"
+    device_name: ClassVar[str] = "Device"
+    _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
 
     @property
     def api(self) -> NodePlatformAPI:
         """Lazily create and return the SDK API wrapper."""
+
         if self._api is None:
+            env = dotenv_values(self.config.env_file)
+            api_key = env.get("NODE_PLATFORM_API_KEY") or os.environ.get("NODE_PLATFORM_API_KEY")
+
+            if not api_key:
+                raise RuntimeError(
+                    f"NODE_PLATFORM_API_KEY must be set in "
+                    f"{self.config.env_file} or as an environment variable"
+                )
+
             self._api = NodePlatformAPI(
                 host=self.config.host,
                 port=self.config.port,
-                api_key=self.config.api_key,
+                api_key=api_key,
                 lineage_id=self.config.lineage_id,
             )
         return self._api
 
-    def require_connected(self):
+    def start_status_loop(self, coro):
+        """Start a background status publishing task, cancelling any existing one."""
+
+        if self._status_task is not None and not self._status_task.done():
+            self._status_task.cancel()
+        self._status_task = asyncio.create_task(coro)
+
+    async def stop_status_loop(self):
+        """Cancel the background status publishing task."""
+
+        if self._status_task is not None:
+            self._status_task.cancel()
+
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._status_task
+
+            self._status_task = None
+
+    async def require_connected(self):
         """Raise DeviceConnectionError if device is not connected."""
+
         if not self.device_connected:
-            raise DeviceConnectionError(f"{self.device_name} not connected")
+            raise DeviceConnectionError(code=-3, message=f"{self.device_name} not connected")
 
 
 class NodePlatformAPI:
     """Async wrapper around the OurSky Node Platform SDK.
 
     The SDK is synchronous (urllib3-backed), so every call is dispatched
-    via ``asyncio.to_thread`` to avoid blocking the event loop.
+    via `asyncio.to_thread` to avoid blocking the event loop.
     """
 
     def __init__(
@@ -62,9 +97,10 @@ class NodePlatformAPI:
     async def call(self, method_name: str, *args, **kwargs) -> Any:
         """Call an SDK method asynchronously.
 
-        The ``lineage_id`` keyword is injected automatically when not
+        The `lineage_id` keyword is injected automatically when not
         explicitly provided.
         """
+
         if "lineage_id" not in kwargs and self.lineage_id:
             kwargs["lineage_id"] = self.lineage_id
 
@@ -75,7 +111,6 @@ class NodePlatformAPI:
             raise NodePlatformError.from_api_exception(exc) from exc
 
     async def close(self) -> None:
-        """Release the underlying HTTP connection pool."""
         try:
             self._client.close()
         except Exception:
@@ -84,12 +119,14 @@ class NodePlatformAPI:
 
 class NodePlatformDeviceConfig[T: NodePlatformDevice = NodePlatformDevice](BaseModel):
     """Generic Node Platform device configuration."""
+
     device_type: Literal[None] = None
     host: str
     port: int = 9080
-    api_key: str | None = None
     lineage_id: str | None = None
     request_timeout: float = 30.0
+    env_file: str = ".env"
+    operation_mode: Literal["manual", "assisted"] = "assisted"
 
     def create_device(self) -> T:
         return NodePlatformDevice(self)
@@ -97,6 +134,7 @@ class NodePlatformDeviceConfig[T: NodePlatformDevice = NodePlatformDevice](BaseM
 
 class NodePlatformDeviceState(BaseModel):
     """Generic Node Platform device state."""
+
     device_type: Literal[None] = None
 
 
@@ -117,25 +155,32 @@ class NodePlatformError(Exception):
 
     @classmethod
     def from_api_exception(cls, exc: osapi.ApiException) -> NodePlatformError:
-        """Map an SDK ApiException to the appropriate error subclass."""
         status = getattr(exc, "status", None) or 0
         body = getattr(exc, "body", "") or str(exc)
         return cls(code=status, message=f"HTTP {status}: {body}")
 
 
 class NodePlatformConnectionError(NodePlatformError):
+    """Node Platform is not connected."""
+
     code = -1
 
 
 class NodePlatformTimeoutError(NodePlatformError):
+    """Node Platform communication timed out."""
+
     code = -2
 
 
 class DeviceConnectionError(NodePlatformError):
+    """Device is not connected."""
+
     code = -3
 
 
 class DeviceTimeoutError(NodePlatformError):
+    """Device operation timed out."""
+
     code = -4
 
 
@@ -149,3 +194,7 @@ class AuthenticationError(NodePlatformError):
 
 class NotFoundError(NodePlatformError):
     code = 404
+
+
+class InternalServerError(NodePlatformError):
+    code = 500

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
@@ -11,6 +12,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from sensorkit.astro.observer import EarthObserver
+from sensorkit.auto.constraint import Constraint, ConstraintManager
 from sensorkit.auto.lifecycle import ControllerLifecycle
 from sensorkit.auto.mode import Mode, ModeList
 from sensorkit.auto.scheduler import ProgramConfig, Scheduler, debug_print_schedule
@@ -19,10 +21,9 @@ from sensorkit.common.aio import AsyncObserver
 from sensorkit.common.graph import StateElection
 from sensorkit.core.client import SensorKit
 from sensorkit.core.controller import InternalControllerState
-from sensorkit.core.task import TaskContexts
 from sensorkit.core.program import ControllerOffers, ProgramClient, ProgramDiscovery, ProgramState
-from sensorkit.models.devices import SitePosition
-from sensorkit.auto.constraint import AnyConstraint
+from sensorkit.core.task import TaskContexts
+from sensorkit.astro.common import SitePosition
 
 
 class ControllerConfig(BaseModel):
@@ -31,7 +32,7 @@ class ControllerConfig(BaseModel):
     estimated_startup_time: float = 0.0
     estimated_shutdown_time: float = 0.0
     modes: ModeList = Field(default_factory=list)
-    constraints: list[AnyConstraint] = Field(default_factory=list)
+    constraints: list[Constraint] = Field(default_factory=list)
     tasking: list[ProgramConfig] = Field(default_factory=list)
     contexts: TaskContexts = Field(default_factory=TaskContexts)
 
@@ -42,7 +43,15 @@ class ControllerConfig(BaseModel):
     @property
     def name(self):
         """The name of this controller, set by the parent ControllerConfigMap validator."""
+        if self._name is None:
+            raise RuntimeError("name not set")
+
         return self._name
+
+    @name.setter
+    def name(self, value: str):
+        """Set the name of this controller."""
+        self._name = value
 
     def mode(self, name: str):
         """Return the Mode configuration with the given name."""
@@ -85,8 +94,8 @@ class ControllerDriver:
             program_configs=config.tasking,
         )
 
-        # Create constraint evaluators.
-        self.constraints = [constraint.make_evaluator() for constraint in config.constraints]
+        # Create constraint manager.
+        self.constraints = ConstraintManager(config.constraints)
 
         # Create the lifecycle object.
         self.lifecycle = ControllerLifecycle()
@@ -99,19 +108,15 @@ class ControllerDriver:
     ):
         """Start the lifecycle, constraints, offers monitor, and background tasks for this driver."""
         self.kit = kit
+        controller = kit.controller(self.config.name)
         logger.info(f"Driver for {self.config.name} starting")
 
         # Start the lifecycle loop. This won't result in commanding until the lifecycle is enabled
         # and a demand state is set.
-        self.lifecycle.start(kit.controller(self.config.name), task_group=task_group)
+        self.lifecycle.start(controller, task_group=task_group)
 
-        # Start constraint evaluators.
-        for constraint in self.constraints:
-            constraint.start(task_group=task_group, kit=kit)
-
-        # Wait for all constraints to become ready.
-        for constraint in self.constraints:
-            await constraint.ready.wait()
+        # Start checking the configured constraints.
+        await self.constraints.start(task_group=task_group, ready_timeout=10.0, kit=kit)
 
         # Start monitoring associated Programs for offers.
         await self.controller_offers.start(task_group=task_group)
@@ -119,7 +124,7 @@ class ControllerDriver:
         # Query controller site position.
         while True:
             try:
-                site = await kit.controller(self.config.name).kv_get_model(SitePosition)
+                site = await controller.kv_get_model(SitePosition)
                 break
             except KeyNotFound:
                 logger.debug(f"waiting for {self.config.name} SitePosition")
@@ -173,17 +178,10 @@ class ControllerDriver:
         )
 
         # Check constraints.
-        constrained = False
-
-        for constraint in self.constraints:
-            if constraint.active.is_set():
-                constrained = True
-                break
-
         election.vote(
             "constraint",
             subject=self.config.name,
-            vote=False if constrained else None,
+            vote=False if self.constraints.is_constrained() else None,
         )
 
     def set_demand(self, operate: bool):
@@ -315,72 +313,74 @@ class ProgramStateManager:
         return self._desired_enable.get(program)
 
     async def start(
-        self, client: SensorKit, discovery: ProgramDiscovery, task_group: Any = asyncio
+        self,
+        client: SensorKit,
+        discovery: ProgramDiscovery,
+        task_group: asyncio.TaskGroup,
     ):
         """Start the background task that drives remote program enable/disable state."""
-        task_group.create_task(self._drive_remote_state(client, discovery))
+        self.client = client
+        self.discovery = discovery
+        self._retries = set()
+        self._program_locks: dict[str, asyncio.Lock] = {}
 
-    async def _drive_remote_state(self, client: SensorKit, discovery: ProgramDiscovery):
-        retries = set()
-        program_locks: dict[str, asyncio.Lock] = {}
+        # Start monitoring tasks.
+        task_group.create_task(self._watch_discovery())
+        task_group.create_task(self._watch_changes())
 
-        async def handle_program(program: str):
-            if program not in program_locks:
-                program_locks[program] = asyncio.Lock()
+    async def _handle_program(self, program: str):
+        if program not in self._program_locks:
+            self._program_locks[program] = asyncio.Lock()
 
-            async with program_locks[program]:
+        async with self._program_locks[program]:
+            program_client = self.client.program(program)
+
+            try:
+                state = await program_client.kv_get_model(ProgramState)
                 target = self.get_target_controller(program)
-                program_client = client.program(program)
-                try:
-                    state = await program_client.kv_get_model(ProgramState)
-                    target = self.get_target_controller(program)
-                    if target:
-                        if (
-                            not state.enable_state.enabled
-                            or state.enable_state.controller != target
-                        ):
-                            logger.info(f"Enabling program {program} for {target}")
-                            await program_client.enable(target)
-                    else:
-                        if state.enable_state.enabled:
-                            logger.info(f"Disabling program {program}")
-                            await program_client.disable()
-                except Exception as e:
-                    logger.error(f"Failed to drive program {program} state: {e}")
 
-                    async def delayed_retry(delay: float = 10.0):
-                        logger.debug(f"retrying in {delay} sec")
-                        await asyncio.sleep(delay)
-                        await handle_program(program)
-
-                    retries.add(asyncio.create_task(delayed_retry()))
-
-                for task in list(retries):
-                    if task.done():
-                        retries.discard(task)
-
-        async def watch_discovery():
-            previous_discovered = set()
-
-            async for programs in discovery.known_programs():
-                changed = programs.symmetric_difference(previous_discovered)
-
-                for p in changed:
-                    if p in self.all_programs:
-                        await handle_program(p)
-
-                previous_discovered = programs
-
-        async def watch_changes():
-            async for program in self.on_change.consume(initial_value=True):
-                if program is None:
-                    # Global change, re-evaluate all programs.
-                    for p in self.all_programs:
-                        await handle_program(p)
+                if target:
+                    if not state.enable_state.enabled or state.enable_state.controller != target:
+                        logger.info(f"Enabling program {program} for {target}")
+                        await program_client.enable(target)
                 else:
-                    await handle_program(program)
+                    if state.enable_state.enabled:
+                        logger.info(f"Disabling program {program}")
+                        await program_client.disable()
+            except Exception as e:
+                logger.error(f"Failed to drive program {program} state: {e}")
 
-        await asyncio.gather(watch_discovery(), watch_changes())
+                async def delayed_retry(delay: float = 10.0):
+                    logger.debug(f"retrying in {delay} sec")
+                    await asyncio.sleep(delay)
+                    await self._handle_program(program)
+
+                self._retries.add(asyncio.create_task(delayed_retry()))
+
+            for task in list(self._retries):
+                if task.done():
+                    self._retries.discard(task)
+
+    async def _watch_discovery(self):
+        previous_discovered = set()
+
+        async for programs in self.discovery.known_programs():
+            changed = programs.symmetric_difference(previous_discovered)
+
+            for p in changed:
+                if p in self.all_programs:
+                    await self._handle_program(p)
+
+            previous_discovered = programs
+
+    async def _watch_changes(self):
+        async for program in self.on_change.consume(initial_value=True):
+            if program is None:
+                # Global change, re-evaluate all programs.
+                for p in self.all_programs:
+                    await self._handle_program(p)
+            else:
+                await self._handle_program(program)
 
     def enabled_programs(self):
         """Return the set of currently enabled program entity names."""

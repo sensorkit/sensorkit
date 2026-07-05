@@ -1,157 +1,83 @@
 # SensorKit
 
-**SensorKit**: A Python framework for building autonomous sensor and astronomical observatory systems.
+**SensorKit is an open-source control system for autonomous observatories**, built for space domain awareness and time-domain astronomy. It connects your telescope hardware to an automation layer that decides — continuously and safely — when to open the dome, what to observe, and when to shut down, whether that's for a passing satellite, a transient follow-up, or an ordinary night of survey work.
 
-Features:
+You describe your site in a single YAML file: which mount, camera, and dome you have, what weather limits you trust, and which observing programs are allowed to request time. SensorKit runs the night.
 
-- Autonomous SDA operation out of the box
-- Controls ASCOM, Planewave, and Software Bisque devices
-- State Vector propagation
-- Configuration-defined data and metadata flow
-- Analysis infrastructure for calibration and edge data processing
-- Designed for extensibility, with discovery-based extension points
-- Loosely coupled distributed architecture for failover and scalability at the edge
+```yaml
+sensors:
+  - id: MySensor
+    devices:
+      mount: MyMount
+      camera: MyCamera
+      dome: MyDome
 
-SensorKit supports NATS JetStream as its messaging backbone, as well as an in-memory implementation for testing.
- 
----
-
-## Quick start — simulated observatory
-
-The `deploy/simulated` directory contains a complete Docker Compose stack with simulated hardware: a PlaneWave mount simulator, ASCOM Alpaca device simulators (camera, dome, filter wheel, focuser, rotator, weather monitor), and a full SensorKit automation stack on top.
-
-**Prerequisites:** Docker Compose and Git.
-
-### 1. Clone and build
-
-```bash
-git clone <sensorkit-repo-url>
-cd sensorkit/deploy/simulated
-docker compose build
+automation:
+  controllers:
+    MySensor:
+      constraints:
+        - kind: weather
+          provider: MyWeather
+          humidity_max: 85.0
+          wind_max: 15.0
+      tasking:
+        - program: SatelliteSurvey
+          priority: 5
 ```
 
-The build step compiles the SensorKit image and pulls the simulator images. This takes a few minutes the first time as
-it builds not only the SensorKit image but also a PWi4 mount simulator and the ASCOM Alpaca simulators.
+## What it does
 
-### 2. Start the stack
+- **Autonomous operation.** An agent service evaluates operating modes (e.g. sunset to sunrise), weather and safety constraints, and program schedules — then starts up, tasks, and shuts down each sensor on its own. A single command hands control back to a human.
+- **Speaks your hardware's language.** Drivers for ASCOM Alpaca, PlaneWave PWI4, and Software Bisque TheSky are included, with additional modules for INDIGO, NINA, and the Observable Space Node Platform. If your device has one of these interfaces, SensorKit can probably run it today.
+- **Satellite tracking as a first-class citizen.** Targets can be fixed alt/az or ICRS positions, TLEs, state vectors, or precomputed ephemerides. SensorKit propagates orbits (via `satkit` and `astropy`) and drives mounts in rate-tracking modes for fast-moving objects.
+- **Observing programs in a few dozen lines of Python.** A program is a small class that advertises *when* it has work and produces the *next task* when asked. Everything else — scheduling, priorities, device sequencing, FITS writing — is handled for you.
+- **Configuration-defined data flow.** Camera frames move through a pipeline you declare in YAML: inject FITS headers populated from live telescope state, compress, write to disk, or hand off to analysis services for astrometry, photometry, or focus estimation.
+- **Built to be pulled apart.** Every device driver, sensor controller, program, and the agent itself is an independent service communicating over [NATS JetStream](https://nats.io). Services can run on different machines, restart without disturbing each other, and be swapped out without touching the rest of the system.
 
-```bash
-docker compose up
+## How it fits together
+
+```
+Observing programs           The agent              Sensor controller
+(what to observe)    (when it's safe & useful)     (how to observe it)
+        │                        │                          │
+        ▼                        ▼                          ▼
+  ┌───────────┐   offers   ┌───────────┐    tasks     ┌───────────┐
+  │  Program  │───────────▶│   Agent   │─────────────▶│  Sensor   │
+  └───────────┘            └───────────┘              └───────────┘
+                                 ▲                          │ commands
+                        weather, │ safety           ┌───────┼──────┐
+                                 │                  ▼       ▼      ▼
+                           ┌───────────┐          Mount  Camera  Dome ...
+                           │  Devices  │          (device services)
+                           └───────────┘
+                  All communication over NATS JetStream
 ```
 
-The services start in dependency order:
+- **Devices** wrap hardware drivers and expose commands and telemetry on the bus.
+- The **sensor controller** coordinates a mount, camera, dome, and friends into one logical instrument, with configurable init/shutdown sequencing and pointing-safety policies.
+- **Programs** publish *offer windows* ("I have work between these times") and produce tasks on demand.
+- The **agent** merges modes, offers, and constraints into a schedule, and brings controllers up and down accordingly. Its decisions are persisted, so a restart resumes exactly where it left off.
 
-| Service         | What it does                                                                          |
-|-----------------|---------------------------------------------------------------------------------------|
-| `nats`          | NATS JetStream message bus                                                            |
-| `planewave-sim` | PWI4 mount simulator with a browser-accessible noVNC UI                               |
-| `alpaca-sim`    | ASCOM Alpaca simulators for camera, dome, filter wheel, focuser, rotator, and weather |
-| `sk-bootstrap`  | Loads all config files into the NATS KV store, then exits                             |
-| `sk-planewave`  | SensorKit PWI4 service — connects to the mount simulator                              |
-| `sk-ascom`      | SensorKit ASCOM service — connects to the Alpaca simulators                           |
-| `sk-controller` | Sensor controller — orchestrates all devices as a single sensor                       |
-| `sk-agent`      | Automation agent — manages the controller and schedules the program                   |
-| `sk-program`    | Demo observing program — generates collect tasks with random alt/az targets           |
+A few design choices worth knowing about, because they shape day-to-day use:
 
-### 3. Run the SensorKit CLI
+- **Devices are described by what they can do, not what they're called.** A structural *trait* system matches devices by the commands they implement, so a controller asks for "something that can slew and track" rather than a specific driver class.
+- **State is event-sourced.** Controller and device state is rebuilt from a persisted event stream after a crash or restart — no "please re-home everything" after a network blip.
+- **Exclusive leases** prevent two copies of the same service from fighting over one piece of hardware.
 
-To interact with your new running instance:
+## Status
 
-- install via `pip` as outlined in (Installation)[installation.md]
-- run `uv sync --all-extras` to install in a venv associated with your cloned repository
-- run `docker exec -it <container-name> bash` to gain access via one of the running containers
+SensorKit is in **beta** and under active development. It runs real telescopes nightly, but APIs and configuration formats are still evolving, and some corners are unfinished (module maturity varies — ASCOM Alpaca and PWI4 are the most exercised paths). Feedback and issues are very welcome.
 
-```bash
-uv sync --all-extras 
-```
+## Where to start
 
-Alternatively, you can run the CLI directly from a service container.
-
-When the Agent starts for the first time, automation is disabled for safety reasons. You can inspect and control the system manually:
-
-```bash
-# See all registered services
-sensorkit service ls
-
-# Check the agent status
-sensorkit agent status
-
-# Manually initialize the sensor (connect and ready all devices)
-sensorkit controller init -e sim_sensor
-
-# Run a standard collect task manually
-sensorkit controller collect -e sim_sensor \
-    -t '{"target_type": "altaz", "azimuth_degrees": 180.0, "altitude_degrees": 60.0}' \
-    -i 5.0 -c 3
-
-# Shut the sensor down
-sensorkit controller shutdown -e sim_sensor
-```
-
-To instruct the Agent to begin autonomous operation, run:
-
-```bash
-sensorkit agent global-control on
-```
-
-### 4. Watch the simulators
-
-Open [http://localhost:6080](http://localhost:6080) in a browser to see the PWI4 noVNC interface showing the simulated mount.
-
-Similarly, open [http://localhost:30000](http://localhost:30000) in a browser to see the ASCOM Alpaca simulators.
-
-### 5. Inspect the code
-
-`deploy/simulated/program.py` is the complete source for the simulated observing program — a good first look at the SensorKit API:
-
-```python
-import sensorkit.api as sk
-from sensorkit.astro.common import Horizontal
-from sensorkit.astro.target import AltAzTarget
-from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
-
-@sk.declare_program
-class SimProgram:
-
-    @sk.on_attach
-    async def startup(self):
-        now = datetime.now(UTC)
-        sk.program().add_offer(now, now + timedelta(days=1))
-        await sk.program().publish_offers()
-
-    @sk.task_factory
-    async def task_factory(self):
-        return StandardCollectTask(
-            task_id=uuid.uuid1(),
-            controller_id="sim_sensor",
-            target=AltAzTarget(coords=Horizontal(random.randint(0, 30), 85)),
-            camera_params=CameraParameterSet(
-                integration_time_seconds=5.0,
-                frame_count=3,
-            ),
-            end_time=datetime.now(UTC) + timedelta(minutes=2),
-        )
-
-@sk.service_entrypoint(version="1.0")
-async def main(service: sk.Service):
-    service.include(SimProgram)
-    await service.run()
-```
-
-Programs publish **offer windows** that tell the agent when they have work available. When the agent decides it is time to observe, it activates the program to begin pulling tasks from the **task factory** and dispatching them to the program's associated controller.
-
-In this example, the program advertises that it can do work for 1 day after it starts up, and, when activated, generates standard collect tasks with random alt/az targets.
-
----
-
-## What's in this documentation
-
-|                                   |                                                                   |
-|-----------------------------------|-------------------------------------------------------------------|
-| [Installation](installation.md)   | Install SensorKit, start NATS, load config, and run services      |
-| [Configuration](configuration.md) | KV store structure, loading config, inspecting and editing values |
-| [Device services](devices.md)     | ASCOM, PWI4, TheSky, Node Platform — config reference             |
-| [Sensor controller](sensor.md)    | Configure the controller, task lifecycle, and manual operation    |
-| [Agent](agent.md)                 | Modes, criteria, constraints, scheduling, and CLI control         |
-| [CLI reference](cli.md)           | Full reference for all `sensorkit` commands                       |
-| [API reference](api.md)           | All symbols exported from `sensorkit.api`                         |
+|                                     |                                                                        |
+|-------------------------------------|------------------------------------------------------------------------|
+| [Quick start](quickstart.md)        | Run a complete simulated observatory with Docker in about ten minutes   |
+| [Installation](installation.md)     | Install SensorKit, start NATS, and launch services                     |
+| [Configuration](configuration.md)   | The unified `sensorkit.yaml` file, data flow, and the KV store         |
+| [Device services](devices.md)       | Connect ASCOM Alpaca, PWI4, TheSky, and Node Platform hardware         |
+| [Sensor controller](sensor.md)      | Coordinate devices into an instrument; run tasks manually              |
+| [Observing programs](programs.md)   | Write a program that feeds targets to your telescope                   |
+| [The agent](agent.md)               | Modes, constraints, scheduling, and autonomous control                 |
+| [CLI reference](cli.md)             | Every `sensorkit` command                                              |
+| [API reference](api.md)             | The `sensorkit.api` Python surface                                     |

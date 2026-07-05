@@ -1,31 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from intervaltree import Interval
 from loguru import logger
 from pydantic import AfterValidator, BaseModel, Field
 
 import sensorkit.api as sk
 from sensorkit.auto.operator import ControllerConfig, VirtualOperator
 from sensorkit.auto.scheduler import Schedule
-from sensorkit.core.impl.entity import EntityImpl
 from sensorkit.core.task import TaskContexts
-
-
-class OfferInterval(Interval):
-    """A typed schedule interval with optional task-offer data."""
-    begin: datetime
-    end: datetime
-    data: Any = None
-
-
-@sk.declare_keyword
-class AgentSchedule(BaseModel):
-    """Published schedule keyword: per-controller offer windows for the current planning horizon."""
-    windows: dict[str, list[OfferInterval]]
 
 
 @sk.declare_keyword
@@ -34,29 +19,9 @@ class ElectionVotes(BaseModel):
     votes: dict[str, dict[str, bool | None]] = Field(default_factory=dict)
 
 
-@sk.declare_keyword
-class AgentActivationState(BaseModel):
-    """Published keyword: whether the agent's global control is currently active."""
-    activated: bool
-
-
-@sk.declare_keyword
-class ControllerActivationState(BaseModel):
-    """Published keyword: per-controller control-enabled state."""
-    controller: str
-    activated: bool
-
-
-@sk.declare_keyword
-class ControllerOverrideState(BaseModel):
-    """Published keyword: per-controller demand-override state (True=up, False=down, None=none)."""
-    controller: str
-    state: bool | None
-
-
 def _set_controller_config_names(configs: dict[str, ControllerConfig]):
     for name, config in configs.items():
-        config._name = name
+        config.name = name
 
     return configs
 
@@ -70,7 +35,7 @@ ControllerConfigMap = Annotated[
 class FirstRunConfig(BaseModel):
     """Initial state to assume on the first run before any persisted agent state exists."""
     operate_all: bool = False
-    enable_scheduling: bool = False
+    enable_scheduling: bool = True
 
 
 class AgentConfig(BaseModel):
@@ -178,7 +143,7 @@ class AgentSchedulerState(sk.Event):
             schedule=self.schedule,
         )
 
-    def derive_for_status(self, *, schedule: dict[str, list[OfferInterval]]):
+    def derive_for_status(self, *, schedule: dict[str, Schedule]):
         """Return a copy of this state updated with the latest *schedule* snapshots."""
         return self.model_copy(update=dict(schedule=schedule))
 
@@ -237,23 +202,6 @@ agent_configure_request = sk.Request.define(
 )
 
 
-# FIXME: Remove once the UI no longer relies on these publishes.
-async def do_compat_publishes(state: AgentState, impl: EntityImpl):
-    async with state.update_lock:
-        await impl.publish(
-            AgentActivationState(activated=state.operating_state.global_control_enabled)
-        )
-
-        for controller, info in state.operating_state.controllers.items():
-            await impl.publish(
-                ControllerOverrideState(controller=controller, state=info.demand_override)
-            )
-            await impl.publish(
-                ControllerActivationState(controller=controller, activated=info.control_enabled)
-            )
-
-
-
 # TODO: Move this to a generic entity impl. Want a core feature to collapse single-entity services
 #       into a single entity first.
 @sk.service_entrypoint(version=sk.VERSION)
@@ -276,14 +224,13 @@ async def agent_service(service: sk.Service):
         logger.debug("controllers manifest was updated due to config change")
         await state.update(service.context, update)
 
-    await do_compat_publishes(state, service.context)
-
     # Create the virtual operator and apply our initial state to it.
     operator = VirtualOperator(config.controllers.values())
     await state.apply_to_operator(operator, config.controllers)
 
     # Start the virtual operator.
-    await operator.start(client=service.client, task_group=service.context.task_group)
+    with service.context.enter_context():
+        await operator.start(client=service.client, task_group=service.context.task_group)
 
     # Handle configuration requests.
     # FIXME: asyncio.Lock does not guarantee FIFO wakeup order, so this usage could result in
@@ -301,7 +248,6 @@ async def agent_service(service: sk.Service):
                 state.scheduler_state.derive_for_request(request),
                 state.operating_state.derive_for_request(request),
             )
-            await do_compat_publishes(state, service.context)
 
             # Configure the virtual operator to reflect the new state.
             await state.apply_to_operator(operator, config.controllers)
@@ -314,27 +260,6 @@ async def agent_service(service: sk.Service):
         while True:
             await service.context.publish(
                 ElectionVotes(votes=operator.election._votes)
-            )
-
-            await service.context.publish(
-                AgentActivationState(activated=state.operating_state.global_control_enabled)
-            )
-
-            for name, driver in operator.drivers.items():
-                await service.context.publish(
-                    ControllerActivationState(
-                        controller=name,
-                        activated=driver.lifecycle._can_operate.is_set()
-                    )
-                )
-
-            await service.context.publish(
-                AgentSchedule(
-                    windows={
-                        name: sorted(driver.scheduler.intervals)
-                        for name, driver in operator.drivers.items()
-                    }
-                )
             )
 
             await state.update(
@@ -350,7 +275,7 @@ async def agent_service(service: sk.Service):
 
             await asyncio.sleep(1)
 
-    asyncio.create_task(publish())
+    _publish_task = asyncio.create_task(publish())
 
     await service.context.kv_put_model(Capabilities(
         controllers=config.controllers

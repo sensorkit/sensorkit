@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from abc import abstractmethod
@@ -14,7 +15,7 @@ from sensorkit.core.device import DeviceCommand, DeviceInterface
 from sensorkit.core.entity import EntityInterface
 from sensorkit.core.executor import TaskFactoryFunc
 from sensorkit.core.program import ProgramInterface
-from sensorkit.core.task import ControllerTask
+from sensorkit.core.task import Task
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Coroutine
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
     from sensorkit.backend.event import Event
     from sensorkit.backend.request import ExtendedHandlerFunc, HandlerFunc, Request
-    from sensorkit.common.keyword import Keyword, KeywordDict
+    from sensorkit.common.keyword import Keyword
     from sensorkit.core.client import SensorKit
     from sensorkit.data.context import Context
     from sensorkit.data.graph import DataGraph
@@ -117,12 +118,12 @@ class ControllerDelegate(EntityDelegate, ControllerInterface):
         return await self.delegate_target.stop_device_subscriptions()
 
     @override
-    def build_context(self, base: KeywordDict | None = None, **kwargs) -> Context:
-        return self.delegate_target.build_context(base=base, **kwargs)
+    async def update_context(self, *args, **kwargs) -> Context:
+        return await self.delegate_target.update_context(*args, **kwargs)
 
     @override
     def task_handler(
-        self, task_type: type[ControllerTask]
+        self, task_type: type[Task]
     ) -> Callable[[Callable[..., Coroutine[Any, Any, None]]], Callable[..., Coroutine[Any, Any, None]]]:
         return self.delegate_target.task_handler(task_type)
 

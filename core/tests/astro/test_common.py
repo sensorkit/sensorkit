@@ -1,18 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
 from datetime import UTC, datetime
 
 import numpy as np
 import pytest
 from astropy.coordinates import CIRS, GCRS, ICRS, ITRS, EarthLocation, SkyCoord
 
-from sensorkit.astro.common import (
-    TLE,
-    Cartesian,
-    Equatorial,
-    Geodetic,
-    Horizontal,
-    ReferenceFrame,
-    StateVector,
-)
+from sensorkit.astro.common import TLE, ReferenceFrame
+from sensorkit.astro.coords import Cartesian, Equatorial, Geodetic, Horizontal, StateVector
 
 
 def test_reference_frame_to_astropy():
@@ -133,3 +127,26 @@ def test_tle_to_list_without_line0():
     lst = tle.to_list()
     assert len(lst) == 2
     assert lst[0].startswith("1 ")
+
+
+def test_tle_norad_id_numeric():
+    # Standard 5-digit numeric catalog number (ISS = 25544)
+    assert _ISS_TLE.norad_id == "25544"
+
+
+def test_tle_norad_id_alpha5_a():
+    # A1234 -> (0 + 10) * 10000 + 1234 = 101234
+    tle = TLE(line0=None, line1="1 A1234U 98067A   25015.00000000  .00000000  00000-0  00000-0 0  9990", line2=_ISS_TLE.line2)
+    assert tle.norad_id == "101234"
+
+
+def test_tle_norad_id_alpha5_z():
+    # Z9999 -> (25 + 10) * 10000 + 9999 = 359999
+    tle = TLE(line0=None, line1="1 Z9999U 98067A   25015.00000000  .00000000  00000-0  00000-0 0  9990", line2=_ISS_TLE.line2)
+    assert tle.norad_id == "359999"
+
+
+def test_tle_norad_id_alpha5_lowercase():
+    # Lowercase letter should be treated the same as uppercase
+    tle = TLE(line0=None, line1="1 a1234U 98067A   25015.00000000  .00000000  00000-0  00000-0 0  9990", line2=_ISS_TLE.line2)
+    assert tle.norad_id == "101234"

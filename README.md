@@ -1,12 +1,23 @@
 # SensorKit
 
-SensorKit is a high-level, distributed command and control system for autonomous operation of sensor systems and astronomical observatories. It connects hardware drivers to a central automation layer over a NATS message bus, coordinating devices, sensors, and observing programs into a single managed system.
+**An open-source control system for autonomous observatories**, built for space domain awareness and time-domain astronomy. SensorKit connects your telescope hardware to an automation layer that decides — continuously and safely — when to open the dome, what to observe, and when to shut down, whether that's for a passing satellite, a transient follow-up, or an ordinary night of survey work.
 
-Hardware integrations are provided for ASCOM Alpaca, PlaneWave PWI4, Software Bisque TheSky, and Node Platform. The automation layer handles operating modes, weather constraints, priority-based scheduling, and safety interlocks. All components are independently deployable and communicate exclusively over NATS — services can run on separate machines, restart without disrupting each other, and be replaced without modifying anything else in the system.
+You describe your site in a single YAML file: which mount, camera, and dome you have, what weather limits you trust, and which observing programs are allowed to request time. SensorKit runs the night.
 
-## Try it
+## Highlights
 
-The fastest way to see SensorKit running is the simulated demo, which spins up a full observatory stack — simulated mount, camera, dome, and weather — using Docker Compose:
+- **Autonomous operation.** An agent service evaluates operating modes, weather and safety constraints, and program schedules — then starts up, tasks, and shuts down each sensor on its own. A single command hands control back to a human.
+- **Speaks your hardware's language.** Drivers for ASCOM Alpaca, PlaneWave PWI4, and Software Bisque TheSky are included, with additional modules for INDIGO, NINA, and the Observable Space Node Platform.
+- **Satellite tracking as a first-class citizen.** Targets can be fixed alt/az or ICRS positions, TLEs, state vectors, or precomputed ephemerides. SensorKit propagates orbits and drives mounts in rate-tracking modes for fast-moving objects.
+- **Observing programs in a few dozen lines of Python.** A program advertises *when* it has work and produces the *next task* when asked. Scheduling, priorities, device sequencing, and FITS writing are handled for you.
+- **Configuration-defined data flow.** Camera frames move through a pipeline you declare in YAML: FITS headers populated from live telescope state, compression, disk, or hand-off to analysis services.
+- **Built to be pulled apart.** Every device driver, sensor controller, program, and the agent itself is an independent service communicating over [NATS JetStream](https://nats.io) — run them on different machines, restart them independently, swap them freely.
+
+Batteries included: **Otto** (standalone satellite observation scheduling) and **UDL** (Unified Data Library tasking) observing programs, plus analysis modules for astrometry and photometry (**SENPAI**) and all-sky transmission. [SensorView](https://github.com/sensorkit/sensorview) is the graphical interface to a running system.
+
+## Quick start
+
+The repository ships a complete simulated observatory — mount, camera, dome, and weather simulators with the full automation stack on top. No hardware, just Docker:
 
 ```bash
 git clone <repo-url>
@@ -14,16 +25,7 @@ cd sensorkit/deploy/simulated
 docker compose up --build
 ```
 
-Open [http://localhost:6080](http://localhost:6080) to see the mount simulator. See the [quick start guide](./docs/index.md) for how to interact with the running system.
-
-## Documentation
-
-Documentation is located at [`docs/`](./docs/index.md). To build and serve it locally:
-
-```bash
-uv run zensical build
-uv run zensical serve
-```
+Open [http://localhost:6080](http://localhost:6080) to watch the simulated mount slew to targets. The [quick start guide](docs/quickstart.md) walks through the rest: exploring the system with the CLI, connecting SensorView, and reading the 35-line observing program that drives it.
 
 ## Installation
 
@@ -31,63 +33,28 @@ uv run zensical serve
 pip install sensorkit
 ```
 
-Hardware modules are optional extras:
-
-| Extra           | Hardware                                                                    |
-|-----------------|-----------------------------------------------------------------------------|
-| `ascom`         | ASCOM Alpaca (camera, mount, dome, focuser, rotator, filter wheel, weather) |
-| `pwi4`          | PlaneWave PWI4 (mount, focuser, rotator, mirror cover)                      |
-| `thesky`        | Software Bisque TheSky / SkyX                                               |
-| `node-platform` | Node Platform observatory controller                                        |
-| `otto`          | *TBD*                                                                       |
-
-Install one or more:
+Hardware and feature support ships as optional extras — install only what your site uses:
 
 ```bash
-pip install "sensorkit[ascom,pwi4]"
+pip install "sensorkit[alpaca,pwi4]"
 ```
 
-SensorKit requires a running NATS server with JetStream enabled. The simplest way to run one is:
+SensorKit requires Python 3.13+ and a NATS server with JetStream enabled:
 
 ```bash
 docker run -d --name nats -p 4222:4222 nats:alpine -js
+export NATS_URL=nats://localhost:4222
 ```
 
-Point SensorKit at it:
+See [Installation](docs/installation.md) for the full list of extras and how to go from an empty config to running services.
+
+## Documentation
+
+Full documentation lives in [`docs/`](docs/index.md) — quick start, installation, configuration, guides for devices, sensors, programs, and the agent, plus CLI and API references. To build and serve it locally:
 
 ```bash
-export SENSORKIT_BACKEND_ARG=nats://localhost:4222
+uv run zensical serve
 ```
-
-## Project structure
-
-```
-core/              Core framework and APIs
-  src/sensorkit/
-    api/           Declarative service API and entrypoint
-    backend/       NATS and FakeBackend abstraction
-    common/        Shared utilities and keyword system
-    core/          Device, Controller, Program base types
-    data/          Data graph and context pipeline
-    std/           Standard sensor controller and collect routines
-    astro/         Observers, targets, and trajectory types
-    auto/          Automation agent
-    cli/           Command-line interface
-
-modules/           Hardware and service integrations
-  ascom/           ASCOM Alpaca
-  pwi4/            PlaneWave PWI4
-  thesky/          Software Bisque TheSky
-  node_platform/   Node Platform
-  otto/            Otto
-
-deploy/
-  simulated/       Docker Compose demo with simulated hardware
-
-docs/              User documentation
-```
-
-Module source trees are assembled into the `sensorkit` package at build time by the Hatch build hook. In development, `core/src` and each `modules/*/src` directory are all on the Python path simultaneously (configured via `dev-mode-dirs` in `pyproject.toml`).
 
 ## Development
 
@@ -97,60 +64,28 @@ Module source trees are assembled into the `sensorkit` package at build time by 
 git clone <repo-url>
 cd sensorkit
 uv sync --all-extras
-```
 
-### Common tasks
-
-```bash
 # Run the test suite
 uv run pytest core/tests
-
-# Run a single test file
-uv run pytest core/tests/path/to/test_file.py
 
 # Run tests against a live NATS server (requires Docker)
 SK_TEST_BACKEND=nats ENV=local uv run pytest core/tests
 
-# Lint
+# Lint and check import-layer contracts
 uv run ruff check core modules
-
-# Format
-uv run ruff format core modules
-
-# Check import-layer contracts
 uv run lint-imports
 ```
 
-### Architecture rules
+To run the stack natively against the containerized simulators during development, see [Trying it against simulators](docs/installation.md#trying-it-against-simulators).
 
-Import-linter enforces a strict layering contract. The dependency order from bottom to top is:
+## Status
 
-```
-sensorkit.common
-sensorkit.backend
-sensorkit.core / .data
-sensorkit.api
-sensorkit.std
-sensorkit.astro
-sensorkit.auto
-sensorkit.cli
-modules (ascom, pwi4, …)
-```
-
-No layer may import from a layer above it. Modules may not import from other modules.
-
-### Running the CLI in development
-
-```bash
-uv run sensorkit --help
-```
+SensorKit is in **beta** and under active development. It runs real telescopes nightly, but APIs and configuration formats are still evolving, and some corners are unfinished. Feedback and issues are very welcome.
 
 ## Contributing
 
-*TBD* — contribution guidelines, PR process, and coding standards will be documented here.
-
-Please open an issue before starting work on a significant change.
+Contribution guidelines, PR process, and coding standards are still being documented. In the meantime, please open an issue before starting work on a significant change.
 
 ## License
 
-*TBD*
+Licensed under the [Apache License 2.0](LICENSE).

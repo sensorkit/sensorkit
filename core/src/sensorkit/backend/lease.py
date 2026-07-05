@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
@@ -25,6 +26,10 @@ class LeaseModel[M: BaseModel | None](BaseModel):
 
 class LeaseUnavailableError(BackendError):
     """Raised when a lease cannot be acquired because the key is already held."""
+
+
+class LeaseAbandonedError(BackendError):
+    """Raised when a lease is lost unexpectedly (TTL expiry or external deletion)."""
 
 
 class Lease[M: BaseModel | None]:
@@ -81,6 +86,7 @@ class Lease[M: BaseModel | None]:
         self.ttl = ttl
         self._revision = revision
         self.model = model
+        self.expire_called = False
         self._expired = asyncio.Event()
         self._lock = asyncio.Lock()
         self._task = asyncio.create_task(self._expiry_monitor())
@@ -135,6 +141,7 @@ class Lease[M: BaseModel | None]:
         """Expire the lease if it isn't already expired."""
         async with self._lock:
             if not self._expired.is_set():
+                self.expire_called = True
                 logger.debug(f"expiring lease for {self._kv.entity.subject(self._key)}")
 
                 async with asyncio.timeout(1.0):
@@ -192,7 +199,7 @@ class LeaseGroup:
         self._lease_added.set()
         return lease
 
-    async def refresh_loop(self, record_callback: Callable[[Lease], None] = None):
+    async def refresh_loop(self, record_callback: Callable[[Lease], None] | None = None):
         """Yield Leases as their scheduled refresh time becomes current.
 
         NOTE: This implementation requires that lease refreshes are performed serially. There are
@@ -218,10 +225,19 @@ class LeaseGroup:
                 # Wait for a lease to expire, a new lease to be added, or until our next scheduled
                 # refresh. If the return value is False, an expiration occurred.
                 if not await self._wait_for_event():
+                    abandoned = [
+                        lease
+                        for lease in self._lease_waiters
+                        if lease.expired and not lease.expire_called
+                    ]
                     break
         finally:
             # Expire all leases in the group on expiration of any lease or on error.
             await self.expire()
+
+        if abandoned:
+            keys = ", ".join(lease._key for lease in abandoned)
+            raise LeaseAbandonedError(f"Lease(s) lost unexpectedly: {keys}")
 
     async def expire(self):
         """Expire all leases in the group."""
@@ -254,7 +270,9 @@ class LeaseGroup:
         max_wait = self._time_until_next_refresh()
 
         async with scoped_waiter(self._lease_added.wait()) as wait_added:
-            expired, _ = await asyncio.wait([wait_added, *waiters], timeout=max_wait)
+            expired, _ = await asyncio.wait(
+                [wait_added, *waiters], timeout=max_wait, return_when=asyncio.FIRST_COMPLETED
+            )
             expired.discard(wait_added)
 
         self._lease_added.clear()

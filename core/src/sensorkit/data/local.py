@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
@@ -57,7 +58,7 @@ class AppSink(SinkOp):
         self._queue: asyncio.Queue[tuple[Context, Buffer]] = asyncio.Queue()
 
     async def consume(self):
-        """Async generator that yields ``(context, buffer)`` tuples as graph runs complete."""
+        """Async generator that yields `(context, buffer)` tuples as graph runs complete."""
         while True:
             record = await self._queue.get()
             self._queue.task_done()

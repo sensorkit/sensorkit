@@ -24,6 +24,7 @@ value:
     tle_update_interval_hours: 4         # How often to poll Spacebook for new TLEs
     graylist_interval_minutes: 15        # How often to promote from graylist
     end_time_deadband_seconds: 3600      # Extra time added to task end time
+    inter_task_delay_seconds: 0          # Fixed pause after each completed task (0 = back-to-back)
   collect:
     altitude_min: 20                     # Minimum observing altitude (degrees)
     track_mode: rate_sidereal            # Collection mode [rate, sidereal, rate_sidereal]
@@ -50,10 +51,6 @@ value:
       username: ${UDL_USERNAME}
       password: ${UDL_PASSWORD}
       sensor_name: MY_SENSOR
-  server:
-    host: 0.0.0.0
-    port: 8001
-    log_level: INFO
 
 ---
 
@@ -76,8 +73,8 @@ value:
       keyword_map:
         task_id: TASK_ID
         frame_num: FRAMENUM
-        image_width: NAXIS2
-        image_height: NAXIS1
+        image_width: NAXIS1
+        image_height: NAXIS2
       output:
         - sink
     sink:
@@ -176,5 +173,5 @@ UDL publishing is not yet implemented in otto.
 ## Usage
 
 ```sh
-sensorkit service run -s sensorkit.otto.service -n otto
+sensorkit service run -s sensorkit.otto.program -n otto
 ```

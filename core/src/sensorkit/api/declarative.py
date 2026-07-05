@@ -1,7 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import functools
 import inspect
 import warnings
@@ -22,12 +22,13 @@ from sensorkit.core.delegate import (
     ProgramDelegate,
 )
 from sensorkit.core.device import CommandHandlerCallback, DeviceCommand
+from sensorkit.core.entity import DeviceDetails
 from sensorkit.core.executor import TaskFactoryFunc
 from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.impl.device import DeviceImpl
 from sensorkit.core.impl.entity import EntityImpl
 from sensorkit.core.impl.program import ProgramImpl
-from sensorkit.core.task import ControllerTask
+from sensorkit.core.task import Task
 from sensorkit.core.trait import Archetype, Trait
 
 type AnyEntityDecl = DeclaredEntity | DeclaredDevice | DeclaredController | DeclaredProgram
@@ -138,8 +139,6 @@ class DeclaredEntity[T: EntityImpl = EntityImpl](EntityDelegate):
     def __init__(self, name: str | None):
         self.name = name
         self._associated_callbacks: list[tuple[CallbackKind, Callable]] = []
-        self._init_callbacks: list[InitDeinitCallback] = []
-        self._deinit_callbacks: list[InitDeinitCallback] = []
 
         # These are set when the service is registered.
         self.client: SensorKit | None = None  # TODO: Remove when the impl itself provides this.
@@ -175,9 +174,6 @@ class DeclaredEntity[T: EntityImpl = EntityImpl](EntityDelegate):
             service: the service context that manages this entity's lifecycle
             acquire_lease: whether to acquire a lease on the entity during registration
 
-        Returns:
-            a Future that will complete when the service exits
-
         Raises:
             DeclarationError: if the entity does not have a name assigned
             Exception: any exception raised by an initialization callback is propagated
@@ -192,68 +188,32 @@ class DeclaredEntity[T: EntityImpl = EntityImpl](EntityDelegate):
         for kind, func in self._associated_callbacks:
             self.register_callback(kind, func)
 
-        # Register with the backend. If lease acquisition fails, we raise here and the service
-        # will exit.
-        await service.register_impl(self.impl, acquire_lease=acquire_lease)
+        # Validate the declaration against the now-configured impl, before we touch the backend.
+        self.validate_declaration()
 
         # Store references for use by the caller.
         self.client = client
         self.service = service
 
-        # Run init callbacks.
-        with self.impl.enter_context():
-            for init_callback in self._init_callbacks:
-                try:
-                    aw = init_callback()
+        # Register and attach the impl. If lease acquisition fails, we raise here and the service
+        # will exit.
+        await service.register_impl(self.impl, acquire_lease=acquire_lease)
 
-                    if asyncio.iscoroutine(aw):
-                        await aw
-                except Exception as e:
-                    logger.warning(f"Error during {self.name} initialization ({type(e).__name__})")
-                    raise
-
-        # Run post-initialization hook.
-        await self.post_decl_init()
-
-        async def run_deinit_callbacks():
-            # Wait for the service task to end. We defer propagation of any exceptions until after
-            # our deinit callbacks have been run.
-            with contextlib.suppress(BaseException):
-                await self.service.join()
-
-                # Run deinit callbacks.
-                with self.impl.enter_context():
-                    for deinit_callback in self._deinit_callbacks:
-                        try:
-                            aw = deinit_callback()
-
-                            if asyncio.iscoroutine(aw):
-                                await aw
-                        except Exception as e:
-                            logger.warning(f"Error cleaning up {self.name} ({type(e).__name__})")
-                            logger.opt(exception=e).debug("deinit callback raised")
-
-            # Propagate exception, if any.
-            await self.service.join()
-
-        self._deinit_task = asyncio.create_task(run_deinit_callbacks())
-        return self._deinit_task
+    def validate_declaration(self):
+        """Validate the declaration against the configured implementation."""
+        pass
 
     def create_impl(self, service: ServiceContext):
         """Instantiate the implementation object bound to *service*."""
         return EntityImpl.for_service_context(service, self.name)
 
-    async def post_decl_init(self):
-        """Hook called after initialization callbacks."""
-        await self.impl.publish_entity_info()
-
     def register_callback(self, kind: CallbackKind, func: Callable):
         """Route a callback to the appropriate registration method on the implementation."""
         match kind:
             case CallbackKind.ENTITY_INIT:
-                self._init_callbacks.append(func)
+                self.impl.on_attach(func)
             case CallbackKind.ENTITY_DEINIT:
-                self._deinit_callbacks.append(func)
+                self.impl.on_detach(func)
 
 
 class DeclaredDevice(DeclaredEntity[DeviceImpl], DeviceDelegate):
@@ -268,16 +228,33 @@ class DeclaredDevice(DeclaredEntity[DeviceImpl], DeviceDelegate):
         return DeviceImpl.for_service_context(svc, self.name)
 
     @override
-    async def post_decl_init(self):
-        info = await self.impl.publish_entity_info()
-
-        # Validate declared traits.
+    def validate_declaration(self):
+        # FIXME: For now we trust the device to publish the keywords required by its traits.
+        #        This should be removed in favor of API that allows the device implementation
+        #        to explicitly declare the keywords it publishes, which can then be used to
+        #        validate whether its traits are satisfied.
         for trait in self._declared_traits:
-            if not trait.match(info.details):
-                missing = trait.effective_command_ids() - set(info.details.supported_commands)
+            for kw_id in trait.effective_keyword_ids():
+                self.impl.declare_published_keyword(kw_id)
+
+        # Validate declared traits against the info the device will publish when it attaches.
+        details = self.impl.entity_info().details
+
+        if not isinstance(details, DeviceDetails):
+            raise RuntimeError("Device did not publish its details")
+
+        for trait in self._declared_traits:
+            if not trait.match(details):
+                missing = []
+
+                if commands := trait.effective_command_ids() - details.supported_commands:
+                    missing.append("does not implement " + ", ".join(sorted(commands)))
+
+                if keywords := trait.effective_keyword_ids() - details.published_keywords:
+                    missing.append("does not publish " + ", ".join(sorted(keywords)))
+
                 raise DeclarationError(
-                    f"Device declares trait '{trait.name}' "
-                    f"but does not implement commands: {"".join(missing)}"
+                    f"Device declares trait '{trait.name}' but {'; '.join(missing)}"
                 )
 
     @override
@@ -302,16 +279,6 @@ class DeclaredController(DeclaredEntity[ControllerImpl], ControllerDelegate):
         return ControllerImpl.for_service_context(svc, self.name)
 
     @override
-    async def post_decl_init(self):
-        await self.impl.publish_entity_info()
-
-        # Insert subscription stop as the first deinit callback so it runs
-        # before user-defined on_detach handlers.
-        self._deinit_callbacks.insert(0, self.impl.stop_device_subscriptions)
-
-        await self.impl.start_device_subscriptions()
-
-    @override
     def register_callback(self, kind: CallbackKind, func: Callable):
         super().register_callback(kind, func)
 
@@ -319,7 +286,7 @@ class DeclaredController(DeclaredEntity[ControllerImpl], ControllerDelegate):
             case CallbackKind.TASK_HANDLER:
                 task_type = introspect_param_type(func)
 
-                if not issubclass(task_type, ControllerTask):
+                if not issubclass(task_type, Task):
                     raise DeclarationError("Task handler parameter has incorrect type")
 
                 self.impl.task_handler(task_type)(func)
@@ -356,10 +323,8 @@ class Service:
         self.client: SensorKit | None = None
         self._delegate_entity: DeclaredEntity | None = None
         self._register_lock = asyncio.Lock()
-        self._deinit_tasks: tuple[asyncio.Task, ...] = ()
-
+        self._started = False
         loop = asyncio.get_running_loop()
-        self.started = loop.create_future()
         self.running = loop.create_future()
         self.shutdown = loop.create_future()
 
@@ -474,7 +439,7 @@ class Service:
     def include_module(self, **kwargs):
         """Add all entity declarations found in the calling module.
 
-        See the ``include`` method.
+        See the `include` method.
         """
         # Include decls from the module of the user code call site. We must check for None here
         # because in certain contexts there may be no calling module.
@@ -492,22 +457,17 @@ class Service:
 
     async def start(self):
         """Start the service."""
-        try:
-            if self.started.done():
-                raise RuntimeError("Service was already started")
+        if self._started:
+            raise RuntimeError("Service was already started")
 
-            self.started.set_result(True)
-        except BaseException as e:
-            self.started.set_exception(e)
-            self.shutdown.set_exception(e)
-            raise
+        self._started = True
 
         try:
             # Register as a service.
             await self.register()
 
             # Register all declared entities.
-            self._deinit_tasks = await asyncio.gather(
+            await asyncio.gather(
                 *(
                     decl.register(
                         self.client, self.context, acquire_lease=decl is not self._delegate_entity
@@ -521,7 +481,10 @@ class Service:
             logger.debug(f"service error propagated to declarative API: {type(e).__name__}: {e}")
             self.running.set_exception(e)
             self.shutdown.set_exception(e)
-            await self.context.shutdown()
+
+            if self.context is not None:
+                await self.context.shutdown()
+
             raise
 
         async def wait_for_shutdown():
@@ -550,14 +513,11 @@ class Service:
         finally:
             await self.stop()
 
-    async def cleanup(self):
-        """Wait for all deinit tasks to complete."""
-        await asyncio.gather(*self._deinit_tasks, return_exceptions=True)
-
     async def stop(self):
         """Stop the service."""
-        await self.context.shutdown()
-        await self.cleanup()
+        if self.context is not None:
+            await self.context.shutdown()
+
         await self.shutdown
 
 
@@ -656,9 +616,9 @@ def declare_device(
 ):
     """Declare a Device to be implemented by a local service.
 
-    Can be used as a bare class decorator (``@sk.declare_device``), a keyword
-    decorator (``@sk.declare_device(type=..., traits=[...])``), or an explicit declaration
-    (``my_device = sk.declare_device(name="foo", type=..., traits=[...])``)
+    Can be used as a bare class decorator (`@sk.declare_device`), a keyword
+    decorator (`@sk.declare_device(type=..., traits=[...])`), or an explicit declaration
+    (`my_device = sk.declare_device(name="foo", type=..., traits=[...])`)
     """
     all_traits: list[Trait] | None = None
     if type is not None or traits:

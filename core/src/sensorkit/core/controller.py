@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from abc import abstractmethod
@@ -5,7 +6,7 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum, auto
-from typing import Any, Callable, ClassVar, Collection, Mapping, Self
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Collection, Mapping, Self
 
 import uuid_utils.compat as uuid
 from pydantic import BaseModel, Field, model_validator
@@ -16,8 +17,11 @@ from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceClient
 from sensorkit.core.entity import EntityClient, EntityInterface, EntityRef
 from sensorkit.core.state import EventSourcedState
-from sensorkit.core.task import ControllerTask
+from sensorkit.core.task import Task, TaskExecution
 from sensorkit.data.context import Context, ContextSubscription
+
+if TYPE_CHECKING:
+    from sensorkit.core.client import SensorKit
 
 
 class InternalControllerState(StrEnum):
@@ -48,12 +52,64 @@ class TaskExecutionState(Event):
     executing: bool = False
     aborting: bool = False
     finished: TaskFinishInfo | None = None
-    task: ControllerTask | None
+    execution: TaskExecution | None
     context: dict | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_task(cls, data: Any) -> Any:
+        """Upgrade events persisted by versions predating the Task/TaskExecution split.
+
+        Two legacy shapes are upgraded here:
+
+        * Versions before the split stored the executing task on `task` as a flat
+          `ControllerTask` — identity (`task_id`, `controller_id`), `context` and the
+          `end_time` deadline embedded alongside the discriminated task fields. This version
+          expects a `TaskExecution` envelope wrapping the semantic `task`.
+        * Versions after the split but before `task` was renamed to `execution` stored the
+          envelope under the `task` key.
+
+        Both are carried onto `execution`. Rewriting the legacy shape here covers both reads:
+        the KV `ControllerState` snapshot (whose `execution_state` is validated as this model)
+        and event-stream replay (where each event is validated through the registry). Without it,
+        state carried by a NATS broker from an older version would raise a `ValidationError`.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        # The pre-rename wire format carried the executing task (flat or enveloped) under `task`.
+        # Lift it onto `execution` so the rest of the migration — and the model — see one key.
+        if "execution" not in data and "task" in data:
+            data = dict(data)
+            data["execution"] = data.pop("task")
+
+        legacy = data.get("execution")
+
+        # A legacy task is a flat `ControllerTask`: it carries the discriminator at the top level
+        # and has no nested `task` envelope. A current `TaskExecution` always nests `task`.
+        if not isinstance(legacy, dict) or "task_type" not in legacy or "task" in legacy:
+            return data
+
+        # Lift the envelope fields off the task; the remaining keys (`task_type` plus domain
+        # fields) become the wrapped semantic task. The legacy `end_time` was the execution
+        # deadline, so it maps to the envelope's `expiry_time`; task types that still declare
+        # `end_time` as a domain field (e.g. `standard_collect`) keep their own copy because it
+        # is left in the wrapped task.
+        envelope = {
+            "task": {
+                k: v for k, v in legacy.items() if k not in ("task_id", "controller_id", "context")
+            },
+            "task_id": legacy.get("task_id"),
+            "controller_id": legacy.get("controller_id"),
+            "context": legacy.get("context"),
+            "expiry_time": legacy.get("end_time"),
+        }
+
+        return {**data, "execution": envelope}
 
     @model_validator(mode="after")
     def _validate(self):
-        if self.executing and self.task is None:
+        if self.executing and self.execution is None:
             raise ValueError("inconsistent state fields: executing with no task")
 
         if self.aborting and not self.executing:
@@ -111,15 +167,25 @@ set_enable_state_request = Request.define(
 
 
 class ExecuteRequestMessage(BaseModel):
-    """Message model representing a Task execution request."""
-    task: ControllerTask
+    """A task execution request.
+
+    The client supplies the semantic `task` plus optional execution parameters. The controller
+    mints the identity (`task_id`, `controller_id`) and returns the resulting `TaskExecution` in
+    the response.
+    """
+    task: Task
+    context: KeywordDict | None = None
+    expiry_time: datetime | None = None
     interrupt: bool = False
 
 
 class ExecuteResponseMessage(ExtendedResponse):
-    """Message model representing a response to a Task execution request."""
-    task_id: uuid.UUID
-    start_time: datetime | None = None
+    """A response to a task execution request.
+
+    Carries the minted `TaskExecution` envelope so the client learns the assigned `task_id` (e.g.
+    for a subsequent abort) without having to supply it.
+    """
+    execution: TaskExecution | None = None
 
 
 class AbortRequestMessage(BaseModel):
@@ -177,14 +243,71 @@ class ControllerClient(EntityClient):
 
     def execute_task(
         self,
-        task: ControllerTask,
+        task: Task,
+        *,
+        context: KeywordDict | None = None,
+        expiry_time: datetime | None = None,
         interrupt=False,
     ) -> Call[ExecuteResponseMessage, TaskExecutionResult]:
-        """Send a task execution request to the controller and return a Call tracking completion."""
+        """Send a task execution request to the controller and return a `Call` tracking completion.
+
+        The controller assigns the `task_id` and `controller_id`. The optional execution
+        parameters are recorded on the resulting `TaskExecution`.
+
+        Args:
+            task: The semantic task to execute.
+            context: Optional keyword context to attach to the execution.
+            expiry_time: Optional time after which the execution should be considered expired.
+            interrupt: Whether to interrupt any task currently in progress.
+
+        Returns:
+            A `Call` that yields the final `TaskExecutionResult` when awaited.
+        """
         return self.call(
             execute_task_request,
-            ExecuteRequestMessage(task=task, interrupt=interrupt),
+            ExecuteRequestMessage(
+                task=task,
+                context=context,
+                expiry_time=expiry_time,
+                interrupt=interrupt,
+            ),
         )
+
+    async def start_task(
+        self,
+        task: Task,
+        *,
+        context: KeywordDict | None = None,
+        expiry_time: datetime | None = None,
+        interrupt=False,
+    ) -> TaskExecution:
+        """Submit a task and return its execution envelope once the controller acknowledges it.
+
+        Unlike `execute_task`, this awaits only the controller's initial response, then returns the
+        minted `TaskExecution`. The controller assigns the identity (`task_id`, `controller_id`);
+        the returned execution is bound to the in-flight call, so the caller can read the assigned
+        identity immediately and `await` the execution itself for the final `TaskExecutionResult`.
+
+        Args:
+            task: The semantic task to execute.
+            context: Optional keyword context to attach to the execution.
+            expiry_time: Optional time after which the execution should be considered expired.
+            interrupt: Whether to interrupt any task currently in progress.
+
+        Returns:
+            The minted execution envelope, awaitable for the final result.
+        """
+        call = self.execute_task(
+            task, context=context, expiry_time=expiry_time, interrupt=interrupt
+        )
+        response = await call.invoke()
+        execution = response.execution
+        assert execution is not None, "controller acknowledged task without an execution envelope"
+
+        # The in-flight call's future resolves to the result in this (client) context.
+        execution.bind_result(call.get_future())
+
+        return execution
 
     def abort_task(self, task_id: uuid.UUID | None = None) -> Call[AbortResponseMessage, None]:
         """Send an abort request to the controller for the optionally specified task ID."""
@@ -195,7 +318,7 @@ class ControllerClient(EntityClient):
         # FIXME: This is unreliable at present due to backend limitations.
         async for event in ControllerState.event_stream(self, TaskExecutionState):
             if task_id is not None:
-                if event.task is None or event.task.task_id != task_id:
+                if event.execution is None or event.execution.task_id != task_id:
                     return None
 
             if not event.executing:
@@ -206,6 +329,9 @@ class ControllerClient(EntityClient):
 
 class ControllerRef(EntityRef[ControllerClient]):
     """A serializable reference to a controller client."""
+
+    def _get_client(self, kit: SensorKit) -> ControllerClient:
+        return kit.controller(self.name)
 
 
 @dataclass
@@ -225,7 +351,7 @@ class ControllerDevice(Mapping[Any, Any]):
         return iter(self.subscription.cache)
 
 
-type TaskHandlerCallback[T: ControllerTask] = Callable[[T], Coroutine[Any, Any, None]]
+type TaskHandlerCallback[T: Task] = Callable[[T], Coroutine[Any, Any, None]]
 
 
 class ControllerInterface(EntityInterface):
@@ -267,16 +393,16 @@ class ControllerInterface(EntityInterface):
         ...
 
     @abstractmethod
-    def build_context(
+    async def update_context(
         self,
-        base: KeywordDict | None = None,
+        *args,
         **kwargs,
     ) -> Context:
-        """Build a Context from the current device keyword state, merging any provided base values."""
+        """Update the context of the currently executing task."""
         ...
 
     @abstractmethod
-    def task_handler(self, task_type: type[ControllerTask]) -> Callable[..., TaskHandlerCallback]:
+    def task_handler(self, task_type: type[Task]) -> Callable[..., TaskHandlerCallback]:
         """Register a handler for the given task type and return a decorator."""
         ...
 

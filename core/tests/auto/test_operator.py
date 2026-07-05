@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """System tests for VirtualOperator driving election, demand, and lifecycle.
 
 Tests the agent layer: VirtualOperator with election, demand evaluation,
@@ -22,7 +23,7 @@ from sensorkit.auto.scheduler import ProgramConfig
 from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.program import ProgramDiscovery, ProgramState
 from sensorkit.core.task import InitTask, ShutdownTask
-from sensorkit.models.devices import SitePosition
+from sensorkit.astro.common import SitePosition
 
 _test_position = SitePosition(latitude_degrees=42.0, longitude_degrees=123.0, altitude_km=3.0)
 
@@ -34,7 +35,7 @@ async def test_operator_override_drives_operate(kit, service_context):
 
     # Create operator with one controller, no modes/constraints, one program reference.
     config = ControllerConfig(tasking=[ProgramConfig(program="prog1")])
-    config._name = "ctrl1"
+    config.name = "ctrl1"
     operator = VirtualOperator([config])
 
     async with asyncio.timeout(5.0):
@@ -88,7 +89,7 @@ async def test_operator_override_false_shuts_down(kit, service_context):
     shutdown_ran = asyncio.Event()
 
     config = ControllerConfig(tasking=[ProgramConfig(program="prog1")])
-    config._name = "ctrl1"
+    config.name = "ctrl1"
     operator = VirtualOperator([config])
 
     async with asyncio.timeout(5.0):
@@ -208,7 +209,7 @@ async def test_late_discovered_program_gets_enabled(kit, service_context):
             ProgramConfig(program="late_prog"),
         ],
     )
-    config._name = "ctrl1"
+    config.name = "ctrl1"
     operator = VirtualOperator([config])
 
     # Apply state that desires both programs enabled.

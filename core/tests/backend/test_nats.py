@@ -1,7 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for NATS backend specifics not covered by the generic backend suite.
 
 Integration tests require Docker (via testcontainers) and are skipped when
-``ENV`` is not set to ``local``. Unit tests (mocked KeyWatcher) always run.
+`ENV` is not set to `local`. Unit tests (mocked KeyWatcher) always run.
 """
 
 from __future__ import annotations
@@ -59,7 +60,7 @@ async def test_kv_iterator_separates_initial_from_live():
     """_kv_iterator must yield initial entries as one batch, then live entries individually.
 
     Regression: a previous implementation used an async list-comprehension
-    ``[_kv_entry(e) async for e in watcher]`` that never checked for the
+    `[_kv_entry(e) async for e in watcher]` that never checked for the
     None end-of-initial sentinel, causing either an AttributeError (on
     None.key) or an infinite hang.
     """

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
@@ -34,7 +35,7 @@ def test_entity_ref_resolve_and_cache(kit):
     with pytest.raises(RuntimeError):
         _ = ref.get()
 
-    # Resolving binds it to a client (uses kit.device under the hood)
+    # Resolving binds it to a client
     ref.resolve(kit)
     client1 = ref.get()
     assert client1 is not None

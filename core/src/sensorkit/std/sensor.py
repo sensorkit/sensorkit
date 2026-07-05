@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
@@ -8,26 +9,20 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
-from sensorkit.astro.common import ReferenceFrame
-from sensorkit.astro.target import AltAzTarget, FrameTarget, ICRSTarget, TLETarget
-from sensorkit.core import task
+from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
+from sensorkit.astro.target import CatalogTarget, FrameTarget, ICRSTarget, TLETarget
 from sensorkit.models.devices import (
-    AltAzPointing,
     AxisRates,
-    CameraCapture,
-    Close,
-    Connect,
     Deinit,
     FollowTarget,
     Init,
-    Open,
-    RADecPointing,
-    SetBinning,
-    SetFilter,
-    SitePosition,
     Stop,
 )
-from sensorkit.std.collect import StandardCollectTask
+from sensorkit.std.collect import Collect, StandardCollectTask
+from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
+from sensorkit.std.instrument import Binning, CameraCapture, ConfigureCameraSensor
+from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover, SetFilter
+from sensorkit.std.traits import Connect
 
 
 class Sensor:
@@ -38,8 +33,8 @@ class Sensor:
         self.mount = impl.use_device(
             devices.mount,
             subscribe=[AltAzPointing, RADecPointing, AxisRates],
-        )
-        self.camera = impl.use_device(devices.camera)
+        ) if devices.mount else None
+        self.camera = impl.use_device(devices.camera) if devices.camera else None
         self.focuser = impl.use_device(devices.focuser) if devices.focuser else None
         self.rotator = impl.use_device(devices.rotator) if devices.rotator else None
         self.mirror_cover = impl.use_device(devices.mirror_cover) if devices.mirror_cover else None
@@ -51,25 +46,27 @@ class Sensor:
         if self.dome:
             logger.info("Opening the dome")
             async with asyncio.timeout(self.policies.dome_open_close_timeout):
-                await self.dome.command(Open())
+                await self.dome.command(OpenEnclosure())
 
     async def deinit_dome(self):
         """Close the dome if one is configured."""
         if self.dome:
             logger.info("Closing the dome")
             async with asyncio.timeout(self.policies.dome_open_close_timeout):
-                await self.dome.command(Close())
+                await self.dome.command(CloseEnclosure())
 
     async def init_mount(self):
         """Initialize the mount."""
-        logger.info("Initializing the mount")
-        async with asyncio.timeout(self.policies.mount_init_timeout):
-            await self.mount.command(Init())
+        if self.mount:
+            logger.info("Initializing the mount")
+            async with asyncio.timeout(self.policies.mount_init_timeout):
+                await self.mount.command(Init())
 
     async def deinit_mount(self):
         """Deinitialize the mount."""
-        logger.info("Deinitializing the mount")
-        await self.mount.command(Deinit())
+        if self.mount:
+            logger.info("Deinitializing the mount")
+            await self.mount.command(Deinit())
 
     async def init_mirror_cover(self):
         """Open the mirror cover if one is configured."""
@@ -77,7 +74,7 @@ class Sensor:
             # Start opening the mirror cover.
             logger.info("Opening mirror cover")
             async with asyncio.timeout(self.policies.mirror_cover_open_close_timeout):
-                await self.mirror_cover.command(Open())
+                await self.mirror_cover.command(OpenMirrorCover())
 
     async def deinit_mirror_cover(self):
         """Close the mirror cover if one is configured."""
@@ -85,24 +82,20 @@ class Sensor:
             # Start closing the mirror cover.
             logger.info("Closing mirror cover")
             async with asyncio.timeout(self.policies.mirror_cover_open_close_timeout):
-                await self.mirror_cover.command(Close())
+                await self.mirror_cover.command(CloseMirrorCover())
 
     async def init_all(self, tg: asyncio.TaskGroup):
         """Init the mount and open the dome and mirror cover, if configured."""
         tasks = []
 
         # Open the dome, if any.
-        tasks.append(
-            tg.create_task(self.init_dome())
-        )
+        tasks.append(tg.create_task(self.init_dome()))
 
         if not self.policies.concurrent_dome_and_mount_init:
             await asyncio.wait(tasks)
 
         # Initialize the mount.
-        tasks.append(
-            tg.create_task(self.init_mount())
-        )
+        tasks.append(tg.create_task(self.init_mount()))
 
         if not self.policies.concurrent_mount_and_mirror_cover_init:
             await asyncio.wait(tasks)
@@ -115,8 +108,9 @@ class Sensor:
 
     async def stop_all(self):
         """Issue Stop commands to the mount, dome, and mirror cover, suppressing any errors."""
-        with contextlib.suppress(Exception):
-            await self.mount.command(Stop())
+        if self.mount:
+            with contextlib.suppress(Exception):
+                await self.mount.command(Stop())
 
         if self.dome:
             with contextlib.suppress(Exception):
@@ -170,7 +164,7 @@ class SensorControl:
         logger.info(f"Sensor '{sk.controller().entity}' is ready to operate")
 
     @sk.task_handler
-    async def sensor_standby(self, task: task.StandbyTask):
+    async def sensor_standby(self, task: sk.StandbyTask):
         """Put the sensor in standby mode."""
         # FIXME: Presently this is a synonym for init. Semantics should be dictated by config.
         try:
@@ -187,14 +181,16 @@ class SensorControl:
     @sk.task_handler
     async def sensor_collect(self, task: StandardCollectTask):
         """Execute a StandardCollectTask: slew, configure camera, capture frames."""
+        if not self.sensor.mount or not self.sensor.camera:
+            raise RuntimeError("Standard collect requires a mount and a camera")
+
         # Perform the device commands to do the collect!
         logger.info("Moving to target")
         await self.sensor.mount.command(FollowTarget(target=task.target))
 
         logger.info("Reached target")
 
-        if (task.camera_params.filter_name is not None
-            and self.sensor.filter_wheel is not None):
+        if task.camera_params.filter_name is not None and self.sensor.filter_wheel is not None:
             await self.sensor.filter_wheel.command(
                 SetFilter(filter=task.camera_params.filter_name)
             )
@@ -202,54 +198,56 @@ class SensorControl:
         # Configure camera capture parameters.
         if None not in (task.camera_params.binning_x, task.camera_params.binning_y):
             await self.sensor.camera.command(
-                SetBinning(
-                    x=task.camera_params.binning_x,
-                    y=task.camera_params.binning_y,
+                ConfigureCameraSensor(
+                    binning=Binning(
+                        x=task.camera_params.binning_x,
+                        y=task.camera_params.binning_y,
+                    ),
                 )
             )
 
-        # FIXME: Ad hoc context should be formalized as Keywords.
-        adhoc = dict(
-            binning_x=task.camera_params.binning_x,
-            binning_y=task.camera_params.binning_y,
-            elevation=self.config.site_position.altitude_km,
-            filter_name=task.camera_params.filter_name,
-            frame_count=task.camera_params.frame_count,
-            latitude=self.config.site_position.latitude_degrees,
-            longitude=self.config.site_position.longitude_degrees,
-            task_id=task.task_id,
+        # Set base context for all frames.
+        collect = Collect(
+            target=task.target,
+            params=task.camera_params,
+            target_id=(
+                task.target_id
+                if task.target_id
+                else task.target.tle.norad_id
+                if isinstance(task.target, TLETarget)
+                else task.target.object
+                if isinstance(task.target, CatalogTarget)
+                else None
+            ),
         )
+        await sk.controller().update_context(self.config.site_position, collect)
 
-        match task.target:
-            case ICRSTarget():
-                adhoc["track_mode"] = "sidereal"
-            case AltAzTarget():
-                adhoc["track_mode"] = "fixed"
-            case TLETarget():
-                adhoc["track_mode"] = "rate"
-                adhoc["target_name"] = task.target.tle.line0
-                adhoc["target_id"] = f"{int(task.target.tle.line1[2:7])}"
-            case _:
-                adhoc["track_mode"] = "rate"
+        # For inherently sidereal targets (stars), the initial FollowTarget already
+        # establishes sidereal tracking — mark as sidereal from the start so the frame
+        # loop never issues a redundant tracking switch.
+        target_is_sidereal = isinstance(task.target, (ICRSTarget, CatalogTarget))
+        currently_sidereal = target_is_sidereal
 
         # Capture the requested frames.
         for frame_num in range(0, task.camera_params.frame_count):
-            if task.sidereal_track_from_frame == frame_num:
-                # Switch to sidereal tracking.
-                logger.info("Beginning sidereal track")
-                await self.sensor.mount.command(
-                    FollowTarget(target=FrameTarget(frame=ReferenceFrame.ICRF))
-                )
-                adhoc["track_mode"] = "sidereal"
-                await asyncio.sleep(0.1)
+            collect.frame_number = frame_num
+            want_sidereal = target_is_sidereal or frame_num in task.sidereal_frames
 
-            logger.info(f"Acquiring frame #{frame_num}")
+            if want_sidereal and not currently_sidereal:
+                # Hold the current RA/Dec under sidereal tracking.
+                logger.info(f"Frame #{frame_num+1} of {task.camera_params.frame_count}: switching to sidereal track")
+                collect.target = FrameTarget(frame=ReferenceFrame.ICRF)
+                await self.sensor.mount.command(FollowTarget(target=collect.target))
+                currently_sidereal = True
+            elif not want_sidereal and currently_sidereal:
+                # Resume following the original target.
+                logger.info(f"Frame #{frame_num+1} of {task.camera_params.frame_count}: resuming target track")
+                collect.target = task.target
+                await self.sensor.mount.command(FollowTarget(target=collect.target))
+                currently_sidereal = False
 
-            context = sk.controller().build_context(
-                task.get_context(),
-                **adhoc,
-                frame_num=frame_num,
-            )
+            logger.info(f"Acquiring frame #{frame_num+1} of {task.camera_params.frame_count}")
+            context = await sk.controller().update_context(collect)
             _add_compat_context(context)
 
             await self.sensor.camera.command(
@@ -263,8 +261,9 @@ class SensorControl:
         await self.sensor.mount.command(Stop())
 
     @sk.task_handler
-    async def sensor_recover(self, task: task.RecoverTask):
+    async def sensor_recover(self, task: sk.RecoverTask):
         """Reconnect to all devices and stop any in-progress motion."""
+
         def assert_success_or_unsupported(results: tuple[Any]):
             logger.debug(f"{results=}")
 
@@ -312,8 +311,9 @@ class SensorControl:
 
 class SensorDevices(BaseModel):
     """Device entity references for sensor control."""
-    mount: str
-    camera: str
+
+    mount: str | None = None
+    camera: str | None = None
     focuser: str | None = None
     rotator: str | None = None
     filter_wheel: str | None = None
@@ -357,15 +357,26 @@ class SensorPolicies(BaseModel):
 
 class SensorConfig(BaseModel):
     """Configuration for standard sensor control."""
+
     controller_name: str
     devices: SensorDevices
     site_position: SitePosition
     policies: SensorPolicies = Field(default_factory=SensorPolicies)
 
 
+sk.declare_config_section(
+    "sensors",
+    list[SensorConfig],
+    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
+    model_mapper=iter,
+    service_path=__name__,
+)
+
+
 # TODO: Phase out when UI code is updated to use ControllerInfo and SensorConfig for this info.
 class Capabilities(BaseModel):
     """Deprecated controller capability descriptor for the sensor service."""
+
     type: Literal["controller"] = "controller"
     tasks: list[str]
     devices: SensorDevices
@@ -392,7 +403,7 @@ async def sensor_control_service(service: sk.Service):
 
 
 def _add_compat_context(context: sk.Context):
-    # FIXME: temporary for compat
+    # FIXME: Temporary to avoid breaking existing deployed config.
     compat = dict(
         ra="RADecPointing.right_ascension_hours * 15",
         ra_hms="RADecPointing.ra_hms",
@@ -404,7 +415,41 @@ def _add_compat_context(context: sk.Context):
         alt_rate="AxisRates.altitude.velocity * 3600",
         az="AltAzPointing.azimuth_degrees",
         az_rate="AxisRates.azimuth.velocity * 3600",
+        track_mode="Collect.track_mode",
+        target_id="Collect.target_id",
+        target_name="Collect.target.tle.line0 if Collect.target.target_type == 'tle' else target_id",
+        tle_line0="Collect.target.tle.line0 if Collect.target.target_type == 'tle' else None",
+        tle_line1="Collect.target.tle.line1 if Collect.target.target_type == 'tle' else None",
+        tle_line2="Collect.target.tle.line2 if Collect.target.target_type == 'tle' else None",
+        frame_num="Collect.frame_number",
+        frame_count="Collect.params.frame_count",
+        integration_time_seconds="Collect.params.integration_time_seconds",
+        binning_x="Collect.params.binning_x",
+        binning_y="Collect.params.binning_y",
+        filter_name="Collect.params.filter_name",
+        elevation="SitePosition.altitude_km",
+        latitude="SitePosition.latitude_degrees",
+        longitude="SitePosition.longitude_degrees",
+        task_id="TaskInfo.task_id",
     )
+
     for key, expr in compat.items():
         with contextlib.suppress(Exception):
             context[key] = context.eval(expr)
+
+    # Fold legacy flat file_name/file_path keys into FileNameTemplate / FileInfo keywords.
+    # A file_name is an input naming template; a file_path is an explicit output location.
+    import pathlib
+
+    from sensorkit.data.filesys import FileInfo, FileNameTemplate
+
+    file_name = context.pop("file_name", None)
+    file_path = context.pop("file_path", None)
+
+    if file_name is not None:
+        logger.warning("The 'file_name' context key is deprecated. Use FileNameTemplate instead.")
+        context.set(FileNameTemplate(template=file_name))
+
+    if file_path is not None:
+        logger.warning("The 'file_path' context key is deprecated. Use FileInfo instead.")
+        context.set(FileInfo(path=pathlib.Path(file_path)))

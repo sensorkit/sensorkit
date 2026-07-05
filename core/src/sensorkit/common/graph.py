@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Graph utilities for dependency-aware state election and topological evaluation."""
 
 from __future__ import annotations

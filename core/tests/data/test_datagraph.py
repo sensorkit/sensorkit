@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 from typing import ClassVar, Literal
 
@@ -45,33 +46,26 @@ class TestOp(DataOp):
     out_kind: str = "buffer"
 
     async def process(self, incoming: list[DataFlow], outgoing: list[DataFlow]):
-        if self.in_kind == "buffer":
-            context, buffer = await incoming[0].receive("buffer")
-            reader = None
-        else:
-            context, reader = await incoming[0].receive("stream")
-            buffer = None
-
-        assert reader is not None or buffer is not None
+        context, data = await incoming[0].receive(self.in_kind)
         context["count"] += 1
 
         if self.out_kind == "buffer":
-            if buffer is not None:
-                await outgoing[0].send(context, buffer)
+            if self.in_kind == "buffer":
+                await outgoing[0].send(context, data)
             else:
                 combined = bytearray()
 
-                async for chunk in reader:
+                async for chunk in data:
                     combined.extend(chunk)
 
                 await outgoing[0].send(context, combined)
         else:
             writer = await outgoing[0].send(context)
 
-            if buffer is not None:
-                writer.write(buffer)
+            if self.in_kind == "buffer":
+                writer.write(data)
             else:
-                async for chunk in reader:
+                async for chunk in data:
                     writer.write(chunk)
 
             writer.close()
@@ -140,8 +134,7 @@ async def test_data_graph_cycle():
     )
 
     with pytest.raises(DataGraphCycleError):
-        async with asyncio.timeout(1):
-            graph.start()
+        graph.start()
 
 
 @pytest.mark.asyncio
@@ -150,8 +143,7 @@ async def test_data_graph_sources():
     graph = DataGraph(nodes={})
 
     with pytest.raises(DataGraphSourceError):
-        async with asyncio.timeout(1):
-            graph.start()
+        graph.start()
 
     # Multiple sources.
     graph = DataGraph(
@@ -162,8 +154,7 @@ async def test_data_graph_sources():
     )
 
     with pytest.raises(DataGraphSourceError):
-        async with asyncio.timeout(1):
-            graph.start()
+        graph.start()
 
 
 @pytest.mark.asyncio

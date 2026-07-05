@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Utilities for dynamic module loading and object resolution from string specifiers."""
 
 import importlib
@@ -47,46 +48,47 @@ def module_from_file(path: pathlib.Path, name: str):
     return module
 
 
+def import_module_or_file(name: str):
+    """Import a module by name or path, handling relative imports within it."""
+    path = pathlib.Path(name)
+
+    if path.exists():
+        module = module_from_file(path, path.stem)
+        sys.modules[path.stem] = module
+        return module
+
+    return importlib.import_module(name)
+
+
 def obj_from_spec[T](
-        *,
-        spec: str,
-        base: type[T],
-        subclass: bool = False,
-        load_file: bool = False,
+    *,
+    spec: str,
+    base: type[T],
+    subclass: bool = False,
+    load_file: bool = False,
 ) -> T:
     """Find and return an object of a given type based on a string specifier."""
-    obj_name = None
-    sep = spec.rfind(":")
+    module_name, sep, obj_name = spec.rpartition(":")
 
-    if sep >= 0:
-        module_name = spec[:sep]
-        obj_name = spec[sep+1:]
-    else:
+    if not sep:
         module_name = spec
+        obj_name = None
 
-    path = pathlib.Path(module_name)
-
-    if load_file and path.exists(follow_symlinks=True):
-        module = module_from_file(path, path.name)
-    else:
-        module = importlib.import_module(module_name)
-
+    module = (
+        import_module_or_file(module_name)
+        if load_file
+        else importlib.import_module(module_name)
+    )
     haystack = [obj_name] if obj_name else dir(module)
 
     for symbol in haystack:
         obj = getattr(module, symbol)
 
         if subclass:
-            if not isinstance(obj, type) or obj is base:
-                continue
-
-            if issubclass(obj, base):
+            if isinstance(obj, type) and obj is not base and issubclass(obj, base):
                 return obj
-        else:
-            if isinstance(obj, base):
-                return obj
+        elif isinstance(obj, base):
+            return obj
 
-    raise ValueError(
-        f"no {base.__name__} {'subclass' if subclass else 'instance'} matching spec found"
-        f"in {module_name}"
-    )
+    kind = "subclass" if subclass else "instance"
+    raise ValueError(f"no {base.__name__} {kind} matching spec found in {module_name}")

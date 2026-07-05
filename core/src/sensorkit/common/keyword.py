@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Keyword registration, lookup, and serialization for the sensorkit data model."""
 
 import functools
@@ -78,7 +79,7 @@ def declare_keyword[M](
 
 
 def get_keyword_info(obj: type | object) -> KeywordInfo | None:
-    """Return the ``KeywordInfo`` for a registered keyword type or instance, or ``None`` if not registered."""
+    """Return the `KeywordInfo` for a registered keyword type or instance, or `None` if not registered."""
     if not isinstance(obj, type):
         obj = type(obj)
 
@@ -91,17 +92,17 @@ def dump_keyword_json(obj: object):
 
 
 def validate_keyword(key: str, data: Any):
-    """Validate and deserialize ``data`` as the keyword type identified by ``key``."""
+    """Validate and deserialize `data` as the keyword type identified by `key`."""
     return _keyword_adapter.validate_python(data, context={ModelRegistry.DISCRIMINATOR_CONTEXT: key})
 
 
 def validate_keyword_json(key: str, json: bytes):
-    """Validate and deserialize a JSON byte string as the keyword type identified by ``key``."""
+    """Validate and deserialize a JSON byte string as the keyword type identified by `key`."""
     return _keyword_adapter.validate_json(json, context={ModelRegistry.DISCRIMINATOR_CONTEXT: key})
 
 
 def validated_items(dct: dict[str, object]) -> Iterable[tuple[str, object]]:
-    """Yield ``(key, value)`` pairs from ``dct``, deserializing dict values as keywords where possible."""
+    """Yield `(key, value)` pairs from `dct`, deserializing dict values as keywords where possible."""
     for k, v in dct.items():
         if isinstance(v, dict):
             try:
@@ -156,7 +157,7 @@ class KeywordDict(dict[str, Any]):
     def set(self, *objs: Unpack[tuple[object, ...]]):
         """Insert one or more keyword objects, keying each by its registered keyword key."""
         for obj in objs:
-            self.__setitem__(_keyword_index[type(obj)].key, obj)
+            self[type(obj)] = obj
 
     @classmethod
     def _validate(cls, obj):

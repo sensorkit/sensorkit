@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import contextlib
 import os
 from enum import StrEnum
@@ -93,13 +94,13 @@ async def backend():
 
 @pytest_asyncio.fixture
 async def kit(backend):
-    """Return a SensorKit instance backed by the ``backend`` fixture."""
+    """Return a SensorKit instance backed by the `backend` fixture."""
     yield SensorKit(backend)
 
 
 @pytest_asyncio.fixture
 async def service_context(kit):
-    """Return a registered service context on top of the ``kit`` fixture."""
+    """Return a registered service context on top of the `kit` fixture."""
     yield await kit.register_service("testservice", "0.1.0")
 
 

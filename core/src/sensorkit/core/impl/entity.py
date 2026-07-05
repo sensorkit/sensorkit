@@ -1,9 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
 import contextlib
 from _contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Self, override
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterable, Literal, Self, final, override
 
 from loguru import logger
 from pydantic import BaseModel, TypeAdapter
@@ -38,9 +39,68 @@ class EntityImpl(EntityBase, EntityInterface):
         super().__init__(sensorkit, entity)
         self._data_graph: DataGraph | None = None
         self._task_group = task_group
+        self._attach_hooks: list[Callable] = []
+        self._detach_hooks: list[Callable] = []
 
     async def init_impl(self):
-        """Perform one-time initialization of this service binding."""
+        """Implements initialization of the entity.
+
+        This method is called after the backend is up and available, but before `attach` is run.
+        Implementations will typically retrieve configuration, restore persisted state, and
+        perform any other initialization to prepare resources required by user `on_attach` hooks.
+        """
+        pass
+
+    def on_attach(self, func: Callable):
+        """Register a callback to run when this entity is being attached."""
+        self._attach_hooks.append(func)
+        return func
+
+    @final
+    async def attach(self):
+        """Attach the entity implementation to the running service context.
+
+        Runs all attach hooks and publishes entity info. An exception raised in any attach hook
+        is propagated as fatal.
+        """
+        await self._call_with_context(self._attach_hooks, error_policy="raise")
+
+        with self.enter_context():
+            await self.attach_impl()
+
+        await self.publish_entity_info()
+
+    async def attach_impl(self):
+        """Implements "attach". Runs after the user attach hooks."""
+        pass
+
+    def on_detach(self, func: Callable):
+        """Register a callback to run when this entity is being detached."""
+        self._detach_hooks.append(func)
+        return func
+
+    @final
+    async def detach(self):
+        """Detach the entity implementation from the running service context.
+
+        Runs all detach hooks. An exception raised in the internal detach hook (`detach_impl`) is
+        propagated as fatal, while exceptions from user detach hooks are logged.
+        """
+        with self.enter_context():
+            await self.detach_impl()
+
+        for result in await self._call_with_context(self._detach_hooks, error_policy="ignore"):
+            match result:
+                case asyncio.CancelledError():
+                    logger.warning(f"Cancelled during {self.entity} detach")
+                case Exception():
+                    logger.warning(f"Error during {self.entity} detach ({type(result).__name__})")
+                    logger.opt(exception=result).debug("detach hook raised")
+                case BaseException():
+                    raise result
+
+    async def detach_impl(self):
+        """Implements "detach". Runs before the user detach hooks."""
         pass
 
     @contextlib.contextmanager
@@ -49,10 +109,17 @@ class EntityImpl(EntityBase, EntityInterface):
         var = type(self).current
         token = var.set(self)
 
+        # Also set the base EntityImpl.current so sk.entity() resolves for all entity types.
+        base_var = EntityImpl.current
+        base_token = base_var.set(self) if var is not base_var else None
+
         try:
             yield
         finally:
             var.reset(token)
+
+            if base_token is not None:
+                base_var.reset(base_token)
 
     @override
     @property
@@ -61,7 +128,7 @@ class EntityImpl(EntityBase, EntityInterface):
 
     @override
     async def emit_event(self, event: Event):
-        """Serialise and publish the event to the entity's event stream subject."""
+        """Serialize and publish the event to the entity's event stream subject."""
         await self._stream.publish(
             SpecialProperty.EVENTS,
             event.model_dump_json().encode(),
@@ -69,7 +136,7 @@ class EntityImpl(EntityBase, EntityInterface):
 
     @override
     async def publish(self, model: Keyword):
-        """Serialise and publish a keyword model to the entity's data stream."""
+        """Serialize and publish a keyword model to the entity's data stream."""
         if info := get_keyword_info(model):
             await self._stream.publish(
                 info.key,
@@ -110,10 +177,14 @@ class EntityImpl(EntityBase, EntityInterface):
 
         return self._data_graph
 
+    def entity_info(self) -> EntityInfo:
+        """Build this entity's info record from its current state."""
+        return EntityInfo(entity_type="generic", details=None)
+
     @override
     async def publish_entity_info(self) -> EntityInfo:
-        """Publish a generic EntityInfo entry to the KV store."""
-        info = EntityInfo(entity_type="generic", details=None)
+        """Publish this entity's EntityInfo entry to the KV store."""
+        info = self.entity_info()
         await self.kv_put_model(info)
         return info
 
@@ -121,19 +192,38 @@ class EntityImpl(EntityBase, EntityInterface):
         self,
         funcs: Iterable[Callable],
         args: tuple[Any, ...] = (),
-        kwargs: dict[str, Any] = None,
-    ):
-        if kwargs is None:
-            kwargs = {}
+        kwargs: dict[str, Any] | None = None,
+        *,
+        error_policy: Literal["raise", "log", "ignore"] = "log",
+    ) -> list[Any]:
+        """Invoke hooks concurrently within this entity's execution context."""
+        call_kwargs = kwargs if kwargs is not None else {}
+
+        async def invoke(func: Callable):
+            aw = func(*args, **call_kwargs)
+            return await aw if asyncio.iscoroutine(aw) else aw
 
         with self.enter_context():
-            excs = await asyncio.gather(
-                *(func(*args, **kwargs) for func in funcs),
-                return_exceptions=True,
-            )
+            tasks = [asyncio.ensure_future(invoke(func)) for func in funcs]
 
-        for e in excs:
-            if e is not None:
-                logger.opt(exception=e).debug("error in callback")
+            if error_policy == "raise":
+                # Fail fast: propagate the first hook exception immediately, cancelling any
+                # still-running siblings so none are left orphaned on the loop.
+                try:
+                    return await asyncio.gather(*tasks)
+                finally:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
 
-        return excs
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        if error_policy == "log":
+            for result in results:
+                match result:
+                    case Exception():
+                        logger.opt(exception=result).debug("error in callback")
+                    case BaseException():
+                        logger.debug(f"error in callback ({type(result).__name__})")
+
+        return results

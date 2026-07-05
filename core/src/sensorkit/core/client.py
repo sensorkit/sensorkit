@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 import contextlib
 from dataclasses import dataclass
@@ -10,19 +11,14 @@ from pydantic import BaseModel
 from sensorkit.backend.base import Backend, BackendError, BackendImpl, Entity, ServiceInfo
 from sensorkit.backend.lease import LeaseGroup
 from sensorkit.core.controller import ControllerClient
+from sensorkit.core.device import DeviceClient
+from sensorkit.core.entity import DeviceDetails, EntityClient, EntityInfo
 from sensorkit.core.impl.controller import ControllerImpl
-from sensorkit.core.device import DeviceClient, DeviceListing
 from sensorkit.core.impl.device import DeviceImpl
-from sensorkit.core.entity import EntityClient, EntityInfo, DeviceDetails
 from sensorkit.core.impl.entity import EntityImpl
-from sensorkit.core.program import ProgramClient
 from sensorkit.core.impl.program import ProgramImpl
-from sensorkit.core.trait import (
-    Trait,
-    get_registered_traits,
-    match_archetype,
-    match_traits,
-)
+from sensorkit.core.program import ProgramClient
+from sensorkit.core.trait import Trait
 
 
 class SensorKit:
@@ -64,38 +60,13 @@ class SensorKit:
             for entity, record in records.items()
         }
 
-    async def list_entities(self):
+    async def list_entities(self) -> dict[Entity, EntityInfo]:
         """Return a mapping of entity to lease-value string for all currently online entities."""
         return {
-            entry.key.entity(): entry.value.decode()
+            entry.key.entity(): EntityInfo.model_validate_json(entry.value)
             for entry in await self.backend.key_value().get_all(deep=True)
-            if entry.key.prop == "EntityLease"
+            if entry.key.prop == "EntityInfo"
         }
-
-    async def list_devices(self) -> list[DeviceListing]:
-        """List all online devices with their resolved traits and archetypes."""
-        all_traits = get_registered_traits()
-        listings: list[DeviceListing] = []
-
-        for entry in await self.backend.key_value().get_all(deep=True):
-            if entry.key.prop != "EntityInfo":
-                continue
-
-            info = EntityInfo.model_validate_json(entry.value)
-            if not isinstance(info.details, DeviceDetails):
-                continue
-
-            entity = entry.key.entity()
-            listings.append(
-                DeviceListing(
-                    name=str(entity),
-                    entity=entity,
-                    archetype=match_archetype(info.details),
-                    traits=match_traits(info.details, all_traits),
-                )
-            )
-
-        return listings
 
     async def find_devices(self, *, match_trait: Trait) -> list[DeviceClient]:
         """Return DeviceClients for all online devices matching the given trait."""
@@ -207,7 +178,9 @@ class ServiceContext(EntityImpl):
 
         self.info = info
         self._lease_group = LeaseGroup()
+        self._impls: list[EntityImpl] = []
         self._shutdown = asyncio.get_running_loop().create_future()
+        self._shutdown_called = False
 
     async def register_impl[T: EntityImpl](
         self,
@@ -215,8 +188,12 @@ class ServiceContext(EntityImpl):
         *,
         acquire_lease: bool = True,
         lease_ttl: float = ENTITY_LEASE_TTL,
-    ):
-        """Register an entity implementation on the backend."""
+    ) -> T:
+        """Register an entity implementation on the backend.
+
+        If `acquire_lease` is False, no lease is acquired. This should only be done in special
+        scenarios where the entity is already leased by another implementation in the same process.
+        """
         if acquire_lease:
             await self._lease_group.acquire(
                 impl._kv,
@@ -225,7 +202,14 @@ class ServiceContext(EntityImpl):
                 record=self.info,
             )
 
+        # Run baseline entity initialization.
         await impl.init_impl()
+
+        # Track the impl before attaching so that an impl whose attach raises partway is still
+        # detached on shutdown.
+        self._impls.append(impl)
+        await impl.attach()
+
         return impl
 
     @override
@@ -249,6 +233,7 @@ class ServiceContext(EntityImpl):
         await ready.wait()
 
     async def _service_task(self, ready: asyncio.Event):
+        ran_detach = False
         logger.debug(f"Service {self.info.name} startup")
 
         try:
@@ -258,9 +243,23 @@ class ServiceContext(EntityImpl):
 
                 # Start lease maintenance.
                 await self._lease_group.refresh_loop()
+
+                # Normal exit. Run detach while the task group is still active and the backend
+                # is still live.
+                ran_detach = True
+                await self._run_detach()
+
+                # Force all tasks to shut down.
+                raise asyncio.CancelledError("Service shutdown")
         except asyncio.CancelledError:
-            logger.error(f"Service {self.info.name} abnormal shutdown (cancelled)")
-            self._shutdown.cancel()
+            if self._shutdown_called:
+                logger.debug(f"Service {self.info.name} normal shutdown")
+                self._shutdown.set_result(True)
+            else:
+                logger.error(f"Service {self.info.name} abnormal shutdown (cancelled)")
+                self._shutdown.cancel()
+
+            raise
         except BaseExceptionGroup as eg:
             logger.error(f"Service {self.info.name} abnormal shutdown")
             errors = [e for e in eg.exceptions if not isinstance(e, asyncio.CancelledError)]
@@ -273,17 +272,39 @@ class ServiceContext(EntityImpl):
                 self._shutdown.set_exception(BaseExceptionGroup("ServiceContext errors", errors))
             else:
                 self._shutdown.cancel()
-        else:
-            logger.debug(f"Service {self.info.name} normal shutdown")
-            self._shutdown.set_result(True)
         finally:
             # Shut down request listeners.
             with contextlib.suppress(Exception):
                 async with asyncio.timeout(5.0):
                     await self.backend.shutdown_request_listeners()
 
+            # Ensure all impls are detached on every shutdown path.
+            if not ran_detach:
+                await self._run_detach()
+
+    async def _run_detach(self):
+        impls = list(self._impls)
+
+        # Detach all impls in parallel.
+        results = await asyncio.gather(
+            *(impl.detach() for impl in impls),
+            return_exceptions=True,
+        )
+
+        for impl, result in zip(impls, results, strict=True):
+            match result:
+                case Exception():
+                    logger.warning(f"Error during {impl.entity} detach ({type(result).__name__})")
+                case asyncio.CancelledError():
+                    pass
+                case BaseException():
+                    # Propagate nuclear exceptions (SystemExit / KeyboardInterrupt).
+                    raise result
+
     async def shutdown(self):
         """Shut down this service context, making it no longer usable."""
+        self._shutdown_called = True
+
         # Expire our leases to trigger shutdown.
         try:
             await self._lease_group.expire()
@@ -295,13 +316,18 @@ class ServiceContext(EntityImpl):
         # The caller has requested an intentional shutdown, so we won't bother propagating an error
         # if the service context happened to simultaneously blow up.
         with contextlib.suppress(asyncio.CancelledError, Exception):
-            await self._shutdown
+            await self.join()
 
     async def join(self):
         """Wait until the service shuts down.
 
         If the service exited abnormally, the exception that caused it to exit will be raised.
         """
+        with contextlib.suppress(asyncio.CancelledError):
+            # The task can only raise CancelledError (and nuclear BaseExceptions) due to exception
+            # handling in _service_task above.
+            await self._task
+
         await self._shutdown
 
     async def register_entity(self, entity: str):

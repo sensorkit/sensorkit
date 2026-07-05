@@ -1,18 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import UTC, datetime
 from typing import Literal
 
 import pytest
 import uuid_utils.compat as uuid
 from pydantic import BaseModel
 
+from sensorkit.backend.event import Event
 from sensorkit.backend.request import CallError
 from sensorkit.common.keyword import declare_keyword
-from sensorkit.core.controller import ControllerDevice
+from sensorkit.core.controller import ControllerDevice, ControllerState, TaskExecutionState
 from sensorkit.core.device import DeviceClient
 from sensorkit.core.impl.controller import ControllerImpl
-from sensorkit.core.task import CollectTask, InitTask
+from sensorkit.core.task import CollectTask, InitTask, TaskExecution
 
 
 @pytest.mark.asyncio
@@ -139,9 +143,10 @@ async def test_controller_abort(kit):
 
     async with asyncio.timeout(1.0):
         cli = kit.controller("mycontroller")
-        task_id = uuid.uuid1()
-        exec_call = cli.execute_task(InitTask(task_id=task_id, controller_id="mycontroller"))
-        await exec_call.invoke()
+        exec_call = cli.execute_task(InitTask())
+        # The controller mints the task_id; learn it from the initial response.
+        exec_response = await exec_call.invoke()
+        task_id = exec_response.execution.task_id
         await ready.wait()
 
         abort_call = cli.abort_task()
@@ -158,10 +163,9 @@ async def test_controller_abort(kit):
             await exec_call.wait()
 
 
-@pytest.mark.skip
 @pytest.mark.asyncio
-@pytest.mark.parametrize("task_id", [uuid.uuid7(), None], ids=("with_id", "without_id"))
-async def test_wait_for_task(kit, task_id):
+@pytest.mark.parametrize("with_id", [True, False], ids=("with_id", "without_id"))
+async def test_wait_for_task(kit, with_id):
     async with asyncio.timeout(1.0):
         sc = await kit.register_service("testservice", "0.1.0")
         controller = await sc.register_controller("mycontroller")
@@ -178,16 +182,19 @@ async def test_wait_for_task(kit, task_id):
         cli = kit.controller("mycontroller")
         await cli.enable()
 
-        event = await cli.wait_for_task(task_id=task_id)
-        assert event is None if task_id is not None else not event.executing
+        # No task is running yet: waiting for an arbitrary id returns None immediately.
+        probe_id = uuid.uuid7() if with_id else None
+        event = await cli.wait_for_task(task_id=probe_id)
+        assert event is None if with_id else not event.executing
 
-        exec_call = cli.execute_task(
-            InitTask(task_id=task_id or uuid.uuid7(), controller_id="mycontroller")
-        )
-        await exec_call.invoke()
+        exec_call = cli.execute_task(InitTask())
+        # The controller mints the task_id; learn it from the initial response.
+        response = await exec_call.invoke()
+        task_id = response.execution.task_id
         await started.wait()
 
-        wait_fut = asyncio.create_task(cli.wait_for_task(task_id=task_id))
+        want_id = task_id if with_id else None
+        wait_fut = asyncio.create_task(cli.wait_for_task(task_id=want_id))
         await asyncio.sleep(0)
         assert not wait_fut.done()
 
@@ -198,8 +205,8 @@ async def test_wait_for_task(kit, task_id):
         assert not event.finished.aborted
         assert not event.executing
 
-        if task_id is not None:
-            assert event.task.task_id == task_id
+        if with_id:
+            assert event.execution.task_id == task_id
 
         await exec_call
 
@@ -288,3 +295,91 @@ async def test_controller_use_device(kit):
 
     # 9. stop_device_subscriptions()
     await controller.stop_device_subscriptions()
+
+
+# Legacy state migration: versions before the Task/TaskExecution split stored the executing
+# task as a flat ControllerTask on `execution_state.execution`. A `mode="before"` validator on
+# TaskExecutionState upgrades that shape so old state from a NATS broker still loads.
+_LEGACY_TASK = {
+    "task_type": "init",
+    "task_id": "0192c3f4-5678-7abc-8def-0123456789ab",
+    "controller_id": "legacy-controller",
+    "context": None,
+    "end_time": "2026-01-01T00:00:00Z",
+}
+_LEGACY_TASK_ID = uuid.UUID(_LEGACY_TASK["task_id"])
+_LEGACY_EXPIRY = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def test_legacy_task_execution_state_migrates_flat_task():
+    """A legacy flat task on a TaskExecutionState is wrapped into a TaskExecution envelope."""
+    state = TaskExecutionState.model_validate(
+        {"executing": True, "task": dict(_LEGACY_TASK)}
+    )
+
+    assert isinstance(state.execution, TaskExecution)
+    assert isinstance(state.execution.task, InitTask)
+    assert state.execution.task_id == _LEGACY_TASK_ID
+    assert state.execution.controller_id == "legacy-controller"
+    # The legacy deadline becomes the envelope expiry; identity is lifted off the task.
+    assert state.execution.expiry_time == _LEGACY_EXPIRY
+
+
+def test_legacy_controller_state_loads_from_kv_json():
+    """A full ControllerState snapshot persisted in the old shape deserialises without error."""
+    legacy = {
+        "enable_state": {"enabled": True},
+        "operating_state": {"current": "operate"},
+        "execution_state": {"executing": True, "task": dict(_LEGACY_TASK)},
+    }
+
+    state = ControllerState.model_validate_json(json.dumps(legacy))
+
+    assert isinstance(state.execution_state.execution, TaskExecution)
+    assert isinstance(state.execution_state.execution.task, InitTask)
+    assert state.execution_state.execution.task_id == _LEGACY_TASK_ID
+    assert state.execution_state.execution.expiry_time == _LEGACY_EXPIRY
+
+
+def test_legacy_task_execution_event_replays_through_registry():
+    """A legacy event on the durable stream is upgraded when narrowed via the Event registry."""
+    payload = {
+        "event_model": "TaskExecutionState",
+        "executing": True,
+        "task": dict(_LEGACY_TASK),
+    }
+
+    event = Event.model_validate_json(json.dumps(payload))
+
+    assert isinstance(event, TaskExecutionState)
+    assert isinstance(event.execution, TaskExecution)
+    assert isinstance(event.execution.task, InitTask)
+    assert event.execution.task_id == _LEGACY_TASK_ID
+
+
+def test_current_task_execution_state_roundtrips_unchanged():
+    """Current-shape state passes through the migration validator as a no-op."""
+    execution = TaskExecution(
+        task=InitTask(), task_id=uuid.uuid7(), controller_id="ctl"
+    )
+    state = TaskExecutionState(executing=True, execution=execution)
+
+    reloaded = TaskExecutionState.model_validate(state.model_dump())
+
+    assert isinstance(reloaded.execution, TaskExecution)
+    assert isinstance(reloaded.execution.task, InitTask)
+    assert reloaded.execution.task_id == execution.task_id
+
+
+def test_pre_rename_task_envelope_migrates_to_execution():
+    """State persisted after the split but before `task` was renamed loads onto `execution`."""
+    execution = TaskExecution(
+        task=InitTask(), task_id=uuid.uuid7(), controller_id="ctl"
+    )
+    legacy = {"executing": True, "task": execution.model_dump()}
+
+    state = TaskExecutionState.model_validate(legacy)
+
+    assert isinstance(state.execution, TaskExecution)
+    assert isinstance(state.execution.task, InitTask)
+    assert state.execution.task_id == execution.task_id

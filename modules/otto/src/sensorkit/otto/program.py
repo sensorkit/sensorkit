@@ -1,32 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
-from datetime import datetime, timedelta, UTC
 import random
+from datetime import UTC, datetime, timedelta
 from typing import Dict, List
-import uuid
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
-from sensorkit.astro.common import TLE
+from sensorkit.astro.common import TLE, SitePosition
 from sensorkit.astro.target import TLETarget
-from sensorkit.core.controller import ControllerClient
-from sensorkit.models.devices import SitePosition
-from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
-
 from sensorkit.otto.models import OttoConfig
-from sensorkit.otto.task_queue import TaskQueue, start_fastapi
+from sensorkit.otto.task_queue import TaskQueue
 from sensorkit.otto.utils import (
-    fetch_tles,
-    check_satellite_visibility,
-    dither_tle,
-    ObjectListManager,
     ListType,
+    ObjectListManager,
+    calculate_satellite_position,
+    dither_tle,
+    fetch_tles,
 )
+from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 
 
 class OttoState(BaseModel):
     """Persistent state for Otto program."""
+
     blacklist: List[str] = Field(default_factory=list)
     graylist: List[str] = Field(default_factory=list)
     whitelist: List[str] = Field(default_factory=list)
@@ -34,26 +32,31 @@ class OttoState(BaseModel):
 
 class TLECache(BaseModel):
     """Cached TLE data."""
+
     tles: Dict[str, Dict[str, str]] = Field(default_factory=dict)
     dt: datetime
 
 
 @sk.declare_program
 class OttoProgram:
+    """Satellite tasking program.
 
-    def __init__(self, config: OttoConfig):
-        self.config = config
+    Maintains a TLE cache and whitelist/graylist/blacklist object lists, generates
+    collect tasks for visible satellites, and publishes the resulting imagery. State
+    is persisted to the KV store so tasking survives restarts and upstream TLE
+    rate limits.
+    """
 
+    def __init__(self):
         self.task_queue: TaskQueue | None = None
 
         self.tles: Dict[str, Dict[str, str]] = {}
         self._tle_updater: asyncio.Task | None = None
 
-        self._fastapi_server: asyncio.Task | None = None
         self._task_generator: asyncio.Task | None = None
         self._publisher: asyncio.Task | None = None
 
-        self.state: OttoState = OttoState()
+        self.state = OttoState()
         self.list_manager: ObjectListManager | None = None
 
     async def _save_state(self):
@@ -62,29 +65,43 @@ class OttoProgram:
         except Exception as e:
             logger.warning(f"Failed to save state: {e}")
 
-    @sk.on_enable
-    async def program_enable(self):
-        pass
-    #     self.controller_client = ControllerClient(self.program.binding.backend, sk.Entity.at(self.config.controller))
-    #     self._controller_location = await self.controller_client.kv_get_model(SitePosition)
-    #     self.latitude = self._controller_location.latitude_degrees
-    #     self.longitude = self._controller_location.longitude_degrees
-    #     self.altitude_km = self._controller_location.altitude_km
-    #
-    #     # Start automated task generation
-    #     self._task_generator = asyncio.create_task(self.generate_tasks())
+    async def _watch_config(self):
+        async for config in self.program.kv_monitor_model(OttoConfig):
+            self.config = config
+
+            # Determine whether the new configuration has a different object list from current.
+            objs_from_state = set(
+                self.state.whitelist + self.state.graylist + self.state.blacklist
+            )
+
+            if set(config.task.objects) != objs_from_state:
+                # New config. Clear our object lists and start fresh.
+                self.state.whitelist = config.task.objects
+                self.state.graylist = []
+                self.state.blacklist = []
+                logger.info(f"Loaded {len(config.task.objects)} objects from config")
 
     @sk.on_attach
     async def program_init(self):
         """Load state, set up the controller, task queue, and optionally start task generation and image publishing."""
         self.program = sk.program()
 
+        self.config = await self.program.kv_get_model(OttoConfig)
+
         # Restore last known state
         try:
             self.state = await self.program.kv_get_model(OttoState)
+            logger.debug(f"restored state for {self.program.entity}")
         except Exception:
             logger.warning(f"No saved state for {self.program.entity}")
-            self.state.whitelist, self.state.graylist, self.state.blacklist = self.config.task.objects, [], []
+
+        # Seed whitelist from initial config if state is empty
+        if not self.state.whitelist and not self.state.graylist and not self.state.blacklist:
+            self.state.whitelist = list(self.config.task.objects)
+            logger.info(f"Loaded {len(self.state.whitelist)} objects from initial config")
+
+        # Watch for live config changes
+        self.program.task_group.create_task(self._watch_config())
 
         # Initialize list manager
         self.list_manager = ObjectListManager(self.state, self._save_state)
@@ -109,19 +126,8 @@ class OttoProgram:
         # Start graylist promoter
         self._graylist_promoter = asyncio.create_task(self.promote_graylist_loop())
 
-        # Start FastAPI server for manual tasking additions
-        server = getattr(self.config, "server", None)
-        fastapi_config = {
-            "host": getattr(server, "host", "0.0.0.0"),
-            "port": getattr(server, "port", 8001),
-            "log_level": getattr(server, "log_level", "info"),
-        }
-        self._fastapi_server = asyncio.create_task(
-            start_fastapi(fastapi_config, self.task_queue)
-        )
-
         # Get site location
-        self.controller_client = ControllerClient(self.program.backend, sk.Entity.at(self.config.controller))
+        self.controller_client = self.program.sensorkit().controller(self.config.controller)
         self._controller_location = await self.controller_client.kv_get_model(SitePosition)
         self.latitude = self._controller_location.latitude_degrees
         self.longitude = self._controller_location.longitude_degrees
@@ -135,8 +141,6 @@ class OttoProgram:
             logger.debug(f"publishing Otto data for {self.config.publish.sensor_name}")
             self._publisher = asyncio.create_task(self.data_publisher())
 
-        await asyncio.sleep(0.1)
-
     @sk.on_detach
     async def program_deinit(self):
         """Cancel background tasks."""
@@ -144,10 +148,9 @@ class OttoProgram:
 
         # Cancel background tasks
         for task in [
-            self._fastapi_server,
             self._task_generator,
             self._publisher,
-            self._tle_updater
+            self._tle_updater,
         ]:
             if task and not task.done():
                 task.cancel()
@@ -156,15 +159,13 @@ class OttoProgram:
         await self._save_state()
 
     async def update_tles_loop(self):
-        """ Background task that updates TLEs on startup and every 24 hours (default)."""
+        """Background task that updates TLEs on startup and every 24 hours (default)."""
         while True:
             try:
                 logger.debug("updating TLEs from Spacebook")
 
                 # Fetch TLEs from Spacebook
-                self.tles, response = await fetch_tles(
-                    objects=self.config.task.objects
-                )
+                self.tles, response = await fetch_tles(objects=self.config.task.objects)
                 if response == 200:
                     logger.debug(f"updated {len(self.tles)} TLEs from Spacebook")
                     self.tles_dt = datetime.now(UTC)
@@ -179,30 +180,26 @@ class OttoProgram:
                 logger.exception(f"Error updating TLEs: {e}")
 
             # Wait configured hours before next update
-            update_interval = getattr(
-                self.config.task,
-                'tle_update_interval_hours',
-                24
-            )
+            update_interval = getattr(self.config.task, "tle_update_interval_hours", 24)
             await asyncio.sleep(update_interval * 60 * 60)
 
     async def promote_graylist_loop(self):
         """Background task that promotes graylisted objects back to whitelist."""
-        graylist_interval = getattr(self.config.task, 'graylist_interval_minutes', 15)
+        graylist_interval = getattr(self.config.task, "graylist_interval_minutes", 15)
 
         while True:
             try:
                 await asyncio.sleep(graylist_interval * 60)
 
                 if self.state.graylist:
-                    logger.debug(f"promoting {len(self.state.graylist)} objects from graylist to whitelist")
+                    logger.debug(
+                        f"promoting {len(self.state.graylist)} objects from graylist to whitelist"
+                    )
 
                     # Move all graylisted objects back to whitelist
                     for obj in self.state.graylist.copy():
                         await self.list_manager.move_object(
-                            obj,
-                            ListType.GRAYLIST,
-                            ListType.WHITELIST
+                            obj, ListType.GRAYLIST, ListType.WHITELIST
                         )
 
             except Exception as e:
@@ -219,29 +216,85 @@ class OttoProgram:
             StandardCollectTask: The next task to be executed.
             None: If no task is available.
         """
-        if task := await self.task_queue.pop_task():
+        if queued := await self.task_queue.pop_task():
+            task = queued.task
+
+            # Recalculate end_time based on current time so that tasks generated
+            # before the controller started operating get a fresh execution deadline.
+            task.end_time = (
+                datetime.now(UTC)
+                + timedelta(
+                    seconds=task.camera_params.integration_time_seconds
+                    * task.camera_params.frame_count
+                )
+                + timedelta(seconds=self.config.task.end_time_deadband_seconds)
+            )
+
             logger.info(
-                f"task ({task.task_id}): target -> {task.target}, "
-                f"camera -> {task.camera_params}"
+                f"task ({queued.id}): target -> {task.target}, camera -> {task.camera_params}"
             )
 
             try:
-                yield task
-                logger.info(f"task ({task.task_id}) finished execution successfully.")
+                # `end_time` is the domain scheduling deadline; pass it through as the
+                # execution `expiry_time` so the controller enforces the same deadline. Await the
+                # yielded execution so completion (and any failure) surfaces here.
+                await (yield task.submit(expiry_time=task.end_time))
+                logger.info(f"task ({queued.id}) finished execution successfully.")
+                # Optional fixed gap after each completed task. Skipped on
+                # cancellation/failure so those propagate without delay.
+                if self.config.task.inter_task_delay_seconds > 0:
+                    logger.info(
+                        f"waiting {self.config.task.inter_task_delay_seconds}s before next task"
+                    )
+                    await asyncio.sleep(self.config.task.inter_task_delay_seconds)
             except asyncio.CancelledError as e:
-                logger.warning(f"Task ({task.task_id}) cancelled: {e}")
+                logger.warning(f"Task ({queued.id}) cancelled: {e}")
+                raise
             except Exception as e:
-                logger.exception(f"Task ({task.task_id}) failed with exception: {e}")
+                logger.exception(f"Task ({queued.id}) failed with exception: {e}")
+                raise
         else:
             # Peek at next task to provide info
-            if next_task := await self.task_queue.peek_task():
-                time_until = (next_task.end_time - datetime.now()).total_seconds()
-                logger.info(
-                    f"next task {next_task.task_id} available for {time_until:.1f}s"
-                )
+            if queued := await self.task_queue.peek_task():
+                time_until = (queued.task.end_time - datetime.now()).total_seconds()
+                logger.info(f"next task {queued.id} available for {time_until:.1f}s")
             else:
                 logger.debug("no tasks available")
             yield None
+
+    async def _build_scan_targets(self) -> list[str]:
+        """Build a list of whitelist objects ordered for a single-flip sky walk.
+
+        Targets are sorted by hour angle so the scan walks the sky continuously,
+        crossing the meridian exactly once. `eastward` (default) emits in
+        descending HA — starting at the far western horizon, walking east
+        through the meridian and continuing into the east. `westward` is the
+        symmetric reverse. All whitelist objects above `altitude_min` are
+        included.
+        """
+        direction = self.config.collect.scan_direction or "eastward"
+
+        candidates: list[tuple[str, float]] = []
+        for obj_id in list(self.state.whitelist):
+            result = calculate_satellite_position(
+                tles=self.tles,
+                object=obj_id,
+                latitude=self.latitude,
+                longitude=self.longitude,
+                elevation=self.altitude_km * 1000,
+            )
+            if result is None:
+                continue
+            altitude, _azimuth, _rising, hour_angle = result
+            if altitude < self.config.collect.altitude_min:
+                continue
+            candidates.append((obj_id, hour_angle))
+
+        # eastward = descending HA (+west → 0 → −east); westward = ascending.
+        reverse = direction == "eastward"
+        candidates.sort(key=lambda x: x[1], reverse=reverse)
+
+        return [obj_id for obj_id, _ in candidates]
 
     async def generate_tasks(self):
         """
@@ -265,112 +318,152 @@ class OttoProgram:
                     continue
 
                 if not self.state.whitelist and not self.state.graylist:
-                    logger.warning("No viewable objects on whitelist nor graylist. Please pick new objects and reload Otto")
-                    return
-                else:
-                    if self.state.whitelist:
-                        object = random.choice(self.state.whitelist)
-                    else:
-                        graylist_interval = getattr(self.config.task, 'graylist_interval_minutes', 15)
-                        logger.warning(f"No viewable objects on whitelist but {len(self.state.graylist)} objects on graylist. Sleeping {graylist_interval} minutes")
-                        await asyncio.sleep(graylist_interval * 60)
+                    logger.warning(
+                        "No viewable objects on whitelist nor graylist. Please pick new objects"
+                    )
+                    await asyncio.sleep(5)
+                    continue
+                elif not self.state.whitelist:
+                    graylist_interval = getattr(self.config.task, "graylist_interval_minutes", 15)
+                    logger.warning(
+                        f"No viewable objects on whitelist but {len(self.state.graylist)} objects on graylist. Sleeping {graylist_interval} minutes"
+                    )
+                    await asyncio.sleep(graylist_interval * 60)
+                    continue
+
+                # Build ordered target list based on scan mode
+                if self.config.collect.scan_mode:
+                    targets = await self._build_scan_targets()
+                    if not targets:
+                        await asyncio.sleep(5)
                         continue
+                else:
+                    targets = [random.choice(self.state.whitelist)]
 
-                # Check current altitude and rising status
-                result = check_satellite_visibility(
-                    tles=self.tles,
-                    object=object,
-                    latitude=self.latitude,
-                    longitude=self.longitude,
-                    elevation=self.altitude_km*1000,
-                )
-                if result is None:
-                    continue
-                altitude, rising = result
-
-                # Determine which list this object should be on
-                if altitude < self.config.collect.altitude_min and not rising:
-                    await self.list_manager.move_object(
-                        object,
-                        ListType.WHITELIST,
-                        ListType.BLACKLIST
-                    )
-                    logger.debug(f"object {object} blacklisted (alt={altitude:.1f}°, falling)")
-                    continue
-
-                if altitude < self.config.collect.altitude_min and rising:
-                    await self.list_manager.move_object(
-                        object,
-                        ListType.WHITELIST,
-                        ListType.GRAYLIST
-                    )
-                    logger.debug(f"object {object} graylisted (alt={altitude:.1f}°, rising)")
-                    continue
-
-                tle_data = self.tles[object]
-                tle_obj = TLE(
-                    line0=tle_data["line0"],
-                    line1=tle_data["line1"],
-                    line2=tle_data["line2"],
-                )
-                if self.config.collect.dither and self.config.collect.dither_amount_arcsec > 0:
-                    tle_obj = dither_tle(
-                        tle_obj,
-                        self.config.collect.dither_amount_arcsec,
+                for object in targets:
+                    # Check current altitude, azimuth, and rising status
+                    result = calculate_satellite_position(
+                        tles=self.tles,
+                        object=object,
                         latitude=self.latitude,
                         longitude=self.longitude,
                         elevation=self.altitude_km * 1000,
                     )
+                    if result is None:
+                        logger.warning(
+                            f"Removing object {object} from the whitelist (no TLE available)"
+                        )
+                        await self.list_manager.move_object(
+                            object,
+                            ListType.WHITELIST,
+                            ListType.BLACKLIST,
+                        )
+                        continue
+                    altitude, azimuth, rising, _hour_angle = result
 
-                # Account for rate-sidereal mode
-                sidereal_kwargs = (
-                    {"sidereal_track_from_frame": self.config.collect.num_frames-1}
-                    if self.config.collect.track_mode == "rate_sidereal"
-                    else {}
-                )
+                    # Determine which list this object should be on
+                    if altitude < self.config.collect.altitude_min and not rising:
+                        await self.list_manager.move_object(
+                            object, ListType.WHITELIST, ListType.BLACKLIST
+                        )
+                        logger.debug(
+                            f"object {object} blacklisted (alt={altitude:.1f}°, az={azimuth:.1f}°, falling)"
+                        )
+                        continue
 
-                # FIXME: may want a custom controller for Otto. The standard controller re-slews between each different
-                # filter, binning, and exposure (but not frame number) setting.
+                    if altitude < self.config.collect.altitude_min and rising:
+                        await self.list_manager.move_object(
+                            object, ListType.WHITELIST, ListType.GRAYLIST
+                        )
+                        logger.debug(
+                            f"object {object} graylisted (alt={altitude:.1f}°, az={azimuth:.1f}°, rising)"
+                        )
+                        continue
 
-                # Create tasks for each combination of camera parameters
-                exposures = list(range(
-                    self.config.collect.exposure_min,
-                    self.config.collect.exposure_max,
-                    self.config.collect.exposure_delta
-                ))
-                random.shuffle(exposures)
+                    tle_data = self.tles.get(object)
+                    if tle_data is None:
+                        logger.warning(
+                            f"Removing object {object} from the whitelist (TLE removed)"
+                        )
+                        await self.list_manager.move_object(
+                            object,
+                            ListType.WHITELIST,
+                            ListType.BLACKLIST,
+                        )
+                        continue
+                    tle_obj = TLE(
+                        line0=tle_data["line0"],
+                        line1=tle_data["line1"],
+                        line2=tle_data["line2"],
+                    )
+                    if self.config.collect.dither and self.config.collect.dither_amount_arcsec > 0:
+                        tle_obj = dither_tle(
+                            tle_obj,
+                            self.config.collect.dither_amount_arcsec,
+                            latitude=self.latitude,
+                            longitude=self.longitude,
+                            elevation=self.altitude_km * 1000,
+                        )
 
-                filters = list(self.config.collect.filters or [None])
-                random.shuffle(filters)
+                    # Account for rate-sidereal mode
+                    sidereal_kwargs = (
+                        {"sidereal_frames": [self.config.collect.num_frames - 1]}
+                        if self.config.collect.track_mode == "rate_sidereal"
+                        else {}
+                    )
 
-                binnings = list(self.config.collect.binning)
-                random.shuffle(binnings)
+                    # FIXME: may want a custom controller for Otto. The standard controller re-slews between each different
+                    # filter, binning, and exposure (but not frame number) setting.
 
-                now = datetime.now(UTC)
-                cumulative_exposure = 0
-                for filter in filters:
-                    for exposure in exposures:
-                        for binning in binnings:
-                            cumulative_exposure += exposure * self.config.collect.num_frames
-                            task = StandardCollectTask(
-                                task_id=uuid.uuid1(),
-                                controller_id=str(self.config.controller),
-                                target=TLETarget(tle=tle_obj),
-                                end_time=(
-                                    now
-                                    + timedelta(seconds=cumulative_exposure)
-                                    + timedelta(seconds=self.config.task.end_time_deadband_seconds)
-                                ),
-                                camera_params=CameraParameterSet(
-                                    filter_name=filter,
-                                    integration_time_seconds=exposure,
-                                    binning_x=binning,
-                                    binning_y=binning,
-                                    frame_count=self.config.collect.num_frames,
-                                ),
-                                **sidereal_kwargs
-                            )
-                            await self.task_queue.push_task(task)
+                    # Create tasks for each combination of camera parameters
+                    exposures = list(
+                        range(
+                            self.config.collect.exposure_min,
+                            self.config.collect.exposure_max,
+                            self.config.collect.exposure_delta,
+                        )
+                    )
+                    random.shuffle(exposures)
+
+                    filters = list(self.config.collect.filters or [None])
+                    random.shuffle(filters)
+
+                    binnings = list(self.config.collect.binning)
+                    random.shuffle(binnings)
+
+                    now = datetime.now(UTC)
+                    cumulative_exposure = 0
+                    for filter in filters:
+                        for exposure in exposures:
+                            for binning in binnings:
+                                cumulative_exposure += exposure * self.config.collect.num_frames
+                                task = StandardCollectTask(
+                                    target=TLETarget(tle=tle_obj),
+                                    end_time=(
+                                        now
+                                        + timedelta(seconds=cumulative_exposure)
+                                        + timedelta(
+                                            seconds=self.config.task.end_time_deadband_seconds
+                                        )
+                                    ),
+                                    camera_params=CameraParameterSet(
+                                        filter_name=filter,
+                                        integration_time_seconds=exposure,
+                                        binning_x=binning,
+                                        binning_y=binning,
+                                        frame_count=self.config.collect.num_frames,
+                                    ),
+                                    **sidereal_kwargs,
+                                )
+                                await self.task_queue.push_task(task)
+
+                    # Wait for this target's tasks to drain before generating
+                    # tasks for the next target.  This prevents far-future tasks
+                    # from expiring while the controller is still working through
+                    # earlier targets in the scan list.
+                    while await self.task_queue.peek_task():
+                        await asyncio.sleep(1)
+
             except Exception as e:
                 logger.exception(f"Error in task generator: {e}")
 
@@ -386,9 +479,11 @@ class OttoProgram:
         cfg = self.config.publish
         if cfg.gdrive:
             from sensorkit.otto.publishers import GDrivePublisher
+
             publishers.append(GDrivePublisher(cfg.gdrive))
         if cfg.dropbox:
             from sensorkit.otto.publishers import DropboxPublisher
+
             publishers.append(DropboxPublisher(cfg.dropbox))
 
         if not publishers:
@@ -406,9 +501,15 @@ class OttoProgram:
                         try:
                             await pub.publish(context, data)
                         except Exception as e:
-                            logger.exception(
-                                f"Error publishing task {task_id} to {pub.name}: {e}"
-                            )
+                            logger.exception(f"Error publishing task {task_id} to {pub.name}: {e}")
         finally:
             for pub in publishers:
                 await pub.close()
+
+
+@sk.service_entrypoint(version=sk.VERSION)
+async def otto_service(service: sk.Service):
+    await service.register()
+
+    service.include(OttoProgram())
+    await service.run()

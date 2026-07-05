@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import asyncio
 from asyncio import StreamReader, StreamWriter
 
@@ -6,6 +7,7 @@ import pytest
 from sensorkit.thesky.device import (
     SCRIPT_FOOTER,
     SCRIPT_HEADER,
+    CommandNotSupportedError,
     ProcessAbortedError,
     TheSkyDevice,
     TheSkyDeviceConfig,
@@ -23,12 +25,20 @@ async def test_send_thesky_script():
 
     async def handle_connection(reader: StreamReader, writer: StreamWriter):
         try:
+            data = b""
             async with asyncio.timeout(1.0):
-                data = await reader.read()
+                while True:
+                    chunk = await reader.read(65536)
+                    if not chunk:
+                        break
+                    data += chunk
+                    if SCRIPT_FOOTER in data:
+                        break
 
             assert data.startswith(SCRIPT_HEADER)
-            assert data.endswith(SCRIPT_FOOTER)
-            assert data.removeprefix(SCRIPT_HEADER).removesuffix(SCRIPT_FOOTER) == command
+            assert SCRIPT_FOOTER in data
+            user_script = data.removeprefix(SCRIPT_HEADER).split(SCRIPT_FOOTER)[0]
+            assert user_script == command
 
             parse_result.set_result(True)
         except Exception as e:
@@ -82,6 +92,18 @@ def test_parse_thesky_response():
         parse_thesky_response(error_payload)
 
     assert isinstance(e.value, ProcessAbortedError)
+    assert e.value.code == error_code
+    assert e.value.args[0] == error_message
+
+    # Unsupported command (e.g. FindHome on a sim mount) maps to its typed error.
+    error_message = "This command is not supported by the selected device"
+    error_code = 228
+    error_payload = f"TypeError: {error_message}. Error = {error_code}.|{no_error}\n".encode()
+
+    with pytest.raises(TheSkyError) as e:
+        parse_thesky_response(error_payload)
+
+    assert isinstance(e.value, CommandNotSupportedError)
     assert e.value.code == error_code
     assert e.value.args[0] == error_message
 
