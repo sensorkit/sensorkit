@@ -60,7 +60,9 @@ services:
     restart: unless-stopped
 ```
 
-The `-js` flag enables JetStream, which SensorKit requires.
+!!! warning "JetStream is required"
+
+    The `-js` flag enables JetStream. Without it NATS runs fine, but SensorKit can't create its streams or KV store — nothing will work.
 
 ## Point SensorKit at NATS
 

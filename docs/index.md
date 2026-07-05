@@ -5,12 +5,24 @@
 You describe your site in a single YAML file: which mount, camera, and dome you have, what weather limits you trust, and which observing programs are allowed to request time. SensorKit runs the night.
 
 ```yaml
-constraints:
-  - kind: weather
-    provider: my-weather-station
-    humidity_max: 85.0
-    wind_max: 15.0
-    rain_max: 0.0
+sensors:
+  - id: MySensor
+    devices:
+      mount: MyMount
+      camera: MyCamera
+      dome: MyDome
+
+automation:
+  controllers:
+    MySensor:
+      constraints:
+        - kind: weather
+          provider: MyWeather
+          humidity_max: 85.0
+          wind_max: 15.0
+      tasking:
+        - program: SatelliteSurvey
+          priority: 5
 ```
 
 ## What it does
@@ -25,20 +37,20 @@ constraints:
 ## How it fits together
 
 ```
- Observing programs          The agent                 Sensor controller
- (what to observe)     (when it's safe & useful)     (how to observe it)
+Observing programs           The agent              Sensor controller
+(what to observe)    (when it's safe & useful)     (how to observe it)
         │                        │                          │
         ▼                        ▼                          ▼
   ┌───────────┐   offers   ┌───────────┐    tasks     ┌───────────┐
   │  Program  │───────────▶│   Agent   │─────────────▶│  Sensor   │
   └───────────┘            └───────────┘              └───────────┘
                                  ▲                          │ commands
-                        weather, │ safety            ┌──────┼──────┐
-                                 │                   ▼      ▼      ▼
+                        weather, │ safety           ┌───────┼──────┐
+                                 │                  ▼       ▼      ▼
                            ┌───────────┐          Mount  Camera  Dome ...
                            │  Devices  │          (device services)
                            └───────────┘
-                All communication over NATS JetStream
+                  All communication over NATS JetStream
 ```
 
 - **Devices** wrap hardware drivers and expose commands and telemetry on the bus.

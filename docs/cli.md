@@ -4,6 +4,10 @@
 sensorkit <group> <command> [options] [args]
 ```
 
+!!! warning "This interface will change substantially"
+
+    The CLI is due for a major overhaul in the near future. With little exception, the commands on this page will be rewritten — expect new names, groupings, and flags. Use it freely at the terminal, but avoid building long-lived scripts against the current command set.
+
 The CLI talks to a running system over NATS (`NATS_URL`, default `nats://127.0.0.1:4222`). A `.env` file in the working directory is loaded automatically, so it's a good place for `NATS_URL` and `SENSORKIT_CONFIG`.
 
 Every command supports `--help`.

@@ -8,14 +8,16 @@ Each driver module contributes its own section to the unified config file. Decla
 sensorkit service run <Id>       # the section's `id` is the service name
 ```
 
-Remember to add the module to `sensorkit.imports` so its config section is recognized:
+!!! tip "Don't forget the import"
 
-```yaml
-sensorkit:
-  imports:
-    - sensorkit.alpaca.service
-    - sensorkit.pwi4.service
-```
+    A module's config section is only recognized if the module appears in `sensorkit.imports` — otherwise `config load` rejects the section as unknown:
+
+    ```yaml
+    sensorkit:
+      imports:
+        - sensorkit.alpaca.service
+        - sensorkit.pwi4.service
+    ```
 
 Device names (the keys under `devices:`) are the entity names you'll use everywhere else — in the sensor's `devices:` mapping, in constraints (`provider:`), and on the CLI (`-e MyMount`).
 

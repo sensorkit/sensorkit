@@ -6,7 +6,11 @@ Everything you need to write devices, controllers, and programs is exported from
 import sensorkit.api as sk
 ```
 
-The API is small by design: you declare entities with decorators, attach handlers, and hand the class to a `Service`. This page covers the public surface, grouped by role. SensorKit is in beta — this surface is stable in shape but still evolving in detail.
+The API is small by design: you declare entities with decorators, attach handlers, and hand the class to a `Service`. This page covers the public surface, grouped by role.
+
+!!! note "The API is still settling"
+
+    SensorKit is in beta: this surface is stable in shape but still evolving in detail. Expect incremental changes — renames, signature adjustments, new capabilities — rather than the wholesale rewrite planned for the [CLI](cli.md).
 
 ---
 

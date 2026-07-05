@@ -6,6 +6,10 @@ You rarely command devices individually during operations; you send *tasks* to t
 
 ## Configuration
 
+!!! note "A new standard sensor is in the works"
+
+    A new **multi-instrument** standard sensor implementation is in development. It will replace much of the configuration described in this section, so treat the `sensors:` schema below as current-release detail rather than a long-term contract.
+
 Declare each sensor in the `sensors` section of the unified config:
 
 ```yaml
@@ -93,7 +97,11 @@ sensorkit controller collect -e MySensor \
 sensorkit controller shutdown -e MySensor
 ```
 
-`-f` on `init`/`shutdown` interrupts a running task first. If the agent is managing this controller, disable its control first (`sensorkit agent global-control off`) so you aren't fighting it.
+`-f` on `init`/`shutdown` interrupts a running task first.
+
+!!! warning "Stand the agent down first"
+
+    If the agent is managing this controller, disable its control before driving the sensor manually (`sensorkit agent global-control off`, or per-controller with `sensorkit agent control MySensor off`) — otherwise the two of you will fight over the hardware.
 
 ### Targets
 

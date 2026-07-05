@@ -132,7 +132,9 @@ sensorkit config load sensorkit.yaml -v     # show each entity and key with its 
 sensorkit config load sensorkit.yaml -f     # write everything, even unchanged keys
 ```
 
-Services read their configuration **once at startup**. After changing a value: load, then restart the affected service.
+!!! warning "Config changes need a service restart"
+
+    Presently, all services read their configuration **once at startup**. `config load` updates the store, not running services — after changing a value, load and then restart the affected service. (In a future release, some configuration will become hot-reloadable for some services.)
 
 `sensorkit go -l` performs the load automatically before starting services, which is the usual workflow during setup:
 

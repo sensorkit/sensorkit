@@ -121,7 +121,9 @@ Constraints are continuous safety monitors. While one is **active**, the agent v
 | `hold`     | 0.0     | Seconds the constraint stays active *after* conditions recover (anti-flap)  |
 | `optional` | false   | If `true`, missing/stale data does **not** trip the constraint             |
 
-By default a constraint with no data is treated as unsafe — a dead weather station keeps the dome closed unless you explicitly mark the constraint `optional`.
+!!! info "No data means unsafe"
+
+    By default a constraint with no fresh data is treated as active — a dead weather station keeps the dome closed. Mark a constraint `optional` only if you're comfortable operating without its input.
 
 ### `weather`
 
