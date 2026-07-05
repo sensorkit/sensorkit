@@ -195,7 +195,7 @@ wheels = [
 [[package]]
 name = "astro-burr"
 version = "0.3.1"
-source = { git = "https://github.com/zgazak/burr.git?rev=main#a4cb355c2833a088ade4a231a0ffa0ecf4107006" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "alpyca" },
     { name = "astropy" },
@@ -213,6 +213,10 @@ dependencies = [
     { name = "tqdm" },
     { name = "tzdata" },
     { name = "watchdog" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/54/4b/8c51a37546411cc39f0b2f4d2988750ce474df6b579fe1c32484cd1db845/astro_burr-0.3.1.tar.gz", hash = "sha256:40d9211e0f73caa0e6669344d33544df18ba2c4672f2b9993b26ba733c5f8be1", size = 175946, upload-time = "2026-07-05T18:44:13.908Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/18/5d/fa9dbbd74c1267dbb67c2b29291f37742b779dad016adb07995d11b74719/astro_burr-0.3.1-py3-none-any.whl", hash = "sha256:a77e2be2c3e0d327ffc2ac7c187a74d50aae601f122e3582a081edeb14a032c0", size = 205573, upload-time = "2026-07-05T18:44:11.987Z" },
 ]
 
 [[package]]
@@ -2883,17 +2887,15 @@ wheels = [
 [[package]]
 name = "sdasim"
 version = "0.2.0"
-source = { git = "https://github.com/zgazak/sdasim.git?branch=orbital#e7fa5258b2a29ed5ac6a5a0b716cbe8db3298c14" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "pyyaml" },
     { name = "torch" },
 ]
-
-[package.optional-dependencies]
-orbital = [
-    { name = "httpx" },
-    { name = "satkit" },
+sdist = { url = "https://files.pythonhosted.org/packages/ae/f3/489e704f46f92f1da4e9d420007034a019a1bf46e150d3b2ac6e0c6211a2/sdasim-0.2.0.tar.gz", hash = "sha256:66429ba5d8b2bb36d6de1fe380bd0c3bb5551473f78cffed7707b55bdf636396", size = 79318, upload-time = "2026-06-19T00:08:26.21Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/a0/7b489e9ff8becab07c34255b61abfab22378d292af1086858cc057b91768/sdasim-0.2.0-py3-none-any.whl", hash = "sha256:d6d727fd03a00dabe8e343d0671a383ebad5d299bf45cfee4581e1158c7db88e", size = 65965, upload-time = "2026-06-19T00:08:24.558Z" },
 ]
 
 [[package]]
@@ -2978,7 +2980,7 @@ pwi4 = [
 ]
 sdasim = [
     { name = "numpy" },
-    { name = "sdasim", extra = ["orbital"] },
+    { name = "sdasim" },
 ]
 senpai = [
     { name = "astro-senpai" },
@@ -3029,7 +3031,7 @@ requires-dist = [
     { name = "allclear", marker = "extra == 'sky-transmission'" },
     { name = "alpyca", marker = "extra == 'alpaca'", specifier = ">=3.1.1" },
     { name = "alpyca", marker = "extra == 'sky-transmission'", specifier = ">=3.1.0" },
-    { name = "astro-burr", marker = "extra == 'burr'", git = "https://github.com/zgazak/burr.git?rev=main" },
+    { name = "astro-burr", marker = "extra == 'burr'" },
     { name = "astro-senpai", marker = "extra == 'senpai'", specifier = ">=2.3.1" },
     { name = "astropy", specifier = ">=7.1.0" },
     { name = "asyncclick", specifier = "==8.1.8" },
@@ -3058,7 +3060,7 @@ requires-dist = [
     { name = "rich", specifier = ">=14.0.0" },
     { name = "satkit", specifier = ">=0.8.3" },
     { name = "scipy", specifier = ">=1.16.3" },
-    { name = "sdasim", extras = ["orbital"], marker = "extra == 'sdasim'", git = "https://github.com/zgazak/sdasim.git?branch=orbital" },
+    { name = "sdasim", marker = "extra == 'sdasim'" },
     { name = "skyfield", specifier = ">=1.53" },
     { name = "slack-sdk", marker = "extra == 'slack'" },
     { name = "systemd-python", marker = "sys_platform == 'linux' and extra == 'systemd'", specifier = "==235" },
