@@ -35,12 +35,19 @@ Invite the bot to each channel it will post to:
 
 ### 3. Configure
 
-Create a config file (see example below) and load it:
+Either configure the module in your deployment config — add
+`sensorkit.slack.service` to `sensorkit.imports` and a top-level `slack:`
+section with the fields below — or load a standalone config (see example
+below) into the KV store:
+
 ```sh
-sensorkit kv load slack_config.yaml
+sensorkit kv load slack.yaml
 ```
 
 ### 4. Run
+
+`sensorkit go` runs the service along with the rest of the deployment config.
+To run just this service:
 
 ```sh
 sensorkit service run slack_service sensorkit.slack.service
@@ -52,8 +59,7 @@ sensorkit service run slack_service sensorkit.slack.service
 entity: slack_service
 key: SlackConfig
 value:
-  entity: slack_notifier
-  env_file: ".env"
+  env_file: .env
   channels:
     alerts:
       channel: "#observatory-alerts"
@@ -74,12 +80,21 @@ value:
           condition: {kind: becomes, threshold: false}
       deduplicate: 300
 
-    - name: weather_unsafe
+    - name: dome_close_failed
+      severity: critical
+      events: [CommandDone]
+      entities: [dome1]
+      filters:
+        success: false
+        command_id: CloseEnclosure
+
+    - name: constraint_set
       severity: warning
       state_watches:
-        - keyword: Safety
-          field: is_safe
-          condition: {kind: becomes, threshold: false}
+        - keyword: ConstraintStatus
+          field: active
+          condition: {kind: becomes, threshold: true}
+      message_template: "Constraint set on `{entity}`: {reason} ({constraint_kind} from {provider})"
 
     - name: observation_complete
       severity: info
@@ -109,6 +124,7 @@ Each rule defines what triggers a notification:
 | `severity` | string | `critical`, `warning`, or `info` (default: `info`) |
 | `entities` | list | Entity names to watch (omit for all entities) |
 | `events` | list | Event model names to match (e.g. `CommandDone`, `TaskExecutionState`) |
+| `filters` | dict | Event fields that must match for the rule to fire (e.g. `success: false`) |
 | `state_watches` | list | State keyword watches with conditions |
 | `message_template` | string | Custom message template with `{variable}` interpolation |
 | `deduplicate` | int | Seconds to suppress repeated triggers (omit for no dedup) |
@@ -152,3 +168,11 @@ Channels with `post_at` configured receive a daily summary at the specified loca
 - **Operational state durations** — time spent executing, idle, weather-closed, etc.
 - **Observation counts** — attempted, completed, failed
 - **Health events** — device connect/disconnect, safety state changes
+
+## TODO
+
+- **Per-program notifications** — program-scoped rules and routing (e.g. burr /
+  otto / udl activity to their own channels, and per-program lines in the
+  daily summary).
+- **SENPAI results** — rules on published `SenpaiResult` telemetry, e.g.
+  plate-solve failures or a dropping zero point / limiting magnitude.

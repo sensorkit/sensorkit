@@ -33,7 +33,7 @@ To run a service using NATS as the backend:
      ```
 4. Run the service using the CLI:
    ```sh
-   sensorkit service run -s sensorkit.pwi4.service -n pwi_service
+   sensorkit service run pwi_service sensorkit.pwi4.service
    ```
 
 ## CLI Commands

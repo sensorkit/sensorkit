@@ -138,6 +138,7 @@ node_platform:
     endpoints:
       - host: 192.168.1.30
         port: 9080               # default: 9080
+        env_file: .env           # NODE_PLATFORM_API_KEY (and optional NODE_PLATFORM_LINEAGE_ID)
         request_timeout: 30.0
         operation_mode: assisted # or: manual
         devices:

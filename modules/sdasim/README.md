@@ -1,87 +1,73 @@
-# sensorkit.sdasim
+# sdasim Module
 
-A **native SensorKit camera** backed by [sdasim](https://github.com/zgazak/sdasim),
-Zach Gazak's speed-optimized differentiable satellite-scene simulator.
+The `sdasim` module runs [sdasim](https://github.com/zgazak/sdasim) — a
+satellite scene simulator — as a native SensorKit camera device. It renders
+synthetic frames from the live mount state and delivers them through the
+camera DataGraph exactly like real camera hardware, so a full deployment
+(controllers, collects, downstream processing) runs end-to-end with no
+hardware (see sdasim for details):
 
-The device implements the `StandardCamera` archetype (`CameraCapture`): on each
-capture it renders a frame with sdasim and delivers the pixels through the
-**DataGraph**, exactly like the `nina`, `thesky`, and `alpaca` camera modules.
-That makes it a drop-in simulated camera that senpai (streak detection),
-autofocus, `array_to_fits` → `write_file`, etc. consume with no special casing.
+- **Scene rendering** — a star field plus satellites (optionally the full
+  Space-Track catalog: every sunlit in-FOV satellite streaks at its apparent
+  rate) over a configurable sensor model (FOV, zeropoint, PSF, noise), driven
+  per exposure by the live mount pointing and rate — sidereal frames get
+  sharp stars and streaking satellites, rate-tracked frames the reverse.
+- **Native camera device** — a standard SensorKit camera device: connect, binning,
+  cooler, capture, and status telemetry, with frames delivered through the
+  camera DataGraph like any real camera module.
 
-It optionally subscribes to a mount and rotator entity for **live pointing**:
-the renderer follows the mount's RA/Dec and axis rates, choosing sidereal
-tracking (sharp stars, streaked targets) or rate-tracking (streaked stars,
-stationary target) automatically from the rates.
+## How It Works
 
-> This replaces the older GitLab `sdasim` tool, which stood up a standalone
-> ASCOM Alpaca HTTP camera *server*. The latest SensorKit has no Alpaca server
-> (its `alpaca` module is a *client*), so the simulator is now a first-class
-> SensorKit device instead.
+1. Each configured camera runs as its own service process (rendering is
+   CPU-bound; run multiple cameras as separate services)
+2. The camera subscribes to the configured mount (and rotator) entities for
+   live pointing and inertial (ICRF) axis rates;
+   sdasim renders apparent motion as object rate minus mount rate, so
+   sidereal and rate tracking need no special casing
+3. On capture, the frame is rendered off the event loop, held to the
+   commanded integration time, then pushed with its context into the device's
+   DataGraph — `array_to_fits` / `write_file` produce FITS as for real
+   hardware
+4. The scene is rebuilt only when the pointing drifts past
+   `rebuild_threshold_deg` or the exposure changes
 
-## Layout
-
-```
-modules/sdasim/src/sensorkit/sdasim/
-  service.py   # declare_config_section("sdasim", ...) + service entrypoint
-  device.py    # SdasimDevice base (require_connected, status-loop helpers)
-  camera.py    # SdasimCamera: StandardCamera device, capture -> DataGraph
-  engine.py    # SdasimEngine (render) + SensorKitBridge (mount/rotator telemetry)
-```
-
-## Install
-
-`sdasim` (and its `torch` dependency) are an **optional extra** — they are not
-pulled into a default SensorKit install:
-
-```sh
-uv sync --extra sdasim
-```
-
-> The extra is currently sourced from a local editable path (`/opt/sdasim`) via
-> `[tool.uv.sources]`, because the orbital API the module uses isn't yet on a
-> public branch. Revert to a git pin once it's pushed.
-
-## Configure
+## Example Config
 
 ```yaml
-sdasim:
-  - id: Sdasim
-    devices:
-      SimulatedCamera:
-        device_type: camera
-        sdasim_config: /path/to/scene.yaml  # your sdasim SceneConfig YAML
-        mount_entity: SimulatedMount       # optional: live RA/Dec + rates
-        rotator_entity: SimulatedRotator   # optional: rotator position
-        device: cpu                        # torch device (cpu | cuda | mps | auto)
-        temperature: -10.0                 # simulated cooler setpoint
-        binning: 1
+entity: sdasimCamera
+key: SdasimCameraConfig
+value:
+  sdasim_config: /path/to/scene.yaml   # sdasim SceneConfig: sensor model, star field, satellites, site
+  mount_entity: OmniSimTelescope       # optional: live pointing + rates drive the render
+  rotator_entity: OmniSimRotator       # optional: subscribed, not yet rendered (see TODO)
+  device: cpu                          # torch device: cpu | cuda | mps | auto
+  temperature: -10.0                   # simulated cooler setpoint (°C)
+  rebuild_threshold_deg: 0.25          # rebuild the scene when pointing drifts past this
 ```
 
-Satellite rendering, the star catalog, and the observer `site` are configured in
-the **sdasim scene YAML** (`sdasim_config`), not here — enable `catalog` there to
-have sdasim discover and streak field satellites for the live pointing. The
-module supplies pointing, inertial mount rate, and `obs_time` per exposure, and
-rebuilds the Scene only when the pointing drifts or the exposure changes.
+Satellite rendering, the star field, and the observer site live in the sdasim
+scene YAML (`sdasim_config`), not here (but see `TODO`). Wire the camera into a sensor like
+any other camera device (`devices: camera: sdasimCamera`) and give it the
+standard camera producer DataGraph (`app_source → array_to_fits →
+write_file`); its `write_file` directory is where the synthetic FITS land.
 
-Add `sensorkit.sdasim.service` to your `SENSORKIT_IMPORTS` / `sensorkit.imports`
-so the config section registers, then run via `sensorkit go` (or
-`sensorkit service run Sdasim`).
+## Usage
 
-## Notes / limitations
+The simulator (`sdasim` on PyPI) and its `torch` dependency are an optional
+extra — install it, then run the service:
 
-- **Full-frame only.** The SensorKit camera archetype has no ROI; binning is
-  supported via `ConfigureCameraSensor` (symmetric NxN only).
-- **CCD vs CMOS binning physics** is preserved from the original: CCD defers
-  read noise until charge is summed on-chip; CMOS bins post read-noise.
-- **Rotator** position is subscribed and reported but **not yet applied** —
-  sdasim does not model field rotation during rendering.
-- The `sdasim.Scene` (and its satellite catalog) is built once and reused across
-  exposures; it is rebuilt only when the pointing drifts past
-  `rebuild_threshold_deg` or the exposure changes (the star field and exposure
-  are fixed at construction).
-- **Mount rate convention:** the camera passes the mount's `AxisRates` straight
-  to sdasim as the inertial rate, which requires an **ICRF** AxisRates producer
-  (sidereal → 0). Only the `alpaca` mount adapter is ICRF so far — nina / pwi4 /
-  thesky / node_platform still publish sidereal-inclusive RA rates and need the
-  same fix before they'll drive sdasim correctly.
+```sh
+pip install "sensorkit[sdasim]"
+sensorkit service run sdasimCamera sensorkit.sdasim.service
+```
+
+## TODO
+
+- **Config** — integrate sdasim scene config into `sdasim` module. 
+- **Rotator** — the rotator position is subscribed and reported, but field
+  rotation is not yet applied to the render.
+- **Filters** — no filter wheel is simulated, and no filter context/header
+  key is set on captured frames.
+- **Calibration frames** — every capture is a light frame; dark/bias frame
+  types are not simulated beyond the sensor noise model.
+- **Full-frame only** — no ROI support; binning is symmetric N×N.
