@@ -17,6 +17,7 @@ from sensorkit.astro.common import TLE, ReferenceFrame
 from sensorkit.astro.coords import Equatorial, Horizontal
 from sensorkit.astro.target import AltAzTarget, ICRSTarget, RateTarget, Target, TLETarget
 from sensorkit.data.filesys import FileNameTemplate
+from sensorkit.data.fits import FITSHeader
 from sensorkit.std import CameraParameterSet, StandardCollectTask
 
 # Produces e.g. `20260424T031530_photometric_standards_110-364_f0.fits`.
@@ -36,6 +37,14 @@ class BurrContext(BaseModel):
     Being namespaced also stops these values from colliding with the generic
     flat keys the std controller injects (`target_id`, `track_mode`, ...),
     which otherwise override anything burr puts at the top level.
+
+    The same three values are also stamped into every frame's FITS header as
+    `BURRSEQ`/`BURRTARG`/`BURRMODE` via a `FITSHeader` keyword in the task's
+    execution context, so downstream processing (`senpai-burr night --seq-key
+    BURRSEQ`) gets them without the deployment adding them to the camera
+    graph's `array_to_fits` header map. A deployment map entry with the same
+    keyword still wins, since the graph's cards resolve after client-stamped
+    ones.
 
     Fields
     ------
@@ -121,9 +130,17 @@ def build_sk_tasks(
         # frames of one collect. Distinct exposure_seconds entries differ.
         # The FileNameTemplate resolves the identity via `BurrContext.<field>`
         # when sensorkit's filesys.WriteFile renders it.
+        #
+        # The same identity is stamped as FITS cards: the controller seeds
+        # every frame's context from this execution context, and array_to_fits
+        # merges a pre-existing FITSHeader into each file it writes, so the
+        # cards land without any camera-graph header config. BURRSEQ is the
+        # grouping key `senpai-burr night --seq-key BURRSEQ` batches on.
+        seq = str(uuid.uuid4())
         exposure_context = sk.KeywordDict(
-            BurrContext(seq=str(uuid.uuid4()), targ=targ, mode=mode),
+            BurrContext(seq=seq, targ=targ, mode=mode),
             FileNameTemplate(template=_FILE_NAME_TEMPLATE),
+            FITSHeader({"BURRSEQ": seq, "BURRTARG": targ, "BURRMODE": mode}),
         )
 
         # The controller mints the task id; `context` and `expiry_time` are recorded on the
