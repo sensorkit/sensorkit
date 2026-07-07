@@ -183,6 +183,28 @@ class TestEnvVarFallback:
         assert p.config.api.env_file == "/opt/sk/.env.udl"
 
 
+class TestGenerateStampsRequestId:
+    @pytest.mark.asyncio
+    async def test_submission_context_carries_udlreqid(self, program):
+        """The submit context carries a FITSHeader UDLREQID card = the request id,
+        which array_to_fits writes into every frame for publish correlation."""
+        from sensorkit.data.fits import FITSHeader
+
+        request_id = str(uuid.uuid4())
+        request = MockCollectRequest.with_tle(id=request_id)
+        await program.queue.push_task(request)
+
+        gen = program.generate()
+        submission = await gen.asend(None)
+        assert submission is not None
+
+        header = submission.context.get(FITSHeader)
+        assert header is not None
+        assert header["UDLREQID"] == request_id
+
+        await gen.aclose()
+
+
 class TestPollFilter:
     @pytest.mark.asyncio
     async def test_default_polls_by_id_sensor(self, program):

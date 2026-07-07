@@ -23,7 +23,9 @@ import sensorkit.api as sk
 from sensorkit.astro.common import TLE, SitePosition
 from sensorkit.astro.coords import Equatorial, Cartesian, StateVector
 from sensorkit.astro.target import ICRSTarget, StateVectorTarget, Target, TLETarget
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.data.filesys import FileInfo
+from sensorkit.data.fits import FITSHeader
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 from sensorkit.udl.models import (
     ResponseStatus,
@@ -675,13 +677,21 @@ class UDLProgram:
 
         logger.info(f"Task ({request.id}): starting execution with end_time={task.end_time}")
 
+        # Stamp the UDL request id into every frame's FITS header: the controller
+        # seeds each frame's context from this execution context, and
+        # array_to_fits writes any pre-existing FITSHeader cards into every file
+        # it produces — no camera-graph header changes needed. The DataGraph maps
+        # it back (task_id: UDLREQID) so the publisher can correlate frames to
+        # their CollectRequest.
+        exec_context = KeywordDict(FITSHeader({"UDLREQID": str(request.id)}))
+
         try:
             # The framework sends back a TaskExecutionResult on success; its
             # start_time/end_time bracket the controller's task execution
             # (before slew … after the mount stop), which we report as the
             # CollectResponse's actual window. Per-exposure precision is carried
             # separately by SkyImagery's expStartTime/expEndTime.
-            result = await (yield task.submit(expiry_time=end_time))
+            result = await (yield task.submit(context=exec_context, expiry_time=end_time))
             logger.info(f"Task ({request.id}): finished execution successfully")
             # Stash the execution window so the COMPLETED response — sent later
             # from _publish_imagery once the imagery set finishes uploading — can
