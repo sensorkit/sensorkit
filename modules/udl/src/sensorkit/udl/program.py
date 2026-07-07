@@ -659,7 +659,7 @@ class UDLProgram:
         end_time = (
             request.end_time + timedelta(seconds=self.config.end_time_deadband_s)
             if request.end_time
-            else datetime.now(UTC) + timedelta(minutes=self.config.end_time_deadband_s)
+            else datetime.now(UTC) + timedelta(seconds=self.config.end_time_deadband_s)
         )
 
         task = StandardCollectTask(
