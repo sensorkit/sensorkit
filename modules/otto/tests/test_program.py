@@ -8,8 +8,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from conftest import make_task
 
-from sensorkit.otto.program import OttoProgram, OttoState
+from sensorkit.otto.program import OttoProgram, OttoState, _sidereal_frames
 from sensorkit.otto.task_queue import TaskQueue
+
+
+class TestSiderealFrames:
+    """track_mode -> per-frame sidereal switches on the StandardCollectTask."""
+
+    def test_rate_pins_no_frames(self):
+        assert _sidereal_frames("rate", 5) == []
+
+    def test_rate_sidereal_pins_final_frame(self):
+        assert _sidereal_frames("rate_sidereal", 5) == [4]
+
+    def test_sidereal_pins_every_frame(self):
+        assert _sidereal_frames("sidereal", 3) == [0, 1, 2]
 
 
 def _resolved_execution():

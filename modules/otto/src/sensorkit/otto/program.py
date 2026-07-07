@@ -22,6 +22,23 @@ from sensorkit.otto.utils import (
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 
 
+def _sidereal_frames(track_mode: str, num_frames: int) -> list[int]:
+    """Frame numbers to collect under sidereal tracking for a track_mode.
+
+    rate          -> none (follow the target for every frame)
+    rate_sidereal -> final frame only (star-pinned astrometric anchor)
+    sidereal      -> every frame (pin the stars at acquisition; the object
+                     streaks and is not re-acquired between frames)
+    """
+    match track_mode:
+        case "sidereal":
+            return list(range(num_frames))
+        case "rate_sidereal":
+            return [num_frames - 1]
+        case _:
+            return []
+
+
 class OttoState(BaseModel):
     """Persistent state for Otto program."""
 
@@ -43,8 +60,8 @@ class OttoProgram:
 
     Maintains a TLE cache and whitelist/graylist/blacklist object lists, generates
     collect tasks for visible satellites, and publishes the resulting imagery. State
-    is persisted to the KV store so tasking survives restarts and upstream TLE
-    rate limits.
+    is persisted to the KV store: object lists carry across restarts, and a failed
+    TLE refresh falls back to the recent cached set instead of stalling tasking.
     """
 
     def __init__(self):
@@ -106,8 +123,8 @@ class OttoProgram:
         # Initialize list manager
         self.list_manager = ObjectListManager(self.state, self._save_state)
 
-        # Restore TLE cache
-        # Useful for proceeding during rate-limit exception on Spacebook fetch
+        # Restore TLE cache — lets tasking proceed if the startup fetch fails
+        # (e.g. a Spacebook outage or transient error)
         try:
             tle_cache = await self.program.kv_get_model(TLECache)
             self.tles = tle_cache.tles
@@ -138,7 +155,6 @@ class OttoProgram:
 
         # Start data publishing (if configured)
         if self.config.publish.upload:
-            logger.debug(f"publishing Otto data for {self.config.publish.sensor_name}")
             self._publisher = asyncio.create_task(self.data_publisher())
 
     @sk.on_detach
@@ -405,21 +421,21 @@ class OttoProgram:
                             elevation=self.altitude_km * 1000,
                         )
 
-                    # Account for rate-sidereal mode
-                    sidereal_kwargs = (
-                        {"sidereal_frames": [self.config.collect.num_frames - 1]}
-                        if self.config.collect.track_mode == "rate_sidereal"
-                        else {}
+                    # Map track_mode onto per-frame sidereal switches
+                    sidereal_frames = _sidereal_frames(
+                        self.config.collect.track_mode, self.config.collect.num_frames
                     )
 
                     # FIXME: may want a custom controller for Otto. The standard controller re-slews between each different
                     # filter, binning, and exposure (but not frame number) setting.
 
                     # Create tasks for each combination of camera parameters
+                    # exposure_max is inclusive (when reachable from exposure_min
+                    # in steps of exposure_delta).
                     exposures = list(
                         range(
                             self.config.collect.exposure_min,
-                            self.config.collect.exposure_max,
+                            self.config.collect.exposure_max + 1,
                             self.config.collect.exposure_delta,
                         )
                     )
@@ -453,7 +469,7 @@ class OttoProgram:
                                         binning_y=binning,
                                         frame_count=self.config.collect.num_frames,
                                     ),
-                                    **sidereal_kwargs,
+                                    sidereal_frames=sidereal_frames,
                                 )
                                 await self.task_queue.push_task(task)
 
@@ -480,11 +496,22 @@ class OttoProgram:
         if cfg.gdrive:
             from sensorkit.otto.publishers import GDrivePublisher
 
-            publishers.append(GDrivePublisher(cfg.gdrive))
+            publishers.append(GDrivePublisher(cfg.gdrive, env_file=cfg.env_file))
         if cfg.dropbox:
             from sensorkit.otto.publishers import DropboxPublisher
 
-            publishers.append(DropboxPublisher(cfg.dropbox))
+            publishers.append(DropboxPublisher(cfg.dropbox, env_file=cfg.env_file))
+        if cfg.udl:
+            from sensorkit.otto.publishers import UDLPublisher
+
+            publishers.append(
+                UDLPublisher(
+                    cfg.udl,
+                    env_file=cfg.env_file,
+                    frame_count=self.config.collect.num_frames,
+                    site=self._controller_location,
+                )
+            )
 
         if not publishers:
             logger.warning("publish.upload is true but no destinations configured")

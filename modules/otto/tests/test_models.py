@@ -1,9 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for Otto's data models."""
 
+import pytest
+from pydantic import ValidationError
+
 from sensorkit.otto.models import (
     CollectConfig,
+    PublishConfig,
     TaskConfig,
+    UDLPublishConfig,
 )
 from sensorkit.otto.program import OttoState, TLECache
 
@@ -62,6 +67,30 @@ class TestCollectConfig:
         assert config.track_mode == "rate_sidereal"
         assert len(config.filters) == 4
         assert config.num_frames == 5
+
+    def test_sidereal_track_mode(self):
+        config = CollectConfig(track_mode="sidereal")
+        assert config.track_mode == "sidereal"
+
+    def test_invalid_track_mode_rejected(self):
+        with pytest.raises(ValidationError):
+            CollectConfig(track_mode="ratee")
+
+
+class TestPublishConfig:
+    def test_defaults(self):
+        config = PublishConfig()
+        assert config.upload is False
+        assert config.env_file == ".env"
+        assert config.gdrive is None
+        assert config.dropbox is None
+        assert config.udl is None
+
+    def test_udl_requires_id_sensor_and_source(self):
+        with pytest.raises(ValidationError):
+            UDLPublishConfig(source="DAO")
+        with pytest.raises(ValidationError):
+            UDLPublishConfig(id_sensor="SENSOR-01")
 
 
 class TestTLECache:
