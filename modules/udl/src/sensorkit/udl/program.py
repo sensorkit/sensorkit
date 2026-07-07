@@ -76,8 +76,8 @@ class UDLProgram:
     has been delivered to UDL. REJECTED (unusable/expired request), CANCELLED, or
     FAILED replace the success path as appropriate.
 
-    Supports both UDL (username/password) and MACHINA (cert-based) authentication.
-    The base_url can be pointed at either endpoint.
+    Supports both username/password and cert-based authentication. The base_url
+    can be pointed at UDL itself or any UDL-compliant endpoint.
     """
 
     def __init__(self):
@@ -145,10 +145,9 @@ class UDLProgram:
         """Read UDL_USERNAME/UDL_PASSWORD for an endpoint (use_certs=False).
 
         Returns (None, None) when no credentials are configured, allowing
-        unauthenticated requests against local UDL-like endpoints (e.g. a
-        UDLx-enabled MACHINA that doesn't enforce auth). When exactly one of
-        username/password is provided, the partial config is treated as a
-        mistake and rejected.
+        unauthenticated requests against local UDL-compliant endpoints that
+        don't enforce auth. When exactly one of username/password is provided,
+        the partial config is treated as a mistake and rejected.
         """
         env = dotenv_values(endpoint.env_file)
         username = env.get("UDL_USERNAME") or os.environ.get("UDL_USERNAME")
@@ -324,10 +323,15 @@ class UDLProgram:
         try:
             now = datetime.now(UTC)
             horizon = now + timedelta(days=1)
+            filter_field = (
+                "origSensorId"
+                if self.config.api.poll_filter == "orig_sensor_id"
+                else "idSensor"
+            )
             page = await self.client.collect_requests.list(
                 start_time=f"<{_udl_ts(horizon)}",
                 extra_query={
-                    "idSensor": self.config.api.id_sensor,
+                    filter_field: self.config.api.id_sensor,
                     "endTime": f">{_udl_ts(now)}",
                 },
                 extra_headers=self._client_headers,
@@ -568,8 +572,8 @@ class UDLProgram:
         POSTs to '{base_url}/filedrop/udl-skyimagery', which 404s. We therefore
         derive the correct host and POST the ZIP ourselves.
 
-        Returns None for hosts we don't recognise (e.g. MACHINA), signalling
-        the caller to fall back to the SDK's upload_zip().
+        Returns None for hosts we don't recognise (custom UDL-compliant
+        endpoints), signalling the caller to fall back to the SDK's upload_zip().
         """
         base = self._upload_endpoint().base_url
         if not base:
@@ -596,7 +600,7 @@ class UDLProgram:
         POSTs the raw ZIP as application/zip with Basic auth (or client cert)
         to the imagery subdomain — the approach proven against the live UDL
         filedrop. Falls back to the SDK when the filedrop host can't be derived
-        (e.g. MACHINA's custom base_url).
+        (a custom base_url).
         """
         endpoint = self._upload_endpoint()
 
@@ -604,7 +608,8 @@ class UDLProgram:
         if url is None:
             # The UDL filedrop contract is "a zip is all that's required" — no
             # multipart filename. We rely on that, and our integration tests
-            # assert UDLx MACHINA keeps parity by accepting the same payload.
+            # assert UDL-compliant endpoints keep parity by accepting the same
+            # payload.
             await self.upload_client.sky_imagery.upload_zip(
                 file=zip_bytes,
                 timeout=endpoint.upload_timeout,

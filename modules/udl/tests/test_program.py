@@ -181,3 +181,32 @@ class TestEnvVarFallback:
         p = UDLProgram()
         p.config = config
         assert p.config.api.env_file == "/opt/sk/.env.udl"
+
+
+class TestPollFilter:
+    @pytest.mark.asyncio
+    async def test_default_polls_by_id_sensor(self, program):
+        program.client.collect_requests = MagicMock()
+        program.client.collect_requests.list = AsyncMock(
+            return_value=MagicMock(items=[])
+        )
+
+        await program._poll_collect_requests()
+
+        kwargs = program.client.collect_requests.list.call_args.kwargs
+        assert kwargs["extra_query"]["idSensor"] == "SENSOR-01"
+        assert "origSensorId" not in kwargs["extra_query"]
+
+    @pytest.mark.asyncio
+    async def test_orig_sensor_id_filter(self, program):
+        program.config.api.poll_filter = "orig_sensor_id"
+        program.client.collect_requests = MagicMock()
+        program.client.collect_requests.list = AsyncMock(
+            return_value=MagicMock(items=[])
+        )
+
+        await program._poll_collect_requests()
+
+        kwargs = program.client.collect_requests.list.call_args.kwargs
+        assert kwargs["extra_query"]["origSensorId"] == "SENSOR-01"
+        assert "idSensor" not in kwargs["extra_query"]

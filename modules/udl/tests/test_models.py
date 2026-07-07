@@ -43,16 +43,16 @@ class TestUDLAPIConfig:
     def test_cert_auth_config(self):
         config = UDLAPIConfig(
             id_sensor="SENSOR-01",
-            source="MACHINA",
+            source="DAO",
             use_certs=True,
             client_cert="/path/to/cert.pem",
             client_key="/path/to/key.pem",
             client_verify=False,
-            base_url="https://machina.example.com",
+            base_url="https://udl-compliant.example.com",
         )
         assert config.use_certs is True
         assert config.client_cert == "/path/to/cert.pem"
-        assert config.base_url == "https://machina.example.com"
+        assert config.base_url == "https://udl-compliant.example.com"
 
     def test_env_file_config(self):
         config = UDLAPIConfig(
@@ -83,3 +83,22 @@ class TestUDLConfig:
         assert config.poll_frequency == 10.0
         assert config.end_time_deadband_s == 0.0
         assert config.skyimagery_save_path is None
+
+
+class TestPollFilterConfig:
+    def test_default_is_id_sensor(self):
+        config = UDLAPIConfig(id_sensor="SENSOR-01", source="DAO")
+        assert config.poll_filter == "id_sensor"
+
+    def test_orig_sensor_id_accepted(self):
+        config = UDLAPIConfig(
+            id_sensor="SENSOR-01", source="DAO", poll_filter="orig_sensor_id"
+        )
+        assert config.poll_filter == "orig_sensor_id"
+
+    def test_invalid_filter_rejected(self):
+        import pytest
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            UDLAPIConfig(id_sensor="SENSOR-01", source="DAO", poll_filter="bogus")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -67,14 +68,17 @@ class UDLEndpointConfig(BaseModel):
     # Auth method selector
     use_certs: bool = Field(
         default=False,
-        description="If True, use cert-based auth (MACHINA). If False, use username/password (UDL)."
+        description=(
+            "If True, use cert-based auth (for UDL-compliant endpoints that "
+            "require client certificates). If False, use username/password."
+        ),
     )
 
-    # Path to .env file for username/password auth (UDL, when use_certs=False)
+    # Path to .env file for username/password auth (when use_certs=False)
     # Expects UDL_USERNAME and UDL_PASSWORD
     env_file: str = Field(default=".env", description="Path to .env file containing UDL_USERNAME and UDL_PASSWORD")
 
-    # Cert-based auth (for MACHINA, when use_certs=True)
+    # Cert-based auth (when use_certs=True)
     client_cert: str | None = None
     client_key: str | None = None
     client_verify: bool = Field(default=True)
@@ -83,8 +87,8 @@ class UDLEndpointConfig(BaseModel):
 class UDLAPIConfig(UDLEndpointConfig):
     """Configuration for UDL API connection."""
     # Optional separate endpoint for SkyImagery uploads, with its own auth
-    # settings (e.g. poll UDL with basic auth, upload to a UDLx-enabled
-    # MACHINA with certs). When None (default), imagery is uploaded to the
+    # settings (e.g. poll UDL with basic auth, upload to a cert-authenticated
+    # UDL-compliant endpoint). When None (default), imagery is uploaded to the
     # primary endpoint (backward compatible).
     upload: UDLEndpointConfig | None = Field(
         default=None,
@@ -94,10 +98,18 @@ class UDLAPIConfig(UDLEndpointConfig):
         ),
     )
 
-    # Sensor identification — used as both idSensor (SkyImagery, CollectResponse)
-    # and origSensorId (CollectRequest polling filter)
-    id_sensor: str = Field(description="Sensor ID (maps to idSensor and origSensorId)")
-    source: str = Field(description="Data source identifier (e.g. 'DAO', 'MACHINA')")
+    # Sensor identification — the CollectRequest poll filter value, and stamped
+    # as both idSensor and origSensorId on CollectResponses (and as idSensor on
+    # SkyImagery)
+    id_sensor: str = Field(description="Sensor ID (poll filter value; maps to idSensor and origSensorId)")
+    poll_filter: Literal["id_sensor", "orig_sensor_id"] = Field(
+        default="id_sensor",
+        description=(
+            "Which CollectRequest field the poll matches id_sensor against: "
+            "idSensor (default) or origSensorId."
+        ),
+    )
+    source: str = Field(description="Data source identifier (e.g. 'DAO')")
 
 
 class UDLConfig(BaseModel):

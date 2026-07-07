@@ -403,8 +403,8 @@ class TestImageryFiledropURL:
         )
 
     def test_unknown_host_returns_none(self, program):
-        """Unknown hosts (e.g. MACHINA) → fall back to the SDK."""
-        program.config.api.base_url = "https://machina.example.mil"
+        """Unknown hosts (custom UDL-compliant endpoints) → fall back to the SDK."""
+        program.config.api.base_url = "https://udl-compliant.example.mil"
         assert program._imagery_filedrop_url() is None
 
 
