@@ -7,7 +7,8 @@ from typing import Literal, NamedTuple, Protocol, runtime_checkable
 
 import numpy as np
 from astropy.io import fits
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, GetCoreSchemaHandler
+from pydantic_core import core_schema
 
 from sensorkit.common.keyword import declare_keyword
 from sensorkit.data.context import Context
@@ -82,6 +83,20 @@ class FITSHeader(dict[str, FITSCardValue]):
     Each value is either a bare card value or a `FITSCardValueWithComment` carrying
     an associated comment.
     """
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source_type, handler: GetCoreSchemaHandler):
+        # A plain dict subclass has no derivable schema; validate as a dict of
+        # cards and rebuild the FITSHeader. This lets a FITSHeader ride
+        # pydantic-validated paths (e.g. a task submission's KeywordDict
+        # context) so client-stamped cards reach the frame contexts downstream.
+        return core_schema.no_info_after_validator_function(
+            cls,
+            core_schema.dict_schema(
+                keys_schema=core_schema.str_schema(),
+                values_schema=handler.generate_schema(FITSCardValue),
+            ),
+        )
 
     def write_to(self, header: fits.Header) -> None:
         """Write these cards into an astropy *header*, preserving comments."""

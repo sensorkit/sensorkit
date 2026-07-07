@@ -90,7 +90,9 @@ class StandardCollectTask(sk.CollectTask):
     and frame acquisition.
 
     Implementations must build and propagate context data to any operations that require it.
-    The base context must be taken from the `TaskExecution`. (FIXME: do this internally)
+    The controller seeds the execution's base context from the `TaskExecution` (the
+    client-supplied submit context plus `TaskInfo`), so client context keys — e.g. a
+    pre-populated `FITSHeader` — flow into every frame's context automatically.
 
     Mandatory context keywords:
       - Collect: Snapshot of the current collect state, prior to each operation
