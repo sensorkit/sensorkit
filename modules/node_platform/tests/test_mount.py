@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for Node Platform mount device."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import MockNodePlatformAPI
+from conftest import MockNodePlatformAPI, make_mount_status
 
 from sensorkit.models.devices import Deinit, FollowTarget, Home, Init, MoveToPark, Stop
 from sensorkit.node_platform.device import DeviceConnectionError
@@ -35,6 +35,13 @@ def mount(api):
     m.mount_slewing = False
     m.mount_tracking = False
     m._fast_status_task = None
+    m._geodetic = None
+    # mount_enable() reads motor state from v2_get_mount_status; default to an
+    # idle mount (motors present, not slewing/tracking).
+    api.set_response("v2_get_mount_status", lambda *a, **k: make_mount_status())
+    # These tests assert which commands are issued, not the settle polling, so
+    # stub the status-poll wait to keep them deterministic and fast.
+    m._wait_for_mount = AsyncMock()
     return m
 
 

@@ -113,10 +113,10 @@ class TestWeatherStatus:
             "node_controller.weather_monitor.air_temperature",
         ]
 
-        result = await w._build_weather_keywords()
+        weather_kw, _basic_safety, _safety = await w._build_weather_keywords()
 
-        assert result is not None
-        assert result.temperature == 20.0
+        assert weather_kw is not None
+        assert weather_kw.temperature == 20.0
 
     @pytest.mark.asyncio
     async def test_build_weather_keywords_disconnected(self):
@@ -130,7 +130,7 @@ class TestWeatherStatus:
         w._api = api
         w._weather_metric_names = []
 
-        result = await w._build_weather_keywords()
+        weather_kw, _basic_safety, _safety = await w._build_weather_keywords()
 
-        assert result is None
+        assert weather_kw is None
         assert w.device_connected is False

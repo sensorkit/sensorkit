@@ -2,7 +2,7 @@
 """Tests for Node Platform rotator device."""
 
 import pytest
-from conftest import MockNodePlatformAPI
+from conftest import MockNodePlatformAPI, make_rotator_status
 
 from sensorkit.models.devices import Stop
 from sensorkit.node_platform.device import DeviceConnectionError
@@ -28,6 +28,8 @@ def rotator(api):
     r.device_connected = True
     r.rotator_position = 90.0
     r.rotator_moving = False
+    # rotator_change() polls v1_get_rotator_status until the move settles.
+    api.set_response("v1_get_rotator_status", lambda *a, **k: make_rotator_status(moving=False))
     return r
 
 
@@ -73,7 +75,7 @@ class TestRotatorCommands:
     async def test_move(self, rotator, api):
         rotator.rotator_moving = False
         cmd = ChangeRotatorPosition(position=135.0)
-        await rotator.rotator_move(cmd)
+        await rotator.rotator_change(cmd)
 
         calls = api.find_calls("v1_go_to_rotator_position")
         assert len(calls) == 1
@@ -90,4 +92,4 @@ class TestRotatorCommands:
         cmd = ChangeRotatorPosition(position=45.0)
 
         with pytest.raises(DeviceConnectionError):
-            await rotator.rotator_move(cmd)
+            await rotator.rotator_change(cmd)

@@ -37,11 +37,19 @@ class NodePlatformDevice:
                     f"{self.config.env_file} or as an environment variable"
                 )
 
+            # Lineage is optional (the Node Platform can scope it server-side from
+            # the API key). Like the API key, it lives only in the environment —
+            # env_file first, then the process environment.
+            lineage_id = env.get("NODE_PLATFORM_LINEAGE_ID") or os.environ.get(
+                "NODE_PLATFORM_LINEAGE_ID"
+            )
+
             self._api = NodePlatformAPI(
                 host=self.config.host,
                 port=self.config.port,
                 api_key=api_key,
-                lineage_id=self.config.lineage_id,
+                lineage_id=lineage_id,
+                request_timeout=self.config.request_timeout,
             )
         return self._api
 
@@ -83,8 +91,10 @@ class NodePlatformAPI:
         port: int = 9080,
         api_key: str | None = None,
         lineage_id: str = "",
+        request_timeout: float | None = None,
     ) -> None:
         self.lineage_id = lineage_id
+        self.request_timeout = request_timeout
 
         base_url = f"http://{host}:{port}"
         self._configuration = osapi.Configuration(
@@ -97,12 +107,16 @@ class NodePlatformAPI:
     async def call(self, method_name: str, *args, **kwargs) -> Any:
         """Call an SDK method asynchronously.
 
-        The `lineage_id` keyword is injected automatically when not
-        explicitly provided.
+        The `lineage_id` and `_request_timeout` keywords are injected
+        automatically when not explicitly provided. `_request_timeout` bounds
+        the underlying (blocking) HTTP request, so a hung Platform call can't
+        stall its `to_thread` worker indefinitely.
         """
 
         if "lineage_id" not in kwargs and self.lineage_id:
             kwargs["lineage_id"] = self.lineage_id
+        if "_request_timeout" not in kwargs and self.request_timeout:
+            kwargs["_request_timeout"] = self.request_timeout
 
         method = getattr(self._sdk, method_name)
         try:
@@ -123,7 +137,6 @@ class NodePlatformDeviceConfig[T: NodePlatformDevice = NodePlatformDevice](BaseM
     device_type: Literal[None] = None
     host: str
     port: int = 9080
-    lineage_id: str | None = None
     request_timeout: float = 30.0
     env_file: str = ".env"
     operation_mode: Literal["manual", "assisted"] = "assisted"

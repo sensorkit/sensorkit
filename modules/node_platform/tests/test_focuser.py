@@ -2,7 +2,7 @@
 """Tests for Node Platform focuser device."""
 
 import pytest
-from conftest import MockNodePlatformAPI
+from conftest import MockNodePlatformAPI, make_focuser_status
 
 from sensorkit.models.devices import Stop
 from sensorkit.node_platform.device import DeviceConnectionError
@@ -28,6 +28,8 @@ def focuser(api):
     f.device_connected = True
     f.focuser_position = 15000.0
     f.focuser_moving = False
+    # focuser_change() polls v1_get_focuser_status until the move settles.
+    api.set_response("v1_get_focuser_status", lambda *a, **k: make_focuser_status(moving=False))
     return f
 
 
@@ -47,7 +49,7 @@ class TestFocuserCommands:
     @pytest.mark.asyncio
     async def test_move(self, focuser, api):
         cmd = ChangeFocusPosition(position=20000)
-        await focuser.focuser_move(cmd)
+        await focuser.focuser_change(cmd)
 
         calls = api.find_calls("v1_go_to_focuser_position")
         assert len(calls) == 1
@@ -64,4 +66,4 @@ class TestFocuserCommands:
         cmd = ChangeFocusPosition(position=10000)
 
         with pytest.raises(DeviceConnectionError):
-            await focuser.focuser_move(cmd)
+            await focuser.focuser_change(cmd)

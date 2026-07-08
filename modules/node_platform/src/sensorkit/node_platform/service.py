@@ -28,7 +28,6 @@ type NodePlatformDeviceConfigs = Annotated[
 class NodePlatformServerConfig(BaseModel):
     host: str
     port: int = 9080
-    lineage_id: str | None = None
     request_timeout: float = 30.0
     env_file: str = ".env"
     operation_mode: Literal["manual", "assisted"] = "assisted"
@@ -42,7 +41,6 @@ class NodePlatformServerConfig(BaseModel):
                 for device in devices.values():
                     device["host"] = data.get("host")
                     device["port"] = data.get("port", 9080)
-                    device["lineage_id"] = data.get("lineage_id")
                     device["request_timeout"] = data.get("request_timeout", 30.0)
                     device["env_file"] = data.get("env_file", ".env")
                     device["operation_mode"] = data.get("operation_mode", "assisted")
