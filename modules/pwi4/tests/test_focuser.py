@@ -48,7 +48,7 @@ class TestPWI4Focuser:
 
         cmd = MagicMock()
         cmd.position = 20000
-        await focuser.focuser_move(cmd)
+        await focuser.focuser_change(cmd)
 
         reqs = client.find_requests("/focuser/goto")
         assert len(reqs) == 1
@@ -65,7 +65,7 @@ class TestPWI4Focuser:
         cmd.position = 20000
 
         with pytest.raises(DeviceConnectionError):
-            await focuser.focuser_move(cmd)
+            await focuser.focuser_change(cmd)
 
     @pytest.mark.asyncio
     async def test_stop(self):
@@ -80,7 +80,7 @@ class TestPWI4Focuser:
         assert len(reqs) == 1
 
     @pytest.mark.asyncio
-    async def test_deinit_stops_disables_and_disconnects(self):
+    async def test_deinit_stops_and_disables(self):
         client = MockPWI4Client()
         config = PWI4FocuserConfig()
         focuser = PWI4Focuser(config=config, client=client)
@@ -88,12 +88,11 @@ class TestPWI4Focuser:
 
         await focuser._deinitialize()
 
+        # focuser_deinit stops and disables; disconnect happens on detach (entity_deinit).
         stop_reqs = client.find_requests("/focuser/stop")
         disable_reqs = client.find_requests("/focuser/disable")
-        disconnect_reqs = client.find_requests("/focuser/disconnect")
         assert len(stop_reqs) == 1
         assert len(disable_reqs) == 1
-        assert len(disconnect_reqs) == 1
 
     @pytest.mark.asyncio
     async def test_status_publish(self):

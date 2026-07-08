@@ -38,7 +38,8 @@ class TestPWI4Cover:
 
     @pytest.mark.asyncio
     async def test_open(self):
-        client = MockPWI4Client()
+        # cover_open polls until the cover reports "Open"; reflect that end-state.
+        client = MockPWI4Client(status_overrides={"mirrorcover.overall_state_name": "Open"})
         config = PWI4CoverConfig()
         cover = PWI4Cover(config=config, client=client)
         cover.device_connected = True
@@ -86,20 +87,19 @@ class TestPWI4Cover:
         assert len(reqs) == 1
 
     @pytest.mark.asyncio
-    async def test_deinit_disconnects(self):
-        client = MockPWI4Client(
-            status_overrides={"mirrorcover.is_connected": "false"}
-        )
+    async def test_deinit_stops_and_closes(self):
+        client = MockPWI4Client()
         config = PWI4CoverConfig()
         cover = PWI4Cover(config=config, client=client)
         cover.device_connected = True
 
         await cover._deinitialize()
 
+        # cover_deinit stops and closes; disconnect happens on detach (entity_deinit).
         stop_reqs = client.find_requests("/mirrorcover/stop")
-        disconnect_reqs = client.find_requests("/mirrorcover/disconnect")
+        close_reqs = client.find_requests("/mirrorcover/close")
         assert len(stop_reqs) == 1
-        assert len(disconnect_reqs) == 1
+        assert len(close_reqs) == 1
 
     @pytest.mark.asyncio
     async def test_status_publishes_open_state(self):

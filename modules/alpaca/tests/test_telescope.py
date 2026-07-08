@@ -108,8 +108,7 @@ async def test_telescope_disconnect(telescope):
 
 @pytest.mark.asyncio
 async def test_telescope_home(telescope):
-    telescope.telescope._properties["Slewing"] = False
-    telescope._slewing = False
+    telescope.telescope._properties["AtHome"] = True
     await telescope.telescope_home(Home())
     assert telescope.state.has_been_homed is True
 

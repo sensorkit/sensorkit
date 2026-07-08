@@ -92,6 +92,8 @@ class TestMountStop:
 class TestMountPark:
     @pytest.mark.asyncio
     async def test_park_default(self, client, mount):
+        # mount_park polls until not slewing and not tracking; reflect the parked end-state.
+        client.set_status(**{"mount.is_tracking": "false"})
         await mount.mount_park(MoveToPark())
 
         reqs = client.find_requests("/mount/park")

@@ -47,7 +47,7 @@ class TestPWI4Rotator:
 
         cmd = MagicMock()
         cmd.position = 135.0
-        await rotator.rotator_move(cmd)
+        await rotator.rotator_change(cmd)
 
         reqs = client.find_requests("/rotator/goto_mech")
         assert len(reqs) == 1
@@ -64,7 +64,7 @@ class TestPWI4Rotator:
         cmd.position = 135.0
 
         with pytest.raises(DeviceConnectionError):
-            await rotator.rotator_move(cmd)
+            await rotator.rotator_change(cmd)
 
     @pytest.mark.asyncio
     async def test_stop(self):
@@ -79,7 +79,7 @@ class TestPWI4Rotator:
         assert len(reqs) == 1
 
     @pytest.mark.asyncio
-    async def test_deinit_disables_and_disconnects(self):
+    async def test_deinit_stops_and_disables(self):
         client = MockPWI4Client()
         config = PWI4RotatorConfig()
         rotator = PWI4Rotator(config=config, client=client)
@@ -87,12 +87,11 @@ class TestPWI4Rotator:
 
         await rotator._deinitialize()
 
+        # rotator_deinit stops and disables; disconnect happens on detach (entity_deinit).
         stop_reqs = client.find_requests("/rotator/stop")
         disable_reqs = client.find_requests("/rotator/disable")
-        disconnect_reqs = client.find_requests("/rotator/disconnect")
         assert len(stop_reqs) == 1
         assert len(disable_reqs) == 1
-        assert len(disconnect_reqs) == 1
 
     @pytest.mark.asyncio
     async def test_status_publish(self):
