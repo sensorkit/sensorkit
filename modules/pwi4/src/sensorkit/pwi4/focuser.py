@@ -8,7 +8,7 @@ from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.models.devices import Stop
-from sensorkit.std import Connect, Connected, Disconnect, Enabled
+from sensorkit.std import Connect, Connected, Disable, Disconnect, Enable, Enabled
 from sensorkit.pwi4.device import PWI4Client, PWI4Device, PWI4DeviceConfig, PWI4DeviceState
 from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
 
@@ -54,11 +54,11 @@ class PWI4Focuser(PWI4Device):
         # Connect to the hardware
         self._reconnect = lambda: self.focuser_connect(Connect())
         await self.focuser_connect(Connect())
-        await self.focuser_enable(sk.Enable())
+        await self.focuser_enable(Enable())
 
     async def _deinitialize(self):
         await self.focuser_stop(Stop())
-        await self.focuser_disable(sk.Disable())
+        await self.focuser_disable(Disable())
 
     @sk.command_handler
     async def focuser_connect(self, cmd: Connect):
@@ -91,14 +91,14 @@ class PWI4Focuser(PWI4Device):
         logger.debug("disconnected from focuser")
 
     @sk.command_handler
-    async def focuser_enable(self, cmd: sk.Enable):
+    async def focuser_enable(self, cmd: Enable):
         await self.require_connected()
         logger.debug("enabling focuser")
         await self.client.request("/focuser/enable")
         logger.debug("enabled focuser")
 
     @sk.command_handler
-    async def focuser_disable(self, cmd: sk.Disable):
+    async def focuser_disable(self, cmd: Disable):
         await self.require_connected()
         logger.debug("disabling focuser")
         await self.client.request("/focuser/disable")
