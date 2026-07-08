@@ -19,7 +19,7 @@ type PWI4DeviceConfigs = Annotated[
 class PWI4ServerConfig(BaseModel):
     host: str = "localhost"
     port: int = 8220
-    timeout: float = 60.0
+    request_timeout: float = 60.0
     devices: dict[str, PWI4DeviceConfigs] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -57,7 +57,7 @@ async def pwi4_service(service: sk.Service):
         client = PWI4Client(
             host=server.host,
             port=server.port,
-            timeout=server.timeout,
+            timeout=server.request_timeout,
         )
         clients.append(client)
 
