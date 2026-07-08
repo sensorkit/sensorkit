@@ -663,7 +663,7 @@ class PWI4Mount(PWI4Device):
         `await_onset=False`: they never raise is_slewing, so onset would
         otherwise burn the full timeout on every call.
 
-        The settle wait is bounded by config.timeout; both phases poll every 0.2 s.
+        The settle wait is bounded by config.timeout; both phases poll every 0.1 s.
         """
 
         if await_onset:
@@ -673,7 +673,7 @@ class PWI4Mount(PWI4Device):
                         st = await self.client.status()
                         if self.client.get_bool(st, "mount.is_slewing"):
                             break
-                        await asyncio.sleep(0.2)
+                        await asyncio.sleep(0.1)
             except TimeoutError:
                 # No slew observed -> positional no-op. Fall through to the
                 # settle check, which returns at once if already on target or
@@ -687,7 +687,7 @@ class PWI4Mount(PWI4Device):
                 is_tracking = self.client.get_bool(st, "mount.is_tracking")
                 if is_slewing == slewing and is_tracking == tracking:
                     break
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
 
     def _start_fast_status(self):
         if self._fast_status_task is None or self._fast_status_task.done():

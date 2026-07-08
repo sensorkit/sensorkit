@@ -701,7 +701,7 @@ class AlpacaTelescope(AlpacaDevice):
                 is_tracking = await self.get(self.telescope, "Tracking", False)
                 if is_slewing == slewing and is_tracking == tracking:
                     break
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.1)
 
     def _start_fast_status(self):
         if self._fast_status_task is None or self._fast_status_task.done():
