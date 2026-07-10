@@ -11,20 +11,20 @@ import aiofile
 from loguru import logger
 from pydantic import BaseModel
 
-import sensorkit.api as sk
 from sensorkit.common.aio import cleanup_future
-from sensorkit.common.filewatch import FileEventKind, watch_dir, wait_for_file
+from sensorkit.common.filewatch import FileEventKind, wait_for_file, watch_dir
+from sensorkit.common.keyword import declare_keyword
 from sensorkit.data.graph import Context, DataFlow, DataOp, SourceOp
 from sensorkit.data.streams import StreamReader, StreamWriter
 
 
-@sk.declare_keyword
+@declare_keyword
 class FileNameTemplate(BaseModel):
     """Template for file naming."""
     template: str
 
 
-@sk.declare_keyword
+@declare_keyword
 class FileInfo(BaseModel):
     """Information about a file on disk."""
     path: pathlib.Path
