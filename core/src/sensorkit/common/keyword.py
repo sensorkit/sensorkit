@@ -86,6 +86,11 @@ def get_keyword_info(obj: type | object) -> KeywordInfo | None:
     return _keyword_index.get(obj)
 
 
+def is_keyword(key: str) -> bool:
+    """Return whether `key` is declared as a keyword in any namespace."""
+    return bool(_keyword_registry.get_namespaces(key))
+
+
 def dump_keyword_json(obj: object):
     """Serialize a keyword object to JSON bytes using the shared keyword type adapter."""
     return _keyword_adapter.dump_json(obj)
