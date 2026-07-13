@@ -5,7 +5,9 @@ import io
 import numpy as np
 import pytest
 from astropy.io import fits
+from pydantic import BaseModel
 
+from sensorkit.common.keyword import declare_keyword
 from sensorkit.data.fits import (
     ApplyDark,
     ArrayInfo,
@@ -473,8 +475,8 @@ async def test_compress_fits_gzip():
 
 
 @pytest.mark.asyncio
-async def test_compress_fits_fallback_on_64bit(caplog):
-    """64-bit data with RICE_1 falls back to GZIP_1 with a warning."""
+async def test_compress_fits_fallback_on_64bit():
+    """64-bit data with RICE_1 falls back to GZIP_1, which is lossless for all dtypes."""
     image_data = np.arange(64, dtype=np.int64).reshape(8, 8)
     fits_buf = _make_fits_buffer(image_data)
 
@@ -487,16 +489,13 @@ async def test_compress_fits_fallback_on_64bit(caplog):
         _, compressed_buf = await outgoing.receive("buffer")
         with fits.open(io.BytesIO(compressed_buf)) as hdul:
             assert isinstance(hdul[1], fits.CompImageHDU)
+            assert hdul[1].compression_type == "GZIP_1"
             np.testing.assert_array_equal(hdul[1].data, image_data)
 
     recv = asyncio.create_task(receiver())
-    with caplog.at_level("WARNING", logger="sensorkit.data.fits"):
-        await incoming.send(Context(), fits_buf)
-        await recv
-        await task
-
-    assert "exceeds 32 bits" in caplog.text
-    assert "GZIP_1" in caplog.text
+    await incoming.send(Context(), fits_buf)
+    await recv
+    await task
 
 
 @pytest.mark.asyncio
@@ -526,12 +525,28 @@ async def test_compress_fits_passthrough_header():
 # --- BuildFITSHeader tests ---
 
 
-class _StubCamera:
-    """Test FITSHeaderProvider yielding a plain card and a card with a comment."""
+@declare_keyword
+class _StubCamera(BaseModel):
+    """Test FITSCardProvider yielding a plain card and a card with a comment."""
 
     def get_fits_cards(self):
         yield "INSTRUME", "StubCam"
         yield "GAIN", FITSCardValueWithComment("1.5", "detector gain")
+
+
+@declare_keyword
+class _StubTelescope(BaseModel):
+    """Test FITSCardProvider that is declared but never placed in the context."""
+
+    def get_fits_cards(self):
+        yield "TELESCOP", "StubScope"
+
+
+@declare_keyword
+class _StubNotAProvider(BaseModel):
+    """Test keyword that is declared but does not satisfy `FITSCardProvider`."""
+
+    value: int = 42
 
 
 @pytest.mark.asyncio
@@ -593,24 +608,59 @@ async def test_build_fits_header_mutate_rename_remove():
 
 
 @pytest.mark.asyncio
-async def test_build_fits_header_providers(caplog):
-    """Provider cards are pulled from the context; bad provider keys warn and are skipped."""
-    op = BuildFITSHeader(providers={"cam", "notaprovider", "missingkey"})
+async def test_build_fits_header_include():
+    """A declared keyword holding a provider contributes its cards, stored verbatim."""
+    op = BuildFITSHeader(include={"_StubCamera"})
     ctx = Context()
-    ctx["cam"] = _StubCamera()
-    ctx["notaprovider"] = 42
+    ctx.set(_StubCamera())
 
-    with caplog.at_level("WARNING", logger="sensorkit.data.fits"):
-        out_ctx, _ = await _run_dataop(op, ctx, b"")
+    out_ctx, _ = await _run_dataop(op, ctx, b"")
+
+    assert out_ctx.get(FITSHeader) == {
+        "INSTRUME": "StubCam",
+        "GAIN": FITSCardValueWithComment("1.5", "detector gain"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_build_fits_header_include_absent_keyword_is_optional():
+    """A declared keyword absent from the context is skipped, so one op serves many pathways."""
+    op = BuildFITSHeader(include={"_StubCamera", "_StubTelescope"})
+    ctx = Context()
+    ctx.set(_StubCamera())  # _StubTelescope never reaches this pathway.
+
+    out_ctx, _ = await _run_dataop(op, ctx, b"")
 
     header = out_ctx.get(FITSHeader)
     assert header["INSTRUME"] == "StubCam"
-    # Provider cards (including comments) are stored verbatim, not resolved.
-    assert header["GAIN"] == FITSCardValueWithComment("1.5", "detector gain")
+    assert "TELESCOP" not in header
 
-    # Both the non-provider value and the missing key are skipped with a warning.
-    assert "notaprovider" in caplog.text
-    assert "missingkey" in caplog.text
+
+@pytest.mark.asyncio
+async def test_build_fits_header_include_undeclared_key_is_skipped():
+    """An include key that is not a declared keyword (e.g. a typo) contributes nothing."""
+    op = BuildFITSHeader(include={"_StubCamera", "NotAKeyword"})
+    ctx = Context()
+    ctx.set(_StubCamera())
+
+    out_ctx, _ = await _run_dataop(op, ctx, b"")
+
+    assert out_ctx.get(FITSHeader) == {
+        "INSTRUME": "StubCam",
+        "GAIN": FITSCardValueWithComment("1.5", "detector gain"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_build_fits_header_include_non_provider_is_skipped():
+    """A declared keyword whose value is not a FITSCardProvider contributes nothing."""
+    op = BuildFITSHeader(include={"_StubNotAProvider"})
+    ctx = Context()
+    ctx.set(_StubNotAProvider())
+
+    out_ctx, _ = await _run_dataop(op, ctx, b"")
+
+    assert out_ctx.get(FITSHeader) == {}
 
 
 @pytest.mark.asyncio
@@ -637,10 +687,10 @@ async def test_build_fits_header_feeds_array_to_fits():
     ctx["exptime"] = 30.0
 
     build = BuildFITSHeader(
-        providers={"cam"},
+        include={"_StubCamera"},
         define={"EXPTIME": ["=exptime", "exposure seconds"]},
     )
-    ctx["cam"] = _StubCamera()
+    ctx.set(_StubCamera())
 
     # The raw array bytes pass through BuildFITSHeader unchanged into ArrayToFITS.
     ctx, buffer = await _run_dataop(build, ctx, data.tobytes())

@@ -1,19 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
 import io
-import logging
 from collections.abc import Buffer, Iterable
 from typing import Literal, NamedTuple, Protocol, runtime_checkable
 
 import numpy as np
 from astropy.io import fits
+from loguru import logger
 from pydantic import BaseModel, Field
 
-from sensorkit.common.keyword import declare_keyword
+from sensorkit.common.keyword import declare_keyword, is_keyword
 from sensorkit.data.context import Context
 from sensorkit.data.graph import DataFlow, DataOp
-
-logger = logging.getLogger(__name__)
 
 
 @declare_keyword
@@ -104,7 +102,7 @@ class FITSHeader(dict[str, FITSCardValue]):
 
 
 @runtime_checkable
-class FITSHeaderProvider(Protocol):
+class FITSCardProvider(Protocol):
     """Protocol for objects that can provide FITS header cards."""
 
     def get_fits_cards(self) -> Iterable[tuple[str, FITSCardValue]]: ...
@@ -160,7 +158,7 @@ class BuildFITSHeader(DataOp):
     interpolate, and anything else is literal text. It supports multiple ways to populate
     header keywords, applied *in order* as shown below:
 
-    - **Providers** — `FITSHeaderProvider` objects looked up from the context by key.
+    - **Include** — `FITSCardProvider` objects looked up from the context by keyword.
     - **Rename** — change keyword names.
     - **Remove** — delete specific keywords.
     - **Define** — set keywords that are not already set.
@@ -169,9 +167,11 @@ class BuildFITSHeader(DataOp):
 
     Attributes:
         op: Operation type identifier, fixed as `"fits_header"`.
-        providers: Set of context keys; each is looked up in the context and, if the value
-            satisfies the `FITSHeaderProvider` protocol, its cards are added to the header.
-            A key that is missing or whose value is not a provider is skipped with a warning.
+        include: Set of keyword keys; each is looked up in the context and, if the value
+            satisfies the `FITSCardProvider` protocol, its cards are added to the header.
+            Inclusions are optional -- keys that are valid keywords but that are absent from
+            context are skipped silently. Keys that are not known keywords or are not FITS
+            card providers are skipped with warnings.
         rename: Dictionary mapping old FITS keyword names to new names.
         remove: Set of FITS keyword names to remove from the header.
         define: Dictionary mapping FITS keyword names to card values resolved against the
@@ -183,18 +183,19 @@ class BuildFITSHeader(DataOp):
     """
 
     op: Literal["fits_header"] = "fits_header"
-    providers: set[str] = Field(default_factory=set)
+    include: set[str] = Field(default_factory=set)
+    rename: dict[str, str] = Field(default_factory=dict)
     remove: set[str] = Field(default_factory=set)
     define: dict[str, FITSCardValue] = Field(default_factory=dict)
     option: dict[str, FITSCardValue] = Field(default_factory=dict)
     mutate: dict[str, FITSCardValue] = Field(default_factory=dict)
-    rename: dict[str, str] = Field(default_factory=dict)
 
     async def process(self, incoming: list[DataFlow], outgoing: list[DataFlow]):
         context, buffer = await incoming[0].receive("buffer")
 
         # Respect a pre-existing FITSHeader keyword, otherwise start a fresh one.
         header = context.get(FITSHeader)
+
         if header is None:
             header = FITSHeader()
 
@@ -206,7 +207,8 @@ class BuildFITSHeader(DataOp):
 
     def _populate(self, header: FITSHeader, context: Context):
         """Apply each population step against *header* in documented order."""
-        self._apply_providers(header, context)
+        # Include: add cards from each context-resolved `FITSCardProvider`.
+        self._apply_includes(header, context)
 
         # Rename: move a keyword's card to a new name.
         for old, new in self.rename.items():
@@ -231,17 +233,22 @@ class BuildFITSHeader(DataOp):
             if keyword in header:
                 header.resolve_from_context(context, keyword, card)
 
-    def _apply_providers(self, header: FITSHeader, context: Context):
-        """Add cards from each context-resolved `FITSHeaderProvider`, warning on bad keys."""
-        for key in self.providers:
+    def _apply_includes(self, header: FITSHeader, context: Context):
+        """Add cards from each context-resolved `FITSCardProvider`."""
+        for key in self.include:
+            if not is_keyword(key):
+                logger.warning(f"fits_header include '{key}' is not a declared keyword")
+                continue
+
             provider = context.get(key)
 
-            if not isinstance(provider, FITSHeaderProvider):
-                logger.warning(
-                    "fits_header provider %r is not a FITSHeaderProvider (got %s); skipping",
-                    key,
-                    type(provider).__name__,
-                )
+            # A declared keyword absent from the context is optional, not an error: an op is
+            # shared by image pathways that do not all populate the same keywords.
+            if provider is None:
+                continue
+
+            if not isinstance(provider, FITSCardProvider):
+                logger.warning(f"fits_header include '{key}' is not a FITSCardProvider")
                 continue
 
             for keyword, card in provider.get_fits_cards():
@@ -334,9 +341,8 @@ class CompressFITS(DataOp):
             # Safety check: RICE_1 and HCOMPRESS_1 only support ≤32-bit data.
             if data.dtype.itemsize > 4 and algorithm in ("RICE_1", "HCOMPRESS_1"):
                 logger.warning(
-                    "compress_fits: image dtype %s exceeds 32 bits; "
-                    "falling back to GZIP_1 for lossless compression.",
-                    data.dtype,
+                    f"compress_fits: image dtype {data.dtype} exceeds 32 bits; "
+                    f"falling back to GZIP_1 for lossless compression."
                 )
                 algorithm = "GZIP_1"
 
