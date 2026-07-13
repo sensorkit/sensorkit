@@ -16,7 +16,6 @@ from sensorkit.data.fits import (
     CompressFITS,
     ContextFromFITS,
     DarkInfo,
-    FITSCardValueWithComment,
     FITSHeader,
     ReshapeArray,
 )
@@ -531,7 +530,7 @@ class _StubCamera(BaseModel):
 
     def get_fits_cards(self):
         yield "INSTRUME", "StubCam"
-        yield "GAIN", FITSCardValueWithComment("1.5", "detector gain")
+        yield "GAIN", ("1.5", "detector gain")
 
 
 @declare_keyword
@@ -618,7 +617,7 @@ async def test_build_fits_header_include():
 
     assert out_ctx.get(FITSHeader) == {
         "INSTRUME": "StubCam",
-        "GAIN": FITSCardValueWithComment("1.5", "detector gain"),
+        "GAIN": ("1.5", "detector gain"),
     }
 
 
@@ -647,7 +646,7 @@ async def test_build_fits_header_include_undeclared_key_is_skipped():
 
     assert out_ctx.get(FITSHeader) == {
         "INSTRUME": "StubCam",
-        "GAIN": FITSCardValueWithComment("1.5", "detector gain"),
+        "GAIN": ("1.5", "detector gain"),
     }
 
 
@@ -673,7 +672,7 @@ async def test_build_fits_header_comment_preserved():
     out_ctx, _ = await _run_dataop(op, ctx, b"")
 
     header = out_ctx.get(FITSHeader)
-    assert header["CCDTEMP"] == FITSCardValueWithComment(-12.3, "sensor temperature, C")
+    assert header["CCDTEMP"] == (-12.3, "sensor temperature, C")
 
 
 @pytest.mark.asyncio

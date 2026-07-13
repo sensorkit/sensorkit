@@ -60,24 +60,31 @@ class ReshapeArray(DataOp):
         await outgoing[0].send(context, arr)
 
 
-# A bare FITS card value: a string (resolved against the context) or a non-string scalar
-# (an int/float/bool literal, e.g. from a YAML number or boolean) carried through verbatim.
+# FITS scalar types and 2-tuple (value, comment) form for header cards.
 type FITSCardScalar = str | int | float | bool
+type FITSCardValue = FITSCardScalar | tuple[FITSCardScalar, str]
 
 
 class FITSCardValueWithComment(NamedTuple):
+    """Model for parsing a FITS card value with a comment.
+
+    This exists only to enable a dictionary input form in user configuration. Instances
+    will match the bare tuple form `(value, comment)` thus are included in `FITSCardValue`.
+    """
+
     value: FITSCardScalar
-    comment: str = ""
+    comment: str
 
 
-type FITSCardValue = FITSCardScalar | FITSCardValueWithComment
+# Type for parsing FITS card input.
+type FITSCardInput = FITSCardValue | FITSCardValueWithComment
 
 
 @declare_keyword
 class FITSHeader(dict[str, FITSCardValue]):
     """A FITS header as a dictionary of keyword-value pairs.
 
-    Each value is either a bare card value or a `FITSCardValueWithComment` carrying
+    Each value is either a bare scalar card value or a `(value, comment)` tuple carrying
     an associated comment.
     """
 
@@ -116,24 +123,24 @@ def resolve_fits_card(
 ) -> FITSCardValue | None:
     """Resolve a FITS card's value against *context*.
 
-    The card is either a bare value or a `FITSCardValueWithComment` whose `value` is resolved
-    and whose `comment` is a literal kept verbatim. A string value is resolved with
+    The card is either a bare value or a `(value, comment)` tuple whose value is resolved
+    and whose comment is a literal kept verbatim. A string value is resolved with
     `Context.resolve`: `=expr` evaluates a Python expression, `f"..."` and text containing
     `{...}` interpolate, and anything else is literal text. A non-string scalar (int, float,
     or bool, e.g. a YAML number or boolean) is a literal carried through unresolved.
 
     Args:
-        card: The card to resolve, as a bare scalar value or a `FITSCardValueWithComment`.
+        card: The card to resolve, as a bare scalar value or a `(value, comment)` tuple.
         context: The context the value is resolved against.
         suppress_missing: When true, a reference to a name absent from the context resolves
             to `None` instead of raising `NameError`.
 
     Returns:
-        The resolved card (a bare value, or a `FITSCardValueWithComment` when a comment is
+        The resolved card (a bare value, or a `(value, comment)` tuple when a comment is
         present), or `None` when the value resolves to `None`.
     """
-    if isinstance(card, FITSCardValueWithComment):
-        source, comment = card.value, card.comment
+    if isinstance(card, tuple):
+        source, comment = card[0], card[1]
     else:
         source, comment = card, ""
 
@@ -155,8 +162,9 @@ class BuildFITSHeader(DataOp):
     This DataOp constructs FITS header cards by resolving card values against the context
     and applying various transformations. Card values are resolved with `resolve_fits_card`
     (via `Context.resolve`): `=expr` evaluates an expression, `f"..."` and `{...}` forms
-    interpolate, and anything else is literal text. It supports multiple ways to populate
-    header keywords, applied *in order* as shown below:
+    interpolate, and anything else is literal text. A card carrying a comment is written
+    either as `[value, comment]` or as `{value: ..., comment: ...}`. It supports multiple
+    ways to populate header keywords, applied *in order* as shown below:
 
     - **Include** — `FITSCardProvider` objects looked up from the context by keyword.
     - **Rename** — change keyword names.
@@ -186,9 +194,9 @@ class BuildFITSHeader(DataOp):
     include: set[str] = Field(default_factory=set)
     rename: dict[str, str] = Field(default_factory=dict)
     remove: set[str] = Field(default_factory=set)
-    define: dict[str, FITSCardValue] = Field(default_factory=dict)
-    option: dict[str, FITSCardValue] = Field(default_factory=dict)
-    mutate: dict[str, FITSCardValue] = Field(default_factory=dict)
+    define: dict[str, FITSCardInput] = Field(default_factory=dict)
+    option: dict[str, FITSCardInput] = Field(default_factory=dict)
+    mutate: dict[str, FITSCardInput] = Field(default_factory=dict)
 
     async def process(self, incoming: list[DataFlow], outgoing: list[DataFlow]):
         context, buffer = await incoming[0].receive("buffer")
@@ -258,7 +266,7 @@ class BuildFITSHeader(DataOp):
 class ArrayToFITS(DataOp):
     """Converts an input array to FITS format."""
     op: Literal["array_to_fits"] = "array_to_fits"
-    header: dict[str, FITSCardValue] = Field(default_factory=dict)
+    header: dict[str, FITSCardInput] = Field(default_factory=dict)
 
     async def process(self, incoming: list[DataFlow], outgoing: list[DataFlow]):
         context, buffer = await incoming[0].receive("buffer")
