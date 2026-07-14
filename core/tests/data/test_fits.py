@@ -5,7 +5,7 @@ import io
 import numpy as np
 import pytest
 from astropy.io import fits
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from sensorkit.common.keyword import declare_keyword
 from sensorkit.data.fits import (
@@ -535,7 +535,7 @@ class _StubCamera(BaseModel):
 
 @declare_keyword
 class _StubTelescope(BaseModel):
-    """Test FITSCardProvider that is declared but never placed in the context."""
+    """Second test FITSCardProvider, also used as the keyword absent from a pathway's context."""
 
     def get_fits_cards(self):
         yield "TELESCOP", "StubScope"
@@ -660,6 +660,69 @@ async def test_build_fits_header_include_non_provider_is_skipped():
     out_ctx, _ = await _run_dataop(op, ctx, b"")
 
     assert out_ctx.get(FITSHeader) == {}
+
+
+@pytest.mark.asyncio
+async def test_build_fits_header_include_all():
+    """`include: all` gathers the cards of every FITSCardProvider in the context."""
+    op = BuildFITSHeader(include="all")
+    ctx = Context()
+    ctx.set(_StubCamera(), _StubTelescope())
+
+    out_ctx, _ = await _run_dataop(op, ctx, b"")
+
+    assert out_ctx.get(FITSHeader) == {
+        "INSTRUME": "StubCam",
+        "GAIN": ("1.5", "detector gain"),
+        "TELESCOP": "StubScope",
+    }
+
+
+@pytest.mark.asyncio
+async def test_build_fits_header_include_all_skips_non_providers():
+    """`include: all` passes over context entries that are not FITSCardProviders."""
+    op = BuildFITSHeader(include="all")
+    ctx = Context()
+    ctx.set(_StubCamera(), _StubNotAProvider())
+    ctx["exptime"] = 30.0  # a plain context value, not a declared keyword
+
+    out_ctx, _ = await _run_dataop(op, ctx, b"")
+
+    assert out_ctx.get(FITSHeader) == {
+        "INSTRUME": "StubCam",
+        "GAIN": ("1.5", "detector gain"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_build_fits_header_include_all_follows_context_order():
+    """`include: all` visits providers in context order, so the last one in wins a collision."""
+    ctx = Context()
+    ctx.set(_StubTelescope(), _StubCamera())
+
+    out_ctx, _ = await _run_dataop(BuildFITSHeader(include="all"), ctx, b"")
+
+    assert list(out_ctx.get(FITSHeader)) == ["TELESCOP", "INSTRUME", "GAIN"]
+
+
+@pytest.mark.asyncio
+async def test_build_fits_header_include_all_with_pre_existing_header():
+    """A pre-existing FITSHeader is itself not a provider; its cards survive `include: all`."""
+    op = BuildFITSHeader(include="all")
+    ctx = Context()
+    ctx.set(FITSHeader({"OBSERVER": "Alice"}), _StubCamera())
+
+    out_ctx, _ = await _run_dataop(op, ctx, b"")
+
+    header = out_ctx.get(FITSHeader)
+    assert header["OBSERVER"] == "Alice"
+    assert header["INSTRUME"] == "StubCam"
+
+
+def test_build_fits_header_include_rejects_other_literals():
+    """Only "all" is accepted as a bare string; a stray string is a config error."""
+    with pytest.raises(ValidationError):
+        BuildFITSHeader(include="every")
 
 
 @pytest.mark.asyncio

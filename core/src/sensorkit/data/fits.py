@@ -166,7 +166,8 @@ class BuildFITSHeader(DataOp):
     either as `[value, comment]` or as `{value: ..., comment: ...}`. It supports multiple
     ways to populate header keywords, applied *in order* as shown below:
 
-    - **Include** — `FITSCardProvider` objects looked up from the context by keyword.
+    - **Include** — `FITSCardProvider` objects looked up from the context by keyword, either
+      a given set of keywords or every such provider in the context.
     - **Rename** — change keyword names.
     - **Remove** — delete specific keywords.
     - **Define** — set keywords that are not already set.
@@ -175,11 +176,10 @@ class BuildFITSHeader(DataOp):
 
     Attributes:
         op: Operation type identifier, fixed as `"fits_header"`.
-        include: Set of keyword keys; each is looked up in the context and, if the value
-            satisfies the `FITSCardProvider` protocol, its cards are added to the header.
-            Inclusions are optional -- keys that are valid keywords but that are absent from
-            context are skipped silently. Keys that are not known keywords or are not FITS
-            card providers are skipped with warnings.
+        include: Set of keyword keys, or `"all"`. Keywords that implement the `FITSCardProvider`
+            protocol are queried for FITS cards, and they are included in the header. Invalid
+            keywords or keywords that do not implement the protocol result in warnings. If "all"
+            is specified, the inclusion order is defined by the configured import order.
         rename: Dictionary mapping old FITS keyword names to new names.
         remove: Set of FITS keyword names to remove from the header.
         define: Dictionary mapping FITS keyword names to card values resolved against the
@@ -191,7 +191,7 @@ class BuildFITSHeader(DataOp):
     """
 
     op: Literal["fits_header"] = "fits_header"
-    include: set[str] = Field(default_factory=set)
+    include: set[str] | Literal["all"] = Field(default_factory=set)
     rename: dict[str, str] = Field(default_factory=dict)
     remove: set[str] = Field(default_factory=set)
     define: dict[str, FITSCardInput] = Field(default_factory=dict)
@@ -243,15 +243,22 @@ class BuildFITSHeader(DataOp):
 
     def _apply_includes(self, header: FITSHeader, context: Context):
         """Add cards from each context-resolved `FITSCardProvider`."""
-        for key in self.include:
+        match self.include:
+            case "all":
+                include = (
+                    key for key, value in context.items() if isinstance(value, FITSCardProvider)
+                )
+            case _:
+                include = self.include
+
+        for key in include:
             if not is_keyword(key):
                 logger.warning(f"fits_header include '{key}' is not a declared keyword")
                 continue
 
             provider = context.get(key)
 
-            # A declared keyword absent from the context is optional, not an error: an op is
-            # shared by image pathways that do not all populate the same keywords.
+            # Includes are optional and will not warn if a valid keyword is not present.
             if provider is None:
                 continue
 
@@ -259,8 +266,8 @@ class BuildFITSHeader(DataOp):
                 logger.warning(f"fits_header include '{key}' is not a FITSCardProvider")
                 continue
 
-            for keyword, card in provider.get_fits_cards():
-                header[keyword] = card
+            for kw, card in provider.get_fits_cards():
+                header[kw] = card
 
 
 class ArrayToFITS(DataOp):
