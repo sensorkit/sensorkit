@@ -80,6 +80,11 @@ class Collect(BaseModel):
 
         return "unknown"
 
+    def get_fits_cards(self):
+        yield "TARGET", (self.target_id, "Target ID")
+        yield "TRKMODE", (self.track_mode, "Tracking mode")
+        yield "FRAMENUM", (self.frame_number, "Frame number")
+
 
 class StandardCollectTask(sk.CollectTask):
     """Task to collect one or more camera frames while tracking a target.
