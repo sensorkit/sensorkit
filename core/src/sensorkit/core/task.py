@@ -193,6 +193,11 @@ class TaskInfo(BaseModel):
     task_id: uuid.UUID
     controller_id: str
 
+    def get_fits_cards(self):
+        yield "SKTASK", (self.task.task_type, "SensorKit task type")
+        yield "SKTASKID", (str(self.task_id), "SensorKit task ID")
+        yield "SKCTRL", (self.controller_id, "SensorKit controller name")
+
 
 class TaskExecution(BaseModel):
     """Execution envelope wrapping a `Task`.
