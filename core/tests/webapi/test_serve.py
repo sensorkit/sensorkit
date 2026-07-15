@@ -12,18 +12,14 @@ import numpy as np
 import pytest
 import pytest_asyncio
 from astropy.io import fits
-from pydantic import TypeAdapter
 
 import sensorkit.api as sk
+from sensorkit.data.fits import FITSHeader
 from sensorkit.webapi import fastapi as webapi_mod
 from sensorkit.webapi.fastapi import WebAPI, WebAPIConfig
 from sensorkit.webapi.forwarder import ProductForwarder, SKRecord
 from sensorkit.webapi.preview import PreviewJPEG
-from sensorkit.webapi.serve import (
-    ServeLocalFITSConfig,
-    ServeLocalFITSHandler,
-    _header_to_metadata,
-)
+from sensorkit.webapi.serve import ServeLocalFITSConfig, ServeLocalFITSHandler
 
 
 def make_fits(path: pathlib.Path, data=None, *, comments=(), history=(), **header) -> pathlib.Path:
@@ -64,44 +60,6 @@ async def running_handler(config: ServeLocalFITSConfig):
 # ---------------------------------------------------------------------------
 # Header conversion
 # ---------------------------------------------------------------------------
-
-def test_header_to_dict_is_json_serializable():
-    hdu = fits.PrimaryHDU(data=np.zeros((4, 4), dtype=np.float32))
-    hdu.header["SKCTRL"] = "ctrlA"
-    hdu.header["EXPTIME"] = 1.5
-    hdu.header["TRACKING"] = True
-    hdu.header.add_comment("a comment")
-    hdu.header.add_history("made by test")
-
-    result = _header_to_metadata(hdu.header)
-
-    assert result["SKCTRL"] == "ctrlA"
-    assert result["EXPTIME"] == 1.5
-    assert result["TRACKING"] is True
-    assert "a comment" in result["COMMENT"]
-    assert "made by test" in result["HISTORY"]
-
-    # The whole thing must round-trip through JSON without error.
-    json.dumps(result)
-
-
-def test_header_to_metadata_handles_valueless_and_complex_cards():
-    # A valueless card reads back as astropy Undefined, which has no JSON form -> None.
-    # complex is left raw and serialized at the wire by pydantic (-> "2+3j").
-    hdu = fits.PrimaryHDU(data=np.zeros((4, 4), dtype=np.float32))
-    hdu.header["GAIN"] = 2 + 3j
-    hdu.header["BLANKVAL"] = None  # a valueless card -> astropy Undefined
-
-    result = _header_to_metadata(hdu.header)
-
-    assert result["GAIN"] == 2 + 3j  # preserved as a native complex
-    assert result["BLANKVAL"] is None
-
-    # The metadata route serializes the dict via pydantic, which renders complex as a string.
-    dumped = json.loads(TypeAdapter(dict).dump_json(result))
-    assert dumped["GAIN"] == "2+3j"
-    assert dumped["BLANKVAL"] is None
-
 
 def test_serialize_record_handles_complex_payload():
     # The SSE path serializes records via pydantic (SKRecord.serialize), which copes with
@@ -183,7 +141,7 @@ async def test_handler_controller_from_metadata(tmp_path):
         pairs = {(info.controller_id, info.product_id) for info in listing}
 
         assert ("metactrl", "x.fits") in pairs
-        assert handler.get_metadata("metactrl", "x.fits")["SKCTRL"] == "metactrl"
+        assert handler.get_metadata("metactrl", "x.fits")[FITSHeader]["SKCTRL"] == "metactrl"
 
 
 @pytest.mark.asyncio
@@ -323,10 +281,11 @@ async def test_route_get_metadata(product_api):
     resp = await client.get("/controller/ctrlA/product/frame1.fits/metadata")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["EXPTIME"] == 2.0
-    # Commentary cards must survive as JSON-safe lists (not raw header objects).
-    assert "a comment" in body["COMMENT"]
-    assert "created by test" in body["HISTORY"]
+    header = body["FITSHeader"]
+    assert header["EXPTIME"] == 2.0
+    # Commentary cards must survive JSON serialization (not stall on raw header objects).
+    assert header["COMMENT"] == "a comment"
+    assert header["HISTORY"] == "created by test"
 
 
 @pytest.mark.asyncio

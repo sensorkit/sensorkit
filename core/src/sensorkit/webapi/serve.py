@@ -6,9 +6,8 @@ import pathlib
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import Literal, NamedTuple, override
+from typing import Any, Literal, NamedTuple, override
 
-from astropy.io.fits.card import UNDEFINED
 from loguru import logger
 from pydantic import BaseModel
 
@@ -16,6 +15,7 @@ import sensorkit.api as sk
 from sensorkit.common.aio import AsyncObserver
 from sensorkit.common.filewatch import FileEventKind, watch_dir
 from sensorkit.common.keyword import KeywordDict
+from sensorkit.data.fits import FITSHeader
 
 DEFAULT_CONTROLLER_ID_FIELD = "SKCTRL"
 
@@ -28,29 +28,6 @@ class ProductInfo(BaseModel):
     product_id: str
     register_time: datetime
     data_size: int
-
-
-def _header_to_metadata(header) -> KeywordDict:
-    """Convert a FITS header into a serializable KeywordDict."""
-    result = KeywordDict()
-
-    for card in header.cards:
-        keyword = card.keyword
-
-        if not keyword:
-            continue
-
-        value = None if card.value is UNDEFINED else card.value
-
-        if keyword in result:
-            if not isinstance(result[keyword], list):
-                result[keyword] = [result[keyword]]
-
-            result[keyword].append(value)
-        else:
-            result[keyword] = value
-
-    return result
 
 
 class _CacheEntry(NamedTuple):
@@ -199,16 +176,16 @@ class ServeLocalFITSHandler(ServeHandler):
 
             def read_file():
                 with fits.open(path) as hdul:
-                    return path.stat(), _header_to_metadata(hdul[0].header)
+                    return path.stat(), hdul[0].header
 
-            stat, metadata = await asyncio.to_thread(read_file)
-            controller_id: str | None = None
+            stat, header = await asyncio.to_thread(read_file)
+            controller_id: Any = None
 
             # Metadata takes precedence over path-based controller ID resolution.
             match self.config.controller_id:
                 case "from_metadata":
-                    controller_id = metadata.get(
-                        self.config.controller_id_field or DEFAULT_CONTROLLER_ID_FIELD,
+                    controller_id = header.get(
+                        self.config.controller_id_field or DEFAULT_CONTROLLER_ID_FIELD
                     )
                 case "from_path":
                     root = pathlib.Path(self.config.root_directory).resolve()
@@ -217,7 +194,7 @@ class ServeLocalFITSHandler(ServeHandler):
                         relative_path.parts[0] if len(relative_path.parts) > 1 else root.parts[-1]
                     )
 
-            if controller_id is None:
+            if controller_id is None or not isinstance(controller_id, str):
                 logger.warning(f"cannot determine controller for {path}, skipping")
                 return
 
@@ -230,7 +207,7 @@ class ServeLocalFITSHandler(ServeHandler):
                 register_time=datetime.fromtimestamp(getattr(stat, "st_birthtime", stat.st_mtime), UTC),
                 data_size=stat.st_size,
             )
-            metadata.set(info)
+            metadata = KeywordDict(info, FITSHeader.from_astropy_header(header))
 
             # Cache and notify observers.
             self._cache[controller_id][info.product_id] = _CacheEntry(info, path, metadata)

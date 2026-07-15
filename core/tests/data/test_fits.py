@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
 import io
+import json
 
 import numpy as np
 import pytest
@@ -769,3 +770,36 @@ async def test_build_fits_header_feeds_array_to_fits():
         assert header["EXPTIME"] == 30.0  # define, resolved against the context
         assert "exposure seconds" in header.comments["EXPTIME"]
         assert header["OBSERVER"] == "Erik"  # added by ArrayToFITS
+
+
+def test_from_astropy_header_reads_cards_and_is_json_serializable():
+    """The foreign-data path yields plain-Python card values that round-trip through JSON."""
+    hdu = fits.PrimaryHDU(data=np.zeros((4, 4), dtype=np.float32))
+    hdu.header["SKCTRL"] = "ctrlA"
+    hdu.header["EXPTIME"] = 1.5
+    hdu.header["TRACKING"] = True
+    hdu.header.add_comment("a comment")
+    hdu.header.add_history("made by test")
+
+    header = FITSHeader.from_astropy_header(hdu.header)
+
+    assert header["SKCTRL"] == "ctrlA"
+    assert header["EXPTIME"] == 1.5
+    assert header["TRACKING"] is True
+    assert header["COMMENT"] == "a comment"
+    assert header["HISTORY"] == "made by test"
+
+    # Unlike a raw fits.Header, the result holds no astropy objects and serializes cleanly.
+    json.dumps(header)
+
+
+def test_from_astropy_header_valueless_and_complex_cards():
+    """A valueless card reads back as None; a complex-valued card stays a native complex."""
+    hdu = fits.PrimaryHDU(data=np.zeros((4, 4), dtype=np.float32))
+    hdu.header["GAIN"] = 2 + 3j
+    hdu.header["BLANKVAL"] = None  # a valueless card -> astropy Undefined
+
+    header = FITSHeader.from_astropy_header(hdu.header)
+
+    assert header["GAIN"] == 2 + 3j  # preserved as a native complex
+    assert header["BLANKVAL"] is None

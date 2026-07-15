@@ -2,10 +2,11 @@
 import asyncio
 import io
 from collections.abc import Buffer, Iterable
-from typing import Literal, NamedTuple, Protocol, runtime_checkable
+from typing import Any, Literal, NamedTuple, Protocol, Self, runtime_checkable
 
 import numpy as np
 from astropy.io import fits
+from astropy.io.fits.card import UNDEFINED
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -61,7 +62,7 @@ class ReshapeArray(DataOp):
 
 
 # FITS scalar types and 2-tuple (value, comment) form for header cards.
-type FITSCardScalar = str | int | float | bool
+type FITSCardScalar = str | int | float | bool | complex | None
 type FITSCardValue = FITSCardScalar | tuple[FITSCardScalar, str]
 
 
@@ -87,6 +88,31 @@ class FITSHeader(dict[str, FITSCardValue]):
     Each value is either a bare scalar card value or a `(value, comment)` tuple carrying
     an associated comment.
     """
+
+    @classmethod
+    def from_astropy_header(cls, header: fits.Header) -> Self:
+        """Build a header from an astropy `Header`, keyed by card keyword.
+
+        This is the foreign-data path, taking values as they appear in the file: a valueless
+        card becomes `None` and a complex-valued card stays a Python `complex`. The result may
+        therefore hold values outside `FITSCardValue`, so it is served as-is rather than
+        validated as a keyword.
+
+        TODO: Repeated cards (e.g. COMMENT, HISTORY) are not supported here; the last card of
+        a given keyword wins. Supporting multi-valued cards likely means backing this type with
+        an ordered list plus an index rather than a plain dict, which would also open the door
+        to user-facing card reordering.
+        """
+        result = cls()
+
+        for card in header.cards:
+            if not card.keyword:
+                continue
+
+            value: Any = None if card.value is UNDEFINED else card.value
+            result[card.keyword] = value
+
+        return result
 
     def write_to(self, header: fits.Header) -> None:
         """Write these cards into an astropy *header*, preserving comments."""
