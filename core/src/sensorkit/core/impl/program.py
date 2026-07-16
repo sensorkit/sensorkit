@@ -29,7 +29,7 @@ from sensorkit.core.program import (
     set_active_state_request,
     set_enable_state_request,
 )
-from sensorkit.core.task import TaskContexts, TaskExecution
+from sensorkit.core.task import TaskContextMap, TaskExecution
 
 
 class ProgramOffers:
@@ -155,7 +155,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
         self._task_factory = func
         return func
 
-    async def _start_loop(self, contexts: TaskContexts):
+    async def _start_loop(self, contexts: TaskContextMap):
         if self._task_loop is not None:
             return
 

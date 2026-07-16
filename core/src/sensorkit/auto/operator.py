@@ -11,6 +11,7 @@ from typing import Any
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from sensorkit.astro.common import SitePosition
 from sensorkit.astro.observer import EarthObserver
 from sensorkit.auto.constraint import Constraint, ConstraintManager
 from sensorkit.auto.lifecycle import ControllerLifecycle
@@ -22,8 +23,7 @@ from sensorkit.common.graph import StateElection
 from sensorkit.core.client import SensorKit
 from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.program import ControllerOffers, ProgramClient, ProgramDiscovery, ProgramState
-from sensorkit.core.task import TaskContexts
-from sensorkit.astro.common import SitePosition
+from sensorkit.core.task import TaskContextMap, TaskContextOverlay
 
 
 class ControllerConfig(BaseModel):
@@ -34,7 +34,7 @@ class ControllerConfig(BaseModel):
     modes: ModeList = Field(default_factory=list)
     constraints: list[Constraint] = Field(default_factory=list)
     tasking: list[ProgramConfig] = Field(default_factory=list)
-    contexts: TaskContexts = Field(default_factory=TaskContexts)
+    contexts: TaskContextOverlay = Field(default_factory=TaskContextOverlay)
 
     _name: str | None = None
     _mode_index: dict[str, Mode]
@@ -65,7 +65,7 @@ class ControllerConfig(BaseModel):
         self._mode_index = {mode.name: mode for mode in self.modes}
         self._program_index = {config.program: config for config in self.tasking}
 
-    def propagate_config(self, contexts: TaskContexts):
+    def propagate_config(self, contexts: TaskContextOverlay):
         """Merge agent-level task contexts into this controller and its program configs."""
         contexts.propagate(self.contexts)
 
@@ -84,6 +84,13 @@ class ControllerDriver:
     ):
         self.config = config
         self.program_manager = program_manager
+
+        # Build task context maps. These are user-configured context keywords passed through
+        # to program tasking and direct task executions.
+        self._context_maps: dict[str | None, TaskContextMap] = {
+            None: config.contexts.build(),
+            **{cfg.program: cfg.contexts.build() for cfg in config.tasking},
+        }
 
         # Create the Controller task offers monitor.
         self.controller_offers = ControllerOffers(config.name, program_discovery)
@@ -218,8 +225,9 @@ class ControllerDriver:
         # for this controller and program (if any).
 
         if program:
-            program_config = self.config.program_config(str(program.entity))
-            contexts = program_config.contexts
+            program_name = str(program.entity)
+            program_config = self.config.program_config(program_name)
+            contexts = self._context_maps[program_name]
 
             # Only interrupt if configured to do so and the controller is in the OPERATE state.
             # This means lifecycle tasks (e.g. InitTask) will not be interrupted.
@@ -229,7 +237,7 @@ class ControllerDriver:
                 else False
             )
         else:
-            contexts = self.config.contexts
+            contexts = self._context_maps[None]
             interrupt = False
 
         changed = self.lifecycle.set_demand_state(

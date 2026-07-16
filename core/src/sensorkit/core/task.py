@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, override
 
 from pydantic import BaseModel, BeforeValidator, Field, PrivateAttr
 
-from sensorkit.common.keyword import KeywordDict, declare_keyword
+from sensorkit.common.keyword import KeywordDict, declare_keyword, validated_items
 from sensorkit.common.model import ModelRegistry, RegistryBaseModel
 
 if TYPE_CHECKING:
@@ -272,49 +272,94 @@ class TaskSubmission(BaseModel):
     expiry_time: datetime | None = None
 
 
-class TaskContexts(BaseModel, extra="allow"):
-    """Per-task-type keyword context bundles passed to a Program when starting tasking.
+type RawKeywords = dict[str, Any]
+"""A sparse, unvalidated mapping of keyword key to raw payload, as declared in config."""
 
-    The `all` field provides keywords that apply to every task type.  Additional fields
-    (`init`, `standby`, `shutdown`, or any custom task type name) provide
-    type-specific overrides.  Extra fields (via `extra="allow"`) support custom task types.
+
+def _deep_merge(base: Any, override: Any) -> Any:
+    """Recursively merge `override` onto `base`, with `override` winning on conflict.
+
+    Dicts are merged key-by-key (so a keyword payload's fields combine across layers); any
+    other value, including a list, is replaced wholesale. A `None` override keeps `base`,
+    which lets a layer contribute a key another layer omits.
+    """
+    if override is None:
+        return base
+
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = dict(base)
+
+        for key, value in override.items():
+            merged[key] = _deep_merge(base.get(key), value)
+
+        return merged
+
+    return override
+
+
+class TaskContextOverlay(BaseModel, extra="allow"):
+    """Raw, sparse, layered task context as declared in config, prior to validation.
+
+    The `all` field provides keywords that apply to every task type. Additional fields
+    (`init`, `standby`, `shutdown`, or any custom task type name) provide type-specific
+    overrides. Extra fields (via `extra="allow"`) support custom task types.
+
+    Values are kept as raw payloads and merged field-wise across layers; validation into
+    keyword instances is deferred to `build`, so overlapping keywords combine rather than
+    clobber and every payload is validated exactly once.
     """
 
-    all: KeywordDict = Field(default_factory=KeywordDict)
-    init: KeywordDict = Field(default_factory=KeywordDict)
-    standby: KeywordDict = Field(default_factory=KeywordDict)
-    shutdown: KeywordDict = Field(default_factory=KeywordDict)
-    __pydantic_extra__: dict[str, KeywordDict] = Field(init=False)
+    all: RawKeywords = Field(default_factory=dict)
+    init: RawKeywords = Field(default_factory=dict)
+    standby: RawKeywords = Field(default_factory=dict)
+    shutdown: RawKeywords = Field(default_factory=dict)
+    __pydantic_extra__: dict[str, RawKeywords] = Field(init=False)
 
-    def propagate(self, into: TaskContexts):
-        """Merge this context into `into`, without overwriting keys already present in `into`."""
-        for field, context in self:
-            if context is self.all:
-                continue
+    def _task_type_items(self):
+        for field, keywords in self:
+            if field != "all":
+                yield field, keywords
 
-            other_context: KeywordDict = getattr(into, field, None)
+    def propagate(self, into: TaskContextOverlay):
+        """Merge this (parent) overlay into `into` (child), with the child taking precedence.
 
-            if not other_context:
-                other_context = KeywordDict()
-                setattr(into, field, other_context)
+        A keyword present in both layers is merged field-wise, so a child override fills in
+        rather than replaces the parent's fields. A parent's type-specific keyword is skipped
+        when the child already carries that keyword in its `all`, since the child's `all`
+        already supplies it for every task type.
+        """
+        for task_type, keywords in self._task_type_items():
+            target = getattr(into, task_type, None)
 
-            for kw, value in context.items():
-                if kw not in into.all and kw not in other_context:
-                    other_context[kw] = value
+            if target is None:
+                target = {}
+                setattr(into, task_type, target)
 
-        all_context = self.all.copy()
-        all_context.update(into.all)
-        into.all = all_context
+            for key, payload in keywords.items():
+                if key in into.all:
+                    continue
+
+                target[key] = _deep_merge(payload, target.get(key))
+
+        into.all = _deep_merge(self.all, into.all)
+
+    def build(self) -> TaskContextMap:
+        """Flatten the `all` layer into each task type and validate every payload as a keyword."""
+        return TaskContextMap(
+            defaults=KeywordDict(validated_items(self.all)),
+            by_type={
+                task_type: KeywordDict(validated_items(_deep_merge(self.all, keywords)))
+                for task_type, keywords in self._task_type_items()
+            },
+        )
+
+
+class TaskContextMap(BaseModel):
+    """Flattened, validated task contexts keyed by task type."""
+
+    defaults: KeywordDict = Field(default_factory=KeywordDict)
+    by_type: dict[str, KeywordDict] = Field(default_factory=dict)
 
     def get(self, task_type: str) -> KeywordDict:
-        """Return the effective task context for a given task type.
-
-        Returns:
-            A new KeywordDict containing the "all" context combined with the type-specific context.
-        """
-        context = self.all.copy()
-
-        if task_context := getattr(self, task_type, None):
-            context.update(task_context)
-
-        return context
+        """Return the effective context for `task_type`, falling back to `defaults`."""
+        return self.by_type.get(task_type, self.defaults).copy()

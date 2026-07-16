@@ -21,7 +21,7 @@ from sensorkit.core.task import (
     ShutdownTask,
     StandbyTask,
     Task,
-    TaskContexts,
+    TaskContextMap,
 )
 
 
@@ -39,7 +39,7 @@ class LifecycleStep(StrEnum):
 class DemandState:
     """The demanded InternalState and associated context."""
     state: InternalControllerState | None
-    contexts: TaskContexts | None = None
+    contexts: TaskContextMap | None = None
     program: ProgramClient | None = None
 
     # Other fields must have `compare=False` to ensure correct demand state difference checks.
@@ -373,7 +373,7 @@ class ControllerLifecycle:
         self,
         demand: Literal[InternalControllerState.OPERATE],
         *,
-        contexts: TaskContexts = ...,
+        contexts: TaskContextMap = ...,
         program: ProgramClient,
         interrupt: bool = ...,
     ): ...
@@ -383,7 +383,7 @@ class ControllerLifecycle:
         self,
         demand: Literal[InternalControllerState.STANDBY, InternalControllerState.SHUTDOWN],
         *,
-        contexts: TaskContexts = ...,
+        contexts: TaskContextMap = ...,
         interrupt: bool = ...,
     ): ...
 

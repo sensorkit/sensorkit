@@ -16,10 +16,10 @@ from pydantic import BaseModel, Field, model_validator
 from sensorkit.backend.event import Event
 from sensorkit.backend.request import ExtendedResponse, Request
 from sensorkit.common.aio import AsyncObserver
-from sensorkit.common.keyword import KeywordDict, declare_keyword
+from sensorkit.common.keyword import declare_keyword
 from sensorkit.core.entity import EntityClient, EntityInterface, EntityRef
 from sensorkit.core.executor import TaskFactoryFunc
-from sensorkit.core.task import TaskContexts, TaskExecution
+from sensorkit.core.task import TaskContextMap, TaskExecution
 
 if TYPE_CHECKING:
     from sensorkit.core.client import SensorKit
@@ -51,7 +51,7 @@ class ProgramActiveState(Event):
     active: bool
     origin: Literal["request", "init", "error"]
     stopping: bool = False
-    contexts: dict[str, KeywordDict] = Field(default_factory=dict)
+    contexts: TaskContextMap = Field(default_factory=TaskContextMap)
 
 
 class ProgramTaskingState(Event):
@@ -130,7 +130,7 @@ set_enable_state_request = Request.define(
 class ProgramActiveStateRequest(BaseModel):
     """Request that a Program activate or deactivate tasking of the target Controller."""
     action: Literal["start", "stop", "abort"]
-    contexts: TaskContexts = Field(default_factory=TaskContexts)
+    contexts: TaskContextMap = Field(default_factory=TaskContextMap)
 
     def active_state(self):
         """Return True if the requested action is 'start', False otherwise."""
@@ -173,11 +173,11 @@ class ProgramClient(EntityClient):
             )
         )
 
-    async def start_tasking(self, contexts: TaskContexts | None = None):
+    async def start_tasking(self, contexts: TaskContextMap | None = None):
         """Request that the Program begin tasking the target Controller."""
         await self.call(
             set_active_state_request,
-            ProgramActiveStateRequest(action="start", contexts=contexts or TaskContexts()),
+            ProgramActiveStateRequest(action="start", contexts=contexts or TaskContextMap()),
         )
 
     async def stop_tasking(self):

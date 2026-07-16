@@ -1,15 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-from sensorkit.common.keyword import KeywordDict
-from sensorkit.core.task import TaskContexts
+from pydantic import BaseModel
+
+from sensorkit.common.keyword import declare_keyword
+from sensorkit.core.task import TaskContextOverlay
+
+
+@declare_keyword
+class _MergeCameraConfig(BaseModel):
+    exposure_time: float = 1.0
+    binning: int = 1
 
 
 def test_contexts_get():
-    contexts = TaskContexts(
-        all=KeywordDict({"a": 1, "b": 2}),
-        init=KeywordDict({"b": 3, "c": 4})
-    )
+    contexts = TaskContextOverlay(
+        all={"a": 1, "b": 2},
+        init={"b": 3, "c": 4},
+    ).build()
 
     init_context = contexts.get("init")
     assert init_context["a"] == 1  # From "all"
@@ -21,9 +29,19 @@ def test_contexts_get():
     assert standby_context["b"] == 2
     assert "c" not in standby_context
 
+
+def test_contexts_get_unmentioned_type_falls_back_to_defaults():
+    # A task type never named in config still receives the flattened `all` context.
+    contexts = TaskContextOverlay(all={"a": 1, "b": 2}).build()
+
+    context = contexts.get("collect")
+    assert context["a"] == 1
+    assert context["b"] == 2
+
+
 def test_contexts_propagate():
-    parent = TaskContexts(all=KeywordDict({"a": 1, "b": 2}))
-    child = TaskContexts(all=KeywordDict({"b": 3, "c": 4}))
+    parent = TaskContextOverlay(all={"a": 1, "b": 2})
+    child = TaskContextOverlay(all={"b": 3, "c": 4})
 
     parent.propagate(child)
 
@@ -31,8 +49,8 @@ def test_contexts_propagate():
     assert child.all["b"] == 3  # Kept from child (child has precedence)
     assert child.all["c"] == 4  # Kept from child
 
-    parent = TaskContexts(init=KeywordDict({"a": 1, "b": 2}))
-    child = TaskContexts(init=KeywordDict({"b": 3, "c": 4}))
+    parent = TaskContextOverlay(init={"a": 1, "b": 2})
+    child = TaskContextOverlay(init={"b": 3, "c": 4})
 
     parent.propagate(child)
 
@@ -41,23 +59,24 @@ def test_contexts_propagate():
     assert child.init["c"] == 4  # Kept from child
 
     # If a keyword is in child.all, it should not be copied from parent.specific to child.specific
-    parent = TaskContexts(init=KeywordDict({"a": 1}))
-    child = TaskContexts(all=KeywordDict({"a": 2}))
+    parent = TaskContextOverlay(init={"a": 1})
+    child = TaskContextOverlay(all={"a": 2})
 
     parent.propagate(child)
 
     assert "a" not in child.init
     # The effective context for init should have a=2 from child.all
-    assert child.get("init")["a"] == 2
+    assert child.build().get("init")["a"] == 2
+
 
 def test_contexts_propagate_complex():
-    parent = TaskContexts(
-        all=KeywordDict({"common": "parent", "only_parent": 1}),
-        init=KeywordDict({"init_val": "parent", "conflict": "parent"})
+    parent = TaskContextOverlay(
+        all={"common": "parent", "only_parent": 1},
+        init={"init_val": "parent", "conflict": "parent"},
     )
-    child = TaskContexts(
-        all=KeywordDict({"common": "child", "only_child": 2}),
-        init=KeywordDict({"init_val": "child"})
+    child = TaskContextOverlay(
+        all={"common": "child", "only_child": 2},
+        init={"init_val": "child"},
     )
 
     parent.propagate(child)
@@ -72,9 +91,23 @@ def test_contexts_propagate_complex():
     assert child.init["conflict"] == "parent"
 
     # Check effective context
-    eff = child.get("init")
+    eff = child.build().get("init")
     assert eff["common"] == "child"
     assert eff["only_parent"] == 1
     assert eff["only_child"] == 2
     assert eff["init_val"] == "child"
     assert eff["conflict"] == "parent"
+
+
+def test_build_merges_keyword_payloads_field_wise():
+    # A keyword split across `all` and a task type combines field-wise rather than clobbering,
+    # and the merged payload validates into a real keyword instance.
+    contexts = TaskContextOverlay(
+        all={"_MergeCameraConfig": {"exposure_time": 5.0, "binning": 1}},
+        init={"_MergeCameraConfig": {"binning": 2}},
+    ).build()
+
+    camera = contexts.get("init")[_MergeCameraConfig]
+    assert isinstance(camera, _MergeCameraConfig)
+    assert camera.exposure_time == 5.0  # preserved from `all`
+    assert camera.binning == 2  # overridden by `init`

@@ -16,7 +16,7 @@ from sensorkit.common.interval import (
     stack_interval_trees,
     stamp_interval_trees,
 )
-from sensorkit.core.task import TaskContexts
+from sensorkit.core.task import TaskContextOverlay
 
 
 class ProgramConfig(BaseModel):
@@ -24,7 +24,7 @@ class ProgramConfig(BaseModel):
     program: str
     priority: int = 5
     interrupt: bool = False
-    contexts: TaskContexts = Field(default_factory=TaskContexts)
+    contexts: TaskContextOverlay = Field(default_factory=TaskContextOverlay)
 
 
 class ScheduleInterval(Interval):

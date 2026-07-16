@@ -11,7 +11,7 @@ from loguru import logger
 
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.controller import ControllerClient
-from sensorkit.core.task import Task, TaskContexts, TaskExecution, TaskSubmission
+from sensorkit.core.task import Task, TaskContextMap, TaskExecution, TaskSubmission
 
 type TaskFactoryResult = Task | TaskSubmission | None
 type TaskFactoryFunc = Callable[
@@ -102,7 +102,7 @@ class TaskingLoop:
         self,
         controller: ControllerClient,
         factory_func: TaskFactoryFunc,
-        contexts: TaskContexts,
+        contexts: TaskContextMap,
         task_group: asyncio.TaskGroup,
         *,
         on_task_change: TaskChangeCallback | None = None,

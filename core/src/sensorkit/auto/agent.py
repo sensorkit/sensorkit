@@ -10,7 +10,7 @@ from pydantic import AfterValidator, BaseModel, Field
 import sensorkit.api as sk
 from sensorkit.auto.operator import ControllerConfig, VirtualOperator
 from sensorkit.auto.scheduler import Schedule
-from sensorkit.core.task import TaskContexts
+from sensorkit.core.task import TaskContextOverlay
 
 
 @sk.declare_keyword
@@ -42,7 +42,7 @@ class AgentConfig(BaseModel):
     """Top-level agent service configuration."""
     first_run: FirstRunConfig = Field(default_factory=FirstRunConfig)
     controllers: ControllerConfigMap = Field(default_factory=dict)
-    contexts: TaskContexts = Field(default_factory=TaskContexts)
+    contexts: TaskContextOverlay = Field(default_factory=TaskContextOverlay)
 
     def model_post_init(self, __context: Any):
         for config in self.controllers.values():
