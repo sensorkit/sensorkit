@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
+import array
 import asyncio
 import io
 from collections.abc import Buffer, Iterable
-from typing import Any, Literal, NamedTuple, Protocol, Self, runtime_checkable
+from typing import Any, Literal, NamedTuple, Protocol, Self, overload, runtime_checkable
 
 import numpy as np
 from astropy.io import fits
@@ -14,12 +15,21 @@ from sensorkit.common.keyword import declare_keyword, is_keyword
 from sensorkit.data.context import Context
 from sensorkit.data.graph import DataFlow, DataOp
 
-
-@declare_keyword
-class ImageSize(BaseModel):
-    """Pixel dimensions of a 2-D image."""
-    width: int
-    height: int
+# `array.array` typecodes to numpy dtype names, for cameras whose SDK hands back a
+# flat `array.array` rather than an ndarray. (Platform note: `l`/`L` are at least
+# 32 bits and platform-dependent in width; the mapping assumes the 64-bit form.)
+_ARRAY_TYPECODE_TO_DTYPE = {
+    "b": "int8",
+    "B": "uint8",
+    "h": "int16",
+    "H": "uint16",
+    "i": "int32",
+    "I": "uint32",
+    "l": "int64",
+    "L": "uint64",
+    "f": "float32",
+    "d": "float64",
+}
 
 
 @declare_keyword
@@ -28,6 +38,81 @@ class ArrayInfo(BaseModel):
     shape: tuple[int, ...]
     dtype: str
     order: Literal["C", "F"] = "C"
+
+    @overload
+    @classmethod
+    def from_array(cls, source: np.ndarray) -> Self: ...
+
+    @overload
+    @classmethod
+    def from_array(
+        cls,
+        source: array.array,
+        *,
+        shape: tuple[int, ...],
+        order: Literal["C", "F"] = "C",
+    ) -> Self: ...
+
+    @classmethod
+    def from_array(
+        cls,
+        source: np.ndarray | array.array,
+        *,
+        shape: tuple[int, ...] | None = None,
+        order: Literal["C", "F"] | None = None,
+    ) -> Self:
+        """Build an `ArrayInfo` describing *source*.
+
+        For an ndarray, `shape`, `dtype`, and memory `order` are all read from the array
+        itself, because it already knows its own geometry.
+
+        For an `array.array`, the dtype is derived from its typecode and *shape* is required,
+        because the buffer carries no 2-D geometry.
+
+        Args:
+            source: The source ndarray, or a flat `array.array` buffer.
+            shape: Image shape as `(rows, cols)`. Required for an `array.array`; rejected for
+                an ndarray.
+            order: Memory order the resulting metadata describes. Applies to an `array.array`
+                (default `"C"`); rejected for an ndarray.
+
+        Raises:
+            TypeError: The source is neither an ndarray nor an `array.array` of a recognized
+                typecode.
+            ValueError: A `shape` or `order` was given for an ndarray, or `shape` was omitted
+                for an `array.array`.
+        """
+        match source:
+            case np.ndarray():
+                if shape is not None or order is not None:
+                    raise ValueError(
+                        "shape and order do not apply to an ndarray; it already carries its "
+                        "own shape and memory order"
+                    )
+
+                derived_order = (
+                    "F" if source.flags.f_contiguous and not source.flags.c_contiguous else "C"
+                )
+
+                return cls(shape=source.shape, dtype=str(source.dtype), order=derived_order)
+
+            case array.array():
+                dtype = _ARRAY_TYPECODE_TO_DTYPE.get(source.typecode)
+
+                if dtype is None:
+                    raise TypeError(
+                        f"Cannot infer a dtype from an array.array of typecode {source.typecode!r}"
+                    )
+
+                if shape is None:
+                    raise ValueError(
+                        "shape is required to build ArrayInfo from a flat array.array buffer"
+                    )
+
+                return cls(shape=shape, dtype=dtype, order=order or "C")
+
+            case _:
+                raise TypeError(f"Cannot infer a dtype from a {type(source).__name__} buffer")
 
     @property
     def bit_length(self):
