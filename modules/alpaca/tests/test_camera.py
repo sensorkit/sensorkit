@@ -10,9 +10,6 @@ from conftest import MockAlpacaSDKDevice
 from sensorkit.alpaca.camera import (
     AlpacaCameraConfig,
     AlpacaCameraState,
-    _array_typecode_to_dtype,
-    _dtype_to_bitpix,
-    _dtype_to_bzero,
 )
 from sensorkit.models.devices import Stop
 from sensorkit.std import Connect, Disconnect
@@ -59,22 +56,6 @@ class TestCameraCapture:
 
         with pytest.raises(RuntimeError, match="timed out"):
             cam._do_capture(0.0, True, 0.5)
-
-
-class TestDtypeMappings:
-    def test_typecode_to_dtype(self):
-        assert _array_typecode_to_dtype["H"] == "uint16"
-        assert _array_typecode_to_dtype["i"] == "int32"
-        assert _array_typecode_to_dtype["f"] == "float32"
-
-    def test_dtype_to_bitpix(self):
-        assert _dtype_to_bitpix["uint16"] == 16
-        assert _dtype_to_bitpix["int32"] == 32
-        assert _dtype_to_bitpix["float32"] == -32
-
-    def test_dtype_to_bzero(self):
-        assert _dtype_to_bzero["uint16"] == 32768
-        assert _dtype_to_bzero.get("int16") is None
 
 
 @pytest.fixture

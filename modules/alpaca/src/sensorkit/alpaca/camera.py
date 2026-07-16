@@ -20,7 +20,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceState,
 )
 from sensorkit.data.filesys import FileNameTemplate
-from sensorkit.data.fits import ArrayInfo
+from sensorkit.data.fits import ArrayInfo, ImageInfo
 from sensorkit.models.devices import Stop
 from sensorkit.std import (
     Binning,
@@ -34,37 +34,6 @@ from sensorkit.std import (
     Disconnect,
     TemperatureUnit,
 )
-
-_array_typecode_to_dtype = {
-    "b": "int8",
-    "B": "uint8",
-    "h": "int16",
-    "H": "uint16",
-    "i": "int32",
-    "I": "uint32",
-    "l": "int64",
-    "L": "uint64",
-    "f": "float32",
-    "d": "float64",
-}
-
-_dtype_to_bitpix = {
-    "uint8": 8,
-    "int8": 8,
-    "int16": 16,
-    "uint16": 16,
-    "int32": 32,
-    "uint32": 32,
-    "int64": 64,
-    "uint64": 64,
-    "float32": -32,
-    "float64": -64,
-}
-
-_dtype_to_bzero = {
-    "uint16": 32768,
-    "uint32": 2147483648,
-}
 
 _CAMERA_STATES = {
     0: "Idle",
@@ -395,19 +364,16 @@ class AlpacaCamera(AlpacaDevice):
         # Build data context
         # ImageArrayRaw returns a flat array; dimensions come from ImageArrayInfo.
         # Alpaca dimension convention: Dimension1 = columns (X), Dimension2 = rows (Y).
-        info = self.camera.ImageArrayInfo
         context = cmd.context
-        dtype = _array_typecode_to_dtype.get(data.typecode, "uint16")
-        width = info.Dimension1
-        height = info.Dimension2
-
-        context.set(ArrayInfo(shape=(height, width), dtype=dtype))
-        max_adu = await self.get(self.camera, "MaxADU", None)
-        default_bitpix = (max_adu.bit_length() + 7) // 8 * 8 if max_adu else 16
-        context["max_adu"] = max_adu
-        context["bitpix"] = _dtype_to_bitpix.get(dtype, default_bitpix)
-        context["bscale"] = 1
-        context["bzero"] = _dtype_to_bzero.get(dtype, 0)
+        meta = self.camera.ImageArrayInfo
+        bin_x = await self.get(self.camera, "BinX", 1)
+        bin_y = await self.get(self.camera, "BinY", 1)
+        info = ImageInfo(
+            array=ArrayInfo.from_array(data, shape=(meta.Dimension2, meta.Dimension1)),
+            binning=(bin_x, bin_y),
+        )
+        context.set(info)
+        context["max_adu"] = await self.get(self.camera, "MaxADU", None)
 
         last_exposure_start_time = await self.get(self.camera, "LastExposureStartTime", None)
         if last_exposure_start_time:
@@ -423,8 +389,6 @@ class AlpacaCamera(AlpacaDevice):
         context["instrume"] = await self.get(self.camera, "SensorName", "")
         context["readoutm"] = await self.get(self.camera, "ReadoutMode", None)
         context["ccdtemp"] = await self.get(self.camera, "CCDTemperature", None)
-        context["xbinning"] = await self.get(self.camera, "BinX", 1)
-        context["ybinning"] = await self.get(self.camera, "BinY", 1)
 
         # GPS/timing metadata defaults (None = keyword omitted from FITS header)
         context["time_src"] = None
@@ -448,12 +412,12 @@ class AlpacaCamera(AlpacaDevice):
 
         if not context.get("file_name", None):
             context["file_name"] = f"{uuid.uuid1()}.fits"
-            
+
         if not context.get(FileNameTemplate):
             context.set(FileNameTemplate(template=f"{uuid.uuid1()}.fits"))
 
         # Reshape the array and write to the DataGraph
-        task = asyncio.create_task(self._process_image(data, dtype, width, height, context))
+        task = asyncio.create_task(self._process_image(data, info, context))
         self._data_tasks.add(task)
         task.add_done_callback(self._data_tasks.discard)
 
@@ -477,16 +441,14 @@ class AlpacaCamera(AlpacaDevice):
 
         raise RuntimeError("Exposure timed out waiting for ImageReady")
 
-    async def _process_image(
-        self, data: array.array, dtype: str, width: int, height: int, context: sk.Context
-    ):
+    async def _process_image(self, data: array.array, info: ImageInfo, context: sk.Context):
         try:
             # The flat buffer from ImageArrayRaw is in row-major order with
             # shape (width, height) per Alpaca convention (Dim1=X, Dim2=Y).
             # Reshape and transpose to (height, width) for FITS row-major.
             image_bytes = await asyncio.to_thread(
                 lambda: np.ascontiguousarray(
-                    np.frombuffer(data, dtype=dtype).reshape(width, height).T
+                    np.frombuffer(data, dtype=info.array.dtype).reshape(info.width, info.height).T
                 ).tobytes()
             )
 

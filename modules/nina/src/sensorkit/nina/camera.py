@@ -14,13 +14,13 @@ from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.data.filesys import FileNameTemplate
-from sensorkit.data.fits import ArrayInfo
+from sensorkit.data.fits import ArrayInfo, ImageInfo
+from sensorkit.models.devices import Stop
 from sensorkit.nina.device import (
     NinaDevice,
     NinaDeviceConfig,
     NinaDeviceState,
 )
-from sensorkit.models.devices import Stop
 from sensorkit.std import (
     Binning,
     CameraCapture,
@@ -273,8 +273,6 @@ class NinaCamera(NinaDevice):
         try:
             hdr = hdul[0].header
             data = hdul[0].data
-            height, width = data.shape
-            dtype = str(data.dtype)
             image_bytes = await asyncio.to_thread(data.tobytes)
 
             # Get image history metadata
@@ -283,15 +281,17 @@ class NinaCamera(NinaDevice):
 
             # Build context
             context = cmd.context
-            context.set(ArrayInfo(shape=(height, width), dtype=dtype))
-            context["bitpix"] = int(hdr.get("BITPIX", 16))
-            context["bscale"] = float(hdr.get("BSCALE", 1))
-            context["bzero"] = float(hdr.get("BZERO", 0))
+            row_order = str(hdr.get("ROWORDER", "")).strip().upper()
+            context.set(
+                ImageInfo(
+                    array=ArrayInfo.from_array(data),
+                    binning=(await self._get_binning_x(), await self._get_binning_y()),
+                    top_down=row_order == "TOP-DOWN",
+                )
+            )
             context["date_obs"] = str(exposure_start)
             context["exptime"] = exposure_seconds
             context["instrume"] = history.get("CameraName", str(sk.device().entity))
-            context["xbinning"] = await self._get_binning_x()
-            context["ybinning"] = await self._get_binning_y()
 
             if not context.get(FileNameTemplate):
                 context.set(

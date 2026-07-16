@@ -15,7 +15,7 @@ from pydantic import BaseModel
 import sensorkit.api as sk
 from sensorkit.astro.common import RADecPointing
 from sensorkit.data.context import ContextSubscription
-from sensorkit.data.fits import ArrayInfo
+from sensorkit.data.fits import ArrayInfo, ImageInfo
 from sensorkit.models.devices import AxisRates, Stop
 from sensorkit.sdasim.engine import SdasimEngine
 from sensorkit.std import (
@@ -29,12 +29,6 @@ from sensorkit.std import (
     RotatorPosition,
     TemperatureUnit,
 )
-
-# FITS BITPIX / BZERO for the dtypes sdasim can produce. FITS has no native
-# unsigned-integer type, so unsigned data uses a signed BITPIX with a BZERO
-# offset (astropy follows the same convention).
-_DTYPE_TO_BITPIX = {"uint8": 8, "int16": 16, "uint16": 16, "int32": 32, "uint32": 32}
-_DTYPE_TO_BZERO = {"uint8": 0, "int16": 0, "uint16": 32768, "int32": 0, "uint32": 2147483648}
 
 
 class SdasimError(Exception):
@@ -306,23 +300,16 @@ class SdasimCamera:
 
         self._num_targets = meta.get("num_targets")
 
-        height, width = image.shape
-        dtype = str(image.dtype)
         image_bytes = await asyncio.to_thread(np.ascontiguousarray(image).tobytes)
 
         # Build the data context consumed by the DataGraph (array_to_fits, etc.).
         context = cmd.context
-        context.set(ArrayInfo(shape=(height, width), dtype=dtype))
-        context["bitpix"] = _DTYPE_TO_BITPIX.get(dtype, 16)
-        context["bscale"] = 1
-        context["bzero"] = _DTYPE_TO_BZERO.get(dtype, 32768)
+        context.set(ImageInfo(array=ArrayInfo.from_array(image), binning=(bin_factor, bin_factor)))
         context["date_obs"] = str(exposure_start)
         context["exptime"] = exposure_seconds
         context["instrume"] = str(sk.device().entity)
         context["ccdtemp"] = self._temperature
         context["readoutm"] = self.config.readout_mode
-        context["xbinning"] = bin_factor
-        context["ybinning"] = bin_factor
 
         if not context.get("file_name", None):
             context["file_name"] = f"{uuid.uuid1()}.fits"

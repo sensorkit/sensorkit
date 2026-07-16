@@ -6,12 +6,13 @@ import asyncio
 import uuid
 from typing import Literal, override
 
+import numpy as np
 from astropy.time import Time
 from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.data.filesys import FileNameTemplate
-from sensorkit.data.fits import ArrayInfo
+from sensorkit.data.fits import ArrayInfo, ImageInfo
 from sensorkit.models.devices import Stop
 from sensorkit.std import (
     Binning,
@@ -31,37 +32,6 @@ from sensorkit.thesky.device import (
     TheSkyDeviceConfig,
     TheSkyDeviceState,
 )
-
-_array_typecode_to_dtype = {
-    "b": "int8",
-    "B": "uint8",
-    "h": "int16",
-    "H": "uint16",
-    "i": "int32",
-    "I": "uint32",
-    "l": "int64",
-    "L": "uint64",
-    "f": "float32",
-    "d": "float64",
-}
-
-_dtype_to_bitpix = {
-    "uint8": 8,
-    "int8": 8,
-    "int16": 16,
-    "uint16": 16,
-    "int32": 32,
-    "uint32": 32,
-    "int64": 64,
-    "uint64": 64,
-    "float32": -32,
-    "float64": -64,
-}
-
-_dtype_to_bzero = {
-    "uint16": 32768,
-    "uint32": 2147483648,
-}
 
 
 @sk.declare_device
@@ -264,8 +234,8 @@ class TheSkyCamera(TheSkyDevice):
             logger.error("No data returned from camera!")
             return
 
-        dtype = _array_typecode_to_dtype.get(data[0].typecode)
-        logger.debug(f"got image array with {len(data)} rows, {len(data[0])} cols, dtype {dtype}")
+        array_info = ArrayInfo.from_array(data[0], shape=(len(data), len(data[0])))
+        logger.debug(f"got image array with {len(data)} rows, {len(data[0])} cols, dtype {array_info.dtype}")
 
         # Build data context
         resp = await self.execute(
@@ -273,36 +243,25 @@ class TheSkyCamera(TheSkyDevice):
             var Out;
             Out = [
                 ccdsoftCameraImage.JulianDay,
-                ccdsoftCameraImage.FITSKeyword("BITPIX"),
                 ccdsoftCameraImage.Temperature,
                 ccdsoftCamera.BinX,
-                ccdsoftCamera.BinY                                
+                ccdsoftCamera.BinY
             ];
             """
         )
-        jd, bpp, temp, binx, biny = [float(x) for x in resp.split(",")]
+        jd, temp, binx, biny = [float(x) for x in resp.split(",")]
         cmd.context["date_obs"] = Time(jd, format="jd", scale="utc").isot
         cmd.context["exptime"] = cmd.integration_time
-        cmd.context["bitpix"] = _dtype_to_bitpix.get(dtype, int(bpp))
-        cmd.context["bscale"] = 1
-        cmd.context["bzero"] = _dtype_to_bzero.get(dtype, 0)
 
         # Write it to the DataGraph
         if graph := await sk.device().data_graph():
             source = graph.app_source()
 
-            cmd.context.set(
-                ArrayInfo(
-                    shape=(len(data), len(data[0])),
-                    dtype=dtype,
-                )
-            )
+            cmd.context.set(ImageInfo(array=array_info, binning=(int(binx), int(biny))))
 
             instrume = await self.execute("""SelectedHardware.cameraModel;""")
             cmd.context["instrume"] = instrume
             cmd.context["ccdtemp"] = temp
-            cmd.context["xbinning"] = int(binx)
-            cmd.context["ybinning"] = int(biny)
 
             if not cmd.context.get(FileNameTemplate):
                 cmd.context.set(FileNameTemplate(template=f"{str(uuid.uuid1())}.fits"))
@@ -333,9 +292,8 @@ class TheSkyCamera(TheSkyDevice):
         into a list of array.array rows.
         """
 
-        # Reverse mapping: dtype string to typecode
-        dtype_to_typecode = {v: k for k, v in _array_typecode_to_dtype.items()}
-        typecode = dtype_to_typecode[dtype]
+        # `array.array` typecode for the target dtype (e.g. uint16 -> "H").
+        typecode = np.dtype(dtype).char
 
         img = []
         for row_str in csv_block.strip().split(";"):

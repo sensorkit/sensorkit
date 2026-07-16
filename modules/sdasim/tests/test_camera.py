@@ -12,7 +12,7 @@ import pytest
 from conftest import FakeContext, make_data_graph_writer
 
 from sensorkit.astro.common import RADecPointing
-from sensorkit.data.fits import ArrayInfo
+from sensorkit.data.fits import ImageInfo
 from sensorkit.models.devices import AxisRate, AxisRates, MountAxis
 from sensorkit.sdasim.camera import DeviceConnectionError, SdasimCamera, SdasimCameraConfig
 from sensorkit.std import (
@@ -178,12 +178,12 @@ class TestCapture:
         writer.drain.assert_awaited_once()
         writer.wait_closed.assert_awaited_once()
 
-        # Context carries the array shape + FITS metadata for array_to_fits.
-        array_info = next(k for k in context.keywords if isinstance(k, ArrayInfo))
-        assert array_info.shape == (48, 64)
-        assert array_info.dtype == "uint16"
-        assert context.get("bitpix") == 16
-        assert context.get("bzero") == 32768
+        # Context carries the image structure (as ImageInfo) + acquisition metadata for
+        # array_to_fits. BITPIX is derived by astropy at write time, not stored here.
+        image_info = next(k for k in context.keywords if isinstance(k, ImageInfo))
+        assert image_info.array.shape == (48, 64)
+        assert image_info.array.dtype == "uint16"
+        assert image_info.binning == (1, 1)
         assert context.get("exptime") == 0.0
         assert context.get("file_name")
 
