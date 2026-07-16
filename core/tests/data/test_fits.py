@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import array
 import asyncio
 import io
 import json
@@ -18,6 +19,7 @@ from sensorkit.data.fits import (
     ContextFromFITS,
     DarkInfo,
     FITSHeader,
+    ImageInfo,
     ReshapeArray,
 )
 from sensorkit.data.graph import Context, DataFlow
@@ -101,8 +103,8 @@ async def test_array_to_fits():
 
     async def receiver():
         out_context, fits_buffer = await outgoing_edge.receive("buffer")
-        assert out_context["ImageSize"].width == width
-        assert out_context["ImageSize"].height == height
+        assert out_context["ImageInfo"].width == width
+        assert out_context["ImageInfo"].height == height
 
         bio = io.BytesIO(fits_buffer)
 
@@ -128,6 +130,67 @@ def test_array_info_bit_length():
     assert ArrayInfo(shape=(1,), dtype="uint16").bit_length == 16
     assert ArrayInfo(shape=(1,), dtype="float64").bit_length == 64
     assert ArrayInfo(shape=(1,), dtype="uint8").bit_length == 8
+
+
+def test_array_info_from_ndarray_infers_shape_and_dtype():
+    info = ArrayInfo.from_array(np.zeros((8, 12), dtype=np.uint16))
+    assert info.shape == (8, 12)
+    assert info.dtype == "uint16"
+
+
+def test_array_info_from_ndarray_reads_order_from_array():
+    c_order = ArrayInfo.from_array(np.zeros((8, 12), dtype=np.uint16, order="C"))
+    assert c_order.order == "C"
+    f_order = ArrayInfo.from_array(np.zeros((8, 12), dtype=np.uint16, order="F"))
+    assert f_order.order == "F"
+
+
+def test_array_info_from_array_array_uses_typecode():
+    # array.array carries a typecode but no 2-D geometry, so shape is required.
+    info = ArrayInfo.from_array(array.array("H", range(96)), shape=(8, 12))
+    assert info.shape == (8, 12)
+    assert info.dtype == "uint16"
+
+
+def test_array_info_from_array_flat_buffer_requires_shape():
+    with pytest.raises(ValueError, match="shape is required"):
+        ArrayInfo.from_array(array.array("H", [1, 2, 3]))
+
+
+def test_image_info_get_fits_cards():
+    info = ImageInfo(
+        array=ArrayInfo(shape=(8, 12), dtype="uint16"),
+        binning=(2, 3),
+    )
+    cards = dict(info.get_fits_cards())
+
+    # The structural and scaling keywords are owned by the writer/astropy, which derives them
+    # from the physical array (including the half-range BZERO for unsigned data), so ImageInfo
+    # intentionally does not emit them as cards.
+    assert "BITPIX" not in cards
+    assert "BSCALE" not in cards
+    assert "BZERO" not in cards
+    assert cards["XBINNING"][0] == 2
+    assert cards["YBINNING"][0] == 3
+    # Default orientation is FITS-native bottom-up (top_down defaults to False).
+    assert cards["ROWORDER"][0] == "BOTTOM-UP"
+
+
+def test_image_info_roworder_reflects_top_down():
+    bottom_up = ImageInfo(array=ArrayInfo(shape=(2, 2), dtype="uint16"))
+    assert dict(bottom_up.get_fits_cards())["ROWORDER"][0] == "BOTTOM-UP"
+
+    top_down = ImageInfo(array=ArrayInfo(shape=(2, 2), dtype="uint16"), top_down=True)
+    assert dict(top_down.get_fits_cards())["ROWORDER"][0] == "TOP-DOWN"
+
+
+def test_image_info_bayer_cards_only_when_present():
+    mono = ImageInfo(array=ArrayInfo(shape=(2, 2), dtype="uint16"))
+    assert "BAYERPAT" not in dict(mono.get_fits_cards())
+
+    color = ImageInfo(array=ArrayInfo(shape=(2, 2), dtype="uint16"), bayer="RGGB")
+    color_cards = dict(color.get_fits_cards())
+    assert color_cards["BAYERPAT"][0] == "RGGB"
 
 
 def test_array_info_ndarray_from_buffer():
