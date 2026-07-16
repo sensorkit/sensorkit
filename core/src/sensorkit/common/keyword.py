@@ -4,7 +4,19 @@
 import functools
 from collections.abc import Iterable
 from functools import partial
-from typing import Annotated, Any, ClassVar, Literal, NamedTuple, Self, Unpack, overload, override
+from typing import (
+    Annotated,
+    Any,
+    ClassVar,
+    Literal,
+    NamedTuple,
+    Protocol,
+    Self,
+    Unpack,
+    overload,
+    override,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, GetCoreSchemaHandler, TypeAdapter, ValidationError
 from pydantic_core import core_schema
@@ -119,17 +131,20 @@ def validated_items(dct: dict[str, object]) -> Iterable[tuple[str, object]]:
         yield k, v
 
 
+@declare_keyword(key=_keyword_unknown_key)
 class UnknownKeyword(BaseModel, extra="allow"):
     """Fallback keyword type that accepts any extra fields for unrecognized keyword keys."""
-
-    pass
 
 
 class KeywordError(Exception):
     """Keyword error."""
 
 
-declare_keyword(UnknownKeyword, key=_keyword_unknown_key)
+@runtime_checkable
+class CompositeKeyword(Protocol):
+    """Protocol for a keyword that exports other keywords."""
+
+    def composed_keywords(self) -> Iterable[object]: ...
 
 
 class KeywordDict(dict[str, Any]):
@@ -159,9 +174,28 @@ class KeywordDict(dict[str, Any]):
         if objs:
             self.set(*objs)
 
+    def _set_composed(self, obj: CompositeKeyword, visited: set[int]):
+        # DFS over composed keywords.
+        for composed in obj.composed_keywords():
+            if id(composed) in visited:
+                continue
+
+            visited.add(id(composed))
+
+            if isinstance(composed, CompositeKeyword):
+                self._set_composed(composed, visited)
+
+            self[type(composed)] = composed
+
     def set(self, *objs: Unpack[tuple[object, ...]]):
-        """Insert one or more keyword objects, keying each by its registered keyword key."""
+        """Insert one or more keyword objects, keying each by its registered keyword key.
+
+        If a keyword is a `CompositeKeyword`, first insert its composed keywords, recursively.
+        """
         for obj in objs:
+            if isinstance(obj, CompositeKeyword):
+                self._set_composed(obj, {id(obj)})
+
             self[type(obj)] = obj
 
     @classmethod
