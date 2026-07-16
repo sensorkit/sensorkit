@@ -141,6 +141,75 @@ class FITSCardProvider(Protocol):
     def get_fits_cards(self) -> Iterable[tuple[str, FITSCardValue]]: ...
 
 
+# Color filter array pattern, named by the 2x2 filter tile at the image origin. A monochrome
+# sensor, or one whose driver has already debayered into color planes, has no pattern.
+type BayerPattern = Literal["RGGB", "BGGR", "GRBG", "GBRG"]
+
+
+@declare_keyword
+class ImageInfo(BaseModel):
+    """Structure and pixel encoding of a captured image.
+
+    Describes what is needed to interpret the pixels: the buffer they arrive in, how color
+    is encoded, and where on the sensor they were read from.
+
+    Composes: `ArrayInfo`
+
+    Attributes:
+        array: The raw buffer this image arrives in.
+        bayer: Color filter array pattern, or None for monochrome or already-debayered data.
+        bayer_offset: `(x, y)` shift of the bayer pattern, which a subframe read from an odd
+            origin displaces. Meaningless without `bayer`.
+        binning: `(x, y)` on-sensor binning factors.
+        origin: `(x, y)` start position of the subframe on the sensor.
+        pixel_size: `(x, y)` pixel pitch in microns, after binning.
+        top_down: Whether row 0 is the top of the image. Defaults to False (bottom-up).
+    """
+
+    array: ArrayInfo
+    bayer: BayerPattern | None = None
+    bayer_offset: tuple[int, int] = (0, 0)
+    binning: tuple[int, int] = (1, 1)
+    origin: tuple[int, int] = (0, 0)
+    pixel_size: tuple[float, float] | None = None
+    top_down: bool = False
+
+    @property
+    def width(self) -> int:
+        """Return the number of columns in the image."""
+        return self.array.shape[-1]
+
+    @property
+    def height(self) -> int:
+        """Return the number of rows in the image."""
+        return self.array.shape[-2]
+
+    def get_fits_cards(self) -> Iterable[tuple[str, FITSCardValue]]:
+        """Yield the FITS cards describing this image.
+
+        The structural and scaling keywords (SIMPLE, BITPIX, NAXIS, NAXISn, BSCALE, BZERO) are
+        owned by the writer: astropy derives them from the physical array itself — including the
+        half-range BZERO for unsigned data — so they are not yielded here.
+        """
+        yield "XBINNING", (self.binning[0], "Binning factor in X")
+        yield "YBINNING", (self.binning[1], "Binning factor in Y")
+        yield "XORGSUBF", (self.origin[0], "Subframe origin in X")
+        yield "YORGSUBF", (self.origin[1], "Subframe origin in Y")
+        yield "ROWORDER", ("TOP-DOWN" if self.top_down else "BOTTOM-UP", "Row order of the data")
+
+        if self.bayer is not None:
+            yield "BAYERPAT", (self.bayer, "Color filter array pattern")
+            yield "XBAYROFF", (self.bayer_offset[0], "Bayer pattern offset in X")
+            yield "YBAYROFF", (self.bayer_offset[1], "Bayer pattern offset in Y")
+
+        if self.pixel_size is not None:
+            yield "XPIXSZ", (self.pixel_size[0], "Pixel pitch in X [micron]")
+            yield "YPIXSZ", (self.pixel_size[1], "Pixel pitch in Y [micron]")
+
+    def composed_keywords(self) -> Iterable[object]:
+        yield self.array
+
+
 def resolve_fits_card(
     card: FITSCardValue,
     context: Context,
@@ -317,12 +386,14 @@ class ArrayToFITS(DataOp):
         if image_ndarray.ndim != 2:
             raise RuntimeError("array_to_fits only supports 2D arrays")
 
-        # TODO: change this to ImageInfo and add bits-per-pixel, scale, color encoding, etc.
-        context.set(ImageSize(width=image_ndarray.shape[1], height=image_ndarray.shape[0]))
+        # Set the ImageInfo context if it is not already present.
+        if context.get(ImageInfo) is None:
+            context.set(ImageInfo(array=array))
 
         # Respect a pre-existing FITSHeader keyword, otherwise start a fresh one, then add this
         # op's own keywords by evaluating the input patterns against the context.
         fits_header = context.get(FITSHeader)
+
         if fits_header is None:
             fits_header = FITSHeader()
 
