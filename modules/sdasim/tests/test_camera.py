@@ -22,6 +22,8 @@ from sensorkit.std import (
     CameraSensorTemperature,
     ConfigureCameraCooler,
     ConfigureCameraSensor,
+    ExposureInfo,
+    FrameType,
     TemperatureUnit,
 )
 
@@ -182,11 +184,13 @@ class TestCapture:
 
         # Context carries the image structure (as ImageInfo) + acquisition metadata for
         # array_to_fits. BITPIX is derived by astropy at write time, not stored here.
-        image_info = next(k for k in context.keywords if isinstance(k, ImageInfo))
+        image_info = context.get(ImageInfo)
         assert image_info.array.shape == (48, 64)
         assert image_info.array.dtype == "uint16"
         assert image_info.binning == (1, 1)
-        assert context.get("exptime") == 0.0
+        exposure_info = context.get(ExposureInfo)
+        assert exposure_info.exposure_time == 0.0
+        assert exposure_info.image_type is FrameType.LIGHT
         assert context.get("file_name")
 
     @pytest.mark.asyncio

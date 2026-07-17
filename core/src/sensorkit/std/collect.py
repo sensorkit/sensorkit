@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import StrEnum
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -19,15 +18,7 @@ from sensorkit.astro.target import (
     Target,
     TLETarget,
 )
-
-
-class FrameType(StrEnum):
-    """Astronomical frame type for a camera capture."""
-
-    LIGHT = "light"
-    BIAS = "bias"
-    DARK = "dark"
-    FLAT = "flat"
+from sensorkit.std.instrument import FrameType
 
 
 class CameraParameterSet(BaseModel):

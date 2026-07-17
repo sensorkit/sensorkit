@@ -32,6 +32,8 @@ from sensorkit.std import (
     Connect,
     Connected,
     Disconnect,
+    ExposureInfo,
+    FrameType,
     TemperatureUnit,
 )
 
@@ -368,27 +370,30 @@ class AlpacaCamera(AlpacaDevice):
         meta = self.camera.ImageArrayInfo
         bin_x = await self.get(self.camera, "BinX", 1)
         bin_y = await self.get(self.camera, "BinY", 1)
-        info = ImageInfo(
-            array=ArrayInfo.from_array(data, shape=(meta.Dimension2, meta.Dimension1)),
-            binning=(bin_x, bin_y),
-        )
-        context.set(info)
-        context["max_adu"] = await self.get(self.camera, "MaxADU", None)
-
         last_exposure_start_time = await self.get(self.camera, "LastExposureStartTime", None)
-        if last_exposure_start_time:
-            context["date_obs"] = last_exposure_start_time
-        else:
-            context["date_obs"] = str(date_obs_fallback)
-
         last_exposure_duration = await self.get(self.camera, "LastExposureDuration", None)
-        context["exptime"] = (
-            last_exposure_duration if last_exposure_duration is not None else exposure_seconds
+        context.set(
+            ImageInfo(
+                array=ArrayInfo.from_array(data, shape=(meta.Dimension2, meta.Dimension1)),
+                binning=(bin_x, bin_y),
+            ),
+            ExposureInfo(
+                date_obs=last_exposure_start_time or date_obs_fallback,
+                exposure_time=(
+                    last_exposure_duration
+                    if last_exposure_duration is not None
+                    else exposure_seconds
+                ),
+                instrument=await self.get(self.camera, "SensorName", ""),
+                image_type=FrameType.LIGHT,
+                readout_mode=await self.get(self.camera, "ReadoutMode", None),
+                gain=await self.get(self.camera, "Gain", None),
+                offset=await self.get(self.camera, "Offset", None),
+                ccd_temperature=await self.get(self.camera, "CCDTemperature", None),
+                set_temperature=await self.get(self.camera, "SetCCDTemperature", None),
+                max_adu=await self.get(self.camera, "MaxADU", None),
+            )
         )
-
-        context["instrume"] = await self.get(self.camera, "SensorName", "")
-        context["readoutm"] = await self.get(self.camera, "ReadoutMode", None)
-        context["ccdtemp"] = await self.get(self.camera, "CCDTemperature", None)
 
         # GPS/timing metadata defaults (None = keyword omitted from FITS header)
         context["time_src"] = None
@@ -417,7 +422,7 @@ class AlpacaCamera(AlpacaDevice):
             context.set(FileNameTemplate(template=f"{uuid.uuid1()}.fits"))
 
         # Reshape the array and write to the DataGraph
-        task = asyncio.create_task(self._process_image(data, info, context))
+        task = asyncio.create_task(self._process_image(data, context))
         self._data_tasks.add(task)
         task.add_done_callback(self._data_tasks.discard)
 
@@ -441,7 +446,9 @@ class AlpacaCamera(AlpacaDevice):
 
         raise RuntimeError("Exposure timed out waiting for ImageReady")
 
-    async def _process_image(self, data: array.array, info: ImageInfo, context: sk.Context):
+    async def _process_image(self, data: array.array, context: sk.Context):
+        info = context[ImageInfo]
+
         try:
             # The flat buffer from ImageArrayRaw is in row-major order with
             # shape (width, height) per Alpaca convention (Dim1=X, Dim2=Y).

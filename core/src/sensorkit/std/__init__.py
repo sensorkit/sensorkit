@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 from sensorkit.std.collect import (
     CameraParameterSet,
-    FrameType,
     StandardCollectTask,
 )
 from sensorkit.std.enclosure import (
@@ -21,6 +20,8 @@ from sensorkit.std.instrument import (
     ChangeRotatorPosition,
     ConfigureCameraCooler,
     ConfigureCameraSensor,
+    ExposureInfo,
+    FrameType,
     RotatorPosition,
     StandardCamera,
     StandardRotator,

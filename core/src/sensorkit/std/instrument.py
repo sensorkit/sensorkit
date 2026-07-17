@@ -1,10 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
+from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.std.traits import TemperatureUnit
+
+
+class FrameType(StrEnum):
+    """Astronomical frame type for a camera capture."""
+
+    LIGHT = "light"
+    BIAS = "bias"
+    DARK = "dark"
+    FLAT = "flat"
 
 
 class AcquireData(sk.DeviceCommand):
@@ -129,6 +140,61 @@ class CameraCapture(AcquireData):
 
     action: Literal["acquire"] = "acquire"
     integration_time: float
+
+
+@sk.declare_keyword
+class ExposureInfo(BaseModel):
+    """Parameters of the exposure that produced an image.
+
+    Captures the acquisition-time settings and measurements describing *how* an exposure
+    was taken -- the circumstances of the shot as recorded by us. This is distinct from
+    `ImageInfo`, which carries only what is needed to interpret the pixel buffer itself and
+    is therefore recoverable from any image regardless of origin. `ExposureInfo` fields map
+    onto the conventional FITS cards written for a science frame.
+
+    Attributes:
+        date_obs: UTC start of the exposure. -> DATE-OBS
+        exposure_time: Actual exposure duration in seconds. -> EXPTIME
+        instrument: Instrument / camera identifier. -> INSTRUME
+        image_type: Frame type (light, dark, bias, flat). -> IMAGETYP
+        readout_mode: Camera readout mode, as an index or a name. -> READOUTM
+        gain: Camera gain. -> GAIN
+        offset: Camera offset / bias level. -> OFFSET
+        ccd_temperature: Sensor temperature during the exposure, in degrees Celsius. -> CCD-TEMP
+        set_temperature: Cooler setpoint, in degrees Celsius. -> SET-TEMP
+        max_adu: Saturation level in ADU under the active readout configuration. -> SATURATE
+    """
+
+    date_obs: datetime
+    exposure_time: float
+    instrument: str
+    image_type: FrameType | None = None
+    readout_mode: int | str | None = None
+    gain: float | None = None
+    offset: float | None = None
+    ccd_temperature: float | None = None
+    set_temperature: float | None = None
+    max_adu: int | None = None
+
+    def get_fits_cards(self):
+        yield "DATE-OBS", (self.date_obs.isoformat(), "UTC start of exposure")
+        yield "EXPTIME", (self.exposure_time, "Exposure time [s]")
+        yield "INSTRUME", (self.instrument, "Instrument name")
+
+        if self.image_type is not None:
+            yield "IMAGETYP", (str(self.image_type), "Frame type")
+        if self.readout_mode is not None:
+            yield "READOUTM", (self.readout_mode, "Readout mode")
+        if self.gain is not None:
+            yield "GAIN", (self.gain, "Camera gain")
+        if self.offset is not None:
+            yield "OFFSET", (self.offset, "Camera offset")
+        if self.ccd_temperature is not None:
+            yield "CCD-TEMP", (self.ccd_temperature, "CCD temperature [C]")
+        if self.set_temperature is not None:
+            yield "SET-TEMP", (self.set_temperature, "Cooler setpoint [C]")
+        if self.max_adu is not None:
+            yield "SATURATE", (self.max_adu, "Saturation level [ADU]")
 
 
 StandardCamera = sk.declare_archetype(

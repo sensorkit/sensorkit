@@ -31,6 +31,8 @@ from sensorkit.std import (
     Connect,
     Connected,
     Disconnect,
+    ExposureInfo,
+    FrameType,
     TemperatureUnit,
 )
 
@@ -287,11 +289,14 @@ class NinaCamera(NinaDevice):
                     array=ArrayInfo.from_array(data),
                     binning=(await self._get_binning_x(), await self._get_binning_y()),
                     top_down=row_order == "TOP-DOWN",
-                )
+                ),
+                ExposureInfo(
+                    date_obs=exposure_start,
+                    exposure_time=exposure_seconds,
+                    instrument=history.get("CameraName", str(sk.device().entity)),
+                    image_type=FrameType.LIGHT,
+                ),
             )
-            context["date_obs"] = str(exposure_start)
-            context["exptime"] = exposure_seconds
-            context["instrume"] = history.get("CameraName", str(sk.device().entity))
 
             if not context.get(FileNameTemplate):
                 context.set(

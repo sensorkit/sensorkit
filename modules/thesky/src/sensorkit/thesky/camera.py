@@ -24,6 +24,8 @@ from sensorkit.std import (
     Connect,
     Connected,
     Disconnect,
+    ExposureInfo,
+    FrameType,
     TemperatureUnit,
 )
 from sensorkit.thesky.device import (
@@ -250,18 +252,22 @@ class TheSkyCamera(TheSkyDevice):
             """
         )
         jd, temp, binx, biny = [float(x) for x in resp.split(",")]
-        cmd.context["date_obs"] = Time(jd, format="jd", scale="utc").isot
-        cmd.context["exptime"] = cmd.integration_time
 
         # Write it to the DataGraph
         if graph := await sk.device().data_graph():
             source = graph.app_source()
 
-            cmd.context.set(ImageInfo(array=array_info, binning=(int(binx), int(biny))))
-
             instrume = await self.execute("""SelectedHardware.cameraModel;""")
-            cmd.context["instrume"] = instrume
-            cmd.context["ccdtemp"] = temp
+            cmd.context.set(
+                ImageInfo(array=array_info, binning=(int(binx), int(biny))),
+                ExposureInfo(
+                    date_obs=Time(jd, format="jd", scale="utc").isot,
+                    exposure_time=cmd.integration_time,
+                    instrument=instrume,
+                    image_type=FrameType.LIGHT,
+                    ccd_temperature=temp,
+                ),
+            )
 
             if not cmd.context.get(FileNameTemplate):
                 cmd.context.set(FileNameTemplate(template=f"{str(uuid.uuid1())}.fits"))

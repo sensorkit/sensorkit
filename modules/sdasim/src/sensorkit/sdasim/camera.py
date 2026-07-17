@@ -26,6 +26,8 @@ from sensorkit.std import (
     ConfigureCameraCooler,
     ConfigureCameraSensor,
     Connected,
+    ExposureInfo,
+    FrameType,
     RotatorPosition,
     TemperatureUnit,
 )
@@ -304,12 +306,18 @@ class SdasimCamera:
 
         # Build the data context consumed by the DataGraph (array_to_fits, etc.).
         context = cmd.context
-        context.set(ImageInfo(array=ArrayInfo.from_array(image), binning=(bin_factor, bin_factor)))
-        context["date_obs"] = str(exposure_start)
-        context["exptime"] = exposure_seconds
-        context["instrume"] = str(sk.device().entity)
-        context["ccdtemp"] = self._temperature
-        context["readoutm"] = self.config.readout_mode
+        context.set(
+            ImageInfo(array=ArrayInfo.from_array(image), binning=(bin_factor, bin_factor)),
+            ExposureInfo(
+                date_obs=exposure_start,
+                exposure_time=exposure_seconds,
+                instrument=str(sk.device().entity),
+                image_type=FrameType.LIGHT,
+                readout_mode=self.config.readout_mode,
+                ccd_temperature=self._temperature,
+                set_temperature=self._temperature,
+            ),
+        )
 
         if not context.get("file_name", None):
             context["file_name"] = f"{uuid.uuid1()}.fits"
