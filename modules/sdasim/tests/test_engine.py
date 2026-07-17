@@ -54,17 +54,6 @@ class TestEngineNotInitialized:
             engine.initialize()
 
 
-class TestAngularSep:
-    def test_zero_separation(self):
-        assert SdasimEngine._angular_sep_deg(10.0, 20.0, 10.0, 20.0) == pytest.approx(0.0, abs=1e-9)
-
-    def test_one_degree_in_ra_at_equator(self):
-        assert SdasimEngine._angular_sep_deg(0.0, 0.0, 1.0, 0.0) == pytest.approx(1.0, abs=1e-6)
-
-    def test_none_is_infinite(self):
-        assert SdasimEngine._angular_sep_deg(0.0, 0.0, None, None) == float("inf")
-
-
 class TestApplyBinning:
     def test_no_binning_passthrough(self):
         img = np.arange(16, dtype=np.uint16).reshape(4, 4)
@@ -97,6 +86,10 @@ class TestRealRender:
         assert image.dtype == np.uint16
         assert image.shape == (256, 256)
         assert isinstance(meta, dict)
+        # Engine forwards the commanded pointing into render (which re-projects a
+        # sky-backed field to it); metadata echoes the center used for this frame.
+        assert meta["point_ra"] == 10.0
+        assert meta["point_dec"] == 20.0
 
     def test_render_binned_ccd(self, scene_yaml):
         pytest.importorskip("sdasim")
@@ -106,16 +99,19 @@ class TestRealRender:
         assert image.shape == (128, 128)
         assert image.dtype == np.uint16
 
-    def test_scene_reused_within_threshold_rebuilt_on_drift(self, scene_yaml):
+    def test_scene_reused_across_pointing_rebuilt_on_exposure_change(self, scene_yaml):
         pytest.importorskip("sdasim")
-        engine = SdasimEngine(scene_yaml, device="cpu", rebuild_threshold_deg=0.25)
+        engine = SdasimEngine(scene_yaml, device="cpu")
         engine.initialize()
 
         engine.render_frame(0.5, 10.0, 20.0)
         scene1 = engine._scene
-        # Small drift within threshold -> same Scene reused.
+        # Any pointing change reuses the same Scene -- the star field re-projects
+        # to the commanded pointing inside render(), no rebuild needed.
         engine.render_frame(0.5, 10.05, 20.0)
         assert engine._scene is scene1
-        # Large slew past threshold -> Scene rebuilt.
         engine.render_frame(0.5, 30.0, 20.0)
+        assert engine._scene is scene1
+        # Exposure is baked in at construction, so a change there rebuilds.
+        engine.render_frame(1.0, 30.0, 20.0)
         assert engine._scene is not scene1

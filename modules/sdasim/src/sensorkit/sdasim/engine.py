@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """sdasim rendering engine.
 
-`SdasimEngine` wraps a reusable sdasim `Scene`: it is built once (parsing the
-satellite catalog, if enabled) and reused across exposures, with pointing, mount
-rate, and observation time passed as per-frame `render()` overrides. The Scene
-is rebuilt only when the pointing drifts past a threshold or the exposure
-changes (the star field and exposure are baked in at construction).
+`SdasimEngine` wraps an sdasim `Scene`. Every frame is rendered for the pointing,
+mount rate and time it is given: satellites are propagated to that time, and the
+stars are those the catalog holds at that pointing. The Scene caches the parsed
+catalog between frames, and is rebuilt only when the exposure changes.
 
 `sdasim` and `torch` are imported lazily inside the methods that need them so
 this module (and the rest of SensorKit) can be imported without the optional
@@ -25,26 +24,21 @@ from loguru import logger
 class SdasimEngine:
     """Reusable sdasim `Scene` wrapper for the camera device.
 
-    The `Scene` (and its satellite catalog, when enabled) is built once and
-    reused; pointing, mount rate, and time are per-frame `render()` overrides.
-    The Scene is rebuilt only when the pointing center drifts past
-    `rebuild_threshold_deg` or the exposure changes -- the star field and
-    exposure are fixed at construction.
+    Each render gets its own pointing, mount rate and time, so every frame shows
+    the satellites where they are at that moment and the stars at that pointing.
+    The Scene (and its satellite catalog, when enabled) is cached between frames
+    and rebuilt only when the exposure changes.
     """
 
     def __init__(
         self,
         sdasim_config_path: str,
         device: str = "cpu",
-        rebuild_threshold_deg: float = 0.25,
     ):
         self._sdasim_config_path = sdasim_config_path
         self._device = device
-        self._rebuild_threshold_deg = rebuild_threshold_deg
         self._base_config = None
         self._scene = None
-        self._scene_ra: float | None = None
-        self._scene_dec: float | None = None
         self._scene_exposure: float | None = None
 
     def initialize(self) -> None:
@@ -108,12 +102,12 @@ class SdasimEngine:
     ) -> tuple[np.ndarray, dict]:
         """Render one frame at the given pointing, mount rate, and time.
 
-        Pointing, mount rate, and time are passed as `render()` overrides, so a
-        sequence of exposures at (roughly) the same pointing reuses the same Scene
-        and its already-parsed catalog. sdasim's `apparent_rate = object_rate -
-        mount_rate` model handles sidereal vs rate track from the mount rate
-        alone: (0, 0) == sidereal (sharp stars, streaking satellites); nonzero ==
-        rate track (the tracked object becomes a point, stars streak).
+        Satellites are propagated to `obs_time` and the stars are read from the
+        catalog at `point_ra`/`point_dec`, so each frame reflects that moment and
+        that pointing. sdasim's `apparent_rate = object_rate - mount_rate` model
+        handles sidereal vs rate track from the mount rate alone: (0, 0) ==
+        sidereal (sharp stars, streaking satellites); nonzero == rate track (the
+        tracked object becomes a point, stars streak).
 
         For CCD sensors (`is_cmos=False`) with binning > 1, read noise is
         deferred so charge is summed on-chip before one read-noise + A/D pass per
@@ -176,20 +170,14 @@ class SdasimEngine:
         return array, meta
 
     def _ensure_scene(self, point_ra: float, point_dec: float, exposure: float) -> None:
-        """(Re)build the Scene on first use, on an exposure change, or when the
-        pointing drifts past the rebuild threshold.
+        """(Re)build the Scene on first use or when the exposure changes.
 
-        The star field and exposure are baked into the Scene at construction (and
-        the satellite catalog is parsed there once), so those changes require a
-        rebuild; pointing/rate/time within the threshold are cheap per-frame
-        overrides.
+        Pointing needs no rebuild: sdasim reads the stars from the catalog at the
+        pointing it is given on each render. The exposure scales the signal the
+        Scene is built with, so a change there does need one. `point_ra`/`point_dec`
+        seed the build so the first catalog read lands near the working region.
         """
-        if (
-            self._scene is not None
-            and self._scene_exposure == exposure
-            and self._angular_sep_deg(point_ra, point_dec, self._scene_ra, self._scene_dec)
-            <= self._rebuild_threshold_deg
-        ):
+        if self._scene is not None and self._scene_exposure == exposure:
             return
 
         import sdasim
@@ -202,22 +190,11 @@ class SdasimEngine:
         cfg.seed = None
 
         self._scene = sdasim.Scene(cfg)
-        self._scene_ra = point_ra
-        self._scene_dec = point_dec
         self._scene_exposure = exposure
         logger.debug(
             f"(re)built sdasim Scene at RA={point_ra:.4f} Dec={point_dec:.4f} "
-            f"exposure={exposure:.2f}s"
+            f"exposure={exposure:.2f}s (pointing tracks per-frame via render override)"
         )
-
-    @staticmethod
-    def _angular_sep_deg(ra1: float, dec1: float, ra2: float | None, dec2: float | None) -> float:
-        """Great-circle separation (deg) between two RA/Dec points."""
-        if ra2 is None or dec2 is None:
-            return float("inf")
-        r1, d1, r2, d2 = map(math.radians, (ra1, dec1, ra2, dec2))
-        cos_sep = math.sin(d1) * math.sin(d2) + math.cos(d1) * math.cos(d2) * math.cos(r1 - r2)
-        return math.degrees(math.acos(max(-1.0, min(1.0, cos_sep))))
 
     @staticmethod
     def _bin_tensor(image, bin_factor: int):

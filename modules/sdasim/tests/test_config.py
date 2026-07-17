@@ -18,7 +18,6 @@ class TestSdasimCameraConfig:
         assert config.device == "cpu"
         assert config.temperature == -10.0
         assert config.binning == 1
-        assert config.rebuild_threshold_deg == 0.25
         assert config.status_frequency == 1.0
 
     def test_sdasim_config_required(self):

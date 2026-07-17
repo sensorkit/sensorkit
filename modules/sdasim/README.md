@@ -28,8 +28,9 @@ hardware (see sdasim for details):
    commanded integration time, then pushed with its context into the device's
    DataGraph — `array_to_fits` / `write_file` produce FITS as for real
    hardware
-4. The scene is rebuilt only when the pointing drifts past
-   `rebuild_threshold_deg` or the exposure changes
+4. Every frame is rendered for its own time and pointing: satellites are
+   propagated to the frame's timestamp, and the stars are those the catalog
+   holds at the commanded pointing
 
 ## Example Config
 
@@ -42,7 +43,6 @@ value:
   rotator_entity: OmniSimRotator       # optional: subscribed, not yet rendered (see TODO)
   device: cpu                          # torch device: cpu | cuda | mps | auto
   temperature: -10.0                   # simulated cooler setpoint (°C)
-  rebuild_threshold_deg: 0.25          # rebuild the scene when pointing drifts past this
 ```
 
 Satellite rendering, the star field, and the observer site live in the sdasim

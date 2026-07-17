@@ -116,7 +116,6 @@ class SdasimCamera:
         self._engine = SdasimEngine(
             self.config.sdasim_config,
             device=self.config.device,
-            rebuild_threshold_deg=self.config.rebuild_threshold_deg,
         )
         self._mount_sub: ContextSubscription | None = None
         self._rotator_sub: ContextSubscription | None = None
@@ -391,7 +390,6 @@ class SdasimCameraConfig(BaseModel):
     temperature: float = -10.0  # simulated cooler setpoint (°C)
     binning: int = 1  # default symmetric binning factor
     readout_mode: int = 0  # reported as FITS READOUTM (single simulated mode)
-    rebuild_threshold_deg: float = 0.25  # rebuild the Scene when pointing drifts past this
     status_frequency: float = 1.0  # telemetry publish cadence (seconds)
 
     def create_device(self) -> SdasimCamera:
