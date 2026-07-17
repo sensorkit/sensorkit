@@ -3,8 +3,12 @@ FROM python:3.13-slim AS deps
 
 ARG EXTRAS=alpaca,indigo,nina,node-platform,otto,pwi4,slack,thesky,udl
 
-# git is required at build time for hatch-vcs to resolve the version.
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# git: required at build time for hatch-vcs to resolve the version.
+# build-essential: some deps ship no linux/arm64 wheel and must compile from
+# source (e.g. photutils, pulled in by the `senpai` extra — it has cp313 wheels
+# for linux-x86_64/macOS/Windows but none for linux-aarch64). This is the builder
+# stage only; the final image copies just /usr/local, so no toolchain is shipped.
+RUN apt-get update && apt-get install -y git build-essential && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /uvx /bin/
 
 WORKDIR /opt/sensorkit-build
