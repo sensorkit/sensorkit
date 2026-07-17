@@ -9,9 +9,10 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from conftest import FakeContext, make_data_graph_writer
+from conftest import make_data_graph_writer
 
 from sensorkit.astro.common import RADecPointing
+from sensorkit.data.context import Context
 from sensorkit.data.fits import ImageInfo
 from sensorkit.models.devices import AxisRate, AxisRates, MountAxis
 from sensorkit.sdasim.camera import DeviceConnectionError, SdasimCamera, SdasimCameraConfig
@@ -113,7 +114,7 @@ class TestCapture:
     async def test_capture_passes_pointing_and_rate(self, mock_sk_device):
         # render_frame(exposure, point_ra, point_dec, mount_ra_rate, mount_dec_rate, obs_time, bin)
         camera = make_camera()
-        await camera.camera_capture(CameraCapture(integration_time=0.0, context=FakeContext()))
+        await camera.camera_capture(CameraCapture(integration_time=0.0, context=Context()))
         args = camera._engine.render_frame.call_args.args
         assert args[1] == pytest.approx(90.0)  # ra_hours 6.0 * 15
         assert args[2] == pytest.approx(20.0)  # dec
@@ -124,7 +125,7 @@ class TestCapture:
         camera = make_camera()
         camera._mount_sub = None  # no mount subscription -> scene center, sidereal
         camera._engine.default_point = (123.0, -45.0)
-        await camera.camera_capture(CameraCapture(integration_time=0.0, context=FakeContext()))
+        await camera.camera_capture(CameraCapture(integration_time=0.0, context=Context()))
         args = camera._engine.render_frame.call_args.args
         assert args[1] == pytest.approx(123.0)
         assert args[2] == pytest.approx(-45.0)
@@ -135,7 +136,7 @@ class TestCapture:
         # A rate track publishes nonzero ICRF axis rates; they pass straight through.
         camera = make_camera()
         camera._mount_sub = fake_mount_sub(6.0, 20.0, ra_rate=0.5, dec_rate=-0.25)
-        await camera.camera_capture(CameraCapture(integration_time=0.0, context=FakeContext()))
+        await camera.camera_capture(CameraCapture(integration_time=0.0, context=Context()))
         args = camera._engine.render_frame.call_args.args
         assert args[3] == pytest.approx(0.5)
         assert args[4] == pytest.approx(-0.25)
@@ -145,7 +146,7 @@ class TestCapture:
         # data_graph returns None by default -> capture renders but discards.
         # integration_time=0 so the exposure wait is a no-op.
         camera = make_camera()
-        await camera.camera_capture(CameraCapture(integration_time=0.0, context=FakeContext()))
+        await camera.camera_capture(CameraCapture(integration_time=0.0, context=Context()))
         camera._engine.render_frame.assert_called_once()
 
     @pytest.mark.asyncio
@@ -157,7 +158,7 @@ class TestCapture:
         exposure = 0.3
         start = time.perf_counter()
         await camera.camera_capture(
-            CameraCapture(integration_time=exposure, context=FakeContext())
+            CameraCapture(integration_time=exposure, context=Context())
         )
         elapsed = time.perf_counter() - start
         assert elapsed >= exposure  # render is instant (mocked), so the wait dominates
@@ -168,8 +169,9 @@ class TestCapture:
         mock_sk_device.data_graph.return_value = graph
 
         camera = make_camera()
-        context = FakeContext()
-        await camera.camera_capture(CameraCapture(integration_time=0.0, context=context))
+        cmd = CameraCapture(integration_time=0.0, context=Context())
+        await camera.camera_capture(cmd)
+        context = cmd.context
 
         # Rendered 48x64 uint16 -> 48*64*2 bytes written.
         writer.write.assert_called_once()
@@ -192,7 +194,7 @@ class TestCapture:
         camera = make_camera()
         camera.device_connected = False
         with pytest.raises(DeviceConnectionError):
-            await camera.camera_capture(CameraCapture(integration_time=1.0, context=FakeContext()))
+            await camera.camera_capture(CameraCapture(integration_time=1.0, context=Context()))
 
 
 class TestLifecycle:
