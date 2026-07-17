@@ -1,17 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import List, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 import sensorkit.api as sk
 
+OrbitRegime = Literal["LEO", "MEO", "GEO", "HEO"]
+
 
 class TaskConfig(BaseModel):
-    objects: List[str]
+    objects: List[str] = Field(default_factory=list)
+    orbits: List[OrbitRegime] = Field(default_factory=list)
     tle_update_interval_hours: int = 24
     graylist_interval_minutes: int = 300
     end_time_deadband_seconds: int = 60
     inter_task_delay_seconds: float = 0.0
+
+    @model_validator(mode="after")
+    def _require_targets(self):
+        if not self.objects and not self.orbits:
+            raise ValueError("at least one of task.objects or task.orbits is required")
+        return self
 
 
 class CollectConfig(BaseModel):

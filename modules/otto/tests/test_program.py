@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import make_task
+from conftest import ISS_TLE, make_task
 
 from sensorkit.otto.program import OttoProgram, OttoState, _sidereal_frames
 from sensorkit.otto.task_queue import TaskQueue
@@ -212,6 +212,95 @@ class TestObjectListManagement:
         )
         all_objects = set(state.whitelist + state.graylist + state.blacklist)
         assert len(all_objects) == 3
+
+
+@pytest.fixture
+def orbit_program(program):
+    """Program configured for orbits-only tasking with one fetched GEO member."""
+    program.state = OttoState()
+    program.config.task.objects = []
+    program.config.task.orbits = ["GEO"]
+    program.config.collect.altitude_min = 20.0
+    program.config.collect.scan_mode = False
+    program.config.collect.scan_direction = "eastward"
+    program.config.collect.track_mode = "rate"
+    program.config.collect.dither = False
+    program.config.collect.filters = []
+    program.config.collect.exposure_min = 1
+    program.config.collect.exposure_max = 1
+    program.config.collect.exposure_delta = 1
+    program.config.collect.binning = [1]
+    program.config.collect.num_frames = 1
+    program.latitude = 33.0
+    program.longitude = -117.0
+    program.altitude_km = 0.1
+    program.tles = {
+        "19548": {"line0": ISS_TLE.line0, "line1": ISS_TLE.line1, "line2": ISS_TLE.line2}
+    }
+    program.tles_dt = datetime.now(UTC)
+    program.list_manager = MagicMock()
+    program.list_manager.move_object = AsyncMock()
+    return program
+
+
+class TestOrbitTargets:
+    """Orbit-regime targets are visibility-selected at generation time, never list-managed."""
+
+    @pytest.mark.asyncio
+    async def test_visible_targets_filters_and_orders(self, program, monkeypatch):
+        positions = {
+            "11111": (45.0, 180.0, True, -2.0),  # up, east of meridian
+            "22222": (5.0, 180.0, True, 1.0),  # below the altitude floor
+            "33333": (60.0, 180.0, True, 3.0),  # up, west of meridian
+        }
+        monkeypatch.setattr(
+            "sensorkit.otto.program.calculate_satellite_position",
+            lambda **kwargs: positions[kwargs["object"]],
+        )
+        program.config.collect.altitude_min = 20.0
+        program.config.collect.scan_direction = "eastward"
+        program.latitude = 33.0
+        program.longitude = -117.0
+        program.altitude_km = 0.1
+        program.tles = {}
+
+        # eastward scan: descending hour angle, below-floor objects dropped
+        targets = await program._visible_targets(["11111", "22222", "33333"])
+        assert targets == ["33333", "11111"]
+
+    @pytest.mark.asyncio
+    async def test_orbit_member_tasked_without_list_management(self, orbit_program, monkeypatch):
+        monkeypatch.setattr(
+            "sensorkit.otto.program.calculate_satellite_position",
+            lambda **kwargs: (45.0, 180.0, True, 1.0),
+        )
+        gen = asyncio.create_task(orbit_program.generate_tasks())
+        await asyncio.sleep(0.1)
+        gen.cancel()
+
+        queued = await orbit_program.task_queue.pop_task()
+        assert queued is not None
+        assert queued.task.target.tle.line1 == ISS_TLE.line1
+        assert orbit_program.state.whitelist == []
+        orbit_program.list_manager.move_object.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_stale_orbit_member_skipped_not_blacklisted(self, orbit_program, monkeypatch):
+        # Visible when the scan list is built, below the floor by execution time
+        results = iter([(45.0, 180.0, True, 1.0)])
+        monkeypatch.setattr(
+            "sensorkit.otto.program.calculate_satellite_position",
+            lambda **kwargs: next(results, (5.0, 180.0, False, 1.0)),
+        )
+        orbit_program.config.collect.scan_mode = True
+
+        gen = asyncio.create_task(orbit_program.generate_tasks())
+        await asyncio.sleep(0.1)
+        gen.cancel()
+
+        assert len(orbit_program.task_queue) == 0
+        assert orbit_program.state.blacklist == []
+        orbit_program.list_manager.move_object.assert_not_awaited()
 
 
 class TestProgramDeinit:

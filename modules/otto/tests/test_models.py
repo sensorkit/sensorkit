@@ -45,6 +45,24 @@ class TestTaskConfig:
         config = TaskConfig(objects=["25544", "42738", "39120"])
         assert len(config.objects) == 3
 
+    def test_orbits_only(self):
+        config = TaskConfig(orbits=["GEO", "HEO"])
+        assert config.objects == []
+        assert config.orbits == ["GEO", "HEO"]
+
+    def test_objects_and_orbits(self):
+        config = TaskConfig(objects=["25544"], orbits=["GEO"])
+        assert config.objects == ["25544"]
+        assert config.orbits == ["GEO"]
+
+    def test_requires_objects_or_orbits(self):
+        with pytest.raises(ValidationError):
+            TaskConfig()
+
+    def test_invalid_orbit_rejected(self):
+        with pytest.raises(ValidationError):
+            TaskConfig(orbits=["XEO"])
+
 
 class TestCollectConfig:
     def test_defaults(self):

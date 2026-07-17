@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from datetime import UTC, datetime
 from enum import Enum
+from functools import lru_cache
 from typing import Dict, List, Tuple
 
 import httpx
@@ -8,8 +9,34 @@ from loguru import logger
 from skyfield.api import EarthSatellite, load, wgs84
 
 
+def classify_orbit(line2: str) -> str:
+    """
+    Classify a TLE into an orbit regime from its mean motion (revs/day).
+
+    Boundaries match SensorView's catalog classification:
+    LEO > 11.25 (period < ~128 min), MEO > 2.0, GEO within 0.99-1.01
+    (~1 rev/day), HEO < 2.0, otherwise OTHER.
+    """
+    try:
+        # Mean motion is in columns 53-63 of line 2
+        mean_motion = float(line2[52:63])
+    except (ValueError, IndexError):
+        return "OTHER"
+
+    if mean_motion > 11.25:
+        return "LEO"
+    elif mean_motion > 2.0:
+        return "MEO"
+    elif 0.99 < mean_motion < 1.01:
+        return "GEO"
+    elif mean_motion < 2.0:
+        return "HEO"
+    return "OTHER"
+
+
 async def fetch_tles(
         objects: List[str],
+        orbits: List[str] | None = None,
         timeout: int = 30
 ) -> Tuple[Dict[str, Dict[str, str]], int]:
     """
@@ -20,6 +47,8 @@ async def fetch_tles(
 
     Args:
         objects: List of NORAD catalog IDs (e.g., ["25544", "25994"])
+        orbits: Orbit regimes (e.g., ["LEO", "GEO"]); satellites classifying
+            into any of these are included in addition to `objects`
         timeout: Request timeout in seconds
 
     Returns:
@@ -29,6 +58,7 @@ async def fetch_tles(
     """
     tles = {}
     status_code = 0
+    orbits_set = set(orbits or [])
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -65,8 +95,8 @@ async def fetch_tles(
                 # Extract NORAD ID from line 1 (columns 3-7)
                 norad_id = line1[2:7].strip()
 
-                # IMPORTANT: Only include requested satellites from the 'objects' parameter
-                if norad_id in objects_set:
+                # Only include requested satellites: by NORAD ID or by orbit regime
+                if norad_id in objects_set or classify_orbit(line2) in orbits_set:
                     # Note: Spacebook TLE format doesn't have a line0, so we create one
                     line0 = f"0 {norad_id}"
 
@@ -77,7 +107,8 @@ async def fetch_tles(
                     }
 
                     # Optional: early exit if we've found all requested satellites
-                    if len(tles) == len(objects_set):
+                    # (only valid without orbit regimes, which need a full catalog scan)
+                    if not orbits_set and len(tles) == len(objects_set):
                         logger.debug(f"Found all {len(objects_set)} requested satellites, stopping parse")
                         break
 
@@ -98,6 +129,27 @@ async def fetch_tles(
     return tles, status_code
 
 
+@lru_cache
+def _timescale():
+    return load.timescale()
+
+
+@lru_cache(maxsize=16)
+def _time_at(unix_seconds: int):
+    """Skyfield Time for a unix second, shared so its astrometric caches amortize."""
+    return _timescale().from_datetime(datetime.fromtimestamp(unix_seconds, UTC))
+
+
+@lru_cache(maxsize=32768)
+def _satellite(line0: str, line1: str, line2: str) -> EarthSatellite:
+    return EarthSatellite(line1, line2, line0.split('0')[1].strip(), _timescale())
+
+
+@lru_cache(maxsize=8)
+def _observer(latitude: float, longitude: float, elevation: float):
+    return wgs84.latlon(latitude, longitude, elevation)
+
+
 def calculate_satellite_position(
         tles: dict[str, dict[str, str]],
         object: str,
@@ -107,6 +159,9 @@ def calculate_satellite_position(
 ) -> tuple[float, float, bool, float] | None:
     """
     Calculate a satellite's current position relative to an observer.
+
+    The timescale, satellite, observer, and per-second time objects are cached
+    so bulk passes over a large orbit-regime catalog stay cheap.
 
     Args:
         tles: Dictionary of TLEs keyed by NORAD ID
@@ -129,22 +184,12 @@ def calculate_satellite_position(
     tle_data = tles[object]
 
     try:
-        # Load timescale
-        ts = load.timescale()
+        satellite = _satellite(tle_data["line0"], tle_data["line1"], tle_data["line2"])
+        observer = _observer(latitude, longitude, elevation)
 
-        # Create satellite object from TLE
-        satellite = EarthSatellite(
-            tle_data["line1"],
-            tle_data["line2"],
-            tle_data["line0"].split('0')[1].strip(),
-            ts,
-        )
-
-        # Create observer location
-        observer = wgs84.latlon(latitude, longitude, elevation)
-
-        # Get current time
-        now = ts.from_datetime(datetime.now(UTC))
+        # Current time, quantized to the second so bulk passes share Time objects
+        now_seconds = int(datetime.now(UTC).timestamp())
+        now = _time_at(now_seconds)
 
         # Calculate current position
         difference = satellite - observer
@@ -160,16 +205,12 @@ def calculate_satellite_position(
         last_hours = (now.gast + longitude / 15.0) % 24.0
         hour_angle = ((last_hours - ra.hours + 12.0) % 24.0) - 12.0
 
-        # Calculate position one minute in the future to determine if rising/falling
-        future = ts.from_datetime(datetime.now(UTC).replace(microsecond=0))
-        future = ts.tt_jd(future.tt + 60 / 86400.0)
-
-        future_topocentric = difference.at(future)
+        # Position one minute in the future to determine if rising/falling
+        future_topocentric = difference.at(_time_at(now_seconds + 60))
         future_alt, _, _ = future_topocentric.altaz()
-        future_altitude = future_alt.degrees
 
         # Determine if rising or falling
-        rising = future_altitude > altitude
+        rising = future_alt.degrees > altitude
 
         return altitude, azimuth, rising, hour_angle
 
@@ -220,7 +261,7 @@ def dither_tle(
     a = (mu / n_rad_s**2) ** (1 / 3)  # meters
 
     # Compute observer-satellite range via Skyfield
-    ts = load.timescale()
+    ts = _timescale()
     satellite = EarthSatellite(tle.line1, tle.line2, "dither", ts)
     observer = wgs84.latlon(latitude, longitude, elevation)
     now = ts.from_datetime(datetime.now(UTC))

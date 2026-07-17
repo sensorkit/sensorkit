@@ -84,7 +84,7 @@ class OttoProgram:
 
     async def _watch_config(self):
         async for config in self.program.kv_monitor_model(OttoConfig):
-            self.config = config
+            prev, self.config = self.config, config
 
             # Determine whether the new configuration has a different object list from current.
             objs_from_state = set(
@@ -93,10 +93,18 @@ class OttoProgram:
 
             if set(config.task.objects) != objs_from_state:
                 # New config. Clear our object lists and start fresh.
-                self.state.whitelist = config.task.objects
+                self.state.whitelist = list(config.task.objects)
                 self.state.graylist = []
                 self.state.blacklist = []
                 logger.info(f"Loaded {len(config.task.objects)} objects from config")
+
+            # New targeting: refetch TLEs so it takes effect immediately
+            if (
+                set(config.task.objects) != set(prev.task.objects)
+                or set(config.task.orbits) != set(prev.task.orbits)
+            ) and self._tle_updater:
+                self._tle_updater.cancel()
+                self._tle_updater = asyncio.create_task(self.update_tles_loop())
 
     @sk.on_attach
     async def program_init(self):
@@ -181,10 +189,14 @@ class OttoProgram:
                 logger.debug("updating TLEs from Spacebook")
 
                 # Fetch TLEs from Spacebook
-                self.tles, response = await fetch_tles(objects=self.config.task.objects)
+                self.tles, response = await fetch_tles(
+                    objects=self.config.task.objects, orbits=self.config.task.orbits
+                )
                 if response == 200:
                     logger.debug(f"updated {len(self.tles)} TLEs from Spacebook")
                     self.tles_dt = datetime.now(UTC)
+                    # Large orbit regimes can exceed the KV payload limit; a failed
+                    # put is caught below and only costs the restart cache
                     tle_cache = TLECache(tles=self.tles, dt=self.tles_dt)
                     await self.program.kv_put_model(tle_cache)
                 elif response == 429:
@@ -278,33 +290,37 @@ class OttoProgram:
                 logger.debug("no tasks available")
             yield None
 
-    async def _build_scan_targets(self) -> list[str]:
-        """Build a list of whitelist objects ordered for a single-flip sky walk.
+    async def _visible_targets(self, objects: list[str]) -> list[str]:
+        """Filter objects to those above `altitude_min`, ordered for a single-flip sky walk.
 
-        Targets are sorted by hour angle so the scan walks the sky continuously,
+        Targets are sorted by hour angle so a scan walks the sky continuously,
         crossing the meridian exactly once. `eastward` (default) emits in
         descending HA — starting at the far western horizon, walking east
         through the meridian and continuing into the east. `westward` is the
-        symmetric reverse. All whitelist objects above `altitude_min` are
-        included.
+        symmetric reverse. Runs in a worker thread so a pass over a large
+        orbit-regime catalog doesn't stall the event loop.
         """
         direction = self.config.collect.scan_direction or "eastward"
 
-        candidates: list[tuple[str, float]] = []
-        for obj_id in list(self.state.whitelist):
-            result = calculate_satellite_position(
-                tles=self.tles,
-                object=obj_id,
-                latitude=self.latitude,
-                longitude=self.longitude,
-                elevation=self.altitude_km * 1000,
-            )
-            if result is None:
-                continue
-            altitude, _azimuth, _rising, hour_angle = result
-            if altitude < self.config.collect.altitude_min:
-                continue
-            candidates.append((obj_id, hour_angle))
+        def compute() -> list[tuple[str, float]]:
+            candidates: list[tuple[str, float]] = []
+            for obj_id in objects:
+                result = calculate_satellite_position(
+                    tles=self.tles,
+                    object=obj_id,
+                    latitude=self.latitude,
+                    longitude=self.longitude,
+                    elevation=self.altitude_km * 1000,
+                )
+                if result is None:
+                    continue
+                altitude, _azimuth, _rising, hour_angle = result
+                if altitude < self.config.collect.altitude_min:
+                    continue
+                candidates.append((obj_id, hour_angle))
+            return candidates
+
+        candidates = await asyncio.to_thread(compute)
 
         # eastward = descending HA (+west → 0 → −east); westward = ascending.
         reverse = direction == "eastward"
@@ -333,30 +349,47 @@ class OttoProgram:
                     await asyncio.sleep(5)
                     continue
 
-                if not self.state.whitelist and not self.state.graylist:
-                    logger.warning(
-                        "No viewable objects on whitelist nor graylist. Please pick new objects"
-                    )
-                    await asyncio.sleep(5)
-                    continue
-                elif not self.state.whitelist:
-                    graylist_interval = getattr(self.config.task, "graylist_interval_minutes", 15)
-                    logger.warning(
-                        f"No viewable objects on whitelist but {len(self.state.graylist)} objects on graylist. Sleeping {graylist_interval} minutes"
-                    )
-                    await asyncio.sleep(graylist_interval * 60)
+                # Orbit-regime members come straight from the TLE fetch; they are
+                # selected by current visibility, never list-managed
+                known = set(self.state.whitelist + self.state.graylist + self.state.blacklist)
+                orbit_members = [oid for oid in self.tles if oid not in known]
+
+                if not self.state.whitelist and not orbit_members:
+                    if not self.state.graylist:
+                        logger.warning(
+                            "No viewable objects on whitelist nor graylist. Please pick new objects"
+                        )
+                        await asyncio.sleep(5)
+                    else:
+                        graylist_interval = getattr(
+                            self.config.task, "graylist_interval_minutes", 15
+                        )
+                        logger.warning(
+                            f"No viewable objects on whitelist but {len(self.state.graylist)} objects on graylist. Sleeping {graylist_interval} minutes"
+                        )
+                        await asyncio.sleep(graylist_interval * 60)
                     continue
 
                 # Build ordered target list based on scan mode
                 if self.config.collect.scan_mode:
-                    targets = await self._build_scan_targets()
+                    targets = await self._visible_targets(self.state.whitelist + orbit_members)
                     if not targets:
                         await asyncio.sleep(5)
                         continue
                 else:
-                    targets = [random.choice(self.state.whitelist)]
+                    # Whitelist objects are visibility-checked (and list-managed) after
+                    # selection; orbit members are filtered to currently-visible first
+                    pool = self.state.whitelist + await self._visible_targets(orbit_members)
+                    if not pool:
+                        await asyncio.sleep(5)
+                        continue
+                    targets = [random.choice(pool)]
 
                 for object in targets:
+                    # Orbit-regime targets aren't list-managed: on a stale check
+                    # they are simply skipped until the next pass
+                    managed = object in self.state.whitelist
+
                     # Check current altitude, azimuth, and rising status
                     result = calculate_satellite_position(
                         tles=self.tles,
@@ -366,46 +399,50 @@ class OttoProgram:
                         elevation=self.altitude_km * 1000,
                     )
                     if result is None:
-                        logger.warning(
-                            f"Removing object {object} from the whitelist (no TLE available)"
-                        )
-                        await self.list_manager.move_object(
-                            object,
-                            ListType.WHITELIST,
-                            ListType.BLACKLIST,
-                        )
+                        if managed:
+                            logger.warning(
+                                f"Removing object {object} from the whitelist (no TLE available)"
+                            )
+                            await self.list_manager.move_object(
+                                object,
+                                ListType.WHITELIST,
+                                ListType.BLACKLIST,
+                            )
                         continue
                     altitude, azimuth, rising, _hour_angle = result
 
                     # Determine which list this object should be on
                     if altitude < self.config.collect.altitude_min and not rising:
-                        await self.list_manager.move_object(
-                            object, ListType.WHITELIST, ListType.BLACKLIST
-                        )
-                        logger.debug(
-                            f"object {object} blacklisted (alt={altitude:.1f}°, az={azimuth:.1f}°, falling)"
-                        )
+                        if managed:
+                            await self.list_manager.move_object(
+                                object, ListType.WHITELIST, ListType.BLACKLIST
+                            )
+                            logger.debug(
+                                f"object {object} blacklisted (alt={altitude:.1f}°, az={azimuth:.1f}°, falling)"
+                            )
                         continue
 
                     if altitude < self.config.collect.altitude_min and rising:
-                        await self.list_manager.move_object(
-                            object, ListType.WHITELIST, ListType.GRAYLIST
-                        )
-                        logger.debug(
-                            f"object {object} graylisted (alt={altitude:.1f}°, az={azimuth:.1f}°, rising)"
-                        )
+                        if managed:
+                            await self.list_manager.move_object(
+                                object, ListType.WHITELIST, ListType.GRAYLIST
+                            )
+                            logger.debug(
+                                f"object {object} graylisted (alt={altitude:.1f}°, az={azimuth:.1f}°, rising)"
+                            )
                         continue
 
                     tle_data = self.tles.get(object)
                     if tle_data is None:
-                        logger.warning(
-                            f"Removing object {object} from the whitelist (TLE removed)"
-                        )
-                        await self.list_manager.move_object(
-                            object,
-                            ListType.WHITELIST,
-                            ListType.BLACKLIST,
-                        )
+                        if managed:
+                            logger.warning(
+                                f"Removing object {object} from the whitelist (TLE removed)"
+                            )
+                            await self.list_manager.move_object(
+                                object,
+                                ListType.WHITELIST,
+                                ListType.BLACKLIST,
+                            )
                         continue
                     tle_obj = TLE(
                         line0=tle_data["line0"],

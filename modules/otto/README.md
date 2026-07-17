@@ -1,16 +1,17 @@
 # Otto Module
 
 Otto is an autonomous satellite observation program, meant for collecting large
-training data sets. Given a list of NORAD IDs, it fetches TLEs, tracks object
-visibility, and continuously generates `StandardCollectTask` offers over the
-configured camera parameter grid (filters × exposures × binnings). Collected FITS
-imagery can optionally be published to Google Drive, Dropbox, and/or the UDL
-SkyImagery filedrop. Some supported features:
+training data sets. Given a list of NORAD IDs and/or orbit regimes, it fetches
+TLEs, tracks object visibility, and continuously generates `StandardCollectTask`
+offers over the configured camera parameter grid (filters × exposures × binnings).
+Collected FITS imagery can optionally be published to Google Drive, Dropbox, and/or
+the UDL SkyImagery filedrop. Some supported features:
 
-- **Target selection** — random whitelist selection by default, or `scan_mode`, which
+- **Target selection** — random whitelist selection by default or via orbit class
+- (i.e. LEO/MEO/GEO/HEO), both supporting `scan_mode`, which
   orders all visible objects by hour angle to walk the sky in one direction and
   cross the meridian only once (one pier flip per pass).
-- **Visibility** — objects move between a whitelist (visible now), a
+- **Visibility** — explicit `task.objects` move between a whitelist (visible now), a
   graylist (below the altitude floor but rising; re-promoted periodically), and
   a blacklist (below the floor and setting, or no TLE). Lists are persisted
   across restarts. A future `TODO` item will populate these lists from object
@@ -24,10 +25,12 @@ SkyImagery filedrop. Some supported features:
 
 ## How It Works
 
-1. Otto fetches TLEs from Spacebook for the configured NORAD IDs (and re-fetches
-   every `tle_update_interval_hours`)
+1. Otto fetches TLEs from Spacebook for the configured NORAD IDs and orbit
+   regimes (and re-fetches every `tle_update_interval_hours`)
 2. It evaluates satellite visibility (altitude, rising/setting) from the
-   controller's site position and maintains the whitelist / graylist / blacklist
+   controller's site position and maintains the whitelist / graylist / blacklist;
+   orbit-regime members are instead selected live — whichever are above the
+   altitude floor at task-generation time
 3. Visible objects are queued as `StandardCollectTask` entries — one task per
    filter × exposure × binning combination, `num_frames` frames each — and
    offered to the agent scheduler
@@ -54,6 +57,7 @@ value:
   controller: controller1                # named controller for the agent to task
   task:
     objects: ["40105", "38833", "42741"] # NORAD IDs to observe
+    orbits: []                           # Orbit regimes to observe (LEO/MEO/GEO/HEO), e.g. ["GEO"]
     tle_update_interval_hours: 4         # How often to poll Spacebook for new TLEs
     graylist_interval_minutes: 15        # How often to promote graylist -> whitelist
     end_time_deadband_seconds: 300       # Extra time added to each task's deadline
@@ -288,9 +292,6 @@ sensorkit service run otto sensorkit.otto.program
 
 ## TODO
 
-- **Orbit-class tasking** — accept an `orbits` key (a list drawn from `LEO` /
-  `MEO` / `GEO` / `HEO`) as an alternative to enumerating NORAD IDs in
-  `task.objects`, tasking everything in the selected orbit regimes.
 - **Configurable TLE sourcing** — allow fixed-file (e.g. no internet connection)
   or unique sourcing (e.g. Space-Track, Celestrak, etc).
 - **SNR-driven list transitions** — promote/demote objects across the
