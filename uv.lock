@@ -2886,16 +2886,16 @@ wheels = [
 
 [[package]]
 name = "sdasim"
-version = "0.2.0"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "pyyaml" },
     { name = "torch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ae/f3/489e704f46f92f1da4e9d420007034a019a1bf46e150d3b2ac6e0c6211a2/sdasim-0.2.0.tar.gz", hash = "sha256:66429ba5d8b2bb36d6de1fe380bd0c3bb5551473f78cffed7707b55bdf636396", size = 79318, upload-time = "2026-06-19T00:08:26.21Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0f/0a/81a861ed2a9831091437ae7315f50e4602958fceb6173bbb7a3def6b5aed/sdasim-0.3.0.tar.gz", hash = "sha256:92e931bf06a22d5acebe04986b9c5c052b28dd23e8b7ad881f99eaf24d8266e8", size = 104740, upload-time = "2026-07-16T23:39:53.102Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/14/a0/7b489e9ff8becab07c34255b61abfab22378d292af1086858cc057b91768/sdasim-0.2.0-py3-none-any.whl", hash = "sha256:d6d727fd03a00dabe8e343d0671a383ebad5d299bf45cfee4581e1158c7db88e", size = 65965, upload-time = "2026-06-19T00:08:24.558Z" },
+    { url = "https://files.pythonhosted.org/packages/35/e2/98ba6cbb880c9b225cd7c9f8b84a21bfd148cbd656e0c786d99b79fdd17b/sdasim-0.3.0-py3-none-any.whl", hash = "sha256:655941327317f86a64d07f204924ba198ff62093d770bcf12105d05eb8915f41", size = 80614, upload-time = "2026-07-16T23:39:51.729Z" },
 ]
 
 [[package]]
