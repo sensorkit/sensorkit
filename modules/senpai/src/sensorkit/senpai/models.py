@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
 
@@ -11,6 +12,7 @@ import sensorkit.api as sk
 class SenpaiConfig(BaseModel):
     senpai_config: str
     senpai_output_dir: str
+    process_sequence: bool = Field(default=True)
 
 
 sk.declare_config_section(
@@ -23,6 +25,11 @@ sk.declare_config_section(
 
 class Detection(BaseModel):
     """Per-detection stats for either point sources or streaks in either a sidereal or rate-tracked frame."""
+
+    # SENPAI's discriminator: "streak" = confirmed satellite streak, "point" =
+    # point source (the satellite candidate in rate-tracked frames),
+    # "streak_candidate" = unconfirmed streak.
+    kind: Literal["streak", "point", "streak_candidate"] | None = None
 
     x: float
     y: float
@@ -71,6 +78,19 @@ class SenpaiResult(BaseModel):
     file_path: str
     timestamp: datetime
     track_mode: str
+
+    # Collect identity passed through from the DataGraph context (present when
+    # the deployment maps the corresponding FITS headers), letting consumers
+    # correlate results to the tasking that produced the frame.
+    task_id: str | None = None
+    frame_num: int | None = None
+    frame_count: int | None = None
+
+    # True when this result came out of multi-frame sequence processing
+    # (e.g. sidereal-anchored WCS, cross-frame streak confirmation).
+    from_sequence: bool = True
+
+    exposure_time_seconds: float | None = None
     n_sources: int | None
     median_fwhm_pixels: float | None
     std_fwhm_pixels: float | None

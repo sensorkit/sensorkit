@@ -1,15 +1,42 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import logging
+import math
+import warnings
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from loguru import logger
 
-from senpai.core.config import initialize_config
-from senpai.engine.models.images import ProcessedFitsImage
-from senpai.engine.processing.collect import final_plots, process_senpai_collect
 from sensorkit.senpai.models import Detection, Photometry, SenpaiResult
+
+# Importing the engine is noisy, and self-defeatingly so: `senpai` installs a
+# console handler on the root logger partway through (see `sensorkit.senpai`), and
+# whatever it imports afterwards logs onto it — matplotlib announcing a rebuilt
+# font cache — before `analyzer.quiet_engine_logging()` can take the handler off
+# again. Muting the `senpai` namespace alone doesn't cover that, since the records
+# are somebody else's. Drop INFO and below for the duration of the import instead;
+# warnings and errors still get through.
+logging.disable(logging.INFO)
+try:
+    from senpai.core.config import initialize_config
+    from senpai.engine.models.images import ProcessedFitsImage
+    from senpai.engine.processing.collect import final_plots, process_senpai_collect
+finally:
+    logging.disable(logging.NOTSET)
+
+
+@dataclass
+class FrameInput:
+    """One frame handed to the pipeline, with its collect identity from the DataGraph context."""
+
+    data: bytes
+    file_path: str
+    task_id: str | None = None
+    frame_num: int | None = None
+    frame_count: int | None = None
 
 
 class SenpaiPipeline:
@@ -21,43 +48,74 @@ class SenpaiPipeline:
             config.runtime.output_dir = Path(senpai_output_dir)
         self.config = config
 
-    def process_frame(self, fits_data: bytes, file_path: str | Path) -> SenpaiResult:  # noqa: C901
-        """Analyze a FITS frame via SENPAI's unified collect pipeline.
+    def process_frames(
+        self, inputs: list[FrameInput], from_sequence: bool = False
+    ) -> list[SenpaiResult]:
+        """Analyze one or more FITS frames as a single SENPAI collect.
 
-        Parameters:
-            fits_data: Raw FITS file bytes.
-            file_path: Path to the FITS file on disk.
+        Multi-frame batches let SENPAI anchor the WCS from sidereal frames,
+        propagate it to rate frames, and confirm streaks across frames.
+        `from_sequence` stamps the results as sequence-derived — the analyzer
+        passes True for any batch it assembled from a collect, including a
+        complete single-frame collect.
 
-        Returns:
-            SenpaiResult
+        Returns one SenpaiResult per input, in input order (a frame whose
+        results can't be extracted is logged and skipped rather than failing
+        the batch).
         """
-
-        file_path = str(file_path)
-
-        # Load FITS image
-        fits_image = ProcessedFitsImage.from_file_bytes(fits_data, file_path=file_path)
+        images = [
+            ProcessedFitsImage.from_file_bytes(inp.data, file_path=inp.file_path)
+            for inp in inputs
+        ]
 
         # Run the unified collect pipeline
-        senpai_run = process_senpai_collect([fits_image])
+        senpai_run = process_senpai_collect(images)
 
         # Generate annotated plots (WCS overlay, detections, etc.)
         final_plots(senpai_run, Path(self.config.runtime.output_dir))
 
-        # Determine which track mode produced the frame
-        if senpai_run.sidereal_frames:
-            frame = senpai_run.sidereal_frames[0]
-            track_mode = "SIDEREAL"
-        elif senpai_run.rate_track_frames:
-            frame = senpai_run.rate_track_frames[0]
-            track_mode = "RATE"
-        else:
-            logger.warning("No frames returned from collect pipeline")
+        # Map the run's frames (split by track mode) back to their source files.
+        frames_by_path: dict[str, tuple] = {}
+        for frame in senpai_run.sidereal_frames:
+            frames_by_path[str(frame.frame.file_path)] = (frame, "SIDEREAL")
+        for frame in senpai_run.rate_track_frames:
+            frames_by_path[str(frame.frame.file_path)] = (frame, "RATE")
+
+        results: list[SenpaiResult] = []
+        for inp, image in zip(inputs, images, strict=True):
+            try:
+                results.append(
+                    self._extract(inp, image, frames_by_path, from_sequence)
+                )
+            except Exception:
+                # A bad frame (e.g. a corrupt header) must not discard the
+                # rest of the batch's results.
+                logger.exception(f"Failed to extract results for {inp.file_path}")
+
+        return results
+
+    def _extract(  # noqa: C901
+        self,
+        inp: FrameInput,
+        image: ProcessedFitsImage,
+        frames_by_path: dict[str, tuple],
+        from_sequence: bool,
+    ) -> SenpaiResult:
+        """Build the SenpaiResult for one frame of the collect run."""
+        timestamp = datetime.fromisoformat(image.header["DATE-OBS"]).replace(tzinfo=UTC)
+
+        frame, track_mode = frames_by_path.get(inp.file_path, (None, "UNKNOWN"))
+        if frame is None:
+            logger.warning(f"No frame returned from collect pipeline for {inp.file_path}")
             return SenpaiResult(
-                file_path=file_path,
-                timestamp=datetime.fromisoformat(fits_image.header["DATE-OBS"]).replace(
-                    tzinfo=UTC
-                ),
+                file_path=inp.file_path,
+                timestamp=timestamp,
                 track_mode="UNKNOWN",
+                task_id=inp.task_id,
+                frame_num=inp.frame_num,
+                frame_count=inp.frame_count,
+                from_sequence=from_sequence,
+                exposure_time_seconds=image.header.get("EXPTIME"),
                 n_sources=0,
                 median_fwhm_pixels=None,
                 std_fwhm_pixels=None,
@@ -78,22 +136,19 @@ class SenpaiPipeline:
 
             # Diagnostic: compare WCS-solved center to FITS header RA/Dec
             if solved and frame.starfield.wcs is not None:
-                import warnings
-
                 wcs_astropy = frame.starfield.wcs.to_astropy_wcs()
-                img_w = int(fits_image.header.get("NAXIS1", 0))
-                img_h = int(fits_image.header.get("NAXIS2", 0))
+                img_w = int(image.header.get("NAXIS1", 0))
+                img_h = int(image.header.get("NAXIS2", 0))
                 center_x, center_y = img_w / 2.0, img_h / 2.0
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     sky = wcs_astropy.pixel_to_world(center_x, center_y)
                 wcs_ra, wcs_dec = sky.ra.deg, sky.dec.deg
-                hdr_ra = fits_image.header.get("RA")
-                hdr_dec = fits_image.header.get("DEC")
+                hdr_ra = image.header.get("RA")
+                hdr_dec = image.header.get("DEC")
                 if hdr_ra is not None:
                     dra = (wcs_ra - hdr_ra) * 3600.0  # arcsec
                     ddec = (wcs_dec - hdr_dec) * 3600.0
-                    import math
 
                     cos_dec = math.cos(math.radians(hdr_dec))
                     sep = math.sqrt((dra * cos_dec) ** 2 + ddec**2)
@@ -148,6 +203,7 @@ class SenpaiPipeline:
             for det in frame.detections.detections:
                 detections.append(
                     Detection(
+                        kind=det.detection_type,
                         x=det.x,
                         y=det.y,
                         snr=det.snr,
@@ -166,11 +222,12 @@ class SenpaiPipeline:
                     )
                 )
 
-        # Extract streak candidates (unconfirmed in single-frame mode)
+        # Extract streak candidates (unconfirmed)
         if frame.streak_candidates:
             for c in frame.streak_candidates:
                 detections.append(
                     Detection(
+                        kind="streak_candidate",
                         x=c.x,
                         y=c.y,
                         snr=c.peak_snr,
@@ -197,10 +254,21 @@ class SenpaiPipeline:
         if pixel_scale_arcsec is not None and std_fwhm_pixels is not None:
             std_fwhm_arcsec = std_fwhm_pixels * pixel_scale_arcsec
 
+        exposure = (
+            frame.frame_metadata.exposure_time_seconds if frame.frame_metadata else None
+        )
+        if exposure is None:
+            exposure = image.header.get("EXPTIME")
+
         return SenpaiResult(
-            file_path=file_path,
-            timestamp=datetime.fromisoformat(fits_image.header["DATE-OBS"]).replace(tzinfo=UTC),
+            file_path=inp.file_path,
+            timestamp=timestamp,
             track_mode=track_mode,
+            task_id=inp.task_id,
+            frame_num=inp.frame_num,
+            frame_count=inp.frame_count,
+            from_sequence=from_sequence,
+            exposure_time_seconds=exposure,
             n_sources=len(detections),
             median_fwhm_pixels=median_fwhm_pixels,
             std_fwhm_pixels=std_fwhm_pixels,

@@ -9,17 +9,30 @@ SensorKit as telemetry (see SENPAI for details):
 - **Per-frame analysis** — plate solution (WCS), FWHM / seeing, zero point and
   limiting magnitude, point-source and streak detections, with annotated
   plots written per frame.
+- **Sequence processing** (on by default) — frames sharing a collect are batched
+  and run through SENPAI as one multi-frame collect: the WCS is anchored from
+  sidereal frames and propagated to rate frames (the `rate_sidereal` collect
+  shape), and streaks are confirmed across frames.
 - **Telemetry** — each frame's results are published as a `SenpaiResult`
-  keyword for downstream consumers (e.g. monitoring, dashboards).
+  keyword for downstream consumers (e.g. monitoring, dashboards, the `udl`
+  module's EOObservation publisher).
 
 ## How It Works
 
 1. On startup the module loads the SENPAI engine config (`senpai_config`) and
    starts consuming FITS frames from its DataGraph
-2. Each frame runs through SENPAI's collect pipeline — pre-processing, plate
+2. With `process_sequence` on (the default), frames carrying a collect identity (`task_id` +
+   `frame_count` in the DataGraph context) are accumulated per `task_id`; the
+   batch runs once `frame_count` frames have arrived. A batch with nothing new
+   for its exposure time plus a fixed margin is assumed incomplete (e.g. a
+   dropped exposure) and is processed partially. Frames without a collect
+   identity — and everything, when `process_sequence` is off — process one at
+   a time
+3. Each batch runs through SENPAI's collect pipeline — pre-processing, plate
    solution, detection, photometry — with plots written to `senpai_output_dir`
-3. A `SenpaiResult` (track mode, solve status, FWHM, zero point, limiting
-   magnitude, detections) is published per frame
+4. A `SenpaiResult` (track mode, solve status, FWHM, zero point, limiting
+   magnitude, detections tagged with their `kind`, collect identity, and
+   `from_sequence` for multi-frame batches) is published per frame
 
 ## Example Config
 
@@ -29,6 +42,7 @@ key: SenpaiConfig
 value:
   senpai_config: /path/to/senpai.yaml                 # SENPAI engine config (astrometry, calibrations, ...)
   senpai_output_dir: /path/to/data/processed/senpai   # per-frame plots land here
+  # process_sequence: false                           # disable multi-frame sequence processing
 
 ---
 
@@ -46,6 +60,15 @@ value:
     read_fits_file:
       op: read_file
       output:
+        - read_context
+    read_context:
+      op: context_from_fits
+      keyword_map:                # required for sequence batching / correlation;
+        task_id: TASKID           # the right side must mirror whatever the camera
+        frame_num: FRAMENUM       # graph's array_to_fits `header:` map wrote
+        frame_count: NFRAMES      # (the collect context provides these keys to
+        exptime: EXPTIME          # that map); exptime sizes the stalled-
+      output:                     # sequence limit
         - sink
     sink:
       op: app_sink
@@ -54,7 +77,10 @@ value:
 Both blocks live on the same entity — the analyzer shares the service name
 (`-n senpai` below). Point `watch_directory` at the camera graph's
 `write_file` directory; every FITS file that appears there is analyzed,
-regardless of which program collected it.
+regardless of which program collected it. The `keyword_map` is only needed for
+sequence batching and for downstream consumers that correlate results to
+tasking (e.g. EOObservations); without it, every frame processes individually
+and `SenpaiResult.task_id` stays null.
 
 ## Usage
 
