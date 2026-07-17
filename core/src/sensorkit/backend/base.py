@@ -201,9 +201,9 @@ class StreamContext(BaseContext):
 
     async def consume(
         self,
-        key: str = None,
+        key: str | None = None,
         *,
-        durable_name: str = None,
+        durable_name: str | None = None,
         from_sequence: int | None = None,
         from_time: datetime | None = None,
         include_latest: bool = False,

@@ -25,7 +25,7 @@ class StateElection[E: Hashable = str]:
         self._votes: dict[str | None, dict[E, bool | None]] = collections.defaultdict(dict)
         self._tally: dict[E, StateElection.VoteTally] = collections.defaultdict(self.VoteTally)
 
-    def vote(self, source: str = None, *, subject: E, vote: bool | None):
+    def vote(self, source: str | None = None, *, subject: E, vote: bool | None):
         """Set or clear an up/down state vote for the specified subject.
 
         The `source` parameter specifies a "voter" for this vote. When multiple votes for the same

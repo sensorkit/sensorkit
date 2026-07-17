@@ -177,7 +177,7 @@ class TheSkyError(Exception):
     def __new__(cls, code, message):
         return super().__new__(cls.subtypes.get(code, cls), message)
 
-    def __init__(self, message: str, *, code: int = None):
+    def __init__(self, message: str, *, code: int | None = None):
         if type(self) is TheSkyError and code is not None:
             self.code = code
         super().__init__(message)

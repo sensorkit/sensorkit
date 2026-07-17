@@ -52,8 +52,8 @@ class BaseTarget(BaseModel, ABC):
     async def adapt(
         self,
         *accepts: type[BaseTarget | Trajectory] | tuple,
-        observer: EarthObserver | Geodetic = None,
-        weather: BasicWeather = None,
+        observer: EarthObserver | Geodetic | None = None,
+        weather: BasicWeather | None = None,
         _catalog: Any = None,
     ) -> BaseTarget | Trajectory:
         """Convert this target to the best matching type from *accepts*, propagating as needed."""
@@ -111,7 +111,7 @@ class BaseTarget(BaseModel, ABC):
         duration: timedelta,
         step: timedelta,
         frame: ReferenceFrame = ReferenceFrame.GCRF,
-        observer: EarthObserver | Geodetic = None,
+        observer: EarthObserver | Geodetic | None = None,
         weather: BasicWeather | None = None,
     ):
         """Propagate this target into a pre-computed EphemerisTarget over the given time window."""
@@ -230,10 +230,10 @@ class AltAzTarget(FixedTarget[Horizontal]):
     @override
     def to_astropy(
         self,
-        time: Time = None,
-        observer: EarthObserver | Geodetic = None,
-        weather: BasicWeather = None,
-        wavelength: float = None,
+        time: Time | None = None,
+        observer: EarthObserver | Geodetic | None = None,
+        weather: BasicWeather | None = None,
+        wavelength: float | None = None,
     ):
         return self.coords.to_astropy(
             obstime=time,
@@ -252,7 +252,7 @@ class ICRSTarget(FixedTarget[Equatorial]):
     @override
     def to_astropy(
         self,
-        time: Time = None,
+        time: Time | None = None,
     ):
         return self.coords.to_astropy(frame=self.frame, obstime=time)
 

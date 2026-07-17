@@ -24,14 +24,14 @@ class Trajectory(ABC):
         """Propagate the trajectory to the given point in time."""
 
     @abstractmethod
-    def sample(self, epoch: datetime = None) -> GCRS:
+    def sample(self, epoch: datetime | None = None) -> GCRS:
         """Interpolate the state at the given time and return as an astropy coordinate."""
 
 
 class OrbitalTrajectory(Trajectory):
     """Trajectory derived from numerical orbital propagation of a state vector via satkit."""
 
-    def __init__(self, sv: StateVector, *, _result: satkit.propresult = None):
+    def __init__(self, sv: StateVector, *, _result: satkit.propresult | None = None):
         self.sv = sv
         self._result = _result
 
@@ -51,7 +51,7 @@ class OrbitalTrajectory(Trajectory):
             _result=result,
         )
 
-    def sample(self, epoch: datetime = None):
+    def sample(self, epoch: datetime | None = None):
         t = satkit.time.now() if epoch is None else satkit.time.from_datetime(epoch)
         vec = self._result.interp(t)
         return GCRS(
@@ -75,7 +75,7 @@ class TLETrajectory(Trajectory):
     async def propagate(self, when: datetime | timedelta) -> Self:
         return self
 
-    def sample(self, epoch: datetime = None) -> GCRS:
+    def sample(self, epoch: datetime | None = None) -> GCRS:
         t = satkit.time.now() if epoch is None else satkit.time.from_datetime(epoch)
         teme_p, teme_v = satkit.sgp4(self.tle, t)
         q = satkit.frametransform.qteme2gcrf(t)

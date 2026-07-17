@@ -91,7 +91,7 @@ class ModelRegistry[T](ModelRegistryBase[T]):
         self,
         *models: type[T],
         discriminator: str | None = None,
-        default_tag: str = None,
+        default_tag: str | None = None,
     ):
         self.discriminator_field = discriminator
         self.default_tag = default_tag

@@ -48,7 +48,7 @@ def read_template():
     return parts[0], parts[1]
 
 
-def run_thesky_script(script: bytes, state: SimulationState = None):
+def run_thesky_script(script: bytes, state: SimulationState | None = None):
     pre, post = read_template()
     return cast(
         Simulation,

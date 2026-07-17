@@ -82,7 +82,7 @@ def _subject_from_nats(method: Method, subject: str):
     return Subject(tuple[str](tokens[2:-1]), tokens[-1])
 
 
-def _kv_entry(entry: KeyValue.Entry, *, key: Subject = None):
+def _kv_entry(entry: KeyValue.Entry, *, key: Subject | None = None):
     return KVEntry(
         key=key if key else _subject_from_nats(Method.KV, entry.key),
         value=entry.value if entry.operation not in DELETE_OPS else KVEntry.DELETE_MARKER,

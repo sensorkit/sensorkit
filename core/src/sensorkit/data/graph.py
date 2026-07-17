@@ -161,7 +161,7 @@ class DataFlow:
 
     async def receive(
         self,
-        kind: ReceiveKind = None,
+        kind: ReceiveKind | None = None,
     ) -> tuple[Context, StreamReader | Buffer]:
         """Wait for the producer to send data and return `(context, data)`.
 

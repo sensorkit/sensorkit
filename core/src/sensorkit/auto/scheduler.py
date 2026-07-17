@@ -78,7 +78,7 @@ class Scheduler:
         *,
         offers_dict: dict[str, IntervalTree],
         enabled_programs: set[str],
-        mode_context: dict[str, Any] = None
+        mode_context: dict[str, Any] | None = None
     ):
         """Updates the schedule."""
         mode_context = mode_context.copy() if mode_context else {}

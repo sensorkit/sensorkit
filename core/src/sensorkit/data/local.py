@@ -22,7 +22,7 @@ class AppSource(SourceOp):
 
     def produce(
         self,
-        context: Context = None,
+        context: Context | None = None,
         obj: Buffer | StreamReader | None = None,
     ) -> StreamWriter | None:
         """Enqueue a graph run.

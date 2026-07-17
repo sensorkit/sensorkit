@@ -35,7 +35,7 @@ def clear_timezone_cache():
     _timezones.cache_clear()
 
 
-def get_tzinfo(name: str | None, offset: int = None):
+def get_tzinfo(name: str | None, offset: int | None = None):
     """Resolve a timezone name and optional UTC offset (in seconds) to a `tzinfo` object.
 
     Returns the local timezone when both arguments are absent. Raises `TimeRangeError` for
@@ -103,7 +103,7 @@ def parse_spec(
     spec: str,
     range_min: datetime,
     range_max: datetime,
-    symbol_handlers: dict[str, SymbolParseHandler] = None,
+    symbol_handlers: dict[str, SymbolParseHandler] | None = None,
     latest_match: bool = False,
 ) -> datetime:
     """Resolve a time spec string to a `datetime` within a one-day window.
@@ -152,8 +152,8 @@ def parse_spec(
 def parse_time_range(
     start_spec: str,
     end_spec: str,
-    time_ref: datetime = None,
-    symbol_handlers: dict[str, SymbolParseHandler] = None,
+    time_ref: datetime | None = None,
+    symbol_handlers: dict[str, SymbolParseHandler] | None = None,
 ):
     """Parse a start and end spec into a `(start_dt, end_dt)` tuple relative to `time_ref`.
 

@@ -268,7 +268,7 @@ class ProgramStateManager:
         self.on_change = AsyncObserver[str | None](None)
         self._controller: dict[str, list[str]] = {}
 
-    def assign_controller(self, program: str, controller: str = None):
+    def assign_controller(self, program: str, controller: str | None = None):
         """Register a controller as a candidate for a program."""
         if program not in self._controller:
             self._controller[program] = []

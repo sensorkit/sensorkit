@@ -457,7 +457,7 @@ class Request[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None]:
     def create_handler(
         self,
         func: HandlerFunc[P, R] | ExtendedHandlerFunc[P, R, V],
-        stream: StreamContext = None,
+        stream: StreamContext | None = None,
     ) -> CallHandler[P, R]:
         """Construct the appropriate CallHandler or ExtendedCallHandler for this request."""
         if self.is_extended():
@@ -471,7 +471,7 @@ class Request[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None]:
         cls,
         name: str,
         *,
-        payload: type[P] = None,
+        payload: type[P] | None = None,
         response: type[R],
     ) -> Request[P, R, None]:
         """Define a long-running request that uses the entity event stream to track progress."""
@@ -482,7 +482,7 @@ class Request[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None]:
         cls,
         name: str,
         *,
-        payload: type[P] = None,
+        payload: type[P] | None = None,
         response: type[R] = ExtendedResponse,
         result: type[V],
     ) -> Request[P, R, V]:
@@ -494,8 +494,8 @@ class Request[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None]:
         cls,
         name: str,
         *,
-        payload: type[P] = None,
-        response: type[R] = None,
+        payload: type[P] | None = None,
+        response: type[R] | None = None,
     ) -> Request[P, R, R]:
         """Define a simple request that requires an immediate response."""
 
