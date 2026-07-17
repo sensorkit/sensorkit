@@ -3,13 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import io
-import json
 import os
-import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any, Dict, List
 
 import httpx
@@ -21,9 +17,8 @@ from unifieddatalibrary.types import CollectRequestFull
 
 import sensorkit.api as sk
 from sensorkit.astro.common import TLE, SitePosition
-from sensorkit.astro.coords import Equatorial, Cartesian, StateVector
+from sensorkit.astro.coords import Cartesian, Equatorial, StateVector
 from sensorkit.astro.target import ICRSTarget, StateVectorTarget, Target, TLETarget
-from sensorkit.data.filesys import FileInfo
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 from sensorkit.udl.models import (
     ResponseStatus,
@@ -31,12 +26,12 @@ from sensorkit.udl.models import (
     UDLEndpointConfig,
     UDLReferenceFrame,
 )
+from sensorkit.udl.publishers import (
+    EOObservationPublisher,
+    SkyImageryPublisher,
+    _udl_ts,
+)
 from sensorkit.udl.task_queue import TaskQueue
-
-
-def _udl_ts(dt: datetime) -> str:
-    """Format a datetime as UDL expects: ISO 8601 UTC with trailing 'Z' (no offset)."""
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 class UDLState(BaseModel):
@@ -69,12 +64,13 @@ class UDLProgram:
     This program:
     - Polls UDL for CollectRequests assigned to our sensor
     - Converts CollectRequests to StandardCollectTasks
-    - Publishes imagery back to UDL as SkyImagery
+    - Delivers data products per the publish config: SkyImagery frame uploads
+      and/or EOObservations built from senpai detections (see publishers.py)
 
     CollectResponse lifecycle for a request: ACCEPTED on receipt, then COLLECTED
-    once the collect task finishes executing, then COMPLETED once the imagery set
-    has been delivered to UDL. REJECTED (unusable/expired request), CANCELLED, or
-    FAILED replace the success path as appropriate.
+    once the collect task finishes executing, then COMPLETED once the frame set
+    has been delivered (see _finalize_set). REJECTED (unusable/expired request),
+    CANCELLED, or FAILED replace the success path as appropriate.
 
     Supports both username/password and cert-based authentication. The base_url
     can be pointed at UDL itself or any UDL-compliant endpoint.
@@ -112,6 +108,13 @@ class UDLProgram:
         # Background tasks
         self._poller: asyncio.Task | None = None
         self._publisher: asyncio.Task | None = None
+
+        # Data publishers (created in program_init per config.publish)
+        self._imagery: SkyImageryPublisher | None = None
+        self._eo: EOObservationPublisher | None = None
+
+        # Frames consumed from the data graph (feeds the EO watchdog)
+        self.frames_seen = 0
 
         # Site location (populated from controller)
         self._site: SitePosition | None = None
@@ -279,11 +282,26 @@ class UDLProgram:
             except Exception as e:
                 logger.warning(f"Failed to restore task: {e}")
 
+        await self._init_publishers()
+
         # Start background poller
         self._poller = asyncio.create_task(self._poll_loop())
 
-        # Start imagery publisher
+        # Start frame publisher (feeds the data publishers from the graph sink)
         self._publisher = asyncio.create_task(self._publish_loop())
+
+    async def _init_publishers(self) -> None:
+        """Create the data publishers enabled by the publish config."""
+        if self.config.publish.upload:
+            if self.config.publish.sky_imagery:
+                self._imagery = SkyImageryPublisher(self)
+            if self.config.publish.eo_observation:
+                self._eo = EOObservationPublisher(self)
+
+        if self._eo:
+            for request in self.tasks.values():
+                self._eo.note_request(request)
+            await self._eo.start()
 
     @sk.on_detach
     async def program_deinit(self) -> None:
@@ -296,6 +314,11 @@ class UDLProgram:
 
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+
+        if self._eo:
+            await self._eo.close()
+        if self._imagery:
+            await self._imagery.close()
 
         await self._save_state()
 
@@ -356,6 +379,8 @@ class UDLProgram:
         logger.debug(f"received CollectRequest {request.id}")
 
         self.tasks[request.id] = request
+        if self._eo:
+            self._eo.note_request(request)
         await self.queue.push_task(request)
 
         await self._send_response(request, ResponseStatus.ACCEPTED)
@@ -408,12 +433,12 @@ class UDLProgram:
         sink = graph.app_sink()
         async for context, data in sink.consume():
             try:
-                await self._publish_imagery(context, data)
+                await self._handle_frame(context, data)
             except Exception as e:
                 logger.warning(f"Error in publish loop: {e}")
 
-    async def _publish_imagery(self, context: dict, data: bytes) -> None:
-        """Build and upload SkyImagery for a completed frame."""
+    async def _handle_frame(self, context: dict, data: bytes) -> None:
+        """Track set progress for a collected frame and hand it to the publishers."""
         task_id: str | None = context.get("task_id")
         if not task_id:
             return
@@ -423,218 +448,58 @@ class UDLProgram:
             logger.warning(f"No CollectRequest found for task_id {task_id}")
             return
 
-        # Extract context values
-        info = context.get(FileInfo)
-        filename = info.path.name if info else f"{request.id}_{context.get('frame_num', 0)}.fits"
-
-        date_obs = context.get("date_obs")
-        exp_start_time = datetime.fromisoformat(date_obs) if date_obs else datetime.now(UTC)
-
-        exposure_time = context.get("exptime")
-        exp_end_time = (
-            exp_start_time + timedelta(seconds=float(exposure_time))
-            if exposure_time is not None
-            else exp_start_time
-        )
-
-        # sequenceId must be >= 1 (UDL requirement)
-        frame_num = context.get("frame_num", 0)
-        sequence_id = frame_num + 1
-
+        self.frames_seen += 1
         image_set_length = request.num_frames or 1
-
-        # Build SkyImagery metadata
-        metadata = {
-            "classificationMarking": request.classification_marking,
-            "idSensor": self.config.api.id_sensor,
-            "satNo": request.sat_no,
-            "expStartTime": _udl_ts(exp_start_time),
-            "expEndTime": _udl_ts(exp_end_time),
-            "imageSetLength": image_set_length,
-            "sequenceId": sequence_id,
-            "frameWidthPixels": context.get("image_width"),
-            "frameHeightPixels": context.get("image_height"),
-            "pixelBitDepth": context.get("bits_per_pixel"),
-            "filename": filename,
-            "filesize": len(data),
-            "source": self.config.api.source,
-            "origin": request.origin,
-            "dataMode": request.data_mode or "TEST",
-            "imageType": context.get("image_type") or self.config.image_type,
-        }
-
-        # imageSetId groups multiple frames of one collect into a set. Per UDL:
-        # a single-image set doesn't need an imageSetId, so only emit it when
-        # the set has more than one frame.
-        if image_set_length > 1:
-            metadata["imageSetId"] = request.id
-
-        if self._site:
-            metadata["senlat"] = self._site.latitude_degrees
-            metadata["senlon"] = self._site.longitude_degrees
-            metadata["senalt"] = self._site.altitude_km
-        else:
-            logger.warning(
-                f"Task ({request.id}): publishing SkyImagery without sensor location "
-                f"(no SitePosition from controller {self.config.controller})"
-            )
-
-        # Remove None values
-        metadata = {k: v for k, v in metadata.items() if v is not None}
-
-        metadata_bytes = json.dumps(metadata).encode()
-        metadata_fname = f"{Path(filename).stem}_skyimagery.json"
-
-        # Save locally if configured
-        if self.config.skyimagery_save_path:
-            await asyncio.to_thread(
-                self._save_archive_locally_sync,
-                request.id,
-                filename,
-                data,
-                metadata_fname,
-                metadata_bytes,
-            )
-
-        # Create ZIP in memory and upload
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(metadata_fname, metadata_bytes)
-            zf.writestr(filename, data)
-        zip_buffer.seek(0)
-
         progress = self._publish_progress.setdefault(request.id, _PublishProgress())
         progress.attempted += 1
-        try:
-            await self._upload_skyimagery_zip(zip_buffer.getvalue())
-            progress.uploaded += 1
-            logger.debug(
-                f"task ({request.id}) uploaded skyimagery "
-                f"({sequence_id}/{image_set_length})"
-            )
-        except Exception as e:
-            logger.warning(f"Task ({request.id}) failed to upload skyimagery: {e}")
 
-        # Once every frame in the set has been attempted, the collect's imagery
-        # delivery is finished. Report COMPLETED if at least one frame reached
-        # UDL — a partially-delivered set is still "completed" enough to ack, so
-        # per-frame upload failures (including the final frame) are tolerated.
-        # The window guard scopes COMPLETED to tasks that collected successfully
-        # (the factory only stashes a window on the success path).
-        if progress.attempted >= image_set_length:
-            self._publish_progress.pop(request.id, None)
-            if progress.uploaded > 0 and progress.window is not None:
-                start_time, end_time = progress.window
-                await self._send_response(
-                    request,
-                    ResponseStatus.COMPLETED,
-                    actual_start_time=start_time,
-                    actual_end_time=end_time,
-                )
-                logger.info(
-                    f"task ({request.id}): sent COMPLETED "
-                    f"({progress.uploaded}/{image_set_length} frames delivered)"
-                )
-            elif progress.uploaded == 0:
-                logger.warning(
-                    f"task ({request.id}): all {image_set_length} frame uploads "
-                    f"failed; COMPLETED not sent"
-                )
+        if self._imagery:
+            try:
+                await self._imagery.publish(context, data, request)
+                progress.uploaded += 1
+            except Exception as e:
+                logger.warning(f"Task ({request.id}) failed to upload skyimagery: {e}")
 
-    def _save_archive_locally_sync(
-        self,
-        task_id: str,
-        data_fname: str,
-        data: bytes,
-        metadata_fname: str,
-        metadata_bytes: bytes,
+        await self._finalize_set(request, progress, image_set_length)
+
+    async def _finalize_set(
+        self, request: CollectRequestFull, progress: _PublishProgress, image_set_length: int
     ) -> None:
-        """Save imagery archive to local filesystem."""
-        try:
-            save_path = Path(self.config.skyimagery_save_path)
-            save_path.mkdir(parents=True, exist_ok=True)
-            zip_path = save_path / f"{Path(data_fname).stem}.zip"
+        """Send COMPLETED once every frame in the set has been seen.
 
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr(data_fname, data)
-                zf.writestr(metadata_fname, metadata_bytes)
-
-            logger.debug(f"task ({task_id}) saved archive to {zip_path}")
-        except Exception as e:
-            logger.warning(f"Task ({task_id}) failed to save archive locally: {e}")
-
-    def _imagery_filedrop_url(self) -> str | None:
-        """Resolve the SkyImagery filedrop URL.
-
-        UDL serves the imagery filedrop on a dedicated subdomain. The SDK's
-        sky_imagery.upload_zip() only targets it correctly for the production
-        default; when base_url is overridden (e.g. the test environment) it
-        POSTs to '{base_url}/filedrop/udl-skyimagery', which 404s. We therefore
-        derive the correct host and POST the ZIP ourselves.
-
-        Returns None for hosts we don't recognise (custom UDL-compliant
-        endpoints), signalling the caller to fall back to the SDK's upload_zip().
+        With imagery publishing enabled, at least one frame must have reached
+        UDL — a partially-delivered set is still "completed" enough to ack, so
+        per-frame upload failures (including the final frame) are tolerated.
+        Without it, seeing the full set is completion. The window guard scopes
+        COMPLETED to tasks that collected successfully (the factory only
+        stashes a window on the success path). EO posting never gates
+        COMPLETED: SENPAI results arrive minutes later and are best-effort.
         """
-        base = self._upload_endpoint().base_url
-        if not base:
-            # SDK default → production UDL
-            return "https://imagery.unifieddatalibrary.com/filedrop/udl-skyimagery"
-
-        host = base.rstrip("/").split("://", 1)[-1]
-        if host == "test.unifieddatalibrary.com":
-            return "https://imagery-test.unifieddatalibrary.com/filedrop/udl-skyimagery"
-        if host == "unifieddatalibrary.com":
-            return "https://imagery.unifieddatalibrary.com/filedrop/udl-skyimagery"
-        return None
-
-    def _upload_endpoint(self) -> UDLEndpointConfig:
-        """Effective endpoint settings for SkyImagery uploads.
-
-        The separate upload endpoint when configured, the primary otherwise.
-        """
-        return self.config.api.upload or self.config.api
-
-    async def _upload_skyimagery_zip(self, zip_bytes: bytes) -> None:
-        """Upload a SkyImagery ZIP to the UDL imagery filedrop.
-
-        POSTs the raw ZIP as application/zip with Basic auth (or client cert)
-        to the imagery subdomain — the approach proven against the live UDL
-        filedrop. Falls back to the SDK when the filedrop host can't be derived
-        (a custom base_url).
-        """
-        endpoint = self._upload_endpoint()
-
-        url = self._imagery_filedrop_url()
-        if url is None:
-            # The UDL filedrop contract is "a zip is all that's required" — no
-            # multipart filename. We rely on that, and our integration tests
-            # assert UDL-compliant endpoints keep parity by accepting the same
-            # payload.
-            await self.upload_client.sky_imagery.upload_zip(
-                file=zip_bytes,
-                timeout=endpoint.upload_timeout,
-                extra_headers=self._upload_headers,
-            )
+        if progress.attempted < image_set_length:
             return
 
-        if endpoint.use_certs:
-            client_kwargs = {
-                "cert": (endpoint.client_cert, endpoint.client_key),
-                "verify": endpoint.client_verify,
-            }
-        else:
-            client_kwargs = {"auth": (self._upload_username, self._upload_password)}
+        self._publish_progress.pop(request.id, None)
+        delivered = self._imagery is None or progress.uploaded > 0
 
-        async with httpx.AsyncClient(timeout=endpoint.upload_timeout, **client_kwargs) as http:
-            resp = await http.post(
-                url,
-                content=zip_bytes,
-                headers={"Content-Type": "application/zip"},
+        if delivered and progress.window is not None:
+            start_time, end_time = progress.window
+            await self._send_response(
+                request,
+                ResponseStatus.COMPLETED,
+                actual_start_time=start_time,
+                actual_end_time=end_time,
             )
-            if resp.status_code >= 300:
-                raise RuntimeError(
-                    f"SkyImagery upload to {url} failed: HTTP {resp.status_code} {resp.text}"
-                )
+            detail = (
+                f"{progress.uploaded}/{image_set_length} frames delivered"
+                if self._imagery
+                else f"all {image_set_length} frames seen; imagery publishing disabled"
+            )
+            logger.info(f"task ({request.id}): sent COMPLETED ({detail})")
+        elif self._imagery and progress.uploaded == 0:
+            logger.warning(
+                f"task ({request.id}): all {image_set_length} frame uploads "
+                f"failed; COMPLETED not sent"
+            )
 
     # ── Task generation ──
 

@@ -112,22 +112,74 @@ class UDLAPIConfig(UDLEndpointConfig):
     source: str = Field(description="Data source identifier (e.g. 'DAO')")
 
 
-class UDLConfig(BaseModel):
-    """Main configuration for UDL program."""
-    controller: str
-    api: UDLAPIConfig
-    poll_frequency: float = Field(default=10.0, description="Polling interval in seconds")
-    end_time_deadband_s: float = Field(default=0.0, description="Deadband added to task end times")
-    skyimagery_save_path: str | None = Field(
-        default=None,
-        description="Path to save skyimagery archives locally before upload"
-    )
+class SkyImageryPublishConfig(BaseModel):
+    """SkyImagery delivery settings; presence of the block enables the publisher."""
     image_type: str = Field(
         default="FITS",
         description=(
             "Default SkyImagery imageType (e.g. FITS, EOSSA, EOCHIP, MP4). "
             "Per-frame override is honored if the data graph context provides 'image_type'."
         ),
+    )
+    save_path: str | None = Field(
+        default=None,
+        description="Path to save skyimagery archives locally before upload"
+    )
+
+
+class EOObservationPublishConfig(BaseModel):
+    """EOObservation delivery settings; presence of the block enables the publisher.
+
+    Detections come from the senpai module's published SenpaiResults; only
+    frames correlated to a CollectRequest produce records. Detection-quality
+    thresholds live in SENPAI's own engine config, not here.
+    """
+    sequence_only: bool = Field(
+        default=True,
+        description=(
+            "Only post detections from sequence-derived SenpaiResults "
+            "(multi-frame SENPAI processing with sidereal-anchored WCS). "
+            "False also posts per-frame results."
+        ),
+    )
+    mag_bands: list[str] = Field(
+        default_factory=lambda: ["G"],
+        description=(
+            "Calibrated-magnitude band priority; the first band present in a "
+            "detection's calibrated_magnitudes populates mag/magUnc."
+        ),
+    )
+    save_path: str | None = Field(
+        default=None,
+        description="Path to save posted EOObservation JSON locally"
+    )
+
+
+class PublishConfig(BaseModel):
+    """Data delivery configuration: which UDL record types to publish."""
+    upload: bool = Field(
+        default=True,
+        description="Master switch; False disables all data delivery without removing the blocks.",
+    )
+    sky_imagery: SkyImageryPublishConfig | None = Field(
+        default=None,
+        description="SkyImagery upload of collected frames. Absent ⇒ disabled.",
+    )
+    eo_observation: EOObservationPublishConfig | None = Field(
+        default=None,
+        description="EOObservation posting of senpai detections. Absent ⇒ disabled.",
+    )
+
+
+class UDLConfig(BaseModel):
+    """Main configuration for UDL program."""
+    controller: str
+    api: UDLAPIConfig
+    poll_frequency: float = Field(default=10.0, description="Polling interval in seconds")
+    end_time_deadband_s: float = Field(default=0.0, description="Deadband added to task end times")
+    publish: PublishConfig = Field(
+        default_factory=PublishConfig,
+        description="Data delivery: sky_imagery and/or eo_observation blocks.",
     )
 
 

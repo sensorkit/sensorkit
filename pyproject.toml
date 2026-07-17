@@ -173,6 +173,11 @@ exclude_type_checking_imports = true
 [[tool.importlinter.contracts]]
 name = "SensorKit layers are intact"
 type = "layers"
+# The udl EO publisher consumes senpai's published SenpaiResult keyword; the
+# models module is pydantic-only (no astro-senpai import).
+ignore_imports = [
+    "sensorkit.udl.publishers -> sensorkit.senpai.models",
+]
 layers = [
     """
     sensorkit.alpaca |

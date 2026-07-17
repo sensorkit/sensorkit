@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-from sensorkit.udl.models import ResponseStatus, UDLAPIConfig, UDLConfig, UDLReferenceFrame
+from sensorkit.udl.models import (
+    EOObservationPublishConfig,
+    PublishConfig,
+    ResponseStatus,
+    SkyImageryPublishConfig,
+    UDLAPIConfig,
+    UDLConfig,
+    UDLReferenceFrame,
+)
 
 
 class TestResponseStatus:
@@ -82,7 +90,26 @@ class TestUDLConfig:
         )
         assert config.poll_frequency == 10.0
         assert config.end_time_deadband_s == 0.0
-        assert config.skyimagery_save_path is None
+        # Publishers are opt-in: with no blocks, nothing is delivered.
+        assert config.publish.upload is True
+        assert config.publish.sky_imagery is None
+        assert config.publish.eo_observation is None
+
+
+class TestPublishConfig:
+    def test_sky_imagery_block_defaults(self):
+        config = PublishConfig(sky_imagery=SkyImageryPublishConfig())
+        assert config.sky_imagery.image_type == "FITS"
+        assert config.sky_imagery.save_path is None
+
+    def test_eo_observation_block_defaults(self):
+        config = PublishConfig(eo_observation=EOObservationPublishConfig())
+        assert config.eo_observation.sequence_only is True
+        assert config.eo_observation.mag_bands == ["G"]
+        assert config.eo_observation.save_path is None
+
+    def test_master_switch_default_on(self):
+        assert PublishConfig().upload is True
 
 
 class TestPollFilterConfig:

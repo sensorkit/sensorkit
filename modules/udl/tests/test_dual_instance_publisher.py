@@ -27,8 +27,15 @@ from unifieddatalibrary.types import CollectRequestFull
 from sensorkit.astro.common import SitePosition
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileInfo
-from sensorkit.udl.models import UDLAPIConfig, UDLConfig, UDLEndpointConfig
+from sensorkit.udl.models import (
+    PublishConfig,
+    SkyImageryPublishConfig,
+    UDLAPIConfig,
+    UDLConfig,
+    UDLEndpointConfig,
+)
 from sensorkit.udl.program import UDLProgram
+from sensorkit.udl.publishers import SkyImageryPublisher
 
 UDL_A_BASE_URL = os.getenv("UDL_A_BASE_URL", "http://localhost:30080")
 UDL_B_BASE_URL = os.getenv("UDL_B_BASE_URL", "http://localhost:31080")
@@ -190,6 +197,7 @@ def make_program(
                 else None
             ),
         ),
+        publish=PublishConfig(sky_imagery=SkyImageryPublishConfig()),
     )
     program.client = AsyncUnifieddatalibrary(
         username="test",
@@ -220,6 +228,7 @@ def make_program(
     program.tasks = {collect_request.id: collect_request}
     program.program = binding  # _publish_loop only needs data_graph()
     program.queue = _StubQueue()
+    program._imagery = SkyImageryPublisher(program)
     return program
 
 
