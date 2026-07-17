@@ -415,9 +415,6 @@ class AlpacaCamera(AlpacaDevice):
         except Exception:
             pass  # Camera doesn't support this endpoint — defaults remain None
 
-        if not context.get("file_name", None):
-            context["file_name"] = f"{uuid.uuid1()}.fits"
-
         if not context.get(FileNameTemplate):
             context.set(FileNameTemplate(template=f"{uuid.uuid1()}.fits"))
 

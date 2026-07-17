@@ -13,6 +13,7 @@ from conftest import make_data_graph_writer
 
 from sensorkit.astro.common import RADecPointing
 from sensorkit.data.context import Context
+from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ImageInfo
 from sensorkit.models.devices import AxisRate, AxisRates, MountAxis
 from sensorkit.sdasim.camera import DeviceConnectionError, SdasimCamera, SdasimCameraConfig
@@ -191,7 +192,7 @@ class TestCapture:
         exposure_info = context.get(ExposureInfo)
         assert exposure_info.exposure_time == 0.0
         assert exposure_info.image_type is FrameType.LIGHT
-        assert context.get("file_name")
+        assert context.get(FileNameTemplate)
 
     @pytest.mark.asyncio
     async def test_capture_requires_connected(self, mock_sk_device):

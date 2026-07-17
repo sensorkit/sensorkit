@@ -15,6 +15,7 @@ from pydantic import BaseModel
 import sensorkit.api as sk
 from sensorkit.astro.common import RADecPointing
 from sensorkit.data.context import ContextSubscription
+from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ArrayInfo, ImageInfo
 from sensorkit.models.devices import AxisRates, Stop
 from sensorkit.sdasim.engine import SdasimEngine
@@ -319,8 +320,8 @@ class SdasimCamera:
             ),
         )
 
-        if not context.get("file_name", None):
-            context["file_name"] = f"{uuid.uuid1()}.fits"
+        if not context.get(FileNameTemplate):
+            context.set(FileNameTemplate(template=f"{uuid.uuid1()}.fits"))
 
         if graph := await sk.device().data_graph():
             source = graph.app_source()
