@@ -1,0 +1,525 @@
+version: 1
+
+sensorkit:
+  imports:
+    - sensorkit.pwi4.service
+    - sensorkit.thesky.service
+    - sensorkit.std.sensor
+    - sensorkit.burr.program
+    - sensorkit.otto.program
+    - sensorkit.udl.service
+    - sensorkit.auto.agent
+    - sensorkit.senpai.service
+    - sensorkit.slack.service
+    - sensorkit.sky_transmission.service
+    - sensorkit.webapi
+
+automation:
+  first_run:
+    operate_all: true
+    enable_scheduling: true
+
+  controllers:
+    FTN-YDR:
+      estimated_startup_time: 60
+
+      modes:
+        # Normal night operating mode.
+        - name: default
+          description: Night operations
+          state: operate
+          criteria:
+            - when: time_range
+              start: sunset + 30m
+              end: sunrise - 30m
+        # Keep the dome open and the mount at its current pointing even if no tasking is available.
+        - name: keepalive
+          description: Keep alive between tasks
+          state: operate
+          criteria:
+            - when: after_activity
+              duration: 15m
+            - when: time_range
+              start: sunset + 30m
+              end: sunrise - 30m
+        # Enter standby (e.g. park mount, close dome) if no tasking_available after after_activity duration.
+        - name: idle
+          description: Idle standby
+          state: standby
+          criteria:
+            - when: time_range
+              start: sunset + 30m
+              end: sunrise - 30m
+
+
+      constraints:
+        # AAGSolo.
+        - kind: conditional
+          entity: AAGSolo
+          keyword: BasicSafety
+          field: is_safe
+          condition:
+            kind: equals
+            threshold: false
+          ttl: 90
+          hold: 900
+        # OMEA.
+        - kind: conditional
+          entity: OMEA
+          keyword: SkyTransmission
+          field: clear_fraction
+          condition:
+            kind: below
+            threshold: 0.7
+          optional: true
+          ttl: 120
+
+      tasking:
+        - program: Burr
+          priority: 10
+          contexts:
+            all:
+              program_name: burr
+        - program: Otto
+          priority: 9
+          contexts:
+            all:
+              program_name: otto
+        - program: UDL
+          priority: 1
+          contexts:
+            all:
+              program_name: udl
+
+  contexts:
+    all:
+      controller_name: FTN-YDR
+    standard_collect:
+      FileNameTemplate:
+        template: f"{task_id}_{frame_num}.fits"
+
+data_flow:
+  - entity: Apx60
+    producer:
+      simple:
+        - op: app_source
+        - op: array_to_fits
+          header:
+            TASKID: =task_id
+            TARGETID: =target_id
+            SKCTRL:
+              value: =controller_name
+              comment: SensorKit controller ID
+            SITELAT:
+              value: =latitude
+              comment: geographic latitude [+/-] of the observation
+            SITELONG:
+              value: =longitude
+              comment: geographic longitude [+/-] of the observation
+            SITEELEV:
+              value: =elevation
+              comment: geographic elevation [km] of the observation
+            ALT:
+              value: =alt
+              comment: measured altitude [deg]
+            ALT_RATE:
+              value: =alt_rate/3600
+              comment: measured altitude rate [deg/s]
+            AZ:
+              value: =az
+              comment: measured azimuth [deg]
+            AZ_RATE:
+              value: =az_rate/3600
+              comment: measured azimuth rate [deg/s]
+            RA:
+              value: =ra
+              comment: measured right ascension [deg]
+            RA_RATE:
+              value: =ra_rate/3600
+              comment: measured right ascension rate [deg/s]
+            DEC:
+              value: =dec
+              comment: measured declination [deg]
+            DEC_RATE:
+              value: =dec_rate/3600
+              comment: measured declination rate [deg/s]
+            DATE-OBS:
+              value: =date_obs
+              comment: date of the observation
+            TRKMODE:
+              value: =track_mode
+              comment: track mode [RATE, SIDEREAL, FIXED]
+            INSTRUME:
+              value: =instrume
+              comment: name of instrument
+            FILTER:
+              value: =filter_name
+              comment: name of filter used during the observation
+            CCDTEMP:
+              value: =ccdtemp
+              comment: sensor temperature [C]
+            READOUTM:
+              value: =readoutm
+              comment: sensor readout mode
+            EXPTIME:
+              value: =exptime
+              comment: exposure time [s]
+            XBINNING:
+              value: =xbinning
+              comment: detector X binning value
+            YBINNING:
+              value: =ybinning
+              comment: detector Y binning value
+            FRAMENUM:
+              value: =frame_num
+              comment: frame number out of FRAMECNT
+            FRAMECNT:
+              value: =frame_count
+              comment: total requested frame count
+        - op: write_file
+          directory: f"C:/sk/data/raw/{program_name}/{controller_name}"
+  - entity: SENPAI
+    consumer:
+      nodes:
+        source:
+          op: watch_directory
+          directory: C:/sk/data/raw
+          match: "*.fits"
+          recursive: true
+          output: [read_fits_file]
+        read_fits_file:
+          op: read_file
+          output: [read_context]
+        read_context:
+          op: context_from_fits
+          keyword_map:
+            task_id: TASKID
+            frame_num: FRAMENUM
+            frame_count: FRAMECNT
+            exptime: EXPTIME
+          output: [sink]
+        sink:
+          op: app_sink
+
+sensors:
+  - id: FTN-YDR
+
+    devices:
+      dome: AstroHaven
+      mirror_cover: TheSkyOTA
+      mount: L-500
+      rotator: PWI4Rotator
+      focuser: PWI4Focuser
+      filter_wheel: TheSkyFilterWheel
+      camera: Apx60
+
+    site_position:
+      latitude_degrees: 38.8872
+      longitude_degrees: -104.201333
+      altitude_km: 1.948
+
+    policies:
+      concurrent_dome_and_mount_init: false
+      concurrent_dome_and_mount_deinit: true
+      dome_open_close_timeout: 120
+      concurrent_mount_and_mirror_cover_init: false
+      concurrent_mount_and_mirror_cover_deinit: true
+      mirror_cover_open_close_timeout: 60
+      mount_init_timeout: 60
+      mount_home_timeout: 60
+
+    controller_name: ""
+
+burr:
+  - id: Burr
+    controller: FTN-YDR
+    schedule:
+      twilight_flats:
+        collect: true
+        windows:
+          - nautical_twilight
+        n_frames: 50
+        minimum_exposure_seconds: 0.1
+        long_exposure_threshold: 1.0
+        min_counts: 40000
+        max_counts: 50000
+        max_saturation_percentage: 1.0
+        saturation_threshold: null
+        scheduling:
+          type: one_shot
+      lunar_background:
+        collect: true
+        windows:
+          - night
+        minimum_moon_altitude_degrees: 40
+        maximum_moon_altitude_degrees: 85
+        minimum_moon_phase: 0.2
+        moon_separation_degrees: [1.0, 2.0, 4.0, 8.0]
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 5
+        n_exposures: 3
+        scheduling:
+          type: one_shot
+      calsats:
+        collect: true
+        windows:
+          - astronomical_twilight
+          - night
+        minimum_altitude_degrees: 20
+        maximum_altitude_degrees: 85
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 5
+        scheduling:
+          type: interval
+          minimum_interval_minutes: 3
+          fill_gaps: true
+        tle_provider: spacebook
+      photometric_standards:
+        collect: true
+        windows:
+          - night
+        minimum_altitude_degrees: 20
+        maximum_altitude_degrees: 85
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 10
+        n_exposures: 5
+        scheduling:
+          type: time_share
+          target_percentage: 10
+      streaks:
+        collect: true
+        streaks_per_collect: 2
+        minimum_length_pixel: 10
+        maximum_length_pixel: 100
+        minimum_orientation_deg: 0
+        maximum_orientation_deg: 180
+      coverage:
+        collect: true
+        windows:
+          - astronomical_twilight
+          - night
+        minimum_altitude_degrees: 20
+        maximum_altitude_degrees: 85
+        min_separation_degrees: 10
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 10
+        n_exposures: 5
+        points_per_map: 12
+        enable_plotting: true
+        scheduling:
+          type: time_share
+          target_percentage: 20
+    plotting:
+      debug: false
+      review: true
+    runtime:
+      output_dir: "C:/sk/data/processed/burr/"
+
+otto:
+  - id: Otto
+    controller: FTN-YDR
+    task:
+      objects: [ "12345" ]
+      tle_update_interval_hours: 4
+      graylist_interval_minutes: 15
+      end_time_deadband_seconds: 300
+    collect:
+      altitude_min: 20
+      track_mode: rate_sidereal
+      dither: false
+      dither_amount_arcsec: 500
+      filters: [ ]
+      exposure_min: 4
+      exposure_max: 5
+      exposure_delta: 1
+      binning: [ 2 ]
+      num_frames: 3
+    publish:
+      upload: false
+      sensor_name: "FTN-YDR"
+
+udl:
+  - id: UDL
+    controller: FTN-YDR
+    api:
+      # UDL (username/password auth via .env file)
+      base_url: https://test.unifieddatalibrary.com
+      # e.g. MACHINA (cert-based auth)
+      # base_url: https://api.sensor.machina.net/machina
+      # use_certs: true
+      # client_cert: /path/to/client.pem
+      # client_key: /path/to/client-key.pem
+      # client_verify: true
+      id_sensor: DAO-01
+      source: DAO
+      timeout: 60
+      env_file: C:/sk/.env
+    poll_frequency: 10
+    end_time_deadband_s: 120
+
+thesky:
+  - id: thesky_service
+    endpoints:
+      - host: host.docker.internal
+        port: 3040
+        devices:
+          AAGSolo:
+            device_type: weather
+            status_frequency: 30
+            timeout: 90
+          AstroHaven:
+            device_type: dome
+            status_frequency: 5
+            timeout: 120
+          TheSkyOTA:
+            device_type: ota
+            status_frequency: 5
+            timeout: 60
+          TheSkyFilterWheel:
+            device_type: filter_wheel
+            filters:
+              Open: 0
+              B: 1
+              V: 2
+              R: 3
+              I: 4
+              PRH: 5
+              PLH: 6
+              TG100: 7
+              TG200: 8
+              Dark: 9
+              g': 10
+              r': 11
+              i': 12
+              z': 13
+              P000: 14
+              P090: 15
+              P045: 16
+              P135: 17
+              P000-TG100: 18
+              P090-TG100: 19
+              P045-TG100: 20
+              P135-TG100: 21
+              P000-TG200: 22
+              P090-TG200: 23
+              P045-TG200: 24
+              P135-TG200: 25
+              g'-TG100: 26
+              r'-TG100: 27
+              i'-TG100: 28
+              z'-TG100: 29
+              g'-TG200: 30
+              r'-TG200: 31
+              i'-TG200: 32
+              z'-TG200: 33
+            status_frequency: 5
+            timeout: 30
+          Apx60:
+            device_type: camera
+            temperature: -10
+            status_frequency: 1
+            timeout: 60
+
+pwi4:
+  - id: pwi4_service
+    endpoints:
+    - host: host.docker.internal
+      port: 8220
+      devices:
+        PWI4Mount:
+          device_type: mount
+          wrap_autocenter: true
+          wrap_interval: 60
+          wrap_deadband_deg: 10
+          fans: ["m1rear", "m1side"]
+          heaters:
+            m1: 0
+            m2: 0
+          status_frequency_slow: 1.0
+          status_frequency_fast: 0.1
+          timeout: 180
+        PWI4Focuser:
+          device_type: focuser
+          status_frequency: 1
+          timeout: 60
+        PWI4Rotator:
+          device_type: rotator
+          status_frequency: 1
+          timeout: 60
+
+slack:
+  id: slack
+  env_file: C:/sk/.env
+  channels:
+    alerts:
+      channel: "#alerts-ftn-ydr"
+      severity: [critical, warning]
+    log:
+      channel: "#log-ftn-ydr"
+      severity: [info]
+    summary:
+      channel: "#daily-summary-ftn-ydr"
+      post_at: "08:00"
+      timezone: "US/Denver"
+  rules:
+    - name: dome_close_failed
+      severity: critical
+      events: [CommandDone]
+      entities: [AstroHaven]
+      filters:
+        success: false
+        command_id: CloseEnclosure
+
+    - name: constraint_set
+      severity: warning
+      state_watches:
+        - keyword: ConstraintStatus
+          field: active
+          condition: {kind: becomes, threshold: true}
+      message_template: "Constraint set on `{entity}`: {reason} ({constraint_kind} from {provider})"
+
+    - name: constraint_cleared
+      severity: info
+      state_watches:
+        - keyword: ConstraintStatus
+          field: active
+          condition: {kind: becomes, threshold: false}
+      message_template: "Constraint cleared on `{entity}`: {reason} ({constraint_kind} from {provider})"
+
+senpai:
+  id: SENPAI
+  senpai_config: C:/sk/senpai_FTN-YDR.yaml
+  senpai_output_dir: C:/sk/data/processed/senpai
+
+sky_transmission:
+  - id: OMEA
+    controllers:
+      - FTN-YDR
+    acquisition:
+      mode: watch_directory
+      watch_path: C:/sk/data
+      watch_pattern: "*.fits"
+      watch_recursive: true
+    allclear:
+      instrument_model_path: C:/sk/instrument_model_ftn-ydr.json
+      clear_threshold: 0.7
+    output:
+      directory: C:/sk/data/processed/sky_transmission
+    server:
+      host: 0.0.0.0
+      port: 8200
+
+config:
+  FTN-YDR:
+    SitePosition:
+      latitude_degrees: 38.8872
+      longitude_degrees: -104.201333
+      altitude_km: 1.948
+
+webapi:
+  id: WebAPI
+  port: 8000
+  serve_data_products:
+    - kind: local_fits
+      root_directory: C:/sk/data
+      controller_id: from_path

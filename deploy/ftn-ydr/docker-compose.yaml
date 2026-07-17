@@ -1,0 +1,244 @@
+# =============================================================================
+# SensorKit — FTN-YDR Docker stack
+#
+# One agent + controller driving the FTN-YDR sensor: a TheSky service (AAGSolo
+# weather + AstroHaven dome + TheSkyOTA mirror cover + TheSkyFilterWheel +
+# Apx60 camera) and a PWI4 service (L-500 + PWI4Focuser + PWI4Rotator).
+# Programs: Burr, Otto, UDL. Plus SENPAI and Sky Transmission analyzers.
+#
+#   Build + start:  docker compose -f docker-compose.yaml up -d --build
+#   Logs:           docker compose -f docker-compose.yaml logs -f agent
+#   Stop:           docker compose -f docker-compose.yaml down
+# =============================================================================
+name: sensorkit
+
+x-common-environment: &common-env
+  NATS_URL: nats://nats:4222
+  SENSORKIT_CONFIG: /sensorkit.yaml
+#  SENSORKIT_DEBUG: 1
+
+x-config-file: &config-file "./ftn-ydr.yaml:/sensorkit.yaml:ro"
+x-env-file:    &env-file    "C:/sk/.env:/opt/sk/.env:ro"
+x-data-dir:    &data-dir    "C:/sk/data:/opt/sk/data"
+
+services:
+  nats:
+    image: nats:2.12-alpine
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: "-js -m 8222"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8222/varz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # One-shot: build the image, load the unified config into NATS KV, exit.
+  config:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      args:
+        EXTRAS: pwi4,thesky,burr,otto,udl,senpai,slack,sky-transmission
+    image: sensorkit
+    pull_policy: never
+    command: config load -v /sensorkit.yaml
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  # Sensor controller (sensors[].id == FTN-YDR) — orchestrates via NATS.
+  controller:
+    image: sensorkit
+    pull_policy: never
+    command: service run FTN-YDR sensorkit.std.sensor
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # TheSky service, running on the Windows host, reached via host.docker.internal.
+  thesky:
+    image: sensorkit
+    pull_policy: never
+    command: service run thesky_service sensorkit.thesky.service
+    environment:
+      <<: *common-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - *config-file
+      - *data-dir
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # PWI4 service, running on the Windows host, reached via host.docker.internal.
+  pwi4:
+    image: sensorkit
+    pull_policy: never
+    command: service run pwi4_service sensorkit.pwi4.service
+    environment:
+      <<: *common-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - *config-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Burr calibration program (burr[].id == Burr).
+  burr:
+    image: sensorkit
+    pull_policy: never
+    command: service run Burr sensorkit.burr.program
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *data-dir
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Otto satellite tasking program (otto[].id == Otto).
+  otto:
+    image: sensorkit
+    pull_policy: never
+    command: service run Otto sensorkit.otto.program
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *env-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # UDL tasking program (udl[].id == UDL).
+  udl:
+    image: sensorkit
+    pull_policy: never
+    command: service run UDL sensorkit.udl.service
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *env-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Automation agent — schedules tasking across the controller's programs.
+  agent:
+    image: sensorkit
+    pull_policy: never
+    command: service run agent sensorkit.auto.agent
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+      controller:
+        condition: service_started
+      thesky:
+        condition: service_started
+      pwi4:
+        condition: service_started
+
+  # SENPAI streak analyzer (senpai.id == SENPAI). Built from the config image +
+  # astrometry.net (solve-field). Needs /path/to/senpai_FTN-YDR.yaml to exist and
+  # /path/to/catalogs for the star catalog + astrometry indices.
+  senpai:
+    build:
+      additional_contexts:
+        - base=service:config
+      dockerfile_inline: |
+        FROM base
+        RUN apt-get update \
+         && apt-get install -y --no-install-recommends astrometry.net \
+         && rm -rf /var/lib/apt/lists/*
+    image: sensorkit-senpai
+    pull_policy: never
+    command: service run SENPAI sensorkit.senpai.service
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *data-dir
+      - "C:/sk/senpai_FTN-YDR.yaml:/opt/sk/senpai_FTN-YDR.yaml:ro"
+      - "C:/sk/catalogs:/opt/sk/catalogs:ro"
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Sky transmission analyzer (sky_transmission[].id == OMEA).
+  sky_transmission:
+    image: sensorkit
+    pull_policy: never
+    command: service run OMEA sensorkit.sky_transmission.service
+    environment:
+      <<: *common-env
+    ports:
+      - "8200:8200"
+    volumes:
+      - *config-file
+      - *data-dir
+      - "C:/sk/instrument_model_ftn-ydr.json:/opt/sk/instrument_model_ftn-ydr.json:ro"
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Slack notifications (slack.id == slack) — needs .env for the token.
+  slack:
+    image: sensorkit
+    pull_policy: never
+    command: service run slack sensorkit.slack.service
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *env-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Web API (services[].id == webapi).
+  webapi:
+    image: sensorkit
+    pull_policy: never
+    command: service run WebAPI sensorkit.webapi
+    environment:
+      <<: *common-env
+    ports:
+      - "8000:8000"
+    volumes:
+      - *config-file
+      - *data-dir
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully

@@ -1,0 +1,464 @@
+version: 1
+
+sensorkit:
+  imports:
+    - sensorkit.alpaca.service
+    - sensorkit.node_platform.service
+    - sensorkit.std.sensor
+    - sensorkit.burr.program
+    - sensorkit.otto.program
+    - sensorkit.udl.service
+    - sensorkit.auto.agent
+    - sensorkit.senpai.service
+    - sensorkit.slack.service
+    - sensorkit.webapi
+
+automation:
+  first_run:
+    operate_all: true
+    enable_scheduling: true
+
+  controllers:
+    DAO-01:
+      estimated_startup_time: 60
+
+      modes:
+        # Normal night operating mode.
+        - name: default
+          description: Night operations
+          state: operate
+          criteria:
+            - when: time_range
+              start: sunset + 30m
+              end: sunrise - 30m
+        # Keep the dome open and the mount at its current pointing even if no tasking is available.
+        - name: keepalive
+          description: Keep alive between tasks
+          state: operate
+          criteria:
+            - when: after_activity
+              duration: 15m
+            - when: time_range
+              start: sunset + 30m
+              end: sunrise - 30m
+        # Enter standby (e.g. park mount, close dome) if no tasking_available after after_activity duration.
+        - name: idle
+          description: Idle standby
+          state: standby
+          criteria:
+            - when: time_range
+              start: sunset + 30m
+              end: sunrise - 30m
+
+      constraints:
+        # Node Platform safety.
+        - kind: conditional
+          entity: EdgeWeather
+          keyword: BasicSafety
+          field: is_safe
+          condition:
+            kind: equals
+            threshold: false
+          ttl: 180
+          hold: 900
+
+      tasking:
+        - program: Burr
+          priority: 10
+          contexts:
+            all:
+              program_name: burr
+        - program: Otto
+          priority: 9
+          contexts:
+            all:
+              program_name: otto
+        - program: UDL
+          priority: 1
+          contexts:
+            all:
+              program_name: udl
+
+  contexts:
+    all:
+      controller_name: DAO-01
+    standard_collect:
+      FileNameTemplate:
+        template: f"{task_id}_{frame_num}.fits"
+    
+
+data_flow:
+  - entity: Cosmos-8k
+    producer:
+      simple:
+        - op: app_source
+        - op: array_to_fits
+          header:
+            TASKID: =task_id
+            TARGETID: =target_id
+            SKCTRL:
+              value: =controller_name
+              comment: SensorKit controller ID
+            SITELAT:
+              value: =latitude
+              comment: geographic latitude [+/-] of the observation
+            SITELONG:
+              value: =longitude
+              comment: geographic longitude [+/-] of the observation
+            SITEELEV:
+              value: =elevation
+              comment: geographic elevation [km] of the observation
+            ALT:
+              value: =alt
+              comment: measured altitude [deg]
+            ALT_RATE:
+              value: =alt_rate/3600
+              comment: measured altitude rate [deg/s]
+            AZ:
+              value: =az
+              comment: measured azimuth [deg]
+            AZ_RATE:
+              value: =az_rate/3600
+              comment: measured azimuth rate [deg/s]
+            RA:
+              value: =ra
+              comment: measured right ascension [deg]
+            RA_RATE:
+              value: =ra_rate/3600
+              comment: measured right ascension rate [deg/s]
+            DEC:
+              value: =dec
+              comment: measured declination [deg]
+            DEC_RATE:
+              value: =dec_rate/3600
+              comment: measured declination rate [deg/s]
+            DATE-OBS:
+              value: =date_obs
+              comment: date of the observation
+            TRKMODE:
+              value: =track_mode
+              comment: track mode [RATE, SIDEREAL, FIXED]
+            INSTRUME:
+              value: =instrume
+              comment: name of instrument
+            FILTER:
+              value: =filter_name
+              comment: name of filter used during the observation
+            CCDTEMP:
+              value: =ccdtemp
+              comment: sensor temperature [C]
+            READOUTM:
+              value: =readoutm
+              comment: sensor readout mode
+            EXPTIME:
+              value: =exptime
+              comment: exposure time [s]
+            XBINNING:
+              value: =xbinning
+              comment: detector X binning value
+            YBINNING:
+              value: =ybinning
+              comment: detector Y binning value
+            FRAMENUM:
+              value: =frame_num
+              comment: frame number out of FRAMECNT
+            FRAMECNT:
+              value: =frame_count
+              comment: total requested frame count
+        - op: write_file
+          directory: f"C:/sk/data/raw/{program_name}/{controller_name}"
+  - entity: SENPAI
+    consumer:
+      # nodes form so a context_from_fits step can pull the collect identity
+      # (task_id / frame_num / ...) out of the FITS headers written above. Without
+      # it SenpaiResult.task_id stays null and multi-frame sequence batching is off.
+      nodes:
+        source:
+          op: watch_directory
+          directory: C:/sk/data/raw
+          match: "*.fits"
+          recursive: true
+          output: [read_fits_file]
+        read_fits_file:
+          op: read_file
+          output: [read_context]
+        read_context:
+          op: context_from_fits
+          keyword_map:                 # right-hand side mirrors the array_to_fits header keys above
+            task_id: TASKID
+            frame_num: FRAMENUM
+            frame_count: FRAMECNT
+            exptime: EXPTIME
+          output: [sink]
+        sink:
+          op: app_sink
+
+sensors:
+  - id: DAO-01
+
+    devices:
+      dome: EdgeEnclosure
+      mount: EdgeMount
+      rotator: EdgeRotator
+      focuser: EdgeFocuser
+      camera: Cosmos-8k
+
+    site_position:
+      latitude_degrees: 41.91748
+      longitude_degrees: -84.02790
+      altitude_km: 0.25
+
+    policies:
+      concurrent_dome_and_mount_init: false
+      concurrent_dome_and_mount_deinit: false
+      dome_open_close_timeout: 120
+      mount_init_timeout: 60
+      mount_home_timeout: 60
+
+    controller_name: ""
+
+burr:
+  - id: Burr
+    controller: DAO-01
+    schedule:
+      twilight_flats:
+        collect: true
+        windows:
+          - nautical_twilight
+        n_frames: 50
+        minimum_exposure_seconds: 0.1
+        long_exposure_threshold: 1.0
+        min_counts: 40000
+        max_counts: 50000
+        max_saturation_percentage: 1.0
+        saturation_threshold: null
+        scheduling:
+          type: one_shot
+      lunar_background:
+        collect: true
+        windows:
+          - night
+        minimum_moon_altitude_degrees: 40
+        maximum_moon_altitude_degrees: 85
+        minimum_moon_phase: 0.2
+        moon_separation_degrees: [1.0, 2.0, 4.0, 8.0]
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 5
+        n_exposures: 3
+        scheduling:
+          type: one_shot
+      calsats:
+        collect: true
+        windows:
+          - astronomical_twilight
+          - night
+        minimum_altitude_degrees: 20
+        maximum_altitude_degrees: 85
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 5
+        scheduling:
+          type: interval
+          minimum_interval_minutes: 3
+          fill_gaps: true
+        tle_provider: spacebook
+      photometric_standards:
+        collect: true
+        windows:
+          - night
+        minimum_altitude_degrees: 20
+        maximum_altitude_degrees: 85
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 10
+        n_exposures: 5
+        scheduling:
+          type: time_share
+          target_percentage: 10
+      streaks:
+        collect: true
+        streaks_per_collect: 2
+        minimum_length_pixel: 10
+        maximum_length_pixel: 100
+        minimum_orientation_deg: 0
+        maximum_orientation_deg: 180
+      coverage:
+        collect: true
+        windows:
+          - astronomical_twilight
+          - night
+        minimum_altitude_degrees: 20
+        maximum_altitude_degrees: 85
+        min_separation_degrees: 10
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 10
+        n_exposures: 5
+        points_per_map: 12
+        enable_plotting: true
+        scheduling:
+          type: time_share
+          target_percentage: 20
+    plotting:
+      debug: false
+      review: true
+    runtime:
+      output_dir: "C:/sk/data/processed/burr/"
+
+otto:
+  - id: Otto
+    controller: DAO-01
+    task:
+      objects: [ "12345" ]
+      tle_update_interval_hours: 4
+      graylist_interval_minutes: 15
+      end_time_deadband_seconds: 300
+    collect:
+      altitude_min: 20
+      track_mode: rate_sidereal
+      dither: false
+      dither_amount_arcsec: 500
+      filters: [ ]
+      exposure_min: 4
+      exposure_max: 5
+      exposure_delta: 1
+      binning: [ 2 ]
+      num_frames: 3
+    publish:
+      upload: false
+      sensor_name: "DAO-01"
+
+udl:
+  - id: UDL
+    controller: DAO-01
+    api:
+      # UDL (username/password auth via .env file)
+      base_url: https://test.unifieddatalibrary.com
+      # e.g. MACHINA (cert-based auth)
+      # base_url: https://api.sensor.machina.net/machina
+      # use_certs: true
+      # client_cert: /path/to/client.pem
+      # client_key: /path/to/client-key.pem
+      # client_verify: true
+      id_sensor: DAO-01
+      source: DAO
+      timeout: 60
+      env_file: C:/sk/.env
+    poll_frequency: 10
+    end_time_deadband_s: 120
+
+alpaca:
+  - id: alpaca_service
+    endpoints:
+    - host: host.docker.internal
+      port: 5100
+      protocol: http
+      devices:
+        GMX600:
+          device_type: observing_conditions
+          device_number: 0
+          status_frequency: 5
+          timeout: 60
+    - host: host.docker.internal
+      port: 5900
+      protocol: http
+      devices:
+        Cosmos-8k:
+          device_type: camera
+          device_number: 0
+          temperature: -25
+          status_frequency: 1
+          timeout: 300
+
+node_platform:
+  - id: node_platform_service
+    endpoints:
+      - host: node-platform.host
+        port: node-platform.port
+        env_file: C:/sk/.env
+        operation_mode: assisted
+        devices:
+          EdgeWeather:
+            device_type: weather
+            metric_lookback_seconds: 300
+            status_frequency: 30
+            timeout: 60
+          EdgeEnclosure:
+            device_type: enclosure
+            fans: true
+            status_frequency: 1.0
+            timeout: 120
+          EdgeMount:
+            device_type: mount
+            fans: true
+            heater_power:
+              M1: 0
+              M2: 0
+            status_frequency_slow: 1.0
+            status_frequency_fast: 0.1
+            timeout: 120
+          EdgeFocuser:
+            device_type: focuser
+            status_frequency: 1.0
+            timeout: 60
+          EdgeRotator:
+            device_type: rotator
+            derotate: false
+            status_frequency: 1.0
+            timeout: 60
+
+slack:
+  id: slack_service
+  env_file: C:/sk/.env
+  channels:
+    alerts:
+      channel: "#alerts-dao-01"
+      severity: [critical, warning]
+    log:
+      channel: "#log-dao-01"
+      severity: [info]
+    summary:
+      channel: "#daily-summary-dao-01"
+      post_at: "08:00"
+      timezone: "America/Detroit"
+  rules:
+    - name: dome_close_failed
+      severity: critical
+      events: [CommandDone]
+      entities: [EdgeEnclosure]
+      filters:
+        success: false
+        command_id: CloseEnclosure
+
+    - name: constraint_set
+      severity: warning
+      state_watches:
+        - keyword: ConstraintStatus
+          field: active
+          condition: {kind: becomes, threshold: true}
+      message_template: "Constraint set on `{entity}`: {reason} ({constraint_kind} from {provider})"
+
+    - name: constraint_cleared
+      severity: info
+      state_watches:
+        - keyword: ConstraintStatus
+          field: active
+          condition: {kind: becomes, threshold: false}
+      message_template: "Constraint cleared on `{entity}`: {reason} ({constraint_kind} from {provider})"
+
+senpai:
+  id: SENPAI
+  senpai_config: C:/sk/senpai_DAO-01.yaml
+  senpai_output_dir: C:/sk/data/processed/senpai
+
+config:
+  DAO-01:
+    SitePosition:
+      latitude_degrees: 41.91748
+      longitude_degrees: -84.02790
+      altitude_km: 0.25
+
+webapi:
+  id: WebAPI
+  port: 8000
+  serve_data_products:
+    - kind: local_fits
+      root_directory: C:/sk/data
+      controller_id: from_path

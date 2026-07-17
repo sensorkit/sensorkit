@@ -1,0 +1,127 @@
+app:
+  astrometry:
+    cpulimit_seconds: 30
+    docker_image: null   # CONTAINERIZED stack: native astrometry.net baked into the image (no Docker-in-Docker). BARE-METAL Mac `go` needs astrometry-cli instead (no local GNU `timeout`) unless you `brew install coreutils` + put `timeout` on PATH.
+    indices_path: /path/to/catalogs/indices/4100
+    indices_series: "4100"
+    max_sources: 20
+    max_width_degrees: 1.0
+    min_sources_for_attempt: 4
+    min_width_degrees: 0.5
+    sip_refit_enabled: false
+    sip_refit_order: 2
+    tweak_order: 2
+  calibrations:
+    auto_apply_darks: false
+    auto_apply_flats: false
+    auto_remove_column_median: true
+    auto_remove_row_median: true
+    auto_scale_images: false
+    auto_subtract_background: false
+    background_box_size: 20
+    background_exclude_percentile: 50.0
+    background_filter_size: 3
+    background_maxiters: 10
+    background_sigma: 3.0
+    clip_negative_after_dark: true
+    collect_fwhm_stats: true
+    dark_matching_headers:
+    - XBINNING
+    flat_matching_headers:
+    - XBINNING
+    - FILTER
+    master_darks_dir: null
+    master_flats_dir: null
+    max_dark_exposure_ratio: 1.5
+    negative_clip_threshold: -1000
+    oversample_threshold: 4.0
+    scaling_method: median_filter
+    target_fwhm: 3.0
+  cors:
+    allowed_origins:
+    - http://localhost:8800
+  debug: true
+  detection:
+    detect: true
+    snr_threshold: 3.0
+    verbose: false
+  headers:
+    exposure_time:
+      exposure_time_keys:
+      - EXPTIME
+      exposure_time_unit: seconds
+    observation_time:
+      observation_time_keys:
+      - DATE-OBS
+    pointing:
+      az_alt_format: float
+      boresight_altitude_keys:
+      - ALT
+      boresight_azimuth_keys:
+      - AZ
+      ra_dec_format: float
+      ra_units: degrees
+      target_dec_keys:
+      - DEC
+      target_ra_keys:
+      - RA
+    site:
+      altitude_unit: kilometers
+      positional_format: sexagesimal
+      site_altitude_keys:
+      - SITEELEV
+      site_latitude_keys:
+      - SITELAT
+      site_longitude_keys:
+      - SITELONG
+    tracking:
+      track_dec_rate_keys:
+      - DEC_RATE
+      track_dec_rate_unit: degrees/second
+      track_mode_keys:
+      - TRKMODE
+      track_ra_rate_keys:
+      - RA_RATE
+      track_ra_rate_unit: degrees/second
+  logging:
+    level: info
+  photometry:
+    aperture_radii:
+    - 1.0
+    - 1.25
+    - 1.5
+    - 2.0
+    bg_inner_radius: 1.5
+    bg_method: median
+    bg_outer_radius: 2.5
+    bg_sigma_clip: 3.0
+    gain: 0.1
+    include_read_noise: true
+    max_aperture_radius: 30.0
+    max_crowding: 0.3
+    min_aperture_radius: 5.0
+    min_separation: 5.0
+    min_snr: 3.0
+    preferred_filters:
+    - Johnson_V
+    - Johnson_R
+    - Sloan_r
+    - Gaia_G
+    - Sloan_g
+    - Johnson_B
+    read_noise: 1.0
+    saturation_threshold: 0.9
+    systematic_error: 0.01
+    limiting_snr: 3.0
+    limiting_completeness_fraction: 0.5
+  plotting:
+    debug: false
+    review: true
+    photometry: true
+  reload: true
+  stage: localdev
+  star_catalog:
+    type: sstrc7
+    path: /path/to/catalogs/sstrc7
+    faint_limit: 18.0
+  version: 0.1.0

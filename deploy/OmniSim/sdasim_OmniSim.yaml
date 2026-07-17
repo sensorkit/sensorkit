@@ -1,0 +1,47 @@
+# sdasim SceneConfig for the OmniSim deployment.
+# see sdasim repo for details
+
+sensor:
+  height: 1024
+  width: 1024
+  y_fov: 1.0
+  x_fov: 1.0
+  exposure: 1.0
+  gap: 5.0
+  num_frames: 1
+  zeropoint: 23.5
+  psf_sigma: 1.5
+  dark_current: 0.1
+  read_noise: 1
+  electronic_noise: 0.0
+  is_cmos: true
+  background_mv: 21.5
+  bias: 0.0
+  gain: 1.0
+  fwc: 100000.0
+  a2d_bias: 500.0
+  a2d_dtype: uint16
+
+stars:
+   mode: sstrc7
+   catalog_path: /path/to/catalogs/sstrc7
+   pad_mult: 0.05
+   mv_max: 16.0
+
+site:
+  latitude: 20.82028
+  longitude: -156.27944
+  altitude: 1000.0
+
+catalog:
+  enabled: true
+  source: spacetrack
+  env_path: /path/to/.env
+
+star_motion:
+  temporal_osf: 20
+
+seed: 42
+device: cpu
+enable_shot_noise: true
+enable_read_noise: true

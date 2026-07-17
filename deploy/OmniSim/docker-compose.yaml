@@ -1,0 +1,200 @@
+# =============================================================================
+# SensorKit — OmniSim Docker stack
+#
+# One agent + controller driving the OmniSim sensor: an Alpaca service
+# (OmniSimulator weather + dome + mirror cover + mount + rotator + focuser +
+# filter wheel) and a sdasim synthetic camera.
+# Programs: Otto. Plus a SENPAI analyzer.
+#
+#   Build + start:  docker compose -f docker-compose.yaml up -d --build
+#   Logs:           docker compose -f docker-compose.yaml logs -f agent
+#   Stop:           docker compose -f docker-compose.yaml down
+# =============================================================================
+name: sensorkit
+
+x-common-environment: &common-env
+  NATS_URL: nats://nats:4222
+  SENSORKIT_CONFIG: /sensorkit.yaml
+#  SENSORKIT_DEBUG: 1
+
+x-config-file: &config-file "./omnisim.yaml:/sensorkit.yaml:ro"
+x-env-file:    &env-file    "/path/to/.env:/opt/sk/.env:ro"
+x-data-dir:    &data-dir    "/path/to/data:/opt/sk/data"
+
+services:
+  nats:
+    image: nats:2.12-alpine
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: "-js -m 8222"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8222/varz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # One-shot: build the image, load the unified config into NATS KV, exit.
+  config:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      args:
+        EXTRAS: alpaca,sdasim,otto,senpai,slack
+    image: sensorkit
+    pull_policy: never
+    command: config load -v /sensorkit.yaml
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  # Sensor controller (sensors[].id == OmniSim) — orchestrates via NATS.
+  controller:
+    image: sensorkit
+    pull_policy: never
+    command: service run OmniSim sensorkit.std.sensor
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Alpaca service, running on the host, reached via host.docker.internal.
+  alpaca:
+    image: sensorkit
+    pull_policy: never
+    command: service run alpaca_service sensorkit.alpaca.service
+    environment:
+      <<: *common-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - *config-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # sdasim synthetic camera (sdasim[].id == sdasimCamera) — renders frames from
+  # the OmniSimTelescope pointing; owns the camera, so it runs the data_flow
+  # producer (writes FITS). Needs the co-located sdasim_OmniSim.yaml (scene),
+  # /path/to/data (star catalog), and /path/to/.env (Space-Track creds for satellites).
+  sdasim:
+    image: sensorkit
+    pull_policy: never
+    command: service run sdasimCamera sensorkit.sdasim.service
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *data-dir
+      - *env-file
+      - "./sdasim_OmniSim.yaml:/opt/sensorkit/deploy/OmniSim/sdasim_OmniSim.yaml:ro"
+      - "/path/to/catalogs:/opt/sk/catalogs:ro"
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Otto satellite tasking program (otto[].id == otto).
+  otto:
+    image: sensorkit
+    pull_policy: never
+    command: service run Otto sensorkit.otto.program
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *env-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # SENPAI streak analyzer (senpai.id == SENPAI). Built from the config image +
+  # astrometry.net (solve-field). Needs the co-located senpai_OmniSim.yaml and
+  # /path/to/catalogs for the star catalog + astrometry indices.
+  senpai:
+    build:
+      additional_contexts:
+        - base=service:config
+      dockerfile_inline: |
+        FROM base
+        RUN apt-get update \
+         && apt-get install -y --no-install-recommends astrometry.net \
+         && rm -rf /var/lib/apt/lists/*
+    image: sensorkit-senpai
+    pull_policy: never
+    command: service run SENPAI sensorkit.senpai.service
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *data-dir
+      - "./senpai_OmniSim.yaml:/opt/sensorkit/deploy/OmniSim/senpai_OmniSim.yaml:ro"
+      - "/path/to/catalogs:/opt/sk/catalogs:ro"
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Automation agent — schedules tasking across the controller's programs.
+  agent:
+    image: sensorkit
+    pull_policy: never
+    command: service run agent sensorkit.auto.agent
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+      controller:
+        condition: service_started
+      alpaca:
+        condition: service_started
+      sdasim:
+        condition: service_started
+
+  # Slack notifications (slack.id == slack_service) — needs .env for the token.
+  slack:
+    image: sensorkit
+    pull_policy: never
+    command: service run slack_service sensorkit.slack.service
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *env-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Web API (services[].id == webapi).
+  webapi:
+    image: sensorkit
+    pull_policy: never
+    command: service run WebAPI sensorkit.webapi
+    environment:
+      <<: *common-env
+    ports:
+      - "8000:8000"
+    volumes:
+      - *config-file
+      - *data-dir
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully

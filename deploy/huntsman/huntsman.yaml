@@ -1,0 +1,568 @@
+version: 1
+
+sensorkit:
+  imports:
+    - sensorkit.alpaca.service
+    - sensorkit.indigo.service
+    - sensorkit.thesky.service
+    - /opt/sk/huntsman_dome.py        # custom Musca dome controller module (SensorKit plugin)
+    - sensorkit.std.sensor
+    - sensorkit.burr.program
+    - sensorkit.otto.program
+    - sensorkit.auto.agent
+    - sensorkit.senpai.service
+    - sensorkit.slack.service
+    - sensorkit.webapi
+
+automation:
+  first_run:
+    operate_all: true
+    enable_scheduling: true
+
+  controllers:
+    Huntsman:
+      estimated_startup_time: 60
+
+      modes:
+        # Normal night operating mode.
+        - name: default
+          description: Night operations
+          state: operate
+          criteria:
+            - when: time_range
+              start: sunset + 30m
+              end: sunrise - 30m
+        # Keep the dome open and the mount at its current pointing even if no tasking is available.
+        - name: keepalive
+          description: Keep alive between tasks
+          state: operate
+          criteria:
+            - when: after_activity
+              duration: 15m
+            - when: time_range
+              start: sunset + 30m
+              end: sunrise - 30m
+        # Enter standby (e.g. park mount, close dome) if no tasking_available after after_activity duration.
+        - name: idle
+          description: Idle standby
+          state: standby
+          criteria:
+            - when: time_range
+              start: sunset + 30m
+              end: sunrise - 30m
+
+
+      constraints:
+        - kind: conditional
+          entity: AAGCloudWatcher
+          keyword: WeatherConditions
+          field: humidity
+          condition:
+            kind: equals
+            threshold: "Humid"
+          ttl: 90
+          hold: 900
+        - kind: conditional
+          entity: AAGCloudWatcher
+          keyword: WeatherConditions
+          field: rain
+          condition:
+            kind: equals
+            threshold: "Wet"
+          ttl: 90
+          hold: 900
+        - kind: conditional
+          entity: AAGCloudWatcher
+          keyword: WeatherConditions
+          field: rain
+          condition:
+            kind: equals
+            threshold: "Raining"
+          ttl: 90
+          hold: 900
+        - kind: conditional
+          entity: AAGCloudWatcher
+          keyword: WeatherConditions
+          field: cloud
+          condition:
+            kind: equals
+            threshold: "Cloudy"
+          ttl: 180
+          hold: 600
+        - kind: conditional
+          entity: AAGCloudWatcher
+          keyword: WeatherConditions
+          field: cloud
+          condition:
+            kind: equals
+            threshold: "Overcast"
+          ttl: 180
+          hold: 900
+        - kind: conditional
+          entity: AAGCloudWatcher
+          keyword: WeatherConditions
+          field: wind
+          condition:
+            kind: equals
+            threshold: "Strong"
+          ttl: 120
+          hold: 900
+        - kind: conditional
+          entity: AAGCloudWatcher
+          keyword: WeatherConditions
+          field: sky
+          condition:
+            kind: equals
+            threshold: "Very Light"
+          ttl: 180
+          hold: 300
+        - kind: conditional
+          entity: HuntsmanDome
+          keyword: Connected
+          field: is_connected
+          condition:
+            kind: equals
+            threshold: false
+          ttl: 600
+        # OMEA.
+        - kind: conditional
+          entity: OMEA
+          keyword: SkyTransmission
+          field: clear_fraction
+          condition:
+            kind: below
+            threshold: 0.7
+          optional: true
+          ttl: 120
+
+      tasking:
+        - program: Burr
+          priority: 10
+          contexts:
+            all:
+              program_name: burr
+        - program: Otto
+          priority: 9
+          contexts:
+            all:
+              program_name: otto
+
+  contexts:
+    all:
+      controller_name: Huntsman
+    standard_collect:
+      FileNameTemplate:
+        template: f"{task_id}_{frame_num}.fits"
+
+data_flow:
+  - entity: ASI183MM
+    producer:
+      simple:
+        - op: app_source
+        - op: array_to_fits
+          header:
+            TASKID: =task_id
+            TARGETID: =target_id
+            SKCTRL:
+              value: =controller_name
+              comment: SensorKit controller ID
+            SITELAT:
+              value: =latitude
+              comment: geographic latitude [+/-] of the observation
+            SITELONG:
+              value: =longitude
+              comment: geographic longitude [+/-] of the observation
+            SITEELEV:
+              value: =elevation
+              comment: geographic elevation [km] of the observation
+            ALT:
+              value: =alt
+              comment: measured altitude [deg]
+            ALT_RATE:
+              value: =alt_rate/3600
+              comment: measured altitude rate [deg/s]
+            AZ:
+              value: =az
+              comment: measured azimuth [deg]
+            AZ_RATE:
+              value: =az_rate/3600
+              comment: measured azimuth rate [deg/s]
+            RA:
+              value: =ra
+              comment: measured right ascension [deg]
+            RA_RATE:
+              value: =ra_rate/3600
+              comment: measured right ascension rate [deg/s]
+            DEC:
+              value: =dec
+              comment: measured declination [deg]
+            DEC_RATE:
+              value: =dec_rate/3600
+              comment: measured declination rate [deg/s]
+            DATE-OBS:
+              value: =date_obs
+              comment: date of the observation
+            TRKMODE:
+              value: =track_mode
+              comment: track mode [RATE, SIDEREAL, FIXED]
+            INSTRUME:
+              value: =instrume
+              comment: name of instrument
+            FILTER:
+              value: =filter_name
+              comment: name of filter used during the observation
+            CCDTEMP:
+              value: =ccdtemp
+              comment: sensor temperature [C]
+            READOUTM:
+              value: =readoutm
+              comment: sensor readout mode
+            EXPTIME:
+              value: =exptime
+              comment: exposure time [s]
+            XBINNING:
+              value: =xbinning
+              comment: detector X binning value
+            YBINNING:
+              value: =ybinning
+              comment: detector Y binning value
+            FRAMENUM:
+              value: =frame_num
+              comment: frame number out of FRAMECNT
+            FRAMECNT:
+              value: =frame_count
+              comment: total requested frame count
+        - op: compress_fits
+        - op: write_file
+          directory: f"/opt/sk/data/raw/{program_name}/{controller_name}"
+  - entity: SENPAI
+    consumer:
+      nodes:
+        source:
+          op: watch_directory
+          directory: /opt/sk/data/raw
+          match: "*.fits"
+          recursive: true
+          output: [read_fits_file]
+        read_fits_file:
+          op: read_file
+          output: [read_context]
+        read_context:
+          op: context_from_fits
+          keyword_map:
+            task_id: TASKID
+            frame_num: FRAMENUM
+            frame_count: FRAMECNT
+            exptime: EXPTIME
+          output: [sink]
+        sink:
+          op: app_sink
+
+sensors:
+  - id: Huntsman
+
+    devices:
+      dome: HuntsmanDome
+      mount: ParamountMEII
+      focuser: Birger
+      filter_wheel: EFW7x36
+      camera: ASI183MM
+
+    site_position:
+      latitude_degrees: -31.27175
+      longitude_degrees: 149.06149
+      altitude_km: 1.165
+
+    policies:
+      concurrent_dome_and_mount_init: false
+      concurrent_dome_and_mount_deinit: false
+      dome_open_close_timeout: 120
+      mount_init_timeout: 180
+      mount_home_timeout: 180
+
+    controller_name: ""
+
+burr:
+  - id: Burr
+    controller: Huntsman
+    schedule:
+      twilight_flats:
+        collect: true
+        windows:
+          - nautical_twilight
+        n_frames: 50
+        minimum_exposure_seconds: 0.1
+        long_exposure_threshold: 1.0
+        min_counts: 40000
+        max_counts: 50000
+        max_saturation_percentage: 1.0
+        saturation_threshold: null
+        scheduling:
+          type: one_shot
+      lunar_background:
+        collect: true
+        windows:
+          - night
+        minimum_moon_altitude_degrees: 40
+        maximum_moon_altitude_degrees: 85
+        minimum_moon_phase: 0.2
+        moon_separation_degrees: [1.0, 2.0, 4.0, 8.0]
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 5
+        n_exposures: 3
+        scheduling:
+          type: one_shot
+      calsats:
+        collect: true
+        windows:
+          - astronomical_twilight
+          - night
+        minimum_altitude_degrees: 20
+        maximum_altitude_degrees: 85
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 5
+        scheduling:
+          type: interval
+          minimum_interval_minutes: 3
+          fill_gaps: true
+        tle_provider: spacebook
+      photometric_standards:
+        collect: true
+        windows:
+          - night
+        minimum_altitude_degrees: 20
+        maximum_altitude_degrees: 85
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 10
+        n_exposures: 5
+        scheduling:
+          type: time_share
+          target_percentage: 10
+      streaks:
+        collect: true
+        streaks_per_collect: 2
+        minimum_length_pixel: 10
+        maximum_length_pixel: 100
+        minimum_orientation_deg: 0
+        maximum_orientation_deg: 180
+      coverage:
+        collect: true
+        windows:
+          - astronomical_twilight
+          - night
+        minimum_altitude_degrees: 20
+        maximum_altitude_degrees: 85
+        min_separation_degrees: 10
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 10
+        n_exposures: 5
+        points_per_map: 12
+        enable_plotting: true
+        scheduling:
+          type: time_share
+          target_percentage: 20
+    plotting:
+      debug: false
+      review: true
+    runtime:
+      output_dir: "/opt/sk/data/processed/burr/"
+
+otto:
+  - id: Otto
+    controller: Huntsman
+    task:
+      objects: [ "12345" ]
+      tle_update_interval_hours: 4
+      graylist_interval_minutes: 15
+      end_time_deadband_seconds: 1800
+    collect:
+      scan_mode: true
+      scan_direction: eastward
+      altitude_min: 15
+      track_mode: rate_sidereal
+      dither: false
+      dither_amount_arcsec: 500
+      filters: ['r','g','Lum']
+      exposure_min: 10
+      exposure_max: 20
+      exposure_delta: 5
+      binning: [1]
+      num_frames: 2
+    publish:
+      upload: false
+      sensor_name: "Huntsman"
+
+indigo:
+  - id: indigo_service
+    endpoints:
+    - host: localhost
+      port: 7624
+      devices:
+        AAGCloudWatcher:
+          device_type: weather
+          indigo_device: "AAG AAGCloudWatcher"
+          timeout: 60
+
+thesky:
+  - id: thesky_service
+    endpoints:
+    - host: &thesky_host localhost
+      port: &thesky_port 3040
+      devices:
+        ParamountMEII:
+          device_type: telescope
+          status_frequency: 1.0
+          timeout: 300
+
+huntsman_dome:
+  thesky_host: *thesky_host
+  thesky_port: *thesky_port
+  serial_port: /dev/rfcomm0
+  heartbeat_interval: 60
+  min_battery_voltage: 12
+
+alpaca:
+  - id: alpaca_service
+    endpoints:
+      - host: alpaca.host
+        port: 5900
+        protocol: http
+        devices:
+          Birger:
+            device_type: focuser
+            device_number: 0
+            status_frequency: 1
+      - host: alpaca.host
+        port: 5910
+        protocol: http
+        devices:
+          EFW7x36:
+            device_type: filter_wheel
+            device_number: 0
+            status_frequency: 5
+      - host: alpaca.host
+        port: 5920
+        protocol: http
+        devices:
+          ASI183MM:
+            device_type: camera
+            device_number: 0
+            status_frequency: 1
+
+slack:
+  id: slack_service
+  env_file: /opt/sk/.env
+  channels:
+    alerts:
+      channel: "#hunts-alerts"
+      severity: [critical, warning]
+    log:
+      channel: "#hunts-log"
+      severity: [info]
+    summary:
+      channel: "#hunts-daily-summary"
+      post_at: "08:00"
+      timezone: "Australia/Sydney"
+  rules:
+    # --- HuntsmanDome ---
+    - name: dome_close_failed
+      severity: critical
+      events: [CommandDone]
+      entities: [HuntsmanDome]
+      filters:
+        success: false
+        command_id: CloseEnclosure
+      message_template: "Dome FAILED to close via `CloseEnclosure`"
+
+    - name: dome_disconnected
+      severity: critical
+      entities: [HuntsmanDome]
+      state_watches:
+        - keyword: Connected
+          field: is_connected
+          condition: {kind: becomes, threshold: false}
+      message_template: "HuntsmanDome disconnected"
+
+    # --- Weather (AAG AAGCloudWatcher) ---
+    - name: weather_humid
+      severity: warning
+      entities: [AAGCloudWatcher]
+      state_watches:
+        - keyword: WeatherConditions
+          field: humidity
+          condition: {kind: becomes, threshold: "Humid"}
+      message_template: "Weather: humidity is now `{value}` on `{entity}`"
+
+    - name: weather_wind_strong
+      severity: warning
+      entities: [AAGCloudWatcher]
+      state_watches:
+        - keyword: WeatherConditions
+          field: wind
+          condition: {kind: becomes, threshold: "Strong"}
+      message_template: "Weather: wind is now `{value}` on `{entity}`"
+
+    - name: weather_sky_very_light
+      severity: warning
+      entities: [AAGCloudWatcher]
+      state_watches:
+        - keyword: WeatherConditions
+          field: sky
+          condition: {kind: becomes, threshold: "Very Light"}
+      message_template: "Weather: sky is now `{value}` on `{entity}`"
+
+    - name: weather_rain_wet
+      severity: warning
+      entities: [AAGCloudWatcher]
+      state_watches:
+        - keyword: WeatherConditions
+          field: rain
+          condition: {kind: becomes, threshold: "Wet"}
+      message_template: "Weather: rain is now `{value}` on `{entity}`"
+
+    - name: weather_rain_raining
+      severity: critical
+      entities: [AAGCloudWatcher]
+      state_watches:
+        - keyword: WeatherConditions
+          field: rain
+          condition: {kind: becomes, threshold: "Raining"}
+      message_template: "Weather: rain is now `{value}` on `{entity}`"
+
+    - name: weather_cloud_cloudy
+      severity: warning
+      entities: [AAGCloudWatcher]
+      state_watches:
+        - keyword: WeatherConditions
+          field: cloud
+          condition: {kind: becomes, threshold: "Cloudy"}
+      message_template: "Weather: cloud is now `{value}` on `{entity}`"
+
+    - name: weather_cloud_overcast
+      severity: critical
+      entities: [AAGCloudWatcher]
+      state_watches:
+        - keyword: WeatherConditions
+          field: cloud
+          condition: {kind: becomes, threshold: "Overcast"}
+      message_template: "Weather: cloud is now `{value}` on `{entity}`"
+
+senpai:
+  id: SENPAI
+  senpai_config: /opt/sk/senpai_Huntsman.yaml
+  senpai_output_dir: /opt/sk/data/processed/senpai
+
+config:
+  Huntsman:
+    SitePosition:
+      latitude_degrees: -31.27175
+      longitude_degrees: 149.06149
+      altitude_km: 1.165
+
+webapi:
+  id: WebAPI
+  port: 8000
+  serve_data_products:
+    - kind: local_fits
+      root_directory: /opt/sk/data
+      controller_id: from_path

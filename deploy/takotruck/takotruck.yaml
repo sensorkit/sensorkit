@@ -1,0 +1,485 @@
+version: 1
+
+sensorkit:
+  imports:
+    - sensorkit.alpaca.service
+    - sensorkit.pwi4.service
+    - sensorkit.std.sensor
+    - sensorkit.burr.program
+    - sensorkit.auto.agent
+    - sensorkit.senpai.service
+    - sensorkit.slack.service
+    - sensorkit.webapi
+
+automation:
+  first_run:
+    operate_all: true
+    enable_scheduling: true
+
+  controllers:
+    TakoTruck:
+      estimated_startup_time: 60
+
+      modes:
+        # Normal night operating mode.
+        - name: default
+          description: Night operations
+          state: operate
+          criteria:
+            - when: tasking_available
+            - when: time_range
+              start: sunset + 30m
+              end: sunrise - 30m
+        # Keep the dome open and the mount at its current pointing even if no tasking is available.
+        - name: keepalive
+          description: Keep alive between tasks
+          state: operate
+          criteria:
+            - when: after_activity
+              duration: 15m
+            - when: time_range
+              start: sunset + 30m
+              end: sunrise - 30m
+        # Enter standby (e.g. park mount, close dome) if no tasking_available after after_activity duration.
+        - name: idle
+          description: Idle standby
+          state: standby
+          criteria:
+            - when: time_range
+              start: sunset + 30m
+              end: sunrise - 30m
+
+
+      constraints:
+        # GMX600.
+        - kind: weather
+          provider: GMX600
+          humidity_max: 92.5
+          humidity_deadband: 7.5
+          wind_max: 25
+          wind_deadband: 5
+          rain_max: 0.0
+          ttl: 90
+          hold: 900
+        # Boltwood.
+        - kind: weather
+          provider: Boltwood
+          humidity_max: 92.5
+          humidity_deadband: 7.5
+          wind_max: 25
+          wind_deadband: 5
+          rain_max: 0.0
+          ttl: 90
+          hold: 900
+        # OMEA.
+        - kind: conditional
+          entity: OMEA
+          keyword: SkyTransmission
+          field: clear_fraction
+          condition:
+            kind: below
+            threshold: 0.7
+          optional: true
+          ttl: 120
+
+      tasking:
+        - program: Burr
+          priority: 10
+          contexts:
+            all:
+              program_name: burr
+        - program: Otto
+          priority: 9
+          contexts:
+            all:
+              program_name: otto
+        - program: UDL
+          priority: 1
+          contexts:
+            all:
+              program_name: udl
+
+  contexts:
+    all:
+      controller_name: TakoTruck
+    standard_collect:
+      FileNameTemplate:
+        template: f"{task_id}_{frame_num}.fits"
+
+data_flow:
+  - entity: QHY600
+    producer:
+      simple:
+        - op: app_source
+        - op: array_to_fits
+          header:
+            TASKID: =task_id
+            TARGETID: =target_id
+            SKCTRL:
+              value: =controller_name
+              comment: SensorKit controller ID
+            SITELAT:
+              value: =latitude
+              comment: geographic latitude [+/-] of the observation
+            SITELONG:
+              value: =longitude
+              comment: geographic longitude [+/-] of the observation
+            SITEELEV:
+              value: =elevation
+              comment: geographic elevation [km] of the observation
+            ALT:
+              value: =alt
+              comment: measured altitude [deg]
+            ALT_RATE:
+              value: =alt_rate/3600
+              comment: measured altitude rate [deg/s]
+            AZ:
+              value: =az
+              comment: measured azimuth [deg]
+            AZ_RATE:
+              value: =az_rate/3600
+              comment: measured azimuth rate [deg/s]
+            RA:
+              value: =ra
+              comment: measured right ascension [deg]
+            RA_RATE:
+              value: =ra_rate/3600
+              comment: measured right ascension rate [deg/s]
+            DEC:
+              value: =dec
+              comment: measured declination [deg]
+            DEC_RATE:
+              value: =dec_rate/3600
+              comment: measured declination rate [deg/s]
+            DATE-OBS:
+              value: =date_obs
+              comment: date of the observation
+            TRKMODE:
+              value: =track_mode
+              comment: track mode [RATE, SIDEREAL, FIXED]
+            INSTRUME:
+              value: =instrume
+              comment: name of instrument
+            FILTER:
+              value: =filter_name
+              comment: name of filter used during the observation
+            CCDTEMP:
+              value: =ccdtemp
+              comment: sensor temperature [C]
+            READOUTM:
+              value: =readoutm
+              comment: sensor readout mode
+            EXPTIME:
+              value: =exptime
+              comment: exposure time [s]
+            XBINNING:
+              value: =xbinning
+              comment: detector X binning value
+            YBINNING:
+              value: =ybinning
+              comment: detector Y binning value
+            FRAMENUM:
+              value: =frame_num
+              comment: frame number out of FRAMECNT
+            FRAMECNT:
+              value: =frame_count
+              comment: total requested frame count
+        - op: write_file
+          directory: f"/opt/sk/data/raw/{program_name}/{controller_name}"
+  - entity: SENPAI
+    consumer:
+      nodes:
+        source:
+          op: watch_directory
+          directory: /opt/sk/data/raw
+          match: "*.fits"
+          recursive: true
+          output: [read_fits_file]
+        read_fits_file:
+          op: read_file
+          output: [read_context]
+        read_context:
+          op: context_from_fits
+          keyword_map:
+            task_id: TASKID
+            frame_num: FRAMENUM
+            frame_count: FRAMECNT
+            exptime: EXPTIME
+          output: [sink]
+        sink:
+          op: app_sink
+
+sensors:
+  - id: TakoTruck
+
+    devices:
+      dome: AstroHaven
+      mirror_cover: PWI4Cover
+      mount: PWI4Mount
+      rotator: PWI4Rotator
+      focuser: PWI4Focuser
+      filter_wheel: QHYCFW3XL
+      camera: QHY600
+
+    site_position:
+      latitude_degrees: 20.745861
+      longitude_degrees: -156.431750
+      altitude_km: 0.05
+
+    policies:
+      concurrent_dome_and_mount_init: false
+      concurrent_dome_and_mount_deinit: false
+      dome_open_close_timeout: 60
+      concurrent_mount_and_mirror_cover_init: false
+      mirror_cover_open_close_timeout: 60
+      mount_init_timeout: 60
+      mount_home_timeout: 60
+
+    controller_name: ""
+
+burr:
+  - id: Burr
+    controller: TakoTruck
+    schedule:
+      twilight_flats:
+        collect: true
+        windows:
+          - nautical_twilight
+        n_frames: 50
+        minimum_exposure_seconds: 0.1
+        long_exposure_threshold: 1.0
+        min_counts: 40000
+        max_counts: 50000
+        max_saturation_percentage: 1.0
+        saturation_threshold: null
+        scheduling:
+          type: one_shot
+      lunar_background:
+        collect: true
+        windows:
+          - night
+        minimum_moon_altitude_degrees: 40
+        maximum_moon_altitude_degrees: 85
+        minimum_moon_phase: 0.2
+        moon_separation_degrees: [1.0, 2.0, 4.0, 8.0]
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 5
+        n_exposures: 3
+        scheduling:
+          type: one_shot
+      calsats:
+        collect: true
+        windows:
+          - astronomical_twilight
+          - night
+        minimum_altitude_degrees: 20
+        maximum_altitude_degrees: 85
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 5
+        scheduling:
+          type: interval
+          minimum_interval_minutes: 3
+          fill_gaps: true
+        tle_provider: spacebook
+      photometric_standards:
+        collect: true
+        windows:
+          - night
+        minimum_altitude_degrees: 20
+        maximum_altitude_degrees: 85
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 10
+        n_exposures: 5
+        scheduling:
+          type: time_share
+          target_percentage: 10
+      streaks:
+        collect: true
+        streaks_per_collect: 2
+        minimum_length_pixel: 10
+        maximum_length_pixel: 100
+        minimum_orientation_deg: 0
+        maximum_orientation_deg: 180
+      coverage:
+        collect: true
+        windows:
+          - astronomical_twilight
+          - night
+        minimum_altitude_degrees: 20
+        maximum_altitude_degrees: 85
+        min_separation_degrees: 10
+        minimum_exposure_seconds: 1
+        maximum_exposure_seconds: 10
+        n_exposures: 5
+        points_per_map: 12
+        enable_plotting: true
+        scheduling:
+          type: time_share
+          target_percentage: 20
+    plotting:
+      debug: false
+      review: true
+    runtime:
+      output_dir: "/opt/sk/data/processed/burr/"
+
+otto:
+  - id: Otto
+    controller: TakoTruck
+    task:
+      objects: [ "12345" ]
+      tle_update_interval_hours: 4
+      graylist_interval_minutes: 15
+      end_time_deadband_seconds: 300
+    collect:
+      altitude_min: 20
+      track_mode: rate_sidereal
+      dither: false
+      dither_amount_arcsec: 500
+      filters: [ ]
+      exposure_min: 4
+      exposure_max: 5
+      exposure_delta: 1
+      binning: [ 2 ]
+      num_frames: 3
+    publish:
+      upload: false
+      sensor_name: "TakoTruck"
+
+alpaca:
+  - id: alpaca_service
+    endpoints:
+    - host: localhost
+      port: 5100
+      protocol: http
+      devices:
+        GMX600:
+          device_type: observing_conditions
+          device_number: 0
+          status_frequency: 5
+          timeout: 90
+    - host: localhost
+      port: 5200
+      protocol: http
+      devices:
+        Boltwood:
+          device_type: observing_conditions
+          device_number: 0
+          status_frequency: 5
+          timeout: 90
+    - host: localhost
+      port: 5300
+      protocol: http
+      devices:
+        AstroHaven:
+          device_type: dome
+          device_number: 0
+          status_frequency: 5
+          timeout: 60
+    - host: localhost
+      port: 5800
+      protocol: http
+      devices:
+        QHYCFW3XL:
+          device_type: filter_wheel
+          device_number: 0
+          status_frequency: 5
+          timeout: 60
+    - host: localhost
+      port: 5900
+      protocol: http
+      devices:
+        QHY600:
+          device_type: camera
+          device_number: 0
+          status_frequency: 1
+
+pwi4:
+  - id: pwi4_service
+    endpoints:
+    - host: localhost
+      port: 8220
+      devices:
+        PWI4Cover:
+          device_type: cover
+          status_frequency: 2
+          timeout: 60
+        PWI4Mount:
+          device_type: mount
+          disable_axis_on_deinit: false
+          wrap_autocenter: true
+          wrap_interval: 60.0
+          wrap_deadband_deg: 10.0
+          fans: ["m1rear", "m1side"]
+          heaters:
+            m1: 0
+            m2: 0
+          status_frequency_slow: 1.0
+          status_frequency_fast: 0.1
+          timeout: 180
+        PWI4Focuser:
+          device_type: focuser
+          status_frequency: 2
+          timeout: 60
+        PWI4Rotator:
+          device_type: rotator
+          status_frequency: 1
+          timeout: 60
+
+slack:
+  id: slack_service
+  env_file: /opt/sk/.env
+  channels:
+    alerts:
+      channel: "#alerts-takotruck"
+      severity: [critical, warning]
+    log:
+      channel: "#log-takotruck"
+      severity: [info]
+    summary:
+      channel: "#daily-summary-takotruck"
+      post_at: "08:00"
+      timezone: "US/Hawaii"
+  rules:
+    - name: dome_close_failed
+      severity: critical
+      events: [CommandDone]
+      entities: [AstroHaven]
+      filters:
+        success: false
+        command_id: CloseEnclosure
+
+    - name: constraint_set
+      severity: warning
+      state_watches:
+        - keyword: ConstraintStatus
+          field: active
+          condition: {kind: becomes, threshold: true}
+      message_template: "Constraint set on `{entity}`: {reason} ({constraint_kind} from {provider})"
+
+    - name: constraint_cleared
+      severity: info
+      state_watches:
+        - keyword: ConstraintStatus
+          field: active
+          condition: {kind: becomes, threshold: false}
+      message_template: "Constraint cleared on `{entity}`: {reason} ({constraint_kind} from {provider})"
+
+senpai:
+  id: SENPAI
+  senpai_config: /opt/sk/senpai_TakoTruck.yaml
+  senpai_output_dir: /opt/sk/data/processed/senpai
+
+config:
+  TakoTruck:
+    SitePosition:
+      latitude_degrees: 20.745861
+      longitude_degrees: -156.431750
+      altitude_km: 0.05
+
+webapi:
+  id: WebAPI
+  port: 8000
+  serve_data_products:
+    - kind: local_fits
+      root_directory: /opt/sk/data
+      controller_id: from_path

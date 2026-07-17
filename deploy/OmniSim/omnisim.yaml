@@ -1,0 +1,336 @@
+version: 1
+
+sensorkit:
+  imports:
+    - sensorkit.alpaca.service
+    - sensorkit.sdasim.service
+    - sensorkit.std.sensor
+    - sensorkit.otto.program
+    - sensorkit.auto.agent
+    - sensorkit.senpai.service
+    - sensorkit.slack.service
+    - sensorkit.webapi
+
+automation:
+  first_run:
+    operate_all: true
+    enable_scheduling: true
+
+  controllers:
+    OmniSim:
+      estimated_startup_time: 60
+
+      modes:
+        # Normal 24/7 operating mode.
+        - name: default
+          description: Night operations
+          state: operate
+          criteria:
+            - when: time_range
+              start: 12am utc
+              end: 12am utc
+        # Keep the dome open and the mount at its current pointing even if no tasking is available.
+        - name: keepalive
+          description: Keep alive between tasks
+          state: operate
+          criteria:
+            - when: after_activity
+              duration: 15m
+            - when: time_range
+              start: 12am utc
+              end: 12am utc
+        # Enter standby (e.g. park mount, close dome) if no tasking_available after after_activity duration.
+        - name: idle
+          description: Idle standby
+          state: standby
+          criteria:
+            - when: time_range
+              start: 12am utc
+              end: 12am utc
+
+      constraints:
+        # OmniSim.
+        - kind: weather
+          provider: OmniSimWeather
+          humidity_max: 90
+          humidity_deadband: 5
+          wind_max: 25
+          wind_deadband: 5
+          ttl: 90
+          hold: 900
+
+      tasking:
+        - program: Otto
+          priority: 9
+          contexts:
+            all:
+              program_name: otto
+            standard_collect:
+              FileNameTemplate:
+                template: f"{task_id}_{frame_num}.fits"
+
+  contexts:
+    all:
+      controller_name: OmniSim
+
+data_flow:
+  - entity: sdasimCamera
+    producer:
+      simple:
+        - op: app_source
+        - op: array_to_fits
+          header:
+            TASKID: =task_id
+            TARGETID: =target_id
+            SKCTRL:
+              value: =controller_name
+              comment: SensorKit controller ID
+            SITELAT:
+              value: =latitude
+              comment: geographic latitude [+/-] of the observation
+            SITELONG:
+              value: =longitude
+              comment: geographic longitude [+/-] of the observation
+            SITEELEV:
+              value: =elevation
+              comment: geographic elevation [km] of the observation
+            ALT:
+              value: =alt
+              comment: measured altitude [deg]
+            ALT_RATE:
+              value: =alt_rate/3600
+              comment: measured altitude rate [deg/s]
+            AZ:
+              value: =az
+              comment: measured azimuth [deg]
+            AZ_RATE:
+              value: =az_rate/3600
+              comment: measured azimuth rate [deg/s]
+            RA:
+              value: =ra
+              comment: measured right ascension [deg]
+            RA_RATE:
+              value: =ra_rate/3600
+              comment: measured right ascension rate [deg/s]
+            DEC:
+              value: =dec
+              comment: measured declination [deg]
+            DEC_RATE:
+              value: =dec_rate/3600
+              comment: measured declination rate [deg/s]
+            DATE-OBS:
+              value: =date_obs
+              comment: date of the observation
+            TRKMODE:
+              value: =track_mode
+              comment: track mode [RATE, SIDEREAL, FIXED]
+            INSTRUME:
+              value: =instrume
+              comment: name of instrument
+            FILTER:
+              value: =filter_name
+              comment: name of filter used during the observation
+            CCDTEMP:
+              value: =ccdtemp
+              comment: sensor temperature [C]
+            READOUTM:
+              value: =readoutm
+              comment: sensor readout mode
+            EXPTIME:
+              value: =exptime
+              comment: exposure time [s]
+            XBINNING:
+              value: =xbinning
+              comment: detector X binning value
+            YBINNING:
+              value: =ybinning
+              comment: detector Y binning value
+            FRAMENUM:
+              value: =frame_num
+              comment: frame number out of FRAMECNT
+            FRAMECNT:
+              value: =frame_count
+              comment: total requested frame count
+        - op: write_file
+          directory: f"/path/to/data/raw/{program_name}/{controller_name}"
+  - entity: SENPAI
+    consumer:
+      nodes:
+        source:
+          op: watch_directory
+          directory: /path/to/data/raw
+          match: "*.fits"
+          recursive: true
+          output: [read_fits_file]
+        read_fits_file:
+          op: read_file
+          output: [read_context]
+        read_context:
+          op: context_from_fits
+          keyword_map:
+            task_id: TASKID
+            frame_num: FRAMENUM
+            frame_count: FRAMECNT
+            exptime: EXPTIME
+          output: [sink]
+        sink:
+          op: app_sink
+
+sensors:
+  - id: OmniSim
+
+    devices:
+      dome: OmniSimDome
+      mirror_cover: OmniSimCoverCalibrator
+      mount: OmniSimTelescope
+      rotator: OmniSimRotator
+      focuser: OmniSimFocuser
+      filter_wheel: OmniSimFilterWheel
+      camera: sdasimCamera
+
+    site_position:
+      latitude_degrees: 20.82028
+      longitude_degrees: -156.27944
+      altitude_km: 1.0
+
+    policies:
+      concurrent_dome_and_mount_init: true
+      concurrent_dome_and_mount_deinit: true
+      dome_open_close_timeout: 120.0
+      concurrent_mount_and_mirror_cover_init: true
+      mirror_cover_open_close_timeout: 60.0
+      mount_init_timeout: 180.0
+      mount_home_timeout: 180.0
+
+    controller_name: ""
+
+otto:
+  - id: Otto
+    controller: OmniSim
+    task:
+      objects: [ "21639" ]
+      tle_update_interval_hours: 4
+      graylist_interval_minutes: 15
+      end_time_deadband_seconds: 300
+    collect:
+      altitude_min: 20
+      track_mode: rate_sidereal
+      dither: false
+      dither_amount_arcsec: 500
+      filters: [ ]
+      exposure_min: 4
+      exposure_max: 5
+      exposure_delta: 1
+      binning: [ 2 ]
+      num_frames: 3
+    publish:
+      upload: false
+      sensor_name: "OmniSim"
+
+alpaca:
+  - id: alpaca_service
+    endpoints:
+      # The OmniSimulator runs on the Docker host (launchd LaunchAgent) on :11111.
+      # host.docker.internal reaches it from a container (bare metal: localhost also works).
+      - host: host.docker.internal
+        port: 11111
+        protocol: http
+        devices:
+          OmniSimWeather:
+            device_type: observing_conditions
+            device_number: 0
+            status_frequency: 5
+          OmniSimDome:
+            device_type: dome
+            device_number: 0
+            status_frequency: 5
+          OmniSimCoverCalibrator:
+            device_type: cover_calibrator
+            device_number: 0
+            status_frequency: 2
+          OmniSimTelescope:
+            device_type: telescope
+            device_number: 0
+            status_frequency_slow: 1.0
+            status_frequency_fast: 0.1
+          OmniSimRotator:
+            device_type: rotator
+            device_number: 0
+            status_frequency: 1
+          OmniSimFocuser:
+            device_type: focuser
+            device_number: 0
+            status_frequency: 2
+          OmniSimFilterWheel:
+            device_type: filter_wheel
+            device_number: 0
+            status_frequency: 2
+
+sdasim:
+  - id: sdasimCamera
+    sdasim_config: /path/to/sensorkit/deploy/OmniSim/sdasim_OmniSim.yaml
+    mount_entity: OmniSimTelescope
+    rotator_entity: OmniSimRotator
+    device: cpu
+    temperature: -10.0
+    binning: 2
+    status_frequency: 1.0
+
+slack:
+  id: slack_service
+  env_file: /path/to/.env
+  channels:
+    alerts:
+      channel: "#alerts-omnisim"
+      severity: [critical, warning]
+    log:
+      channel: "#log-omnisim"
+      severity: [info]
+    summary:
+      channel: "#daily-summary-omnisim"
+      post_at: "08:00"
+      timezone: "US/Hawaii"
+  rules:
+    - name: dome_close_failed
+      severity: critical
+      events: [CommandDone]
+      entities: [OmniSimDome]
+      filters:
+        success: false
+        command_id: CloseEnclosure
+
+    - name: constraint_set
+      severity: warning
+      state_watches:
+        - keyword: ConstraintStatus
+          field: active
+          condition: {kind: becomes, threshold: true}
+      message_template: "Constraint set on `{entity}`: {reason} ({constraint_kind} from {provider})"
+
+    - name: constraint_cleared
+      severity: info
+      state_watches:
+        - keyword: ConstraintStatus
+          field: active
+          condition: {kind: becomes, threshold: false}
+      message_template: "Constraint cleared on `{entity}`: {reason} ({constraint_kind} from {provider})"
+
+senpai:
+  id: SENPAI
+  senpai_config: /path/to/sensorkit/deploy/OmniSim/senpai_OmniSim.yaml
+  senpai_output_dir: /path/to/data/processed/senpai
+
+config:
+  OmniSim:
+    SitePosition:
+      latitude_degrees: 20.82028
+      longitude_degrees: -156.27944
+      altitude_km: 1.0
+
+webapi:
+  id: WebAPI
+  port: 8000
+  serve_data_products:
+    - kind: local_fits
+      root_directory: /path/to/data
+      controller_id: from_path

@@ -1,0 +1,289 @@
+# =============================================================================
+# SensorKit — Huntsman Docker stack
+#
+# One agent + controller driving the Huntsman sensor: an Alpaca service
+# (Birger focuser + EFW7x36 filter wheel + ASI183MM camera), an INDIGO service
+# (AAG CloudWatcher weather), a TheSky service (ParamountMEII mount), and a
+# custom Musca dome service (HuntsmanDome).
+# Programs: Burr, Otto. Plus SENPAI and Sky Transmission analyzers.
+#
+#   Build + start:  docker compose -f docker-compose.yaml up -d --build
+#   Logs:           docker compose -f docker-compose.yaml logs -f agent
+#   Stop:           docker compose -f docker-compose.yaml down
+# =============================================================================
+name: sensorkit
+
+x-common-environment: &common-env
+  NATS_URL: nats://nats:4222
+  SENSORKIT_CONFIG: /sensorkit.yaml
+#  SENSORKIT_DEBUG: 1
+
+x-config-file: &config-file "./huntsman.yaml:/sensorkit.yaml:ro"
+x-dome-file:   &dome-file   "/opt/sk/huntsman_dome.py:/opt/sk/huntsman_dome.py:ro"
+x-env-file:    &env-file    "/opt/sk/.env:/opt/sk/.env:ro"
+x-data-dir:    &data-dir    "/opt/sk/data:/opt/sk/data"
+
+services:
+  nats:
+    image: nats:2.12-alpine
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: "-js -m 8222"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8222/varz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # One-shot: build the image, load the unified config into NATS KV, exit.
+  config:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+      args:
+        EXTRAS: alpaca,indigo,thesky,burr,otto,senpai,slack
+    image: sensorkit
+    pull_policy: never
+    command: config load -v /sensorkit.yaml
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *dome-file
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  # Sensor controller (sensors[].id == Huntsman) — orchestrates via NATS.
+  controller:
+    image: sensorkit
+    pull_policy: never
+    command: service run Huntsman sensorkit.std.sensor
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *dome-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Alpaca service, running on the ASCOM Remote host, reached via network_mode: host.
+  alpaca:
+    image: sensorkit
+    pull_policy: never
+    command: service run alpaca_service sensorkit.alpaca.service
+    environment:
+      <<: *common-env
+      NATS_URL: nats://localhost:4222
+    network_mode: host
+    volumes:
+      - *config-file
+      - *dome-file
+      - *data-dir
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # INDIGO service, running on the host, reached via network_mode: host.
+  indigo:
+    image: sensorkit
+    pull_policy: never
+    command: service run indigo_service sensorkit.indigo.service
+    environment:
+      <<: *common-env
+      NATS_URL: nats://localhost:4222
+    network_mode: host
+    volumes:
+      - *config-file
+      - *dome-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # TheSky service, running on the host, reached via network_mode: host.
+  thesky:
+    image: sensorkit
+    pull_policy: never
+    command: service run thesky_service sensorkit.thesky.service
+    environment:
+      <<: *common-env
+      NATS_URL: nats://localhost:4222
+    network_mode: host
+    volumes:
+      - *config-file
+      - *dome-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Huntsman dome service, running on the host, reached via network_mode: host
+  # (huntsman_dome.id == huntsman_dome_service). Built from the config image +
+  # pyserial-asyncio (only this service opens the serial port).
+  dome:
+    build:
+      additional_contexts:
+        - base=service:config
+      dockerfile_inline: |
+        FROM base
+        RUN pip install --no-cache-dir pyserial-asyncio
+    image: sensorkit-dome
+    pull_policy: never
+    command: service run huntsman_dome_service /opt/sk/huntsman_dome.py
+    environment:
+      <<: *common-env
+      NATS_URL: nats://localhost:4222
+    network_mode: host
+    devices:
+      - "/dev/rfcomm0:/dev/rfcomm0"
+    volumes:
+      - *config-file
+      - *dome-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Burr calibration program (burr[].id == Burr).
+  burr:
+    image: sensorkit
+    pull_policy: never
+    command: service run Burr sensorkit.burr.program
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *dome-file
+      - *data-dir
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Otto satellite tasking program (otto[].id == otto).
+  otto:
+    image: sensorkit
+    pull_policy: never
+    command: service run Otto sensorkit.otto.program
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *dome-file
+      - *env-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # SENPAI streak analyzer (senpai.id == SENPAI). Built from the config image +
+  # astrometry.net (solve-field). Needs /path/to/senpai_Huntsman.yaml to exist and
+  # /path/to/catalogs for the star catalog + astrometry indices.
+  senpai:
+    build:
+      additional_contexts:
+        - base=service:config
+      dockerfile_inline: |
+        FROM base
+        RUN apt-get update \
+         && apt-get install -y --no-install-recommends astrometry.net \
+         && rm -rf /var/lib/apt/lists/*
+    image: sensorkit-senpai
+    pull_policy: never
+    command: service run SENPAI sensorkit.senpai.service
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *dome-file
+      - *data-dir
+      - "/opt/sk/senpai_Huntsman.yaml:/opt/sk/senpai_Huntsman.yaml:ro"
+      - "/opt/sk/catalogs:/opt/sk/catalogs:ro"
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Automation agent — schedules tasking across the controller's programs.
+  agent:
+    image: sensorkit
+    pull_policy: never
+    command: service run agent sensorkit.auto.agent
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *dome-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+      controller:
+        condition: service_started
+      alpaca:
+        condition: service_started
+      indigo:
+        condition: service_started
+      thesky:
+        condition: service_started
+      dome:
+        condition: service_started
+
+  # Sky transmission analyzer (sky_transmission[].id == OMEA).
+  sky_transmission:
+    image: sensorkit
+    pull_policy: never
+    command: service run OMEA sensorkit.sky_transmission.service
+    environment:
+      <<: *common-env
+    ports:
+      - "8200:8200"
+    volumes:
+      - *config-file
+      - *data-dir
+      - "/opt/sk/instrument_model_Huntsman.json:/opt/sk/instrument_model_Huntsman.json:ro"
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Slack notifications (slack.id == slack_service) — needs .env for the token.
+  slack:
+    image: sensorkit
+    pull_policy: never
+    command: service run slack_service sensorkit.slack.service
+    environment:
+      <<: *common-env
+    volumes:
+      - *config-file
+      - *dome-file
+      - *env-file
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
+
+  # Web API (services[].id == webapi).
+  webapi:
+    image: sensorkit
+    pull_policy: never
+    command: service run WebAPI sensorkit.webapi
+    environment:
+      <<: *common-env
+    ports:
+      - "8000:8000"
+    volumes:
+      - *config-file
+      - *dome-file
+      - *data-dir
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
