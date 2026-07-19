@@ -18,7 +18,6 @@ DEFAULT_BASE_IMPORTS = (
     "sensorkit.data.filesys",
     "sensorkit.data.fits",
     "sensorkit.data.local",
-    "sensorkit.models.devices",
 )
 BACKEND_MODULES = {
     "nats": "sensorkit.backend.nats",

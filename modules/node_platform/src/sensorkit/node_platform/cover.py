@@ -8,13 +8,12 @@ import ourskyai_node_platform_api as osapi
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Opened, Stop
-from sensorkit.std import Connected
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
     NodePlatformDeviceState,
 )
+from sensorkit.std import Connected, Opened, Stop
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 
 

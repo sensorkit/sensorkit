@@ -162,7 +162,7 @@ Commands are typed Pydantic models sent to devices via `DeviceClient.command(...
 
 ### Standard commands
 
-`sensorkit.models.devices` defines the shared vocabulary (re-exported from `sk`): `Init`, `Deinit`, `Connect`, `Disconnect`, `Enable`, `Disable`, `Home`, `MoveToPark`, `SetParkPosition`, `FollowTarget`, `Stop`, `Open`, `Close`, `SetFilter`, `SetBinning`, `ChangeFocusPosition`, `ChangeRotatorPosition`, `SetSyncEnabled`, `SetTemperature`, `EnableAxis`, `DisableAxis`, `CameraCapture`.
+`sensorkit.std` defines the shared vocabulary. Generic commands live in `sensorkit.std.traits`: `Init`, `Deinit`, `Connect`, `Disconnect`, `Enable`, `Disable`, `Home`, `Stop`, `MoveToPark`, `SetParkPosition`. Family-specific modules add the rest, e.g. `sensorkit.std.mount` (`FollowTarget`, `ApplyOffset`, `EnableAxis`, `DisableAxis`, pointing-model commands), `sensorkit.std.optics` (`SetFilter`, `ChangeFocusPosition`, `OpenMirrorCover`, `CloseMirrorCover`), `sensorkit.std.instrument` (`CameraCapture`, `ConfigureCameraSensor`, `ChangeRotatorPosition`), and `sensorkit.std.enclosure` (`OpenEnclosure`, `CloseEnclosure`, `MoveEnclosure`). Everything is re-exported from `sensorkit.std`.
 
 Devices implement whichever subset applies; traits and archetypes (below) describe the result.
 

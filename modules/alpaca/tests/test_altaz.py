@@ -11,7 +11,7 @@ from sensorkit.alpaca.telescope import (
     AlpacaTelescopeState,
 )
 from sensorkit.astro.coords import Geodetic
-from sensorkit.models.devices import FollowTarget
+from sensorkit.std import FollowTarget
 
 
 @pytest.fixture

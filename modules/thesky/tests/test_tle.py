@@ -3,8 +3,7 @@ import pytest
 
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
-from sensorkit.models.devices import FollowTarget
-from sensorkit.std import Connect
+from sensorkit.std import Connect, FollowTarget
 from sensorkit.thesky.telescope import TheSkyTelescopeConfig, TheSkyTelescopeState
 
 
@@ -70,6 +69,7 @@ async def test_write_tle(telescope):
     assert tle_path is not None
 
     import pathlib
+
     # The path uses the satellite designator from TLE line1 as filename
     import tempfile
     designator = ISS_TLE.line1.split()[1]

@@ -2,10 +2,8 @@
 import pytest
 from conftest import MockNinaClient
 
-import sensorkit.api as sk
-from sensorkit.models.devices import Stop
 from sensorkit.nina.rotator import NinaRotatorConfig, NinaRotatorState
-from sensorkit.std import Connect, Disconnect
+from sensorkit.std import Connect, Disconnect, Stop
 from sensorkit.std.instrument import ChangeRotatorPosition
 
 

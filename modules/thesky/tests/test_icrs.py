@@ -2,8 +2,7 @@
 import pytest
 
 from sensorkit.astro.coords import Geodetic
-from sensorkit.models.devices import FollowTarget
-from sensorkit.std import Connect
+from sensorkit.std import Connect, FollowTarget
 from sensorkit.thesky.telescope import TheSkyTelescopeConfig, TheSkyTelescopeState
 
 

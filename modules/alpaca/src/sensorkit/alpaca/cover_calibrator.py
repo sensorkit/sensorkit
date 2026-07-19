@@ -14,8 +14,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Opened, Stop
-from sensorkit.std import Connect, Connected, Disconnect
+from sensorkit.std import Connect, Connected, Disconnect, Opened, Stop
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 
 # CoverStatus enum (ICoverCalibratorV2)

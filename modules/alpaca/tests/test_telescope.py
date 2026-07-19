@@ -8,8 +8,7 @@ from sensorkit.alpaca.telescope import (
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
 )
-from sensorkit.models.devices import Home, MoveToPark, Stop
-from sensorkit.std import Connect, Disconnect
+from sensorkit.std import Connect, Disconnect, Home, MoveToPark, Stop
 
 
 @pytest.fixture

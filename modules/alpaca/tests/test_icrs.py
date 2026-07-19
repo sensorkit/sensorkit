@@ -6,13 +6,12 @@ import pytest
 from astropy.coordinates import EarthLocation
 from conftest import MockAlpacaSDKDevice
 
-from sensorkit.astro.coords import Geodetic
-
 from sensorkit.alpaca.telescope import (
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
 )
-from sensorkit.models.devices import FollowTarget
+from sensorkit.astro.coords import Geodetic
+from sensorkit.std import FollowTarget
 
 
 @pytest.fixture

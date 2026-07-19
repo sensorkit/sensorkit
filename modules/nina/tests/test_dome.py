@@ -2,10 +2,8 @@
 import pytest
 from conftest import MockNinaClient
 
-import sensorkit.api as sk
-from sensorkit.models.devices import Home, Stop
 from sensorkit.nina.dome import NinaDomeConfig, NinaDomeState
-from sensorkit.std import Connect, Disconnect
+from sensorkit.std import Connect, Disconnect, Home, Stop
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 
 

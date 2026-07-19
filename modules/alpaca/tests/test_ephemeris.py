@@ -14,7 +14,7 @@ from sensorkit.alpaca.telescope import (
 from sensorkit.astro.common import ReferenceFrame
 from sensorkit.astro.coords import Equatorial, Geodetic
 from sensorkit.astro.target import EphemerisTarget
-from sensorkit.models.devices import FollowTarget
+from sensorkit.std import FollowTarget
 
 _UTC_TO_SIDEREAL = 1.00273791
 

@@ -16,7 +16,7 @@ from astropy.utils import iers
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.astro.common import TLE, AltAzPointing, RADecPointing
+from sensorkit.astro.common import TLE, AltAzPointing, RADecPointing, ReferenceFrame
 from sensorkit.astro.coords import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
@@ -26,22 +26,23 @@ from sensorkit.astro.target import (
     RateTarget,
     TLETarget,
 )
-from sensorkit.astro.common import ReferenceFrame
-from sensorkit.models.devices import (
+from sensorkit.std import (
     AxisRate,
     AxisRates,
+    Connect,
+    Connected,
     Deinit,
+    Disconnect,
     FollowTarget,
     Home,
     Init,
-    MoveToPark,
     MountAxis,
+    MoveToPark,
     SetParkPosition,
     Slewing,
     Stop,
     Tracking,
 )
-from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.thesky.device import (
     CommandNotSupportedError,
     MountCommandInProgressError,

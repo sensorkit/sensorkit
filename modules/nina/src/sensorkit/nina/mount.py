@@ -10,7 +10,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.astro.common import SitePosition, AltAzPointing, RADecPointing
+from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
 from sensorkit.astro.coords import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
@@ -18,26 +18,27 @@ from sensorkit.astro.target import (
     ICRSTarget,
     TLETarget,
 )
-from sensorkit.astro.common import ReferenceFrame
-from sensorkit.models.devices import (
-    AxisRate,
-    AxisRates,
-    Deinit,
-    FollowTarget,
-    Home,
-    Init,
-    MoveToPark,
-    MountAxis,
-    SetParkPosition,
-    Slewing,
-    Stop,
-    Tracking,
-)
-from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import (
     NinaDevice,
     NinaDeviceConfig,
     NinaDeviceState,
+)
+from sensorkit.std import (
+    AxisRate,
+    AxisRates,
+    Connect,
+    Connected,
+    Deinit,
+    Disconnect,
+    FollowTarget,
+    Home,
+    Init,
+    MountAxis,
+    MoveToPark,
+    SetParkPosition,
+    Slewing,
+    Stop,
+    Tracking,
 )
 
 

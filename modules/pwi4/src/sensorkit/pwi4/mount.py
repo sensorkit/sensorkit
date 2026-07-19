@@ -23,7 +23,13 @@ from sensorkit.astro.target import (
     RateTarget,
     TLETarget,
 )
-from sensorkit.models.devices import (
+from sensorkit.pwi4.device import (
+    PWI4Client,
+    PWI4Device,
+    PWI4DeviceConfig,
+    PWI4DeviceState,
+)
+from sensorkit.std import (
     AltAzArcseconds,
     ApplyOffset,
     AxisEnabled,
@@ -31,8 +37,11 @@ from sensorkit.models.devices import (
     AxisRates,
     AxisTargetDistance,
     AzimuthWrapRange,
+    Connect,
+    Connected,
     Deinit,
     DisableAxis,
+    Disconnect,
     EnableAxis,
     FollowTarget,
     Home,
@@ -53,13 +62,6 @@ from sensorkit.models.devices import (
     Stop,
     Tracking,
 )
-from sensorkit.pwi4.device import (
-    PWI4Client,
-    PWI4Device,
-    PWI4DeviceConfig,
-    PWI4DeviceState,
-)
-from sensorkit.std import Connect, Connected, Disconnect
 
 iers.conf.auto_download = False
 iers.conf.auto_max_age = None

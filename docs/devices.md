@@ -194,7 +194,7 @@ If your hardware speaks something SensorKit doesn't yet, a device is just a Pyth
 
 ```python
 import sensorkit.api as sk
-from sensorkit.models.devices import Connect, Stop
+from sensorkit.std import Connect, Stop
 
 @sk.declare_device
 class MyMount:

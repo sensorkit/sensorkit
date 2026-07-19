@@ -10,13 +10,13 @@ from conftest import (
     make_safety_status,
 )
 
-from sensorkit.models.devices import Stop
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.enclosure import (
     NodePlatformEnclosure,
     NodePlatformEnclosureConfig,
     NodePlatformEnclosureState,
 )
+from sensorkit.std import Stop
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 
 Shutter = osapi.EnclosureShutterState

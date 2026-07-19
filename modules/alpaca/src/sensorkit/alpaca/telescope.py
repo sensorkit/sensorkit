@@ -20,7 +20,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.astro.common import SitePosition, AltAzPointing, RADecPointing
+from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
 from sensorkit.astro.coords import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
@@ -30,22 +30,23 @@ from sensorkit.astro.target import (
     RateTarget,
     TLETarget,
 )
-from sensorkit.astro.common import ReferenceFrame
-from sensorkit.models.devices import (
+from sensorkit.std import (
     AxisRate,
     AxisRates,
+    Connect,
+    Connected,
     Deinit,
+    Disconnect,
     FollowTarget,
     Home,
     Init,
-    MoveToPark,
     MountAxis,
+    MoveToPark,
     SetParkPosition,
     Slewing,
     Stop,
     Tracking,
 )
-from sensorkit.std import Connect, Connected, Disconnect
 
 iers.conf.auto_download = False
 # Suppress the warning that results from the above decision

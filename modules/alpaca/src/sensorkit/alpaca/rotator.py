@@ -14,8 +14,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Stop
-from sensorkit.std import Connect, Connected, Disconnect
+from sensorkit.std import Connect, Connected, Disconnect, Stop
 from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
 
 

@@ -7,9 +7,8 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Stop
-from sensorkit.std import Connect, Connected, Disable, Disconnect, Enable, Enabled
 from sensorkit.pwi4.device import PWI4Client, PWI4Device, PWI4DeviceConfig, PWI4DeviceState
+from sensorkit.std import Connect, Connected, Disable, Disconnect, Enable, Enabled, Stop
 from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
 
 

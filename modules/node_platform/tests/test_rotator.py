@@ -4,13 +4,13 @@
 import pytest
 from conftest import MockNodePlatformAPI, make_rotator_status
 
-from sensorkit.models.devices import Stop
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.rotator import (
     NodePlatformRotator,
     NodePlatformRotatorConfig,
     NodePlatformRotatorState,
 )
+from sensorkit.std import Stop
 from sensorkit.std.instrument import ChangeRotatorPosition
 
 

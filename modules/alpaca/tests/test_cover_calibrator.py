@@ -10,8 +10,7 @@ from sensorkit.alpaca.cover_calibrator import (
     AlpacaCoverCalibratorConfig,
     AlpacaCoverCalibratorState,
 )
-from sensorkit.models.devices import Stop
-from sensorkit.std import Connect, Disconnect
+from sensorkit.std import Connect, Disconnect, Stop
 
 
 @pytest.fixture

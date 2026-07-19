@@ -4,13 +4,13 @@
 import pytest
 from conftest import MockNodePlatformAPI, make_focuser_status
 
-from sensorkit.models.devices import Stop
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.focuser import (
     NodePlatformFocuser,
     NodePlatformFocuserConfig,
     NodePlatformFocuserState,
 )
+from sensorkit.std import Stop
 from sensorkit.std.optics import ChangeFocusPosition
 
 

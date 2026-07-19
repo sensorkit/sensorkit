@@ -14,8 +14,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
-from sensorkit.models.devices import Stop
-from sensorkit.std import Connect, Connected, Disconnect, Temperature, TemperatureUnit
+from sensorkit.std import Connect, Connected, Disconnect, Stop, Temperature, TemperatureUnit
 from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
 
 

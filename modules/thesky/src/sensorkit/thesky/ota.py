@@ -7,8 +7,7 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Opened
-from sensorkit.std import Connect, Connected, Disconnect
+from sensorkit.std import Connect, Connected, Disconnect, Opened
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 from sensorkit.thesky.device import (
     OTACommandInProgressError,

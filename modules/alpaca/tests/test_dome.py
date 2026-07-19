@@ -5,8 +5,7 @@ import pytest
 from conftest import MockAlpacaSDKDevice
 
 from sensorkit.alpaca.dome import AlpacaDomeConfig, AlpacaDomeState
-from sensorkit.models.devices import Home, MoveToPark, Stop
-from sensorkit.std import Connect, Disconnect
+from sensorkit.std import Connect, Disconnect, Home, MoveToPark, Stop
 
 
 @pytest.fixture

@@ -15,7 +15,6 @@ from pydantic import BaseModel
 import sensorkit.api as sk
 from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ArrayInfo, ImageInfo
-from sensorkit.models.devices import Stop
 from sensorkit.nina.device import (
     NinaDevice,
     NinaDeviceConfig,
@@ -33,6 +32,7 @@ from sensorkit.std import (
     Disconnect,
     ExposureInfo,
     FrameType,
+    Stop,
     TemperatureUnit,
 )
 

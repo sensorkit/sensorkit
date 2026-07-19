@@ -22,7 +22,7 @@ from sensorkit.alpaca.telescope import (
     AlpacaTelescopeState,
     radec_rates_to_altaz_rates,
 )
-from sensorkit.models.devices import AxisRates
+from sensorkit.std import AxisRates
 
 _SIDEREAL_RATE_DEG_S = 15.04107 / 3600.0
 # ASCOM RightAscensionRate (seconds of RA / SI second) that yields an inertial

@@ -15,9 +15,10 @@ from sensorkit.astro.common import RADecPointing
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ImageInfo
-from sensorkit.models.devices import AxisRate, AxisRates, MountAxis
 from sensorkit.sdasim.camera import DeviceConnectionError, SdasimCamera, SdasimCameraConfig
 from sensorkit.std import (
+    AxisRate,
+    AxisRates,
     Binning,
     CameraCapture,
     CameraSensorTemperature,
@@ -25,6 +26,7 @@ from sensorkit.std import (
     ConfigureCameraSensor,
     ExposureInfo,
     FrameType,
+    MountAxis,
     TemperatureUnit,
 )
 

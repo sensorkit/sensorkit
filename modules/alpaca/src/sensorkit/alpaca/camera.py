@@ -21,7 +21,6 @@ from sensorkit.alpaca.device import (
 )
 from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ArrayInfo, ImageInfo
-from sensorkit.models.devices import Stop
 from sensorkit.std import (
     Binning,
     CameraCapture,
@@ -34,6 +33,7 @@ from sensorkit.std import (
     Disconnect,
     ExposureInfo,
     FrameType,
+    Stop,
     TemperatureUnit,
 )
 

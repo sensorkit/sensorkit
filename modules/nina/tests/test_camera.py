@@ -3,7 +3,6 @@ import pytest
 from conftest import MockNinaClient
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Deinit, Init, Stop
 from sensorkit.nina.camera import NinaCameraConfig, NinaCameraState
 from sensorkit.std import Connect, Disconnect, TemperatureUnit
 from sensorkit.std.instrument import (

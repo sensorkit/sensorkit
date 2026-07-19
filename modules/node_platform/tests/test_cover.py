@@ -4,13 +4,13 @@
 import pytest
 from conftest import MockNodePlatformAPI, make_cover_status
 
-from sensorkit.models.devices import Stop
 from sensorkit.node_platform.cover import (
     NodePlatformCover,
     NodePlatformCoverConfig,
     NodePlatformCoverState,
 )
 from sensorkit.node_platform.device import DeviceConnectionError
+from sensorkit.std import Stop
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 
 

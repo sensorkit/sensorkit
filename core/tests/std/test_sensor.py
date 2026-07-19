@@ -20,12 +20,6 @@ from sensorkit.core.task import (
     ShutdownTask,
     StandbyTask,
 )
-from sensorkit.models.devices import (
-    Deinit,
-    FollowTarget,
-    Init,
-    Stop,
-)
 from sensorkit.std import (
     CameraCapture,
     CameraParameterSet,
@@ -34,6 +28,9 @@ from sensorkit.std import (
     CloseMirrorCover,
     ConfigureCameraSensor,
     Connect,
+    Deinit,
+    FollowTarget,
+    Init,
     OpenEnclosure,
     OpenMirrorCover,
     Sensor,
@@ -43,6 +40,7 @@ from sensorkit.std import (
     SensorPolicies,
     SetFilter,
     StandardCollectTask,
+    Stop,
 )
 
 

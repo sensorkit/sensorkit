@@ -15,8 +15,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceState,
 )
 from sensorkit.astro.common import AltAzPointing
-from sensorkit.models.devices import Home, MoveToPark, Opened, Stop
-from sensorkit.std import Connect, Connected, Disconnect
+from sensorkit.std import Connect, Connected, Disconnect, Home, MoveToPark, Opened, Stop
 from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
 
 _SHUTTER_OPEN = 0

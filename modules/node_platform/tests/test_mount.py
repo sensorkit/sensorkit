@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from conftest import MockNodePlatformAPI, make_mount_status
 
-from sensorkit.models.devices import Deinit, FollowTarget, Home, Init, MoveToPark, Stop
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.mount import (
     NodePlatformMount,
     NodePlatformMountConfig,
     NodePlatformMountState,
 )
+from sensorkit.std import Deinit, FollowTarget, Home, Init, MoveToPark, Stop
 
 
 @pytest.fixture

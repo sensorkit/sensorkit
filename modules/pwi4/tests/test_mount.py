@@ -1,12 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sensorkit.models.devices import DisableAxis, EnableAxis, Home, MountAxis, MoveToPark, Stop
-from sensorkit.pwi4.mount import PWI4Mount, PWI4MountConfig, PWI4MountState
-from sensorkit.std import Connect, Disconnect
-
+import pytest
 from conftest import MockPWI4Client
+
+from sensorkit.pwi4.mount import PWI4Mount, PWI4MountConfig, PWI4MountState
+from sensorkit.std import (
+    Connect,
+    DisableAxis,
+    Disconnect,
+    EnableAxis,
+    Home,
+    MountAxis,
+    MoveToPark,
+    Stop,
+)
 
 
 @pytest.fixture

@@ -13,7 +13,7 @@ async def device_group():
 @with_kit
 async def connect_device(kit, entity: str):
     """Connect to a device."""
-    from sensorkit.models.devices import Connect
+    from sensorkit.std import Connect
 
     await kit.device(entity).command(Connect())
 
@@ -22,7 +22,7 @@ async def connect_device(kit, entity: str):
 @with_kit
 async def disconnect_device(kit, entity: str):
     """Disconnect from a device."""
-    from sensorkit.models.devices import Disconnect
+    from sensorkit.std import Disconnect
 
     await kit.device(entity).command(Disconnect())
 
@@ -31,7 +31,7 @@ async def disconnect_device(kit, entity: str):
 @with_kit
 async def stop_device(kit, entity: str):
     """Abort any in-progress motion on a device."""
-    from sensorkit.models.devices import Stop
+    from sensorkit.std import Stop
 
     await kit.device(entity).command(Stop())
 

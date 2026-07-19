@@ -11,18 +11,12 @@ from pydantic import BaseModel, Field
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
 from sensorkit.astro.target import CatalogTarget, FrameTarget, ICRSTarget, TLETarget
-from sensorkit.models.devices import (
-    AxisRates,
-    Deinit,
-    FollowTarget,
-    Init,
-    Stop,
-)
 from sensorkit.std.collect import Collect, StandardCollectTask
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.std.instrument import Binning, CameraCapture, ConfigureCameraSensor
+from sensorkit.std.mount import AxisRates, FollowTarget
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover, SetFilter
-from sensorkit.std.traits import Connect
+from sensorkit.std.traits import Connect, Deinit, Init, Stop
 
 
 class Sensor:

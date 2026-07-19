@@ -8,10 +8,9 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Home, MoveToPark, Opened, Stop
-from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.astro.common import AltAzPointing
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
+from sensorkit.std import Connect, Connected, Disconnect, Home, MoveToPark, Opened, Stop
 from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
 
 

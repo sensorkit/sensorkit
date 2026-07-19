@@ -27,10 +27,19 @@ from sensorkit.astro.target import (
     RateTarget,
     TLETarget,
 )
-from sensorkit.models.devices import (
+from sensorkit.node_platform.device import (
+    NodePlatformDevice,
+    NodePlatformDeviceConfig,
+    NodePlatformDeviceState,
+)
+from sensorkit.std import (
     AxisRate,
     AxisRates,
+    Connect,
+    Connected,
     Deinit,
+    Disable,
+    Enable,
     FollowTarget,
     Home,
     Init,
@@ -41,12 +50,6 @@ from sensorkit.models.devices import (
     Stop,
     Tracking,
 )
-from sensorkit.node_platform.device import (
-    NodePlatformDevice,
-    NodePlatformDeviceConfig,
-    NodePlatformDeviceState,
-)
-from sensorkit.std import Connect, Connected, Enable, Disable
 
 iers.conf.auto_download = False
 iers.conf.auto_max_age = None

@@ -11,8 +11,7 @@ from sensorkit.alpaca.camera import (
     AlpacaCameraConfig,
     AlpacaCameraState,
 )
-from sensorkit.models.devices import Stop
-from sensorkit.std import Connect, Disconnect
+from sensorkit.std import Connect, Disconnect, Stop
 
 
 class TestCameraCapture:

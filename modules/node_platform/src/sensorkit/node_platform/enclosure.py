@@ -10,14 +10,13 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.models.devices import Home, Opened, Stop
-from sensorkit.std import Connected
 from sensorkit.astro.common import AltAzPointing
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
     NodePlatformDeviceState,
 )
+from sensorkit.std import Connected, Home, Opened, Stop
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 
 # Re-export SDK enums for convenience in config / external use

@@ -2,11 +2,10 @@
 import pytest
 from conftest import MockNinaClient
 
-import sensorkit.api as sk
 from sensorkit.astro.coords import Horizontal
 from sensorkit.astro.target import AltAzTarget
-from sensorkit.models.devices import FollowTarget
 from sensorkit.nina.mount import NinaMountConfig, NinaMountState
+from sensorkit.std import FollowTarget
 
 
 @pytest.fixture

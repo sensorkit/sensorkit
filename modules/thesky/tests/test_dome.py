@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
-from sensorkit.models.devices import Home, MoveToPark, Stop
-from sensorkit.std import Connect, Disconnect
+from sensorkit.std import Connect, Disconnect, Home, MoveToPark, Stop
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.thesky.dome import TheSkyDomeConfig, TheSkyDomeState
 
