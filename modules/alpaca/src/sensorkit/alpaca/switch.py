@@ -39,24 +39,21 @@ class AlpacaSwitchStates(BaseModel):
     switches: list[AlpacaSwitchState]
 
 
+class AlpacaSwitchDeviceState(AlpacaDeviceState):
+    device_type: Literal["switch"] = "switch"
+
+
 @sk.declare_device
 class AlpacaSwitch(AlpacaDevice):
     """Alpaca Switch implementation."""
 
     config: AlpacaSwitchConfig
     device_name = "Switch"
+    state_model = AlpacaSwitchDeviceState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        # Restore state
-        try:
-            self.state = await device.kv_get_model(AlpacaSwitchDeviceState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AlpacaSwitchDeviceState()
+        await self.restore_state()
 
         self._max_switch: int = 0
 
@@ -159,7 +156,3 @@ class AlpacaSwitchConfig(AlpacaDeviceConfig[AlpacaSwitch]):
     @override
     def create_device(self):
         return AlpacaSwitch(self)
-
-
-class AlpacaSwitchDeviceState(AlpacaDeviceState):
-    device_type: Literal["switch"] = "switch"

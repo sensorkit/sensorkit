@@ -32,23 +32,21 @@ class AutoslewTertiaryStatus(BaseModel):
     port: int | None = None
 
 
+class AutoslewTertiaryState(AlpacaDeviceState):
+    device_type: Literal["tertiary"] = "tertiary"
+
+
 @sk.declare_device
 class AutoslewTertiary(AutoslewDevice):
     """ASA Autoslew tertiary (Nasmyth) selector, via the Telescope backbone."""
 
     config: AutoslewTertiaryConfig
     device_name = "Tertiary"
+    state_model = AutoslewTertiaryState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        try:
-            self.state = await device.kv_get_model(AutoslewTertiaryState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AutoslewTertiaryState()
+        await self.restore_state()
 
         self._port: int | None = None
 
@@ -112,7 +110,3 @@ class AutoslewTertiaryConfig(AlpacaDeviceConfig[AutoslewTertiary]):
     @override
     def create_device(self):
         return AutoslewTertiary(self)
-
-
-class AutoslewTertiaryState(AlpacaDeviceState):
-    device_type: Literal["tertiary"] = "tertiary"

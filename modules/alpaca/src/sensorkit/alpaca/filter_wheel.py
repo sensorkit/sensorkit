@@ -17,24 +17,21 @@ from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.optics import Filter, Filters, SetFilter
 
 
+class AlpacaFilterWheelState(AlpacaDeviceState):
+    device_type: Literal["filter_wheel"] = "filter_wheel"
+
+
 @sk.declare_device
 class AlpacaFilterWheel(AlpacaDevice):
     """Alpaca FilterWheel implementation."""
 
     config: AlpacaFilterWheelConfig
     device_name = "FilterWheel"
+    state_model = AlpacaFilterWheelState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        # Restore state
-        try:
-            self.state = await device.kv_get_model(AlpacaFilterWheelState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AlpacaFilterWheelState()
+        await self.restore_state()
 
         self.filter_wheel_position: float | None = None
 
@@ -155,7 +152,3 @@ class AlpacaFilterWheelConfig(AlpacaDeviceConfig[AlpacaFilterWheel]):
     @override
     def create_device(self):
         return AlpacaFilterWheel(self)
-
-
-class AlpacaFilterWheelState(AlpacaDeviceState):
-    device_type: Literal["filter_wheel"] = "filter_wheel"

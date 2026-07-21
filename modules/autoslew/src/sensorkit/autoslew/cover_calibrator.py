@@ -26,19 +26,20 @@ from sensorkit.alpaca.cover_calibrator import (
 from sensorkit.autoslew.device import AutoslewMixin
 
 
+class AutoslewCoverCalibratorState(AlpacaCoverCalibratorState):
+    """Autoslew mirror cover state (distinct KV key from the Alpaca base)."""
+
+
 @sk.declare_device
 class AutoslewCoverCalibrator(AutoslewMixin, AlpacaCoverCalibrator):
     """ASA Autoslew mirror cover implementation."""
 
     config: AutoslewCoverCalibratorConfig
     device_name = "CoverCalibrator"
+    state_model = AutoslewCoverCalibratorState
 
 
 class AutoslewCoverCalibratorConfig(AlpacaCoverCalibratorConfig):
     @override
     def create_device(self):
         return AutoslewCoverCalibrator(self)
-
-
-class AutoslewCoverCalibratorState(AlpacaCoverCalibratorState):
-    pass

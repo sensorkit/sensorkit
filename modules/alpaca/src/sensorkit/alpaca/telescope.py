@@ -158,24 +158,22 @@ def radec_rates_to_altaz_rates(
     return alt_rate_deg_per_sec, az_rate_deg_per_sec
 
 
+class AlpacaTelescopeState(AlpacaDeviceState):
+    device_type: Literal["telescope"] = "telescope"
+    has_been_homed: bool = False
+
+
 @sk.declare_device
 class AlpacaTelescope(AlpacaDevice):
     """Alpaca Telescope implementation."""
 
     config: AlpacaTelescopeConfig
     device_name = "Telescope"
+    state_model = AlpacaTelescopeState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        # Restore state
-        try:
-            self.state = await device.kv_get_model(AlpacaTelescopeState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AlpacaTelescopeState()
+        await self.restore_state()
 
         self._tracking: bool | None = None
         self._slewing: bool | None = None
@@ -879,8 +877,3 @@ class AlpacaTelescopeConfig(AlpacaDeviceConfig[AlpacaTelescope]):
     @override
     def create_device(self):
         return AlpacaTelescope(self)
-
-
-class AlpacaTelescopeState(AlpacaDeviceState):
-    device_type: Literal["telescope"] = "telescope"
-    has_been_homed: bool = False

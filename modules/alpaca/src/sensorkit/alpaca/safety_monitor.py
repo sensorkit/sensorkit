@@ -22,24 +22,21 @@ class AlpacaSafety(BaseModel):
     is_safe: bool
 
 
+class AlpacaSafetyMonitorState(AlpacaDeviceState):
+    device_type: Literal["safety_monitor"] = "safety_monitor"
+
+
 @sk.declare_device
 class AlpacaSafetyMonitor(AlpacaDevice):
     """Alpaca SafetyMonitor implementation."""
 
     config: AlpacaSafetyMonitorConfig
     device_name = "SafetyMonitor"
+    state_model = AlpacaSafetyMonitorState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        # Restore state
-        try:
-            self.state = await device.kv_get_model(AlpacaSafetyMonitorState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AlpacaSafetyMonitorState()
+        await self.restore_state()
 
         # Initialize the safety monitor
         await self._initialize()
@@ -102,7 +99,3 @@ class AlpacaSafetyMonitorConfig(AlpacaDeviceConfig[AlpacaSafetyMonitor]):
     @override
     def create_device(self):
         return AlpacaSafetyMonitor(self)
-
-
-class AlpacaSafetyMonitorState(AlpacaDeviceState):
-    device_type: Literal["safety_monitor"] = "safety_monitor"

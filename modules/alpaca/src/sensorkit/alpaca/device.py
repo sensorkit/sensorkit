@@ -10,7 +10,14 @@ from typing import Any, ClassVar, Literal
 from loguru import logger
 from pydantic import BaseModel
 
+import sensorkit.api as sk
 from alpaca.device import Device
+
+
+class AlpacaDeviceState(BaseModel):
+    """Generic Alpaca device state."""
+
+    device_type: Literal[None] = None
 
 
 @dataclass
@@ -19,13 +26,29 @@ class AlpacaDevice:
 
     config: AlpacaDeviceConfig
     device_connected: bool | None = field(default=None, init=False)
+    state: AlpacaDeviceState = field(init=False)
     device_name: ClassVar[str] = "Device"
+    state_model: ClassVar[type[AlpacaDeviceState]] = AlpacaDeviceState
     _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
     _reconnect: Callable[[], Coroutine] | None = field(default=None, init=False, repr=False)
 
     @property
     def address(self) -> str:
         return f"{self.config.host}:{self.config.port}"
+
+    async def restore_state(self):
+        """Restore persisted device state from the KV store.
+
+        Falls back to a fresh `state_model` instance if nothing is saved.
+        """
+
+        device = sk.device()
+        try:
+            self.state = await device.kv_get_model(self.state_model)
+            logger.debug(f"restored state for {device.entity}")
+        except Exception:
+            logger.warning(f"No saved state for {device.entity}")
+            self.state = self.state_model()
 
     async def require_connected(self):
         """Verify the device is connected, attempting to reconnect if not."""
@@ -137,12 +160,6 @@ class AlpacaDeviceConfig[T: AlpacaDevice = AlpacaDevice](BaseModel):
 
     def create_device(self) -> T:
         return AlpacaDevice(self)
-
-
-class AlpacaDeviceState(BaseModel):
-    """Generic Alpaca device state."""
-
-    device_type: Literal[None] = None
 
 
 class AlpacaError(Exception):

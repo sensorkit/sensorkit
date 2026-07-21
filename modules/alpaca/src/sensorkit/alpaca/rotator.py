@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import ClassVar, Literal, override
+from typing import Literal, override
 
 from loguru import logger
 from pydantic import BaseModel
@@ -41,19 +41,11 @@ class AlpacaRotator(AlpacaDevice):
 
     config: AlpacaRotatorConfig
     device_name = "Rotator"
-    state_model: ClassVar[type[AlpacaRotatorState]] = AlpacaRotatorState
+    state_model = AlpacaRotatorState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        # Restore state
-        try:
-            self.state = await device.kv_get_model(self.state_model)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = self.state_model()
+        await self.restore_state()
 
         self.rotator_position: float | None = None
 

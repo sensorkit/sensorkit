@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import ClassVar, Literal, override
+from typing import Literal, override
 
 from loguru import logger
 from pydantic import BaseModel
@@ -43,19 +43,11 @@ class AlpacaFocuser(AlpacaDevice):
 
     config: AlpacaFocuserConfig
     device_name = "Focuser"
-    state_model: ClassVar[type[AlpacaFocuserState]] = AlpacaFocuserState
+    state_model = AlpacaFocuserState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        # Restore state
-        try:
-            self.state = await device.kv_get_model(self.state_model)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = self.state_model()
+        await self.restore_state()
 
         self.focuser_position: float | None = None
 

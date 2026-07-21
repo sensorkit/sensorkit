@@ -148,6 +148,10 @@ class SatTrackError(BaseModel):
     track_error_ax2_millirad: float = 0.0
 
 
+class AutoslewTelescopeState(AlpacaTelescopeState):
+    """Autoslew mount state."""
+
+
 @sk.declare_device
 class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
     """ASA Autoslew mount implementation.
@@ -162,17 +166,11 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
 
     config: AutoslewTelescopeConfig
     device_name = "Telescope"
+    state_model = AutoslewTelescopeState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        try:
-            self.state = await device.kv_get_model(AutoslewTelescopeState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AutoslewTelescopeState()
+        await self.restore_state()
 
         self._tracking: bool | None = None
         self._slewing: bool | None = None
@@ -563,7 +561,3 @@ class AutoslewTelescopeConfig(AlpacaTelescopeConfig):
     @override
     def create_device(self):
         return AutoslewTelescope(self)
-
-
-class AutoslewTelescopeState(AlpacaTelescopeState):
-    """Autoslew mount state."""

@@ -127,24 +127,21 @@ class AlpacaCameraStatus(BaseModel):
     can_pulse_guide: bool = False
 
 
+class AlpacaCameraState(AlpacaDeviceState):
+    device_type: Literal["camera"] = "camera"
+
+
 @sk.declare_device
 class AlpacaCamera(AlpacaDevice):
     """Alpaca Camera implementation."""
 
     config: AlpacaCameraConfig
     device_name = "Camera"
+    state_model = AlpacaCameraState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        # Restore state
-        try:
-            self.state = await device.kv_get_model(AlpacaCameraState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AlpacaCameraState()
+        await self.restore_state()
 
         # Initialize the camera
         await self._initialize()
@@ -647,7 +644,3 @@ class AlpacaCameraConfig(AlpacaDeviceConfig[AlpacaCamera]):
     @override
     def create_device(self):
         return AlpacaCamera(self)
-
-
-class AlpacaCameraState(AlpacaDeviceState):
-    device_type: Literal["camera"] = "camera"

@@ -32,23 +32,21 @@ class AutoslewDomeStatus(BaseModel):
     in_scope_position: bool = False
 
 
+class AutoslewDomeState(AlpacaDeviceState):
+    device_type: Literal["dome"] = "dome"
+
+
 @sk.declare_device
 class AutoslewDome(AutoslewDevice):
     """ASA Autoslew enclosure shutter, driven via the Telescope backbone."""
 
     config: AutoslewDomeConfig
     device_name = "Dome"
+    state_model = AutoslewDomeState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        try:
-            self.state = await device.kv_get_model(AutoslewDomeState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AutoslewDomeState()
+        await self.restore_state()
 
         self._is_open: bool | None = None
 
@@ -122,7 +120,3 @@ class AutoslewDomeConfig(AlpacaDeviceConfig[AutoslewDome]):
     @override
     def create_device(self):
         return AutoslewDome(self)
-
-
-class AutoslewDomeState(AlpacaDeviceState):
-    device_type: Literal["dome"] = "dome"

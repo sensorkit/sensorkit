@@ -33,24 +33,21 @@ class AlpacaObservingConditionsStatus(BaseModel):
     time_since_last_update: dict[str, float] | None = None
 
 
+class AlpacaObservingConditionsState(AlpacaDeviceState):
+    device_type: Literal["observing_conditions"] = "observing_conditions"
+
+
 @sk.declare_device(type=StandardWeather)
 class AlpacaObservingConditions(AlpacaDevice):
     """Alpaca ObservingConditions implementation."""
 
     config: AlpacaObservingConditionsConfig
     device_name = "ObservingConditions"
+    state_model = AlpacaObservingConditionsState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        # Restore state
-        try:
-            self.state = await device.kv_get_model(AlpacaObservingConditionsState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AlpacaObservingConditionsState()
+        await self.restore_state()
 
         # Initialize the observing conditions
         await self._initialize()
@@ -195,7 +192,3 @@ class AlpacaObservingConditionsConfig(AlpacaDeviceConfig[AlpacaObservingConditio
     @override
     def create_device(self):
         return AlpacaObservingConditions(self)
-
-
-class AlpacaObservingConditionsState(AlpacaDeviceState):
-    device_type: Literal["observing_conditions"] = "observing_conditions"
