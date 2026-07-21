@@ -2956,6 +2956,10 @@ alpaca = [
     { name = "alpyca" },
     { name = "numpy" },
 ]
+autoslew = [
+    { name = "alpyca" },
+    { name = "numpy" },
+]
 burr = [
     { name = "astro-burr" },
 ]
@@ -3030,6 +3034,7 @@ requires-dist = [
     { name = "aiohttp", marker = "extra == 'slack'" },
     { name = "allclear", marker = "extra == 'sky-transmission'" },
     { name = "alpyca", marker = "extra == 'alpaca'", specifier = ">=3.1.1" },
+    { name = "alpyca", marker = "extra == 'autoslew'", specifier = ">=3.1.1" },
     { name = "alpyca", marker = "extra == 'sky-transmission'", specifier = ">=3.1.0" },
     { name = "astro-burr", marker = "extra == 'burr'" },
     { name = "astro-senpai", marker = "extra == 'senpai'", specifier = ">=2.3.1" },
@@ -3050,6 +3055,7 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'sky-transmission'" },
     { name = "nats-py", specifier = "==2.14" },
     { name = "numpy", marker = "extra == 'alpaca'", specifier = ">=1.24.0" },
+    { name = "numpy", marker = "extra == 'autoslew'", specifier = ">=1.24.0" },
     { name = "numpy", marker = "extra == 'sdasim'", specifier = ">=1.24.0" },
     { name = "ourskyai-node-platform-api", marker = "extra == 'node-platform'", specifier = ">=1.4.61" },
     { name = "pillow", specifier = ">=12.0.0" },
@@ -3072,7 +3078,7 @@ requires-dist = [
     { name = "watchdog", specifier = ">=6.0.0" },
     { name = "websockets", marker = "extra == 'indigo'", specifier = ">=14.0" },
 ]
-provides-extras = ["alpaca", "burr", "filesys", "indigo", "nina", "node-platform", "otto", "pwi4", "sdasim", "senpai", "sky-transmission", "slack", "systemd", "thesky", "thesky-simulator", "udl", "webapi"]
+provides-extras = ["alpaca", "autoslew", "burr", "filesys", "indigo", "nina", "node-platform", "otto", "pwi4", "sdasim", "senpai", "sky-transmission", "slack", "systemd", "thesky", "thesky-simulator", "udl", "webapi"]
 
 [package.metadata.requires-dev]
 dev = [
