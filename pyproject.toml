@@ -181,6 +181,7 @@ type = "layers"
 # models module is pydantic-only (no astro-senpai import).
 ignore_imports = [
     "sensorkit.udl.publishers -> sensorkit.senpai.models",
+    "sensorkit.autoslew.** -> sensorkit.alpaca.**",
 ]
 layers = [
     """

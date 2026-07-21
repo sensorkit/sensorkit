@@ -4,46 +4,31 @@
 A standard-device wrapper (Autoslew's Focuser exposes no extension actions of its own
 — SupportedActions = 0). The ASA focuser extras (``focuser:homefind``, ``afc:*``) live
 on the Telescope device and are driven through the shared Telescope backbone.
+
+Inherits `focuser_connect`/`focuser_disconnect`/`focuser_stop`/`focuser_change`/
+`status_publish` from `sensorkit.alpaca`'s `AlpacaFocuser` unchanged.
+`entity_init`/`entity_deinit` are overridden only to restore/persist
+`AutoslewFocuserState` (its own `has_been_homed` field) instead of the base
+`AlpacaFocuserState`; `_initialize` is overridden to add the backbone + home.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Literal, override
+from typing import override
 
-from alpaca.focuser import Focuser
 from alpaca.telescope import Telescope
 from loguru import logger
-from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.autoslew.device import (
-    AutoslewDevice,
-    AutoslewDeviceConfig,
-    AutoslewDeviceState,
-)
-from sensorkit.std import Connect, Connected, Disconnect, Home, Stop, Temperature, TemperatureUnit
-from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
-
-
-@sk.declare_keyword
-class AutoslewFocuserStatus(BaseModel):
-    """IFocuserV3 properties."""
-
-    position: float | None = None
-    is_moving: bool = False
-    absolute: bool = True
-    max_step: int = 0
-    max_increment: int = 0
-    step_size: float | None = None
-    temp_comp: bool = False
-    temp_comp_available: bool = False
-    temperature: float | None = None
+from sensorkit.alpaca.focuser import AlpacaFocuser, AlpacaFocuserConfig, AlpacaFocuserState
+from sensorkit.autoslew.device import AutoslewMixin
+from sensorkit.std import Disconnect, Home
 
 
 @sk.declare_device
-class AutoslewFocuser(AutoslewDevice):
+class AutoslewFocuser(AutoslewMixin, AlpacaFocuser):
     """ASA Autoslew focuser implementation."""
 
     config: AutoslewFocuserConfig
@@ -78,17 +63,9 @@ class AutoslewFocuser(AutoslewDevice):
             await self.disconnect(self.telescope)
         await sk.device().kv_put_model(self.state)
 
+    @override
     async def _initialize(self):
-        self._reconnect = lambda: self.focuser_connect(Connect())
-        self.focuser = Focuser(self.address, self.config.device_number, self.config.protocol)
-        await self.focuser_connect(Connect())
-
-        f = self.focuser
-        self._absolute = await self.get(f, "Absolute", True)
-        self._max_step = await self.get(f, "MaxStep", 100000)
-        self._max_increment = await self.get(f, "MaxIncrement", 100000)
-        self._step_size = await self.get(f, "StepSize", None)
-        self._temp_comp_available = await self.get(f, "TempCompAvailable", False)
+        await super()._initialize()
 
         # Telescope backbone for ASA focuser extras (focuser:homefind, afc:*).
         self.telescope = Telescope(self.address, 0, self.config.protocol)
@@ -129,99 +106,12 @@ class AutoslewFocuser(AutoslewDevice):
     async def afc_set_filter(self, filter_index: int) -> None:
         await self.action("afc:setfilter", str(filter_index))
 
-    @sk.command_handler
-    async def focuser_connect(self, cmd: Connect):
-        await self.connect(self.focuser, timeout=self.config.timeout)
-        await sk.device().publish(Connected(is_connected=True))
 
-    @sk.command_handler
-    async def focuser_disconnect(self, cmd: Disconnect):
-        await self.disconnect(self.focuser)
-        await sk.device().publish(Connected(is_connected=False))
-
-    @sk.command_handler
-    async def focuser_stop(self, cmd: Stop):
-        await self.require_connected()
-        logger.debug("stopping focuser")
-        await self.call(self.focuser, "Halt")
-        logger.debug("stopped focuser")
-
-    @sk.command_handler
-    async def focuser_change(self, cmd: ChangeFocusPosition):
-        await self.require_connected()
-        logger.debug(f"changing focus to position {cmd.position}")
-
-        target = max(0, min(int(cmd.position), self._max_step))
-
-        if self._absolute:
-            await self.call(self.focuser, "Move", target)
-        elif self.focuser_position is not None:
-            delta = target - int(self.focuser_position)
-            delta = max(-self._max_increment, min(delta, self._max_increment))
-            await self.call(self.focuser, "Move", delta)
-        else:
-            logger.warning("Cannot change focuser; current position unknown")
-            return
-
-        async with asyncio.timeout(self.config.timeout):
-            while await self.get(self.focuser, "IsMoving", False):
-                await asyncio.sleep(self.config.status_frequency)
-
-        logger.debug(f"changed focus to position {self.focuser_position}")
-
-    async def status_publish(self):
-        while True:
-            try:
-                f = self.focuser
-                connected = await self.get(f, "Connected", False)
-                self.device_connected = connected
-
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
-
-                if connected:
-                    position = await self.get(f, "Position", None)
-                    if position is not None:
-                        self.focuser_position = float(position)
-                        await device.publish(FocusPosition(position=self.focuser_position))
-
-                    temperature = await self.get(f, "Temperature", None)
-                    properties: dict = {
-                        "position": self.focuser_position,
-                        "is_moving": await self.get(f, "IsMoving", False),
-                        "absolute": self._absolute,
-                        "max_step": self._max_step,
-                        "max_increment": self._max_increment,
-                        "temp_comp": await self.get(f, "TempComp", False),
-                    }
-                    if self._step_size is not None:
-                        properties["step_size"] = self._step_size
-                    if self._temp_comp_available:
-                        properties["temp_comp_available"] = True
-                    if temperature is not None:
-                        properties["temperature"] = temperature
-
-                    await device.publish(AutoslewFocuserStatus(**properties))
-                    if temperature is not None:
-                        await device.publish(
-                            Temperature(temperature=temperature, units=TemperatureUnit.CELSIUS)
-                        )
-            except Exception as e:
-                logger.exception(f"Error in focuser status publish: {e}")
-
-            await asyncio.sleep(self.config.status_frequency)
-
-
-class AutoslewFocuserConfig(AutoslewDeviceConfig[AutoslewFocuser]):
-    device_type: Literal["focuser"] = "focuser"
-    status_frequency: float = 1.0
-    timeout: float = 60.0
-
+class AutoslewFocuserConfig(AlpacaFocuserConfig):
     @override
     def create_device(self):
         return AutoslewFocuser(self)
 
 
-class AutoslewFocuserState(AutoslewDeviceState):
-    device_type: Literal["focuser"] = "focuser"
+class AutoslewFocuserState(AlpacaFocuserState):
     has_been_homed: bool = False

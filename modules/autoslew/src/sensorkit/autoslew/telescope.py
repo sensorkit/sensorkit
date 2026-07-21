@@ -1,7 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """ASA Autoslew mount (ASCOM Alpaca Telescope + ASA extensions).
 
-Structure follows ``alpaca``'s telescope; the two Autoslew-specific differences are:
+Subclasses `sensorkit.alpaca`'s `AlpacaTelescope`, inheriting connect/disconnect,
+home/park, and the slew-settle poll unchanged. The parts that differ are overridden
+wholesale (re-decorated so they hook back into SensorKit — see
+`sensorkit.api.declarative`):
+
+  * **Init/stop/follow.** Autoslew needs its own capability probe (no RA/Dec-rate or
+    pulse-guide flags to cache), a motors-on + stale-track cleanup on init, and an
+    `AbortSlew` + ``sat:stop`` on stop.
 
   * **Frames.** Autoslew's ASCOM interface is JNow / topocentric-of-date on *both*
     read and command, regardless of its "Used Ascom Epoch" setting (verified live).
@@ -22,7 +29,7 @@ import asyncio
 import contextlib
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Literal, override
+from typing import override
 
 import astropy.units as u
 from alpaca.telescope import Telescope
@@ -33,6 +40,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from sensorkit.alpaca.telescope import AlpacaTelescope, AlpacaTelescopeConfig, AlpacaTelescopeState
 from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
 from sensorkit.astro.coords import Geodetic
 from sensorkit.astro.target import (
@@ -43,13 +51,7 @@ from sensorkit.astro.target import (
     RateTarget,
     TLETarget,
 )
-from sensorkit.autoslew.device import (
-    AutoslewDevice,
-    AutoslewDeviceConfig,
-    AutoslewDeviceState,
-    _num,
-    _pick,
-)
+from sensorkit.autoslew.device import AutoslewMixin, _num, _pick
 from sensorkit.std import (
     AxisRate,
     AxisRates,
@@ -73,8 +75,6 @@ from sensorkit.std import (
 iers.conf.auto_download = False
 iers.conf.auto_max_age = None
 
-# Max time to wait for a commanded slew to *start* before treating it as a no-op.
-_TELESCOPE_ONSET_TIMEOUT = 2.0
 # Max time to wait for sat:start to engage tracking (or at least begin the
 # acquisition slew) before handing off to the fast status loop.
 _SAT_ACQUIRE_TIMEOUT = 8.0
@@ -150,8 +150,15 @@ class SatTrackError(BaseModel):
 
 
 @sk.declare_device
-class AutoslewTelescope(AutoslewDevice):
-    """ASA Autoslew mount implementation."""
+class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
+    """ASA Autoslew mount implementation.
+
+    Inherits `telescope_connect`/`telescope_disconnect`/`telescope_home`/
+    `telescope_park`/`_wait_for_telescope`/the fast-status task helpers from
+    `AlpacaTelescope` unchanged — Autoslew's capability probe still populates the
+    `_can_find_home`/`_can_park` flags those rely on. Everything else is
+    overridden below for the ASA-specific init/stop/follow/status behavior.
+    """
 
     config: AutoslewTelescopeConfig
     device_name = "Telescope"
@@ -256,16 +263,6 @@ class AutoslewTelescope(AutoslewDevice):
             await self.telescope_park(MoveToPark())
 
     @sk.command_handler
-    async def telescope_connect(self, cmd: Connect):
-        await self.connect(self.telescope, timeout=self.config.timeout)
-        await sk.device().publish(Connected(is_connected=True))
-
-    @sk.command_handler
-    async def telescope_disconnect(self, cmd: Disconnect):
-        await self.disconnect(self.telescope)
-        await sk.device().publish(Connected(is_connected=False))
-
-    @sk.command_handler
     async def telescope_stop(self, cmd: Stop):
         await self.require_connected()
         logger.debug("stopping mount")
@@ -278,39 +275,6 @@ class AutoslewTelescope(AutoslewDevice):
         await self._wait_for_telescope(await_onset=False)
         self._stop_fast_status()
         logger.debug("stopped mount")
-
-    @sk.command_handler
-    async def telescope_home(self, cmd: Home):
-        await self.require_connected()
-        if not self._can_find_home:
-            logger.warning("Cannot find home")
-            return
-        logger.debug("homing mount")
-        await self.call(self.telescope, "FindHome")
-        await asyncio.sleep(self.config.status_frequency_slow)
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                if await self.get(self.telescope, "AtHome", False):
-                    break
-                await asyncio.sleep(0.2)
-        self.state.has_been_homed = True
-        await sk.device().kv_put_model(self.state)
-        logger.debug("homed mount")
-
-    @sk.command_handler
-    async def telescope_park(self, cmd: MoveToPark):
-        await self.require_connected()
-        if not self._can_park:
-            logger.warning("Cannot park")
-            return
-        logger.debug("parking mount")
-        await self.call(self.telescope, "Park")
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                if await self.get(self.telescope, "AtPark", False):
-                    break
-                await asyncio.sleep(0.2)
-        logger.debug("parked mount")
 
     @sk.command_handler
     async def telescope_set_park_position(self, cmd: SetParkPosition):
@@ -510,41 +474,9 @@ class AutoslewTelescope(AutoslewDevice):
         elif self._can_slew:
             await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
 
-    async def _wait_for_telescope(
-        self, *, slewing: bool = False, tracking: bool = False, await_onset: bool = True
-    ):
-        """Poll until Slewing and Tracking match; brief onset wait handles no-ops."""
-        if await_onset:
-            try:
-                async with asyncio.timeout(_TELESCOPE_ONSET_TIMEOUT):
-                    while True:
-                        if await self.get(self.telescope, "Slewing", False):
-                            break
-                        await asyncio.sleep(0.1)
-            except TimeoutError:
-                pass
-
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                is_slewing = await self.get(self.telescope, "Slewing", False)
-                is_tracking = await self.get(self.telescope, "Tracking", False)
-                if is_slewing == slewing and is_tracking == tracking:
-                    break
-                await asyncio.sleep(0.1)
-
     # ---- status ----------------------------------------------------------- #
-    def _start_fast_status(self):
-        if self._fast_status_task is None or self._fast_status_task.done():
-            self._fast_status_task = asyncio.create_task(self.status_publish_fast())
-
-    def _stop_fast_status(self):
-        if self._fast_status_task is not None and not self._fast_status_task.done():
-            self._fast_status_task.cancel()
-            self._fast_status_task = None
-
-    @property
-    def _fast_status_active(self) -> bool:
-        return self._fast_status_task is not None and not self._fast_status_task.done()
+    # _wait_for_telescope / _start_fast_status / _stop_fast_status /
+    # _fast_status_active are inherited from AlpacaTelescope unchanged.
 
     async def _publish_telescope_status(self):
         t = self.telescope
@@ -636,23 +568,16 @@ class AutoslewTelescope(AutoslewDevice):
             await asyncio.sleep(self.config.status_frequency_fast)
 
 
-class AutoslewTelescopeConfig(AutoslewDeviceConfig[AutoslewTelescope]):
+class AutoslewTelescopeConfig(AlpacaTelescopeConfig):
     """Autoslew mount configuration."""
 
-    device_type: Literal["telescope"] = "telescope"
     # Floor for sat:startalt; must exceed the driver's horizon limit + 0.5.
     min_altitude_degrees: float = 20.0
-    status_frequency_slow: float = 1.0
-    status_frequency_fast: float = 0.1
-    timeout: float = 300.0
 
     @override
     def create_device(self):
         return AutoslewTelescope(self)
 
 
-class AutoslewTelescopeState(AutoslewDeviceState):
+class AutoslewTelescopeState(AlpacaTelescopeState):
     """Autoslew mount state."""
-
-    device_type: Literal["telescope"] = "telescope"
-    has_been_homed: bool = False

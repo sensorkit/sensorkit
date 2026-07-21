@@ -20,12 +20,8 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.autoslew.device import (
-    AutoslewDevice,
-    AutoslewDeviceConfig,
-    AutoslewDeviceState,
-    _num,
-)
+from sensorkit.alpaca.device import AlpacaDeviceConfig, AlpacaDeviceState
+from sensorkit.autoslew.device import AutoslewDevice, _num
 from sensorkit.std import Connect, Connected, Disconnect, Stop
 
 
@@ -108,7 +104,7 @@ class AutoslewTertiary(AutoslewDevice):
             await asyncio.sleep(self.config.status_frequency)
 
 
-class AutoslewTertiaryConfig(AutoslewDeviceConfig[AutoslewTertiary]):
+class AutoslewTertiaryConfig(AlpacaDeviceConfig[AutoslewTertiary]):
     device_type: Literal["tertiary"] = "tertiary"
     status_frequency: float = 1.0
     timeout: float = 60.0
@@ -118,5 +114,5 @@ class AutoslewTertiaryConfig(AutoslewDeviceConfig[AutoslewTertiary]):
         return AutoslewTertiary(self)
 
 
-class AutoslewTertiaryState(AutoslewDeviceState):
+class AutoslewTertiaryState(AlpacaDeviceState):
     device_type: Literal["tertiary"] = "tertiary"
