@@ -5,11 +5,11 @@ A standard-device wrapper (Autoslew's Focuser exposes no extension actions of it
 — SupportedActions = 0). The ASA focuser extras (``focuser:homefind``, ``afc:*``) live
 on the Telescope device and are driven through the shared Telescope backbone.
 
-Inherits `focuser_connect`/`focuser_disconnect`/`focuser_stop`/`focuser_change`/
-`status_publish` from `sensorkit.alpaca`'s `AlpacaFocuser` unchanged.
-`entity_init`/`entity_deinit` are overridden only to restore/persist
-`AutoslewFocuserState` (its own `has_been_homed` field) instead of the base
-`AlpacaFocuserState`; `_initialize` is overridden to add the backbone + home.
+Inherits `entity_init`/`focuser_connect`/`focuser_disconnect`/`focuser_stop`/
+`focuser_change`/`status_publish` from `sensorkit.alpaca`'s `AlpacaFocuser`
+unchanged. The `state_model` classvar swaps in `AutoslewFocuserState` (its own
+`has_been_homed` field) at restore time; `_initialize` is overridden to add the
+backbone + home, and `entity_deinit` to also drop the backbone connection.
 """
 
 from __future__ import annotations
@@ -24,7 +24,11 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.alpaca.focuser import AlpacaFocuser, AlpacaFocuserConfig, AlpacaFocuserState
 from sensorkit.autoslew.device import AutoslewMixin
-from sensorkit.std import Disconnect, Home
+from sensorkit.std import Home
+
+
+class AutoslewFocuserState(AlpacaFocuserState):
+    has_been_homed: bool = False
 
 
 @sk.declare_device
@@ -33,35 +37,13 @@ class AutoslewFocuser(AutoslewMixin, AlpacaFocuser):
 
     config: AutoslewFocuserConfig
     device_name = "Focuser"
-
-    @sk.on_attach
-    async def entity_init(self):
-        device = sk.device()
-
-        try:
-            self.state = await device.kv_get_model(AutoslewFocuserState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AutoslewFocuserState()
-
-        self.focuser_position: float | None = None
-
-        await self._initialize()
-        self.start_status_loop(self.status_publish())
-
-        async with asyncio.timeout(self.config.timeout):
-            while self.focuser_position is None:
-                await asyncio.sleep(self.config.status_frequency)
+    state_model = AutoslewFocuserState
 
     @sk.on_detach
     async def entity_deinit(self):
-        await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
-        await self.focuser_disconnect(Disconnect())
+        await super().entity_deinit()
         with contextlib.suppress(Exception):
             await self.disconnect(self.telescope)
-        await sk.device().kv_put_model(self.state)
 
     @override
     async def _initialize(self):
@@ -111,7 +93,3 @@ class AutoslewFocuserConfig(AlpacaFocuserConfig):
     @override
     def create_device(self):
         return AutoslewFocuser(self)
-
-
-class AutoslewFocuserState(AlpacaFocuserState):
-    has_been_homed: bool = False

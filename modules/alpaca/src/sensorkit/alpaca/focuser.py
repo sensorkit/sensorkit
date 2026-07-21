@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal, override
+from typing import ClassVar, Literal, override
 
 from loguru import logger
 from pydantic import BaseModel
@@ -16,6 +16,10 @@ from sensorkit.alpaca.device import (
 )
 from sensorkit.std import Connect, Connected, Disconnect, Stop, Temperature, TemperatureUnit
 from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
+
+
+class AlpacaFocuserState(AlpacaDeviceState):
+    device_type: Literal["focuser"] = "focuser"
 
 
 @sk.declare_keyword
@@ -39,6 +43,7 @@ class AlpacaFocuser(AlpacaDevice):
 
     config: AlpacaFocuserConfig
     device_name = "Focuser"
+    state_model: ClassVar[type[AlpacaFocuserState]] = AlpacaFocuserState
 
     @sk.on_attach
     async def entity_init(self):
@@ -46,11 +51,11 @@ class AlpacaFocuser(AlpacaDevice):
 
         # Restore state
         try:
-            self.state = await device.kv_get_model(AlpacaFocuserState)
+            self.state = await device.kv_get_model(self.state_model)
             logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
-            self.state = AlpacaFocuserState()
+            self.state = self.state_model()
 
         self.focuser_position: float | None = None
 
@@ -194,7 +199,3 @@ class AlpacaFocuserConfig(AlpacaDeviceConfig[AlpacaFocuser]):
     @override
     def create_device(self):
         return AlpacaFocuser(self)
-
-
-class AlpacaFocuserState(AlpacaDeviceState):
-    device_type: Literal["focuser"] = "focuser"

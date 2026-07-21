@@ -61,3 +61,16 @@ async def test_focuser_move(focuser):
 
     focuser.focuser._properties["IsMoving"] = False
     await focuser.focuser_change(ChangeFocusPosition(position=10000.0))
+
+
+@pytest.mark.asyncio
+async def test_focuser_change_clamps_to_max_step(focuser):
+    from sensorkit.std.optics import ChangeFocusPosition
+
+    moves: list[int] = []
+    focuser.focuser.Move = moves.append
+    focuser.focuser._properties["IsMoving"] = False
+
+    await focuser.focuser_change(ChangeFocusPosition(position=999999))
+
+    assert moves[-1] == focuser._max_step

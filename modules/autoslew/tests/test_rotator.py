@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Autoslew rotator — standard move/stop + ASA rotator:setslewoption/homefind."""
+"""Autoslew rotator — ASA rotator:setslewoption/homefind via the Telescope backbone.
+
+Standard move/stop are inherited unchanged from `AlpacaRotator` and covered by the
+alpaca module's tests; only the ASA extensions are exercised here.
+"""
 
 import pytest
 from conftest import MockAutoslewSDKDevice
 
 from sensorkit.autoslew.rotator import AutoslewRotatorConfig, AutoslewRotatorState
-from sensorkit.std import Stop
-from sensorkit.std.instrument import ChangeRotatorPosition
 
 
 def _rotator(**cfg):
@@ -25,19 +27,6 @@ def _rotator(**cfg):
 @pytest.fixture
 def rotator():
     return _rotator()
-
-
-@pytest.mark.asyncio
-async def test_rotator_change_moves_absolute(rotator):
-    await rotator.rotator_change(ChangeRotatorPosition(position=45.0))
-    moves = [c for c in rotator.rotator.calls if c[0] == "MoveAbsolute"]
-    assert moves and moves[-1][1][0] == 45.0
-
-
-@pytest.mark.asyncio
-async def test_rotator_stop_halts(rotator):
-    await rotator.rotator_stop(Stop())
-    assert any(c[0] == "Halt" for c in rotator.rotator.calls)
 
 
 @pytest.mark.asyncio

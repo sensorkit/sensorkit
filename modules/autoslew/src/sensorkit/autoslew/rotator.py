@@ -5,12 +5,12 @@ Standard-device wrapper. Autoslew's Rotator has one own action (``settarget``); 
 ASA rotator extras (``rotator:setslewoption``/``dontslewtozero``/``homefind``) live on
 the Telescope device, driven through the shared backbone.
 
-Inherits `rotator_connect`/`rotator_disconnect`/`rotator_change`/`rotator_stop`/
-`status_publish` from `sensorkit.alpaca`'s `AlpacaRotator` unchanged.
-`entity_init`/`entity_deinit` are overridden only to restore/persist
-`AutoslewRotatorState` (its own `has_been_homed` field) instead of the base
-`AlpacaRotatorState`; `_initialize` is overridden to add the backbone, ASA
-settings, and one-time home.
+Inherits `entity_init`/`rotator_connect`/`rotator_disconnect`/`rotator_change`/
+`rotator_stop`/`status_publish` from `sensorkit.alpaca`'s `AlpacaRotator`
+unchanged. The `state_model` classvar swaps in `AutoslewRotatorState` (its own
+`has_been_homed` field) at restore time; `_initialize` is overridden to add the
+backbone, ASA settings, and one-time home, and `entity_deinit` to also drop the
+backbone connection.
 """
 
 from __future__ import annotations
@@ -25,7 +25,11 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.alpaca.rotator import AlpacaRotator, AlpacaRotatorConfig, AlpacaRotatorState
 from sensorkit.autoslew.device import AutoslewMixin
-from sensorkit.std import Disconnect, Home
+from sensorkit.std import Home
+
+
+class AutoslewRotatorState(AlpacaRotatorState):
+    has_been_homed: bool = False
 
 
 @sk.declare_device
@@ -34,35 +38,13 @@ class AutoslewRotator(AutoslewMixin, AlpacaRotator):
 
     config: AutoslewRotatorConfig
     device_name = "Rotator"
-
-    @sk.on_attach
-    async def entity_init(self):
-        device = sk.device()
-
-        try:
-            self.state = await device.kv_get_model(AutoslewRotatorState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AutoslewRotatorState()
-
-        self.rotator_position: float | None = None
-
-        await self._initialize()
-        self.start_status_loop(self.status_publish())
-
-        async with asyncio.timeout(self.config.timeout):
-            while self.rotator_position is None:
-                await asyncio.sleep(self.config.status_frequency)
+    state_model = AutoslewRotatorState
 
     @sk.on_detach
     async def entity_deinit(self):
-        await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
-        await self.rotator_disconnect(Disconnect())
+        await super().entity_deinit()
         with contextlib.suppress(Exception):
             await self.disconnect(self.telescope)
-        await sk.device().kv_put_model(self.state)
 
     @override
     async def _initialize(self):
@@ -110,7 +92,3 @@ class AutoslewRotatorConfig(AlpacaRotatorConfig):
     @override
     def create_device(self):
         return AutoslewRotator(self)
-
-
-class AutoslewRotatorState(AlpacaRotatorState):
-    has_been_homed: bool = False

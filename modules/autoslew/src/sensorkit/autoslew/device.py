@@ -19,7 +19,6 @@ over `AlpacaDevice`'s in the MRO.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 
@@ -60,37 +59,28 @@ class AutoslewMixin:
     device_connected: bool | None
 
     async def connect(self, device: Device, timeout: float = 60.0):
-        logger.debug(f"connecting to {self.device_name}")
         try:
-            await asyncio.to_thread(device.Connect)
-            async with asyncio.timeout(timeout):
-                while await self.get(device, "Connecting", False):
-                    await asyncio.sleep(0.5)
+            await super().connect(device, timeout)
+        except DeviceConnectionError:
+            raise
         except Exception:
             # Some Autoslew devices (e.g. the CoverCalibrator) don't implement the
             # Platform-7 Connect() method; fall back to the legacy Connected property.
             logger.debug(f"{self.device_name}: Connect() unavailable, using legacy Connected")
             await self.put(device, "Connected", True)
-
-        connected = await self.get(device, "Connected", False)
-        if not connected:
-            raise DeviceConnectionError(f"Failed to connect to {self.device_name}")
-
-        self.device_connected = True
-        logger.debug(f"connected to {self.device_name}")
+            if not await self.get(device, "Connected", False):
+                raise DeviceConnectionError(
+                    f"Failed to connect to {self.device_name}"
+                ) from None
+            self.device_connected = True
+            logger.debug(f"connected to {self.device_name}")
 
     async def disconnect(self, device: Device, timeout: float = 30.0):
-        logger.debug(f"disconnecting from {self.device_name}")
         try:
-            await asyncio.to_thread(device.Disconnect)
-            async with asyncio.timeout(timeout):
-                while await self.get(device, "Connecting", False):
-                    await asyncio.sleep(0.5)
+            await super().disconnect(device, timeout)
         except Exception:
             await self.put(device, "Connected", False)
-
-        self.device_connected = False
-        logger.debug(f"disconnected from {self.device_name}")
+            self.device_connected = False
 
     async def action(self, name: str, params: str = "") -> str:
         """PUT .../telescope/N/action — returns a string always."""

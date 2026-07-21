@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal, override
+from typing import ClassVar, Literal, override
 
 from loguru import logger
 from pydantic import BaseModel
@@ -16,6 +16,10 @@ from sensorkit.alpaca.device import (
 )
 from sensorkit.std import Connect, Connected, Disconnect, Stop
 from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
+
+
+class AlpacaRotatorState(AlpacaDeviceState):
+    device_type: Literal["rotator"] = "rotator"
 
 
 @sk.declare_keyword
@@ -37,6 +41,7 @@ class AlpacaRotator(AlpacaDevice):
 
     config: AlpacaRotatorConfig
     device_name = "Rotator"
+    state_model: ClassVar[type[AlpacaRotatorState]] = AlpacaRotatorState
 
     @sk.on_attach
     async def entity_init(self):
@@ -44,11 +49,11 @@ class AlpacaRotator(AlpacaDevice):
 
         # Restore state
         try:
-            self.state = await device.kv_get_model(AlpacaRotatorState)
+            self.state = await device.kv_get_model(self.state_model)
             logger.debug(f"restored state for {device.entity}")
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
-            self.state = AlpacaRotatorState()
+            self.state = self.state_model()
 
         self.rotator_position: float | None = None
 
@@ -173,7 +178,3 @@ class AlpacaRotatorConfig(AlpacaDeviceConfig[AlpacaRotator]):
     @override
     def create_device(self):
         return AlpacaRotator(self)
-
-
-class AlpacaRotatorState(AlpacaDeviceState):
-    device_type: Literal["rotator"] = "rotator"

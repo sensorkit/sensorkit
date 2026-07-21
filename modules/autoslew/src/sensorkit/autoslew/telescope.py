@@ -58,7 +58,6 @@ from sensorkit.std import (
     Connect,
     Connected,
     Deinit,
-    Disconnect,
     FollowTarget,
     Home,
     Init,
@@ -153,11 +152,12 @@ class SatTrackError(BaseModel):
 class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
     """ASA Autoslew mount implementation.
 
-    Inherits `telescope_connect`/`telescope_disconnect`/`telescope_home`/
-    `telescope_park`/`_wait_for_telescope`/the fast-status task helpers from
-    `AlpacaTelescope` unchanged — Autoslew's capability probe still populates the
-    `_can_find_home`/`_can_park` flags those rely on. Everything else is
-    overridden below for the ASA-specific init/stop/follow/status behavior.
+    Inherits `entity_deinit`/`telescope_connect`/`telescope_disconnect`/
+    `telescope_home`/`telescope_park`/`_wait_for_telescope`/`status_publish_fast`/
+    the fast-status task helpers from `AlpacaTelescope` unchanged — Autoslew's
+    capability probe still populates the `_can_find_home`/`_can_park` flags those
+    rely on. Everything else is overridden below for the ASA-specific
+    init/stop/follow/status behavior.
     """
 
     config: AutoslewTelescopeConfig
@@ -188,13 +188,6 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
         self._can_slew_async = self._can_slew = False
         self._can_slew_altaz_async = self._can_slew_altaz = False
         self._can_park = self._can_unpark = self._can_find_home = False
-
-    @sk.on_detach
-    async def entity_deinit(self):
-        await asyncio.sleep(self.config.status_frequency_slow)
-        await self.stop_status_loop()
-        await self.telescope_disconnect(Disconnect())
-        await sk.device().kv_put_model(self.state)
 
     @sk.command_handler
     async def telescope_init(self, cmd: Init):
@@ -476,7 +469,8 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
 
     # ---- status ----------------------------------------------------------- #
     # _wait_for_telescope / _start_fast_status / _stop_fast_status /
-    # _fast_status_active are inherited from AlpacaTelescope unchanged.
+    # _fast_status_active / status_publish_fast are inherited from AlpacaTelescope
+    # unchanged (status_publish_fast drives the overridden _publish_telescope_status).
 
     async def _publish_telescope_status(self):
         t = self.telescope
@@ -558,14 +552,6 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
             except Exception as e:
                 logger.warning(f"Error in slow mount status publish: {e}")
             await asyncio.sleep(self.config.status_frequency_slow)
-
-    async def status_publish_fast(self):
-        while True:
-            try:
-                await self._publish_telescope_status()
-            except Exception as e:
-                logger.warning(f"Error in fast mount status publish ({e})")
-            await asyncio.sleep(self.config.status_frequency_fast)
 
 
 class AutoslewTelescopeConfig(AlpacaTelescopeConfig):
