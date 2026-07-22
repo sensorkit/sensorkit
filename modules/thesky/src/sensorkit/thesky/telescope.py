@@ -407,7 +407,7 @@ class TheSkyTelescope(TheSkyDevice):
                 await self.execute(
                     f"""
                     sky6RASCOMTele.SlewToRaDec(
-                        {target.coords.ra:0.6f},
+                        {target.coords.ra / 15:0.6f},
                         {target.coords.dec:0.6f},
                         "object"
                     );
@@ -522,11 +522,10 @@ class TheSkyTelescope(TheSkyDevice):
             case RateTarget():
                 logger.debug("executing Rate follow")
 
-                # Slew to initial position
                 await self.execute(
                     f"""
                     sky6RASCOMTele.SlewToRaDec(
-                        {target.initial_coords.ra:0.6f},
+                        {target.initial_coords.ra / 15:0.6f},
                         {target.initial_coords.dec:0.6f},
                         "object"
                     );
@@ -560,11 +559,10 @@ class TheSkyTelescope(TheSkyDevice):
                 dra_deg = (points[i + 1].ra - points[i].ra + 180.0) % 360.0 - 180.0
                 ddec_deg = points[i + 1].dec - points[i].dec
 
-                # Slew to the sample nearest now
                 await self.execute(
                     f"""
                     sky6RASCOMTele.SlewToRaDec(
-                        {points[i].ra:0.6f},
+                        {points[i].ra / 15:0.6f},
                         {points[i].dec:0.6f},
                         "object"
                     );

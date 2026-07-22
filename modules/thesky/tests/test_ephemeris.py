@@ -58,8 +58,9 @@ async def test_telescope_follow_ephemeris(telescope):
 
     assert (await telescope.execute("sky6RASCOMTele.IsTracking;")).strip() == "1"
 
-    # Slewed to the sample nearest now (k=0).
-    assert float(await telescope.execute("sky6RASCOMTele.dRa;")) == pytest.approx(100.0)
+    # Slewed to the sample nearest now (k=0). SlewToRaDec takes RA in hours, so the
+    # 100 deg sample goes out as 100/15 hr; Dec is degrees on both sides.
+    assert float(await telescope.execute("sky6RASCOMTele.dRa;")) == pytest.approx(100.0 / 15)
     assert float(await telescope.execute("sky6RASCOMTele.dDec;")) == pytest.approx(20.0)
 
     # rel=1e-3 absorbs float64 precision loss from differencing ~2.46e6 JDs.

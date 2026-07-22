@@ -431,7 +431,7 @@ class PWI4Mount(PWI4Device):
                 await self.client.request(
                     "/mount/goto_ra_dec_j2000",
                     params={
-                        "ra_hours": target.coords.ra / 15,
+                        "ra_hours": target.coords.ra / 15.0,
                         "dec_degs": target.coords.dec,
                     },
                 )
@@ -482,7 +482,7 @@ class PWI4Mount(PWI4Device):
                 await self.client.request(
                     "/mount/goto_ra_dec_j2000",
                     params={
-                        "ra_hours": target.initial_coords.ra / 15,
+                        "ra_hours": target.initial_coords.ra / 15.0,
                         "dec_degs": target.initial_coords.dec,
                     },
                 )
@@ -510,7 +510,7 @@ class PWI4Mount(PWI4Device):
                         "/mount/radecpath/add_point",
                         params={
                             "jd": target.jds[i],
-                            "ra_j2000_hours": target.points[i].ra / 15,
+                            "ra_j2000_hours": target.points[i].ra / 15.0,
                             "dec_j2000_degs": target.points[i].dec,
                         },
                     )
