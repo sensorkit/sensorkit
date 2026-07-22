@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -39,6 +40,19 @@ class FrameInput:
     frame_count: int | None = None
 
 
+def _iso_z(dt: datetime) -> str:
+    """Format a UTC datetime as ISO-8601 with a trailing ``Z``."""
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _obs_time(image) -> datetime | None:
+    """A frame's DATE-OBS as a UTC datetime, or None when it's missing/unparseable."""
+    try:
+        return datetime.fromisoformat(image.header["DATE-OBS"]).replace(tzinfo=UTC)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 class SenpaiPipeline:
     """Uses the `astro-senpai` unified collect pipeline."""
 
@@ -68,8 +82,23 @@ class SenpaiPipeline:
             for inp in inputs
         ]
 
-        # Run the unified collect pipeline
+        # Announce the collect: frame count, the task id when the frames carry one,
+        # and the observation span (earliest–latest DATE-OBS across the frames).
+        obs_times = [t for t in (_obs_time(im) for im in images) if t is not None]
+        task_id = inputs[0].task_id if inputs else None
+        if obs_times:
+            span = f"{_iso_z(min(obs_times))} - {_iso_z(max(obs_times))}"
+            detail = f"{task_id}, {span}" if task_id else span
+        else:
+            detail = task_id or ""
+        logger.info(f"Analyzing {len(inputs)} frame(s)" + (f" ({detail})" if detail else ""))
+
+        # Run the unified collect pipeline. Time just the analysis so the completion
+        # line can report a duration on every path — SENPAI only fills in its own
+        # compute_seconds on success, leaving nothing to report when a run fails.
+        t0 = time.perf_counter()
         senpai_run = process_senpai_collect(images)
+        elapsed = time.perf_counter() - t0
 
         # Generate annotated plots (WCS overlay, detections, etc.)
         final_plots(senpai_run, Path(self.config.runtime.output_dir))
@@ -80,6 +109,33 @@ class SenpaiPipeline:
             frames_by_path[str(frame.frame.file_path)] = (frame, "SIDEREAL")
         for frame in senpai_run.rate_track_frames:
             frames_by_path[str(frame.frame.file_path)] = (frame, "RATE")
+
+        # Collect-level outcome at INFO/WARNING: a WCS line, then a photometry line
+        # (only when a solve landed — photometry is gated on it), then a terminal
+        # completion line. Per-frame numbers stay at DEBUG (see _process/_extract).
+        n_frames = len(inputs)
+        n_solved = sum(
+            1 for frame, _ in frames_by_path.values() if frame.starfield and frame.starfield.fit
+        )
+        if n_solved == 0:
+            logger.warning(f"No WCS solution found for any of {n_frames} frame(s)")
+        else:
+            logger.info(f"WCS solution found for {n_solved}/{n_frames} frame(s)")
+            n_photom = sum(
+                1
+                for frame, _ in frames_by_path.values()
+                if frame.photometry_summary
+                and frame.photometry_summary.get("zero_point") is not None
+            )
+            if n_photom:
+                logger.info(f"Photometry calibrated for {n_photom}/{n_frames} frame(s)")
+            else:
+                logger.warning(f"No photometry calibration for any of {n_frames} frame(s)")
+
+        if senpai_run.completed:
+            logger.info(f"SENPAI analysis complete in {elapsed:.1f}s")
+        else:
+            logger.warning(f"SENPAI analysis failed after {elapsed:.1f}s")
 
         results: list[SenpaiResult] = []
         for inp, image in zip(inputs, images, strict=True):
@@ -106,7 +162,7 @@ class SenpaiPipeline:
 
         frame, track_mode = frames_by_path.get(inp.file_path, (None, "UNKNOWN"))
         if frame is None:
-            logger.warning(f"No frame returned from collect pipeline for {inp.file_path}")
+            logger.debug(f"No frame returned from collect pipeline for {inp.file_path}")
             return SenpaiResult(
                 file_path=inp.file_path,
                 timestamp=timestamp,
@@ -155,7 +211,7 @@ class SenpaiPipeline:
                     # Also log the CRPIX values
                     crpix1 = wcs_astropy.wcs.crpix[0]
                     crpix2 = wcs_astropy.wcs.crpix[1]
-                    logger.info(
+                    logger.debug(
                         f"WCS diagnostic ({track_mode}): "
                         f"FITS RA={hdr_ra:.6f} Dec={hdr_dec:.6f}, "
                         f"WCS center RA={wcs_ra:.6f} Dec={wcs_dec:.6f}, "

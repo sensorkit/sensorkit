@@ -76,12 +76,18 @@ def make_frame(image, *, detections=(), streak_candidates=(), fit=True, exposure
     )
 
 
-def run_pipeline(monkeypatch, inputs, images, *, sidereal=(), rate=(), from_sequence=False):
+def run_pipeline(
+    monkeypatch, inputs, images, *, sidereal=(), rate=(), from_sequence=False, completed=True
+):
     """Run process_frames with the SENPAI engine calls stubbed out."""
     p = SenpaiPipeline.__new__(SenpaiPipeline)
     p.config = SimpleNamespace(runtime=SimpleNamespace(output_dir="/tmp/senpai-test"))
 
-    run = SimpleNamespace(sidereal_frames=list(sidereal), rate_track_frames=list(rate))
+    run = SimpleNamespace(
+        sidereal_frames=list(sidereal),
+        rate_track_frames=list(rate),
+        completed=completed,
+    )
     monkeypatch.setattr(
         pipeline_mod,
         "ProcessedFitsImage",
@@ -175,6 +181,16 @@ class TestProcessFrames:
         frame = make_frame(images["a.fits"], exposure=None)
         [result] = run_pipeline(monkeypatch, [inp("a.fits")], images, sidereal=[frame])
         assert result.exposure_time_seconds == 3.5
+
+    def test_failed_run_still_returns_results(self, monkeypatch):
+        """A collect with no solved frames returns unsolved results without raising."""
+        images = {"a.fits": make_image(file_path="a.fits")}
+        results = run_pipeline(
+            monkeypatch, [inp("a.fits", task_id="t9")], images, completed=False
+        )
+        assert [r.file_path for r in results] == ["a.fits"]
+        assert results[0].solved is False
+        assert results[0].track_mode == "UNKNOWN"
 
     def test_bad_frame_does_not_discard_batch(self, monkeypatch):
         """A frame whose results can't be extracted is skipped, not batch-fatal."""
