@@ -19,7 +19,11 @@ x-common-environment: &common-env
 #  SENSORKIT_DEBUG: 1
 
 x-config-file: &config-file "./huntsman.yaml:/sensorkit.yaml:ro"
-x-dome-file:   &dome-file   "/opt/sk/huntsman_dome.py:/opt/sk/huntsman_dome.py:ro"
+# The dome module ships with this deployment (huntsman.yaml imports it and the
+# dome service runs it). Host side is the copy in this directory; the container
+# path stays /opt/sk/huntsman_dome.py, which is what huntsman.yaml's
+# `sensorkit.imports` and the dome service's command both refer to.
+x-dome-file:   &dome-file   "./huntsman_dome.py:/opt/sk/huntsman_dome.py:ro"
 x-env-file:    &env-file    "/opt/sk/.env:/opt/sk/.env:ro"
 x-data-dir:    &data-dir    "/opt/sk/data:/opt/sk/data"
 
