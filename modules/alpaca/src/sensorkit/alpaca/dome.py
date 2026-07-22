@@ -15,7 +15,17 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceState,
 )
 from sensorkit.astro.common import AltAzPointing
-from sensorkit.std import Connect, Connected, Disconnect, Home, MoveToPark, Opened, Stop
+from sensorkit.std import (
+    Connect,
+    Connected,
+    Deinit,
+    Disconnect,
+    Home,
+    Init,
+    MoveToPark,
+    Opened,
+    Stop,
+)
 from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
 
 _SHUTTER_OPEN = 0
@@ -107,9 +117,15 @@ class AlpacaDome(AlpacaDevice):
         self._can_slave = await self.get(d, "CanSlave", False)
         self._can_sync_azimuth = await self.get(d, "CanSyncAzimuth", False)
 
+    @sk.command_handler
+    async def dome_init(self, cmd: Init):
         # Home, as needed
         if not self.state.has_been_homed:
             await self.dome_home(Home())
+
+    @sk.command_handler
+    async def dome_deinit(self, cmd: Deinit):
+        await self.dome_park(MoveToPark())
 
     @sk.command_handler
     async def dome_connect(self, cmd: Connect):

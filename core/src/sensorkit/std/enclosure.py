@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from sensorkit.std.traits import Deinit, Init
 
 
 class EnclosureAperture(BaseModel):
@@ -75,13 +76,14 @@ class MoveEnclosure(sk.DeviceCommand):
 
 StandardEnclosure = sk.declare_archetype(
     "enclosure",
-    required_commands=(OpenEnclosure, CloseEnclosure),
+    required_commands=(Init, Deinit, OpenEnclosure, CloseEnclosure),
     optional_commands=(MoveEnclosure, ControlEnclosureAperture),
 )
 """Standard enclosure archetype for observatory enclosures and domes.
 
 A StandardEnclosure provides basic open/close functionality and optional advanced features
 like rotation and aperture control. All enclosures must support opening and closing operations,
-while movement to specific positions and custom aperture configurations are optional capabilities
-for more sophisticated enclosure systems.
+along with initialization and deinitialization — an enclosure Init typically homes, which can
+be slow, so it is kept distinct from connecting. Movement to specific positions and custom
+aperture configurations are optional capabilities for more sophisticated enclosure systems.
 """

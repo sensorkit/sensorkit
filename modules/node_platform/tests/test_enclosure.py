@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for Node Platform enclosure device."""
 
+import asyncio
+
 import ourskyai_node_platform_api as osapi
 import pytest
 from conftest import (
@@ -16,7 +18,7 @@ from sensorkit.node_platform.enclosure import (
     NodePlatformEnclosureConfig,
     NodePlatformEnclosureState,
 )
-from sensorkit.std import Stop
+from sensorkit.std import Deinit, Home, Init, Stop
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 
 Shutter = osapi.EnclosureShutterState
@@ -74,7 +76,10 @@ def enclosure(api):
     )
     enc = NodePlatformEnclosure(config)
     enc._api = api
-    enc.state = NodePlatformEnclosureState()
+    # A normally-operating enclosure has already been homed; open now homes first if not.
+    enc.state = NodePlatformEnclosureState(has_been_homed=True)
+    enc._shutter_lock = asyncio.Lock()
+    enc._home_lock = asyncio.Lock()
     enc.device_connected = True
     return enc
 
@@ -100,36 +105,64 @@ class TestEnclosureConfig:
 
 class TestEnclosureInit:
     @pytest.mark.asyncio
+    async def test_attach_syncs_with_mount(self, enclosure, api):
+        await enclosure._initialize()
+
+        assert len(api.find_calls("v1_sync_enclosure_rotator_with_mount")) == 1
+        assert len(api.find_calls("v1_sync_enclosure_window_with_mount")) == 1
+        assert len(api.find_calls("v1_home_enclosure_shutters")) == 0
+
+    @pytest.mark.asyncio
     async def test_init_homes_if_needed(self, enclosure, api):
         enclosure.state.has_been_homed = False
 
         api.set_response("v1_home_enclosure_shutters", None)
         enclosure.shutter_state = Shutter.CLOSED
 
-        await enclosure._initialize()
+        await enclosure.enclosure_init(Init())
 
         assert len(api.find_calls("v1_home_enclosure_shutters")) == 1
-        assert len(api.find_calls("v1_sync_enclosure_rotator_with_mount")) == 1
-        assert len(api.find_calls("v1_sync_enclosure_window_with_mount")) == 1
+        assert enclosure.state.has_been_homed is True
 
     @pytest.mark.asyncio
     async def test_init_skips_home_if_already_homed(self, enclosure, api):
         enclosure.state.has_been_homed = True
 
-        await enclosure._initialize()
+        await enclosure.enclosure_init(Init())
 
         assert len(api.find_calls("v1_home_enclosure_shutters")) == 0
 
     @pytest.mark.asyncio
-    async def test_deinit_stops(self, enclosure, api):
+    async def test_home_rejects_non_closed_terminal_state(self, enclosure, api):
+        """A halted or faulted calibration must not be recorded as a successful home."""
+        enclosure.state.has_been_homed = False
+
+        api.set_response("v1_home_enclosure_shutters", None)
+        enclosure.shutter_state = Shutter.HALTED
+
+        with pytest.raises(RuntimeError, match="HALTED"):
+            await enclosure.enclosure_init(Init())
+
+        assert enclosure.state.has_been_homed is False
+
+    @pytest.mark.asyncio
+    async def test_deinit_turns_off_fans(self, enclosure, api):
+        enclosure.config = _config("manual", fans=True)
+
+        await enclosure.enclosure_deinit(Deinit())
+
+        assert len(api.find_calls("v1_turn_off_enclosure_fans")) == 1
+
+    @pytest.mark.asyncio
+    async def test_deinit_does_not_close(self, enclosure, api):
+        """The sensor issues CloseEnclosure itself; Deinit must not abort or duplicate it."""
         install_shutter(api, Shutter.OPENED)
         install_mode(api, "MANUAL")
 
-        await enclosure._deinitialize()
+        await enclosure.enclosure_deinit(Deinit())
 
-        assert len(api.find_calls("v1_halt_enclosure_shutters")) == 1
-        assert len(api.find_calls("v1_halt_enclosure_window")) == 1
-        assert len(api.find_calls("v1_close_enclosure_shutters")) == 1
+        assert len(api.find_calls("v1_close_enclosure_shutters")) == 0
+        assert len(api.find_calls("v1_halt_enclosure_shutters")) == 0
 
 
 class TestEnclosureOpen:
@@ -155,6 +188,50 @@ class TestEnclosureOpen:
         assert len(api.find_calls("v1_enable_manual_operation")) == 1
         assert len(api.find_calls("v1_open_enclosure_shutters")) == 1
         assert len(api.find_calls("v1_enable_assisted_operation")) == 1
+
+    @pytest.mark.asyncio
+    async def test_open_homes_first_if_never_homed(self, enclosure, api):
+        """Shutter position is unknown before a home, so an open must home first.
+
+        This is what makes a concurrent Init and OpenEnclosure order-independent: whichever
+        arrives first, the home happens before the shutters open.
+        """
+        enclosure.config = _config("manual")
+        enclosure.state.has_been_homed = False
+        shutter = install_shutter(api, Shutter.CLOSED)
+        install_mode(api, "MANUAL")
+        api.set_response("v1_home_enclosure_shutters", None)
+        enclosure.shutter_state = Shutter.CLOSED
+
+        await enclosure.enclosure_open(OpenEnclosure())
+
+        assert len(api.find_calls("v1_home_enclosure_shutters")) == 1
+        assert len(api.find_calls("v1_open_enclosure_shutters")) == 1
+        assert enclosure.state.has_been_homed is True
+        assert shutter["state"] is Shutter.OPENED
+
+    @pytest.mark.asyncio
+    async def test_open_skips_home_when_already_homed(self, enclosure, api):
+        enclosure.config = _config("manual")
+        install_shutter(api, Shutter.CLOSED)
+        install_mode(api, "MANUAL")
+
+        await enclosure.enclosure_open(OpenEnclosure())
+
+        assert len(api.find_calls("v1_home_enclosure_shutters")) == 0
+        assert len(api.find_calls("v1_open_enclosure_shutters")) == 1
+
+    @pytest.mark.asyncio
+    async def test_home_is_allowed_while_open(self, enclosure, api):
+        """Homing an open enclosure is a legitimate operator action, not a conflict."""
+        install_shutter(api, Shutter.OPENED)
+        api.set_response("v1_home_enclosure_shutters", None)
+        enclosure.shutter_state = Shutter.CLOSED
+
+        await enclosure.enclosure_home(Home())
+
+        assert len(api.find_calls("v1_home_enclosure_shutters")) == 1
+        assert enclosure.state.has_been_homed is True
 
     @pytest.mark.asyncio
     async def test_open_halts_if_closing(self, enclosure, api):

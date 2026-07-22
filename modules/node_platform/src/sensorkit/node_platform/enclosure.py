@@ -16,7 +16,7 @@ from sensorkit.node_platform.device import (
     NodePlatformDeviceConfig,
     NodePlatformDeviceState,
 )
-from sensorkit.std import Connected, Home, Opened, Stop
+from sensorkit.std import Connected, Deinit, Home, Init, Opened, Stop
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 
 # Re-export SDK enums for convenience in config / external use
@@ -64,6 +64,11 @@ class NodePlatformEnclosure(NodePlatformDevice):
     async def entity_init(self):
         device = sk.device()
 
+        # Serialize shutter motion. The home lock is separate because enclosure_home takes
+        # the shutter lock itself, and asyncio locks are not reentrant.
+        self._shutter_lock = asyncio.Lock()
+        self._home_lock = asyncio.Lock()
+
         # Restore state
         try:
             self.state = await device.kv_get_model(NodePlatformEnclosureState)
@@ -91,9 +96,12 @@ class NodePlatformEnclosure(NodePlatformDevice):
         await self.api.call("v1_sync_enclosure_rotator_with_mount")
         await self.api.call("v1_sync_enclosure_window_with_mount")
 
+    @sk.command_handler
+    async def enclosure_init(self, cmd: Init):
         # Home, as needed
-        if not self.state.has_been_homed:
-            await self.enclosure_home(Home())
+        async with self._home_lock:
+            if not self.state.has_been_homed:
+                await self.enclosure_home(Home())
 
         # Turn on enclosure fans
         if self.config.fans:
@@ -104,10 +112,8 @@ class NodePlatformEnclosure(NodePlatformDevice):
             )
             logger.debug(f"turned on all enclosure fans: {[r.value for r in all_fan_roles]}")
 
-    async def _deinitialize(self):
-        await self.enclosure_stop(Stop())
-        await self.enclosure_close(CloseEnclosure())
-
+    @sk.command_handler
+    async def enclosure_deinit(self, cmd: Deinit):
         # Turn off all enclosure fans
         if self.config.fans:
             all_fan_roles = list(osapi.V1EnclosureFanRole)
@@ -134,20 +140,25 @@ class NodePlatformEnclosure(NodePlatformDevice):
         await self.require_connected()
         logger.debug("homing enclosure")
 
-        await self.api.call("v1_home_enclosure_shutters")
-        await asyncio.sleep(0.1)
+        async with self._shutter_lock:
+            await self.api.call("v1_home_enclosure_shutters")
+            await asyncio.sleep(0.1)
 
-        # Wait for homing to complete (state transitions away from HOMING)
-        async with asyncio.timeout(self.config.timeout):
-            while self.shutter_state in (
-                EnclosureShutterState.HOMING,
-                EnclosureShutterState.UNKNOWN,
-                None,
-            ):
-                await asyncio.sleep(self.config.status_frequency)
+            # Wait for homing to complete (state transitions away from HOMING).
+            async with asyncio.timeout(self.config.timeout):
+                while self.shutter_state in (
+                    EnclosureShutterState.HOMING,
+                    EnclosureShutterState.UNKNOWN,
+                    None,
+                ):
+                    await asyncio.sleep(self.config.status_frequency)
 
-        self.state.has_been_homed = True
-        await sk.device().kv_put_model(self.state)
+            # Only a settled, closed shutter counts as homed.
+            if self.shutter_state is not EnclosureShutterState.CLOSED:
+                raise RuntimeError(f"Homing ended in state {self.shutter_state}")
+
+            self.state.has_been_homed = True
+            await sk.device().kv_put_model(self.state)
 
         logger.debug("homed enclosure")
 
@@ -159,7 +170,13 @@ class NodePlatformEnclosure(NodePlatformDevice):
         if await self._shutter_status() is EnclosureShutterState.MOVING_CLOSE:
             await self.api.call("v1_halt_enclosure_shutters")
 
-        async with self._manual_mode():
+        # Shutter position is only known after a home, so never open ahead of one. This
+        # also makes a concurrent Init and OpenEnclosure order-independent.
+        async with self._home_lock:
+            if not self.state.has_been_homed:
+                await self.enclosure_home(Home())
+
+        async with self._shutter_lock, self._manual_mode():
             logger.debug("opening enclosure")
             req = osapi.V1OpenEnclosureShuttersRequest(ignore_safety=False)
             await self.api.call("v1_open_enclosure_shutters", req)
@@ -170,8 +187,11 @@ class NodePlatformEnclosure(NodePlatformDevice):
     async def enclosure_close(self, cmd: CloseEnclosure):
         await self.require_connected()
 
-        # If it's opening, halt and reverse rather than waiting for it to finish.
-        if await self._shutter_status() is EnclosureShutterState.MOVING_OPEN:
+        # If it's opening or homing, halt so the close is never queued behind other motion.
+        if await self._shutter_status() in (
+            EnclosureShutterState.MOVING_OPEN,
+            EnclosureShutterState.HOMING,
+        ):
             await self.api.call("v1_halt_enclosure_shutters")
 
         # In ASSISTED mode the Platform closes the shutter itself when conditions are unsafe.
@@ -191,7 +211,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
                 await self._wait_for_shutter(EnclosureShutterState.CLOSED)
                 return
 
-        async with self._manual_mode():
+        async with self._shutter_lock, self._manual_mode():
             logger.debug("closing enclosure")
             await self.api.call("v1_close_enclosure_shutters")
             await self._wait_for_shutter(EnclosureShutterState.CLOSED)

@@ -10,7 +10,17 @@ from pydantic import BaseModel
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
-from sensorkit.std import Connect, Connected, Disconnect, Home, MoveToPark, Opened, Stop
+from sensorkit.std import (
+    Connect,
+    Connected,
+    Deinit,
+    Disconnect,
+    Home,
+    Init,
+    MoveToPark,
+    Opened,
+    Stop,
+)
 from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
 
 
@@ -59,9 +69,15 @@ class NinaDome(NinaDevice):
         self._reconnect = lambda: self.dome_connect(Connect())
         await self.dome_connect(Connect())
 
+    @sk.command_handler
+    async def dome_init(self, cmd: Init):
         # Home, as needed
         if not self.state.has_been_homed:
             await self.dome_home(Home())
+
+    @sk.command_handler
+    async def dome_deinit(self, cmd: Deinit):
+        await self.dome_park(MoveToPark())
 
     @sk.command_handler
     async def dome_connect(self, cmd: Connect):

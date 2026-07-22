@@ -115,6 +115,14 @@ async def test_std_init_with_optional_devices():
         pass
 
     @command_handler(dome)
+    async def handle_dome_init(cmd: Init):
+        pass
+
+    @command_handler(dome)
+    async def handle_dome_deinit(cmd: Deinit):
+        pass
+
+    @command_handler(dome)
     async def handle_dome_open(cmd: OpenEnclosure):
         dome_open_called.set()
 

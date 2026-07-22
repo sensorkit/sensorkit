@@ -188,7 +188,11 @@ def test_sensor_policies_defaults():
     p = SensorPolicies()
     assert p.concurrent_dome_and_mount_init is False
     assert p.concurrent_dome_and_mount_deinit is False
+    assert p.concurrent_dome_init_open is False
+    assert p.concurrent_dome_deinit_close is False
     assert p.dome_open_close_timeout == 120.0
+    assert p.dome_init_timeout == 300.0
+    assert p.dome_deinit_timeout == 300.0
     assert p.mount_init_timeout == 30.0
     assert p.minimum_target_altitude_degrees is None
 
@@ -279,11 +283,28 @@ async def test_sensor_deinit_mount():
 
 @pytest.mark.asyncio
 async def test_sensor_init_dome_present():
+    """Sequential policy: Init fully completes before the aperture is opened."""
     impl, _ = _mock_impl()
     sensor = Sensor(impl, SensorDevices(mount="m", camera="c", dome="d"), SensorPolicies())
     await sensor.init_dome()
-    cmd = sensor.dome.command.call_args[0][0]
-    assert isinstance(cmd, OpenEnclosure)
+
+    cmds = [call[0][0] for call in sensor.dome.command.call_args_list]
+    assert [type(c) for c in cmds] == [Init, OpenEnclosure]
+
+
+@pytest.mark.asyncio
+async def test_sensor_init_dome_concurrent():
+    """Concurrent policy: both commands are issued, order unconstrained."""
+    impl, _ = _mock_impl()
+    sensor = Sensor(
+        impl,
+        SensorDevices(mount="m", camera="c", dome="d"),
+        SensorPolicies(concurrent_dome_init_open=True),
+    )
+    await sensor.init_dome()
+
+    cmds = [call[0][0] for call in sensor.dome.command.call_args_list]
+    assert {type(c) for c in cmds} == {Init, OpenEnclosure}
 
 
 @pytest.mark.asyncio
@@ -295,11 +316,45 @@ async def test_sensor_init_dome_absent():
 
 @pytest.mark.asyncio
 async def test_sensor_deinit_dome_present():
+    """Stop is hoisted here so a module Deinit can never abort the close mid-flight."""
     impl, _ = _mock_impl()
     sensor = Sensor(impl, SensorDevices(mount="m", camera="c", dome="d"), SensorPolicies())
     await sensor.deinit_dome()
-    cmd = sensor.dome.command.call_args[0][0]
-    assert isinstance(cmd, CloseEnclosure)
+
+    cmds = [call[0][0] for call in sensor.dome.command.call_args_list]
+    assert [type(c) for c in cmds] == [Stop, CloseEnclosure, Deinit]
+
+
+@pytest.mark.asyncio
+async def test_sensor_deinit_dome_concurrent():
+    impl, _ = _mock_impl()
+    sensor = Sensor(
+        impl,
+        SensorDevices(mount="m", camera="c", dome="d"),
+        SensorPolicies(concurrent_dome_deinit_close=True),
+    )
+    await sensor.deinit_dome()
+
+    cmds = [call[0][0] for call in sensor.dome.command.call_args_list]
+    assert type(cmds[0]) is Stop
+    assert {type(c) for c in cmds[1:]} == {CloseEnclosure, Deinit}
+
+
+@pytest.mark.asyncio
+async def test_sensor_deinit_dome_closes_despite_failed_stop():
+    """A dome that rejects Stop must still be closed."""
+    impl, _ = _mock_impl()
+    sensor = Sensor(impl, SensorDevices(mount="m", camera="c", dome="d"), SensorPolicies())
+
+    async def _command(cmd):
+        if isinstance(cmd, Stop):
+            raise RuntimeError("stop unsupported")
+
+    sensor.dome.command.side_effect = _command
+    await sensor.deinit_dome()
+
+    cmds = [call[0][0] for call in sensor.dome.command.call_args_list]
+    assert [type(c) for c in cmds] == [Stop, CloseEnclosure, Deinit]
 
 
 @pytest.mark.asyncio
@@ -388,7 +443,8 @@ async def test_sensor_init_all_sequential():
     async with asyncio.TaskGroup() as tg:
         await sensor.init_all(tg)
 
-    assert sensor.dome.command.await_count == 1
+    # The dome takes both an Init and an OpenEnclosure.
+    assert sensor.dome.command.await_count == 2
     assert sensor.mount.command.await_count == 1
     assert sensor.mirror_cover.command.await_count == 1
 
@@ -410,7 +466,8 @@ async def test_sensor_init_all_concurrent():
     async with asyncio.TaskGroup() as tg:
         await sensor.init_all(tg)
 
-    assert sensor.dome.command.await_count == 1
+    # The dome takes both an Init and an OpenEnclosure.
+    assert sensor.dome.command.await_count == 2
     assert sensor.mount.command.await_count == 1
     assert sensor.mirror_cover.command.await_count == 1
 
@@ -572,6 +629,14 @@ async def test_sensor_control_shutdown_concurrent_dome():
 
     @command_handler(mount)
     async def handle_stop(cmd: Stop):
+        pass
+
+    @command_handler(dome)
+    async def handle_dome_init(cmd: Init):
+        pass
+
+    @command_handler(dome)
+    async def handle_dome_deinit(cmd: Deinit):
         pass
 
     @command_handler(dome)

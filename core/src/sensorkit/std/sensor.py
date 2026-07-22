@@ -36,18 +36,68 @@ class Sensor:
         self.dome = impl.use_device(devices.dome) if devices.dome else None
 
     async def init_dome(self):
-        """Open the dome if one is configured."""
-        if self.dome:
-            logger.info("Opening the dome")
-            async with asyncio.timeout(self.policies.dome_open_close_timeout):
-                await self.dome.command(OpenEnclosure())
+        """Initialize the dome and open it, if one is configured."""
+        if not self.dome:
+            return
+
+        if self.policies.concurrent_dome_init_open:
+            logger.info("Initializing and opening the dome")
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(
+                    asyncio.wait_for(
+                        self.dome.command(Init()),
+                        self.policies.dome_init_timeout,
+                    )
+                )
+                tg.create_task(
+                    asyncio.wait_for(
+                        self.dome.command(OpenEnclosure()),
+                        self.policies.dome_open_close_timeout,
+                    )
+                )
+            return
+
+        logger.info("Initializing the dome")
+        async with asyncio.timeout(self.policies.dome_init_timeout):
+            await self.dome.command(Init())
+
+        logger.info("Opening the dome")
+        async with asyncio.timeout(self.policies.dome_open_close_timeout):
+            await self.dome.command(OpenEnclosure())
 
     async def deinit_dome(self):
-        """Close the dome if one is configured."""
-        if self.dome:
-            logger.info("Closing the dome")
-            async with asyncio.timeout(self.policies.dome_open_close_timeout):
-                await self.dome.command(CloseEnclosure())
+        """Stop the dome, close it, and deinitialize it, if one is configured."""
+        if not self.dome:
+            return
+
+        # Halt any leftover motion before closing, so nothing aborts the close mid-flight.
+        with contextlib.suppress(Exception):
+            await self.dome.command(Stop())
+
+        if self.policies.concurrent_dome_deinit_close:
+            logger.info("Closing and deinitializing the dome")
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(
+                    asyncio.wait_for(
+                        self.dome.command(CloseEnclosure()),
+                        self.policies.dome_open_close_timeout,
+                    )
+                )
+                tg.create_task(
+                    asyncio.wait_for(
+                        self.dome.command(Deinit()),
+                        self.policies.dome_deinit_timeout,
+                    )
+                )
+            return
+
+        logger.info("Closing the dome")
+        async with asyncio.timeout(self.policies.dome_open_close_timeout):
+            await self.dome.command(CloseEnclosure())
+
+        logger.info("Deinitializing the dome")
+        async with asyncio.timeout(self.policies.dome_deinit_timeout):
+            await self.dome.command(Deinit())
 
     async def init_mount(self):
         """Initialize the mount."""
@@ -324,8 +374,20 @@ class SensorPolicies(BaseModel):
     concurrent_dome_and_mount_deinit: bool = False
     """Whether the dome and mount can be deinitialized concurrently."""
 
+    concurrent_dome_init_open: bool = False
+    """Whether the dome can be initialized and opened concurrently."""
+
+    concurrent_dome_deinit_close: bool = False
+    """Whether the dome can be closed and deinitialized concurrently."""
+
     dome_open_close_timeout: float = 120.0
     """Timeout for fully opening or closing the dome."""
+
+    dome_init_timeout: float = 300.0
+    """Timeout for initializing the dome, including homing if required."""
+
+    dome_deinit_timeout: float = 300.0
+    """Timeout for deinitializing the dome, including parking if required."""
 
     concurrent_mount_and_mirror_cover_init: bool = False
     """Whether the mount and mirror cover can be initialized concurrently."""
