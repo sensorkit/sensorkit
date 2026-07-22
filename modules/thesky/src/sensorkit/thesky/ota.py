@@ -11,6 +11,7 @@ from sensorkit.std import Connect, Connected, Disconnect, Opened
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 from sensorkit.thesky.device import (
     OTACommandInProgressError,
+    ScriptBusyError,
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
@@ -98,7 +99,7 @@ class TheSkyOTA(TheSkyDevice):
                 try:
                     await self.execute("""OpticalTubeAssembly.startOpenMirrorCover();""")
                     break
-                except OTACommandInProgressError:
+                except (OTACommandInProgressError, ScriptBusyError):
                     await asyncio.sleep(0.5)
 
         async with asyncio.timeout(self.config.timeout):
@@ -116,7 +117,7 @@ class TheSkyOTA(TheSkyDevice):
                 try:
                     await self.execute("""OpticalTubeAssembly.startCloseMirrorCover();""")
                     break
-                except OTACommandInProgressError:
+                except (OTACommandInProgressError, ScriptBusyError):
                     await asyncio.sleep(0.5)
 
         async with asyncio.timeout(self.config.timeout):

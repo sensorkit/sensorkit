@@ -26,6 +26,7 @@ from sensorkit.thesky.device import (
     CommandFailedError,
     DomeCommandInProgressError,
     ProcessAbortedError,
+    ScriptBusyError,
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
@@ -148,7 +149,7 @@ class TheSkyDome(TheSkyDevice):
                     try:
                         await self.execute("""sky6Dome.FindHome();""")
                         break
-                    except DomeCommandInProgressError:
+                    except (DomeCommandInProgressError, ScriptBusyError):
                         await asyncio.sleep(0.5)
 
             async with asyncio.timeout(self.config.timeout):
@@ -172,7 +173,7 @@ class TheSkyDome(TheSkyDevice):
                 try:
                     await self.execute("""sky6Dome.Park();""")
                     break
-                except DomeCommandInProgressError:
+                except (DomeCommandInProgressError, ScriptBusyError):
                     await asyncio.sleep(0.5)
 
         async with asyncio.timeout(self.config.timeout):
@@ -195,7 +196,7 @@ class TheSkyDome(TheSkyDevice):
                         """
                     )
                     break
-                except DomeCommandInProgressError:
+                except (DomeCommandInProgressError, ScriptBusyError):
                     await asyncio.sleep(0.5)
 
         async with asyncio.timeout(self.config.timeout):
@@ -236,7 +237,7 @@ class TheSkyDome(TheSkyDevice):
                     try:
                         await self.execute("""sky6Dome.OpenSlit();""")
                         break
-                    except DomeCommandInProgressError:
+                    except (DomeCommandInProgressError, ScriptBusyError):
                         await asyncio.sleep(0.5)
 
             async with asyncio.timeout(self.config.timeout):
@@ -258,7 +259,7 @@ class TheSkyDome(TheSkyDevice):
                     try:
                         await self.execute("""sky6Dome.CloseSlit();""")
                         break
-                    except DomeCommandInProgressError:
+                    except (DomeCommandInProgressError, ScriptBusyError):
                         await asyncio.sleep(0.5)
 
             async with asyncio.timeout(self.config.timeout):
@@ -297,7 +298,7 @@ class TheSkyDome(TheSkyDevice):
                             f"""sky6Dome.GotoAzEl({target_az}, {target_el});"""
                         )
                         break
-                    except DomeCommandInProgressError:
+                    except (DomeCommandInProgressError, ScriptBusyError):
                         await asyncio.sleep(0.5)
 
             async with asyncio.timeout(self.config.timeout):

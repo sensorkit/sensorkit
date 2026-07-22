@@ -13,6 +13,10 @@ from pydantic import BaseModel
 SCRIPT_HEADER = b"/* Java Script */\n/* Socket Start Packet */\n"
 SCRIPT_FOOTER = b"\n/* Socket End Packet */"
 
+# Sentinel for `execute(timeout=...)`, distinguishing "use the device's configured
+# timeout" (the default) from an explicit None, which means do not bound the call.
+_CONFIG_TIMEOUT = object()
+
 # Shared lock registry keyed by (host, port) - ensures all devices talking to the
 # same TheSky server serialize their commands (scripts) when needed
 _script_locks: dict[tuple[str, int], asyncio.Lock] = {}
@@ -30,20 +34,27 @@ def _get_script_lock(host: str, port: int) -> asyncio.Lock:
     return _script_locks[key]
 
 
-async def send_thesky_script(host: str, port: int | str, command: bytes | memoryview):
-    # Connect to the TheSky endpoint.
-    reader, writer = await asyncio.open_connection(host, port, limit=4096)
+async def send_thesky_script(
+    host: str, port: int | str, command: bytes | memoryview, timeout: float | None = None
+):
+    async with asyncio.timeout(timeout):
+        # Connect to the TheSky endpoint.
+        reader, writer = await asyncio.open_connection(host, port, limit=4096)
 
-    # Write our command packet.
-    writer.write(SCRIPT_HEADER + command + SCRIPT_FOOTER)
-    await writer.drain()
+        try:
+            # Write our command packet.
+            writer.write(SCRIPT_HEADER + command + SCRIPT_FOOTER)
+            await writer.drain()
 
-    # Read the response and close the socket.
-    response = await reader.read()
-    writer.close()
-    await writer.wait_closed()
+            # Read the response.
+            response = await reader.read()
+        finally:
+            # Always release the socket, even if the read failed or timed out.
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
 
-    return response
+        return response
 
 
 def parse_thesky_response(response: bytes):
@@ -56,7 +67,15 @@ def parse_thesky_response(response: bytes):
 
             if sep >= 0:
                 if code == 0:
-                    return left[:sep].decode(errors="ignore")
+                    value = left[:sep].decode(errors="ignore")
+
+                    # TheSky reports a busy script channel as a code-0 *value* rather
+                    # than an error code. Raise it so callers treat it as the transient,
+                    # retryable condition it is, instead of parsing the sentinel as data.
+                    if "Another script is running" in value:
+                        raise TheSkyError(message="Another script is running!", code=0)
+
+                    return value
                 else:
                     raise TheSkyError(message=left[sep + 1 :].decode(errors="ignore"), code=code)
         case (left, middle, _):
@@ -98,14 +117,17 @@ class TheSkyDevice:
         else:
             raise DeviceConnectionError(message=f"{self.device_name} not connected", code=-1)
 
-    async def execute(self, script: str):
+    async def execute(self, script: str, timeout=_CONFIG_TIMEOUT):
         """Execute a TheSky script, serialized behind the shared script lock."""
 
         lock = _get_script_lock(self.config.host, self.config.port)
 
         async with lock:
             response = await send_thesky_script(
-                self.config.host, self.config.port, script.encode()
+                self.config.host,
+                self.config.port,
+                script.encode(),
+                timeout=self.config.timeout if timeout is _CONFIG_TIMEOUT else timeout,
             )
             return parse_thesky_response(response)
 
@@ -144,9 +166,12 @@ class TheSkyDevice:
 
         await asyncio.sleep(delay)
         while True:
-            resp = await self.execute(script)
-            if resp.strip() == expected:
-                return
+            try:
+                resp = await self.execute(script)
+                if resp.strip() == expected:
+                    return
+            except ScriptBusyError:
+                logger.debug("Another script is running on TheSky, retrying poll")
             await asyncio.sleep(interval)
 
 
@@ -188,6 +213,10 @@ class TheSkyError(Exception):
 
 class DeviceConnectionError(TheSkyError):
     code = -1
+
+
+class ScriptBusyError(TheSkyError):
+    code = 0
 
 
 class FilterWheelCommandInProgressError(TheSkyError):

@@ -47,6 +47,7 @@ from sensorkit.thesky.device import (
     CommandNotSupportedError,
     MountCommandInProgressError,
     ProcessAbortedError,
+    ScriptBusyError,
     TheSkyDevice,
     TheSkyDeviceConfig,
     TheSkyDeviceState,
@@ -301,7 +302,7 @@ class TheSkyTelescope(TheSkyDevice):
                 try:
                     await self.execute("""sky6RASCOMTele.ParkAndDoNotDisconnect();""")
                     break
-                except MountCommandInProgressError:
+                except (MountCommandInProgressError, ScriptBusyError):
                     await asyncio.sleep(0.5)
 
         async with asyncio.timeout(self.config.timeout):
@@ -359,7 +360,7 @@ class TheSkyTelescope(TheSkyDevice):
                             """
                         )
                         break
-                    except MountCommandInProgressError:
+                    except (MountCommandInProgressError, ScriptBusyError):
                         await asyncio.sleep(0.5)
 
             await self.poll("""sky6RASCOMTele.LastSlewError;""", "0")
