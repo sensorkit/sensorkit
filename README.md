@@ -7,7 +7,7 @@ You describe your site in a single YAML file: which mount, camera, and dome you 
 ## Highlights
 
 - **Autonomous operation.** An agent service evaluates operating modes, weather and safety constraints, and program schedules — then starts up, tasks, and shuts down each sensor on its own. A single command hands control back to a human.
-- **Speaks your hardware's language.** Drivers for ASCOM Alpaca, PlaneWave PWI4, and Software Bisque TheSky are included, with additional modules for INDIGO (INDI devices), NINA, and the Observable Space Node Platform.
+- **Speaks your hardware's language.** Modules for ASA Autoslew, ASCOM Alpaca, INDIGO (+INDI), NINA, the Observable Space Node Platform, PlaneWave PWI4, and Software Bisque TheSky are included.
 - **Satellite tracking as a first-class citizen.** Targets can be fixed alt/az or ICRS positions, TLEs, state vectors, or precomputed ephemerides. SensorKit propagates orbits and drives mounts in rate-tracking modes for fast-moving objects.
 - **Observing programs in a few dozen lines of Python.** A program advertises *when* it has work and produces the *next task* when asked. Scheduling, priorities, device sequencing, and FITS writing are handled for you.
 - **Configuration-defined data flow.** Camera frames move through a pipeline you declare in YAML: FITS headers populated from live telescope state, compression, disk, or hand-off to analysis services.
@@ -27,11 +27,11 @@ docker compose up --build
 
 Open [http://localhost:6080](http://localhost:6080) to watch the simulated mount slew to targets. The [quick start guide](docs/quickstart.md) walks through the rest: exploring the system with the CLI, connecting SensorView, and reading the 35-line observing program that drives it.
 
-For a demo, watch [this](https://youtube.com/live/AQEpl3vDFaU?feature=share) 24/7 YouTube stream of SensorKit orchestrating:
+For a demo, watch [this](https://youtube.com/@SensorKit/live) 24/7 YouTube stream of SensorKit orchestrating:
 
- - An *AlpacaSensor*, tasked by Otto (4 random, visible GEOs)
- - A *PWI4Sensor*, listening to the UDL & being tasked (via bot) every 2 min in SensorView
- - A *TheSkySensor*, listening to NEOCP alerts (via NASA/JPL Scout)
+ - An **AlpacaSensor**, tasked by Otto (4 random, visible GEOs)
+ - A **PWI4Sensor**, listening to the UDL & being tasked (via bot) every 2 min in SensorView
+ - A **TheSkySensor**, listening to NEOCP alerts (via NASA/JPL Scout)
 
 All applications are being run on and streamed from a low-power x86 mini-PC.
 
