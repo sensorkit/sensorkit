@@ -167,6 +167,27 @@ def test_sample_altaz_series_icrs():
     assert len(set(round(a, 2) for a in alts)) > 1
 
 
+def test_sample_altaz_series_ephemeris():
+    """EphemerisTarget maps precomputed ICRF RA/Dec samples to alt/az per time."""
+
+    def _jd(dt):
+        return dt.timestamp() / 86400.0 + 2440587.5
+
+    t0 = datetime(2024, 6, 21, 0, 0, 0, tzinfo=UTC)
+    times = [t0, t0 + timedelta(minutes=1)]
+    target = EphemerisTarget(
+        frame=ReferenceFrame.ICRF,
+        jds=[_jd(t) for t in times],
+        points=[Equatorial(ra=180.0, dec=45.0), Equatorial(ra=180.2, dec=45.0)],
+    )
+    loc = _NYC.to_astropy()
+    series = sample_altaz_series(target, loc, times)
+    assert len(series) == 2
+    for alt, az in series:
+        assert -90.0 <= alt <= 90.0
+        assert 0.0 <= az < 360.0
+
+
 def test_is_observable_above_horizon():
     target = AltAzTarget(coords=Horizontal(az=180.0, alt=60.0))
     start = datetime(2024, 6, 21, 0, 0, 0, tzinfo=UTC)
