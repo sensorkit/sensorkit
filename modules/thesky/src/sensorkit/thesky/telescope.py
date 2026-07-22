@@ -133,6 +133,12 @@ class TheSkyTelescope(TheSkyDevice):
     device_name = "Telescope"
     _fast_status_task: asyncio.Task | None = None
 
+    # Site info, populated from TheSky in entity_init. Defaulted here so a status
+    # publish that lands before the attach completes skips the alt/az rate
+    # conversion, which is what the `is not None` guard in status_publish assumes.
+    _geodetic: Geodetic | None = None
+    _location: EarthLocation | None = None
+
     # NOTE: For a TheSky telescope, you have to home it before any commands at all, and you have to "Unpark" it
     # (if in the "Park" position) before any motion. If you "Park" the telescope and "Disconnect" it, note that
     # it will not be in the software "Park" position upon a reconnection, even if it is actually in the hardware

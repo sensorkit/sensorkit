@@ -77,7 +77,9 @@ async def simulator():
             try:
                 simulation = await asyncio.to_thread(run_thesky_script, js, state)
             except Exception as e:
-                response = f"TypeError: {str(e)}. Error = 250."
+                # Match TheSky's real script-error format (see simulator.py): the
+                # trailing "|No error. Error = 0." is what makes it parseable.
+                response = f"TypeError: {str(e)}. Error = 250.|No error. Error = 0."
             else:
                 result = simulation.get("result")
 

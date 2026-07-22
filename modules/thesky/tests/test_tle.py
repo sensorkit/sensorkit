@@ -11,7 +11,7 @@ from sensorkit.thesky.telescope import TheSkyTelescopeConfig, TheSkyTelescopeSta
 def telescope(simulator):
     host, port = simulator
     config = TheSkyTelescopeConfig(
-        device_type="mount",
+        device_type="telescope",
         host=host,
         port=port,
         needs_homed=False,

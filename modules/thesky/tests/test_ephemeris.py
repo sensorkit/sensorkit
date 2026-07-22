@@ -1,4 +1,6 @@
+import astropy.units as u
 import pytest
+from astropy.coordinates import EarthLocation
 from astropy.time import Time
 
 from sensorkit.astro.coords import Geodetic
@@ -20,8 +22,10 @@ def telescope(simulator):
     m = config.create_device()
     m.state = TheSkyTelescopeState()
     # Normally set during entity_init (on_attach) from TheSky's site info, which
-    # these connect-only tests bypass; the value is unused for pass-through adapts.
+    # these connect-only tests bypass. _geodetic is unused for pass-through adapts;
+    # _location is what status_publish needs to reach the alt/az rate conversion.
     m._geodetic = Geodetic(lon=149.0, lat=-31.0, elev=1100.0)
+    m._location = EarthLocation(lat=-31.0 * u.deg, lon=149.0 * u.deg, height=1100.0 * u.m)
     return m
 
 

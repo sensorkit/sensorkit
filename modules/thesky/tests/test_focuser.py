@@ -57,11 +57,11 @@ async def test_focuser_move_in(focuser):
 async def test_focuser_move_no_op(focuser):
     """Moving to current position should be a no-op."""
     await focuser.focuser_connect(Connect())
-    await focuser.focuser_move(ChangeFocusPosition(position=5000))
+    await focuser.focuser_change(ChangeFocusPosition(position=5000))
 
 
 @pytest.mark.asyncio
 async def test_focuser_move_exceeds_limits(focuser):
     await focuser.focuser_connect(Connect())
     with pytest.raises(RuntimeError, match="outside limits"):
-        await focuser.focuser_move(ChangeFocusPosition(position=20000))
+        await focuser.focuser_change(ChangeFocusPosition(position=20000))

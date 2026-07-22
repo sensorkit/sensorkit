@@ -346,6 +346,13 @@ var _sky6StarChart = {
         }
     },
     Find: function (name) {
+        // TheSky loads the chart selection into sky6ObjectInformation. Model a single
+        // satellite hit whose display name embeds the searched designator, which is what
+        // the TLE-follow path matches on ("#<designator>"). Simplification: the real Find
+        // raises ObjectNotFoundError (250) on a miss; this one always hits.
+        sky6ObjectInformation._objects = ["SAT " + name + " #" + name];
+        sky6ObjectInformation.Count = 1;
+        sky6ObjectInformation.Index = 0;
     },
 };
 var _sky6StarChartDefaults = {
@@ -357,6 +364,28 @@ var _sky6StarChartDefaults = {
 };
 
 var sky6StarChart = Object.assign(Object.create(_sky6StarChart), _sky6StarChartDefaults, State.sky6StarChart);
+
+//
+// The sky6ObjectInformation interface (chart selection details). Transient: TheSky
+// repopulates it on every Find, so unlike the device interfaces it is not round-tripped
+// through State.
+//
+var _sky6ObjectInformation = {
+    Property: function (prop) {
+        switch (prop) {
+            case 0: this.ObjInfoPropOut = this._objects[this.Index]; break;  // name
+            default: this.ObjInfoPropOut = ""; break;
+        }
+    },
+};
+var _sky6ObjectInformationDefaults = {
+    Count: 0,
+    Index: 0,
+    ObjInfoPropOut: "",
+    _objects: [],
+};
+
+var sky6ObjectInformation = Object.assign(Object.create(_sky6ObjectInformation), _sky6ObjectInformationDefaults);
 
 //
 // The Raven3 interface (for TLE tracking).

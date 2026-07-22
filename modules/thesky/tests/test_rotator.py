@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
-from sensorkit.std import Connect
+from sensorkit.std import Connect, Disconnect
 from sensorkit.std.instrument import ChangeRotatorPosition
 from sensorkit.thesky.rotator import TheSkyRotatorConfig
 
@@ -49,4 +49,4 @@ async def test_rotator_move(rotator):
 async def test_rotator_move_exceeds_limits(rotator):
     await rotator.rotator_connect(Connect())
     with pytest.raises(RuntimeError, match="outside limits"):
-        await rotator.rotator_move(ChangeRotatorPosition(position=200.0))
+        await rotator.rotator_change(ChangeRotatorPosition(position=200.0))

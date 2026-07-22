@@ -78,7 +78,10 @@ class TheSkySimulator:
             simulation = run_thesky_script(js, state)
         except Exception as e:
             logger.exception("Error running script")
-            response = f"TypeError: {str(e)}. Error = 250."
+            # TheSky terminates a script error with a trailing "|No error. Error = 0."
+            # Without it the response has no "|", and parse_thesky_response falls through
+            # to "Could not parse response", losing both the message and the code.
+            response = f"TypeError: {str(e)}. Error = 250.|No error. Error = 0."
         else:
             # Simulate runtime, if any.
             if runtime := simulation["runtime"]:
