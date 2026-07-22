@@ -6,6 +6,7 @@ import contextlib
 import json
 import pathlib
 from datetime import UTC, datetime
+from unittest.mock import patch
 
 import httpx
 import numpy as np
@@ -16,6 +17,7 @@ from astropy.io import fits
 import sensorkit.api as sk
 from sensorkit.data.fits import FITSHeader
 from sensorkit.webapi import fastapi as webapi_mod
+from sensorkit.webapi import serve as serve_mod
 from sensorkit.webapi.fastapi import WebAPI, WebAPIConfig
 from sensorkit.webapi.forwarder import ProductForwarder, SKRecord
 from sensorkit.webapi.preview import PreviewJPEG
@@ -152,6 +154,47 @@ async def test_handler_get_data_returns_file_bytes(tmp_path):
 
     async with running_handler(config) as handler:
         assert await handler.get_data("ctrlA", "frame1.fits") == path.read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_handler_waits_for_a_frame_still_being_written(tmp_path):
+    """A frame announced mid-write must be read only once all of it is on disk.
+
+    A file is announced as soon as it exists, so the first sighting can be a
+    header-only FITS — which opens without error, and would otherwise be
+    recorded with a truncated data_size.
+    """
+    path = tmp_path / "ctrlA" / "frame1.fits"
+    full = make_fits(path).read_bytes()
+    path.write_bytes(full[:2880])  # header block only: a mid-write sighting
+
+    async def finish_writing():
+        await asyncio.sleep(0.4)
+        path.write_bytes(full)
+
+    config = ServeLocalFITSConfig(root_directory=str(tmp_path), controller_id="from_path")
+    writer = asyncio.create_task(finish_writing())
+    try:
+        async with running_handler(config) as handler:
+            listing = await handler.get_listing()
+            info = next(i for i in listing if i.product_id == "frame1.fits")
+            assert info.data_size == len(full)  # not the 2880-byte truncation
+    finally:
+        await writer
+
+
+@pytest.mark.asyncio
+async def test_handler_skips_a_frame_that_never_completes(tmp_path):
+    """A frame that stays truncated is skipped, not served with a bad size."""
+    path = tmp_path / "ctrlA" / "frame1.fits"
+    full = make_fits(path).read_bytes()
+    path.write_bytes(full[:2880])
+
+    config = ServeLocalFITSConfig(root_directory=str(tmp_path), controller_id="from_path")
+    handler = ServeLocalFITSHandler(config)
+
+    with patch.object(serve_mod, "_SETTLE_ATTEMPTS", 2), patch.object(serve_mod, "_SETTLE_POLL_S", 0.01):
+        assert await handler._read_whole_frame(path) is None
 
 
 # ---------------------------------------------------------------------------

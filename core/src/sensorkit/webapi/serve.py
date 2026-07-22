@@ -19,6 +19,16 @@ from sensorkit.data.fits import FITSHeader
 
 DEFAULT_CONTROLLER_ID_FIELD = "SKCTRL"
 
+# A file is announced as soon as it is created, so the first sighting can precede
+# its contents: the writer is still streaming, and a Docker bind mount raises
+# `created` when the file appears rather than when its data lands. Reading then
+# yields a truncated frame — and a header-only FITS opens *without* error, so the
+# damage can be a wrong data_size rather than an exception. Re-read until the whole
+# frame is there; a frame already complete passes first time, so the initial scan
+# of an existing directory pays nothing.
+_SETTLE_POLL_S = 0.25
+_SETTLE_ATTEMPTS = 20
+
 type ServeDataConfig = ServeLocalFITSConfig
 
 
@@ -170,15 +180,39 @@ class ServeLocalFITSHandler(ServeHandler):
         finally:
             await events.aclose()
 
+    async def _read_whole_frame(self, path: pathlib.Path):
+        """Read *path* once all of it is on disk, or None if it never gets there."""
+        from astropy.io import fits
+
+        def read_file():
+            # The header declares how many bytes the frame occupies, so a
+            # half-written one is recognisable rather than merely suspected.
+            # (astropy usually raises on the short read before we compare.)
+            with fits.open(path) as hdul:
+                stat = path.stat()
+                if stat.st_size < sum(hdu.filebytes() for hdu in hdul):
+                    return None
+                return stat, hdul[0].header
+
+        for _ in range(_SETTLE_ATTEMPTS):
+            try:
+                found = await asyncio.to_thread(read_file)
+            except Exception:
+                found = None  # empty or unparsable: nothing written yet, or garbage
+            if found is not None:
+                return found
+            await asyncio.sleep(_SETTLE_POLL_S)
+
+        return None
+
     async def _found_file(self, path: pathlib.Path):
         try:
-            from astropy.io import fits
+            found = await self._read_whole_frame(path)
+            if found is None:
+                logger.warning(f"{path} is not a complete FITS frame, skipping")
+                return
 
-            def read_file():
-                with fits.open(path) as hdul:
-                    return path.stat(), hdul[0].header
-
-            stat, header = await asyncio.to_thread(read_file)
+            stat, header = found
             controller_id: Any = None
 
             # Metadata takes precedence over path-based controller ID resolution.
