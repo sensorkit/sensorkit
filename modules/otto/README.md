@@ -4,6 +4,9 @@ Otto is an autonomous satellite observation program, meant for collecting large
 training data sets. Given a list of NORAD IDs and/or orbit regimes, it fetches
 TLEs, tracks object visibility, and continuously generates `StandardCollectTask`
 offers over the configured camera parameter grid (filters × exposures × binnings).
+Objects without a TLE (asteroids, comets, spacecraft, planets) can also be tasked
+by referencing the [JPL Horizons](https://ssd.jpl.nasa.gov/horizons/) database — see
+[Horizons objects](#horizons-objects) below.
 Collected FITS imagery can optionally be published to Google Drive, Dropbox, and/or
 the UDL SkyImagery filedrop. Some supported features:
 
@@ -56,7 +59,7 @@ key: OttoConfig
 value:
   controller: controller1                # named controller for the agent to task
   task:
-    objects: ["40105", "38833", "42741"] # NORAD IDs to observe
+    objects: ["40105", "38833", "42741"] # NORAD IDs, and/or "horizons:<query>" (see below)
     orbits: []                           # Orbit regimes to observe (LEO/MEO/GEO/HEO), e.g. ["GEO"]
     tle_update_interval_hours: 4         # How often to poll Spacebook for new TLEs
     graylist_interval_minutes: 15        # How often to promote graylist -> whitelist
@@ -124,6 +127,35 @@ for new FITS files. Currently, only the UDL publishing component makes use of th
 which is used to generate SkyImagery metadata. Note, the right side of this
 `keyword_map` must mirror the camera DataGraph's `header:` map — the two configs
 are the two halves of a context → header → context round trip.
+
+## Horizons objects
+
+Objects that have no Two-Line Element set — asteroids, comets, spacecraft, planets,
+moons — can be tasked by referencing the JPL Horizons database. Add them to the same
+`task.objects` list, prefixed with `horizons:`; the text after the prefix is passed
+verbatim to Horizons' lookup, which resolves names, designations, and ids (and
+disambiguates when needed):
+
+```yaml
+  task:
+    objects:
+      - "25544"              # NORAD ID — tracked via TLE (Spacebook)
+      - "horizons:433 Eros"  # asteroid — tracked via a JPL Horizons ephemeris
+      - "horizons:C/2023 A3" # comet, by designation
+      - "horizons:-170"      # spacecraft (JWST), by Horizons id
+```
+
+Horizons objects flow through the same whitelist / graylist / blacklist visibility
+management and camera-parameter grid as satellites. Instead of propagating a TLE, otto
+resolves the object and fetches an Observer-Table ephemeris (astrometric RA/Dec, ICRF)
+sized to the collect window, and queues it as an `EphemerisTarget`. Notes:
+
+- Ambiguous queries (multiple matching bodies) and the Sun are refused and logged; use
+  a more specific designation.
+- Dithering is TLE-orbital-element specific and is skipped for Horizons objects.
+- Requires the `otto` extra (which pulls in `httpx`); network access to
+  `ssd.jpl.nasa.gov` is needed at task-generation time. Lookups are cached, and JPL
+  publishes no documented rate limit, so otto self-throttles.
 
 ## Publishing
 
@@ -293,7 +325,11 @@ sensorkit service run otto sensorkit.otto.program
 ## TODO
 
 - **Configurable TLE sourcing** — allow fixed-file (e.g. no internet connection)
-  or unique sourcing (e.g. Space-Track, Celestrak, etc).
+  or unique sourcing (e.g. Space-Track, Celestrak, etc). *(Non-TLE objects are now
+  supported via [Horizons objects](#horizons-objects); alternate TLE sources are
+  still open.)*
+- **Horizons dithering** — apply a per-task on-sky offset to Horizons `EphemerisTarget`
+  pointing, matching the TLE dither feature.
 - **SNR-driven list transitions** — promote/demote objects across the
   whitelist / graylist / blacklist using measured object SNR fed back from
   SENPAI, rather than visibility geometry alone.

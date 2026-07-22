@@ -15,9 +15,13 @@ from sensorkit.otto.task_queue import TaskQueue
 from sensorkit.otto.utils import (
     ListType,
     ObjectListManager,
+    build_horizons_target,
+    calculate_horizons_position,
     calculate_satellite_position,
     dither_tle,
     fetch_tles,
+    horizons_query,
+    is_horizons,
 )
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 
@@ -302,9 +306,12 @@ class OttoProgram:
         """
         direction = self.config.collect.scan_direction or "eastward"
 
+        satellites = [o for o in objects if not is_horizons(o)]
+        horizons = [o for o in objects if is_horizons(o)]
+
         def compute() -> list[tuple[str, float]]:
             candidates: list[tuple[str, float]] = []
-            for obj_id in objects:
+            for obj_id in satellites:
                 result = calculate_satellite_position(
                     tles=self.tles,
                     object=obj_id,
@@ -326,7 +333,26 @@ class OttoProgram:
         reverse = direction == "eastward"
         candidates.sort(key=lambda x: x[1], reverse=reverse)
 
-        return [obj_id for obj_id, _ in candidates]
+        ordered = [obj_id for obj_id, _ in candidates]
+
+        # Horizons objects have no TLE and are resolved via JPL (async, one at a
+        # time). Filter to those currently above the horizon and append them after
+        # the hour-angle-ordered satellite walk.
+        for obj in horizons:
+            result = await calculate_horizons_position(
+                horizons_query(obj),
+                latitude=self.latitude,
+                longitude=self.longitude,
+                elevation=self.altitude_km * 1000,
+            )
+            if result is None:
+                continue
+            altitude, _azimuth, _rising, _rate = result
+            if altitude < self.config.collect.altitude_min:
+                continue
+            ordered.append(obj)
+
+        return ordered
 
     async def generate_tasks(self):
         """
@@ -343,8 +369,13 @@ class OttoProgram:
 
         while True:
             try:
-                # Wait for a fresh batch of TLEs
-                if not self.tles or (datetime.now(UTC) - self.tles_dt).days > 1:
+                # Horizons objects resolve via JPL and don't depend on the TLE cache;
+                # only wait for TLEs when there are TLE-based targets to serve.
+                have_horizons = any(is_horizons(o) for o in self.state.whitelist)
+                tles_ready = self.tles and (datetime.now(UTC) - self.tles_dt).days <= 1
+
+                # Wait for a fresh batch of TLEs (unless we can already task Horizons)
+                if not tles_ready and not have_horizons:
                     logger.debug("no TLEs available yet")
                     await asyncio.sleep(5)
                     continue
@@ -352,7 +383,9 @@ class OttoProgram:
                 # Orbit-regime members come straight from the TLE fetch; they are
                 # selected by current visibility, never list-managed
                 known = set(self.state.whitelist + self.state.graylist + self.state.blacklist)
-                orbit_members = [oid for oid in self.tles if oid not in known]
+                orbit_members = (
+                    [oid for oid in self.tles if oid not in known] if tles_ready else []
+                )
 
                 if not self.state.whitelist and not orbit_members:
                     if not self.state.graylist:
@@ -389,19 +422,34 @@ class OttoProgram:
                     # Orbit-regime targets aren't list-managed: on a stale check
                     # they are simply skipped until the next pass
                     managed = object in self.state.whitelist
+                    horizons = is_horizons(object)
 
-                    # Check current altitude, azimuth, and rising status
-                    result = calculate_satellite_position(
-                        tles=self.tles,
-                        object=object,
-                        latitude=self.latitude,
-                        longitude=self.longitude,
-                        elevation=self.altitude_km * 1000,
-                    )
+                    # Check current altitude, azimuth, and rising status. Satellites
+                    # propagate a cached TLE; Horizons objects resolve + sample via JPL.
+                    if horizons:
+                        result = await calculate_horizons_position(
+                            horizons_query(object),
+                            latitude=self.latitude,
+                            longitude=self.longitude,
+                            elevation=self.altitude_km * 1000,
+                        )
+                    else:
+                        result = calculate_satellite_position(
+                            tles=self.tles,
+                            object=object,
+                            latitude=self.latitude,
+                            longitude=self.longitude,
+                            elevation=self.altitude_km * 1000,
+                        )
                     if result is None:
                         if managed:
+                            reason = (
+                                "could not resolve via Horizons"
+                                if horizons
+                                else "no TLE available"
+                            )
                             logger.warning(
-                                f"Removing object {object} from the whitelist (no TLE available)"
+                                f"Removing object {object} from the whitelist ({reason})"
                             )
                             await self.list_manager.move_object(
                                 object,
@@ -409,7 +457,7 @@ class OttoProgram:
                                 ListType.BLACKLIST,
                             )
                         continue
-                    altitude, azimuth, rising, _hour_angle = result
+                    altitude, azimuth, rising = result[0], result[1], result[2]
 
                     # Determine which list this object should be on
                     if altitude < self.config.collect.altitude_min and not rising:
@@ -431,32 +479,6 @@ class OttoProgram:
                                 f"object {object} graylisted (alt={altitude:.1f}°, az={azimuth:.1f}°, rising)"
                             )
                         continue
-
-                    tle_data = self.tles.get(object)
-                    if tle_data is None:
-                        if managed:
-                            logger.warning(
-                                f"Removing object {object} from the whitelist (TLE removed)"
-                            )
-                            await self.list_manager.move_object(
-                                object,
-                                ListType.WHITELIST,
-                                ListType.BLACKLIST,
-                            )
-                        continue
-                    tle_obj = TLE(
-                        line0=tle_data["line0"],
-                        line1=tle_data["line1"],
-                        line2=tle_data["line2"],
-                    )
-                    if self.config.collect.dither and self.config.collect.dither_amount_arcsec > 0:
-                        tle_obj = dither_tle(
-                            tle_obj,
-                            self.config.collect.dither_amount_arcsec,
-                            latitude=self.latitude,
-                            longitude=self.longitude,
-                            elevation=self.altitude_km * 1000,
-                        )
 
                     # Map track_mode onto per-frame sidereal switches
                     sidereal_frames = _sidereal_frames(
@@ -484,6 +506,63 @@ class OttoProgram:
                     binnings = list(self.config.collect.binning)
                     random.shuffle(binnings)
 
+                    # Build the target once and reuse across the camera-param fan-out.
+                    target_id = None
+                    if horizons:
+                        # A precomputed ICRF ephemeris covering the whole task batch,
+                        # since otto drains an object's tasks sequentially. Dithering is
+                        # TLE-orbital-element specific and skipped for Horizons in v1.
+                        batch_seconds = (
+                            len(filters)
+                            * len(binnings)
+                            * sum(exposures)
+                            * self.config.collect.num_frames
+                        )
+                        built = await build_horizons_target(
+                            horizons_query(object),
+                            latitude=self.latitude,
+                            longitude=self.longitude,
+                            elevation=self.altitude_km * 1000,
+                            duration_seconds=batch_seconds,
+                            rate_arcsec_hr=result[3],
+                        )
+                        if built is None:
+                            logger.warning(
+                                f"skipping {object}: could not build Horizons ephemeris"
+                            )
+                            continue
+                        target, target_id = built
+                    else:
+                        tle_data = self.tles.get(object)
+                        if tle_data is None:
+                            if managed:
+                                logger.warning(
+                                    f"Removing object {object} from the whitelist (TLE removed)"
+                                )
+                                await self.list_manager.move_object(
+                                    object,
+                                    ListType.WHITELIST,
+                                    ListType.BLACKLIST,
+                                )
+                            continue
+                        tle_obj = TLE(
+                            line0=tle_data["line0"],
+                            line1=tle_data["line1"],
+                            line2=tle_data["line2"],
+                        )
+                        if (
+                            self.config.collect.dither
+                            and self.config.collect.dither_amount_arcsec > 0
+                        ):
+                            tle_obj = dither_tle(
+                                tle_obj,
+                                self.config.collect.dither_amount_arcsec,
+                                latitude=self.latitude,
+                                longitude=self.longitude,
+                                elevation=self.altitude_km * 1000,
+                            )
+                        target = TLETarget(tle=tle_obj)
+
                     now = datetime.now(UTC)
                     cumulative_exposure = 0
                     for filter in filters:
@@ -491,7 +570,8 @@ class OttoProgram:
                             for binning in binnings:
                                 cumulative_exposure += exposure * self.config.collect.num_frames
                                 task = StandardCollectTask(
-                                    target=TLETarget(tle=tle_obj),
+                                    target=target,
+                                    target_id=target_id,
                                     end_time=(
                                         now
                                         + timedelta(seconds=cumulative_exposure)

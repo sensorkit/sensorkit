@@ -85,6 +85,7 @@ otto = [
     "google-auth-oauthlib",
     "dropbox",
     "udl-sdk",
+    "httpx",
 ]
 pwi4 = [
     "httpx",

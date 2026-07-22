@@ -2973,6 +2973,7 @@ otto = [
     { name = "google-api-python-client" },
     { name = "google-auth" },
     { name = "google-auth-oauthlib" },
+    { name = "httpx" },
     { name = "udl-sdk" },
 ]
 pwi4 = [
@@ -3042,6 +3043,7 @@ requires-dist = [
     { name = "google-auth", marker = "extra == 'otto'" },
     { name = "google-auth-oauthlib", marker = "extra == 'otto'" },
     { name = "httpx", marker = "extra == 'nina'" },
+    { name = "httpx", marker = "extra == 'otto'" },
     { name = "httpx", marker = "extra == 'pwi4'" },
     { name = "httpx", marker = "extra == 'udl'" },
     { name = "imageio", extras = ["pyav"], marker = "extra == 'sky-transmission'" },

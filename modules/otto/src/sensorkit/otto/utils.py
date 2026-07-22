@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from functools import lru_cache
 from typing import Dict, List, Tuple
@@ -7,6 +7,22 @@ from typing import Dict, List, Tuple
 import httpx
 from loguru import logger
 from skyfield.api import EarthSatellite, load, wgs84
+
+# Objects in the config `objects` list may be NORAD catalog IDs (satellites, tracked
+# via TLE) or JPL Horizons objects declared with this prefix (asteroids, comets,
+# spacecraft, planets — bodies for which no TLE exists). The text after the prefix is
+# passed verbatim to Horizons' lookup, which resolves names, designations, and ids.
+HORIZONS_PREFIX = "horizons:"
+
+
+def is_horizons(obj: str) -> bool:
+    """True if `obj` is a Horizons target reference (``horizons:<query>``)."""
+    return obj.startswith(HORIZONS_PREFIX)
+
+
+def horizons_query(obj: str) -> str:
+    """Return the Horizons lookup query from a ``horizons:<query>`` object string."""
+    return obj[len(HORIZONS_PREFIX) :].strip()
 
 
 def classify_orbit(line2: str) -> str:
@@ -35,9 +51,7 @@ def classify_orbit(line2: str) -> str:
 
 
 async def fetch_tles(
-        objects: List[str],
-        orbits: List[str] | None = None,
-        timeout: int = 30
+    objects: List[str], orbits: List[str] | None = None, timeout: int = 30
 ) -> Tuple[Dict[str, Dict[str, str]], int]:
     """
     Fetch TLEs from Spacebook by COMSPOC.
@@ -74,7 +88,7 @@ async def fetch_tles(
             # Parse the TLE format response
             # Spacebook returns: LINE1\nLINE2\n for each satellite (2-line format)
             # NOTE: This returns ALL satellites, so we must filter for requested objects
-            lines = response.text.strip().split('\n')
+            lines = response.text.strip().split("\n")
 
             # Convert requested objects to a set for O(1) lookup
             objects_set = set(objects)
@@ -88,7 +102,7 @@ async def fetch_tles(
                 line2 = lines[i + 1].strip()
 
                 # Validate TLE format
-                if not (line1.startswith('1 ') and line2.startswith('2 ')):
+                if not (line1.startswith("1 ") and line2.startswith("2 ")):
                     i += 1
                     continue
 
@@ -100,16 +114,14 @@ async def fetch_tles(
                     # Note: Spacebook TLE format doesn't have a line0, so we create one
                     line0 = f"0 {norad_id}"
 
-                    tles[norad_id] = {
-                        "line0": line0,
-                        "line1": line1,
-                        "line2": line2
-                    }
+                    tles[norad_id] = {"line0": line0, "line1": line1, "line2": line2}
 
                     # Optional: early exit if we've found all requested satellites
                     # (only valid without orbit regimes, which need a full catalog scan)
                     if not orbits_set and len(tles) == len(objects_set):
-                        logger.debug(f"Found all {len(objects_set)} requested satellites, stopping parse")
+                        logger.debug(
+                            f"Found all {len(objects_set)} requested satellites, stopping parse"
+                        )
                         break
 
                 i += 2
@@ -117,7 +129,9 @@ async def fetch_tles(
             # Warn if any requested satellites were not found
             missing = objects_set - set(tles.keys())
             if missing:
-                logger.warning(f"Could not find TLEs for {len(missing)} satellites: {sorted(missing)}")
+                logger.warning(
+                    f"Could not find TLEs for {len(missing)} satellites: {sorted(missing)}"
+                )
 
     except httpx.TimeoutException:
         logger.error("space-track.org request timed out")
@@ -142,7 +156,7 @@ def _time_at(unix_seconds: int):
 
 @lru_cache(maxsize=32768)
 def _satellite(line0: str, line1: str, line2: str) -> EarthSatellite:
-    return EarthSatellite(line1, line2, line0.split('0')[1].strip(), _timescale())
+    return EarthSatellite(line1, line2, line0.split("0")[1].strip(), _timescale())
 
 
 @lru_cache(maxsize=8)
@@ -151,11 +165,11 @@ def _observer(latitude: float, longitude: float, elevation: float):
 
 
 def calculate_satellite_position(
-        tles: dict[str, dict[str, str]],
-        object: str,
-        latitude: float,
-        longitude: float,
-        elevation: float,
+    tles: dict[str, dict[str, str]],
+    object: str,
+    latitude: float,
+    longitude: float,
+    elevation: float,
 ) -> tuple[float, float, bool, float] | None:
     """
     Calculate a satellite's current position relative to an observer.
@@ -219,12 +233,177 @@ def calculate_satellite_position(
         return None
 
 
+async def resolve_horizons(query: str):
+    """Resolve a Horizons query to a locked command, or None if it can't be resolved.
+
+    Resolutions are cached by the core client, so repeated visibility passes over the
+    same object don't re-query JPL. Returns the ``HorizonsResolution`` on success (with
+    ``resolved`` True), or None on a failed/ambiguous lookup (logged).
+    """
+    from sensorkit.astro.horizons import HorizonsError, resolve
+
+    try:
+        resolution = await resolve(query)
+    except HorizonsError as e:
+        logger.warning(f"Horizons lookup failed for {query!r}: {e}")
+        return None
+
+    if not resolution.resolved:
+        n = len(resolution.candidates)
+        logger.warning(
+            f"Horizons object {query!r} is ambiguous or not found "
+            f"({n} candidate(s)); use a more specific designation"
+        )
+        return None
+    if resolution.is_sun:
+        logger.warning(f"refusing to task the Sun ({query!r})")
+        return None
+    return resolution
+
+
+def _sample_altaz(
+    sample, latitude: float, longitude: float, elevation: float
+) -> tuple[float, float]:
+    """Transform a Horizons sample's ICRF RA/Dec to the observer's alt/az (degrees)."""
+    import astropy.units as u
+    from astropy.coordinates import ICRS, EarthLocation, SkyCoord
+    from astropy.time import Time
+
+    from sensorkit.astro.target import make_altaz_frame, norm_az_deg
+
+    loc = EarthLocation(lat=latitude * u.deg, lon=longitude * u.deg, height=elevation * u.m)
+    t_ast = Time(datetime.fromtimestamp((sample.jd - 2440587.5) * 86400.0, UTC), scale="utc")
+    sc = SkyCoord(ra=sample.ra * u.deg, dec=sample.dec * u.deg, frame=ICRS())
+    a = sc.transform_to(make_altaz_frame(loc, t_ast))
+    return a.alt.deg, norm_az_deg(a.az.deg)
+
+
+async def calculate_horizons_position(
+    query: str,
+    latitude: float,
+    longitude: float,
+    elevation: float,
+) -> tuple[float, float, bool, float] | None:
+    """Calculate a Horizons object's current position relative to an observer.
+
+    Resolves the object (cached), fetches a short two-sample ephemeris (now and
+    now+60s) from JPL Horizons, and transforms the astrometric RA/Dec (ICRF) to the
+    observer's horizontal frame.
+
+    Args:
+        query: Horizons lookup query (name, designation, or id).
+        latitude: Observer latitude in degrees.
+        longitude: Observer longitude in degrees.
+        elevation: Observer elevation in meters.
+
+    Returns:
+        Tuple of (altitude, azimuth, is_rising, rate_arcsec_hr) or None if the object
+        can't be resolved or no ephemeris is returned.
+        - altitude: Current altitude in degrees
+        - azimuth: Current azimuth in degrees
+        - rising: True if altitude is increasing
+        - rate_arcsec_hr: On-sky motion rate in arcsec/hr (for ephemeris cadence)
+    """
+    from sensorkit.astro.horizons import HorizonsError, ephemeris
+
+    resolution = await resolve_horizons(query)
+    if resolution is None:
+        return None
+
+    now = datetime.now(UTC)
+    try:
+        samples = await ephemeris(
+            command=resolution.command,
+            lon=longitude,
+            lat=latitude,
+            alt_km=elevation / 1000.0,
+            start=now,
+            stop=now + timedelta(seconds=60),
+            intervals=1,
+        )
+    except HorizonsError as e:
+        logger.warning(f"Horizons ephemeris failed for {query!r}: {e}")
+        return None
+
+    if not samples:
+        return None
+
+    # Transform the first sample's ICRF RA/Dec to the observer's alt/az. A second
+    # sample (60s later) tells us whether the object is rising.
+    altitude, azimuth = _sample_altaz(samples[0], latitude, longitude, elevation)
+    rising = True
+    if len(samples) > 1:
+        future_alt, _ = _sample_altaz(samples[-1], latitude, longitude, elevation)
+        rising = future_alt > altitude
+
+    rate = samples[0].total_rate_arcsec_hr
+
+    return altitude, azimuth, rising, rate
+
+
+async def build_horizons_target(
+    query: str,
+    latitude: float,
+    longitude: float,
+    elevation: float,
+    duration_seconds: float,
+    rate_arcsec_hr: float | None = None,
+):
+    """Fetch an Observer-Table ephemeris and build an ICRF ``EphemerisTarget``.
+
+    The ephemeris spans from just before now through ``duration_seconds`` (plus
+    padding), so it covers a collect that may execute a while after being queued as
+    otto drains the object's task batch. Sample cadence adapts to the object's
+    sky-motion rate.
+
+    Returns the ``EphemerisTarget`` (with the resolved object name), or None if the
+    object can't be resolved or no ephemeris is returned.
+    """
+    from sensorkit.astro.horizons import (
+        HorizonsError,
+        collect_window,
+        ephemeris,
+        samples_to_ephemeris_target,
+    )
+
+    resolution = await resolve_horizons(query)
+    if resolution is None:
+        return None
+
+    # Reuse the collect-window sizing (start pad + duration + end pad, adaptive
+    # cadence). frame_count=1 with integration_sec=duration gives a window covering
+    # the whole task batch.
+    window = collect_window(
+        integration_sec=duration_seconds,
+        frame_count=1,
+        rate_arcsec_per_hr=rate_arcsec_hr,
+    )
+    try:
+        samples = await ephemeris(
+            command=resolution.command,
+            lon=longitude,
+            lat=latitude,
+            alt_km=elevation / 1000.0,
+            start=window.start,
+            stop=window.stop,
+            intervals=window.intervals,
+        )
+    except HorizonsError as e:
+        logger.warning(f"Horizons ephemeris failed for {query!r}: {e}")
+        return None
+
+    if not samples:
+        return None
+
+    return samples_to_ephemeris_target(samples), resolution.name
+
+
 def dither_tle(
-        tle: "TLE",
-        dither_arcsec: float,
-        latitude: float,
-        longitude: float,
-        elevation: float,
+    tle: "TLE",
+    dither_arcsec: float,
+    latitude: float,
+    longitude: float,
+    elevation: float,
 ) -> "TLE":
     """Create a dithered copy of a TLE by perturbing inclination and RAAN.
 
@@ -286,12 +465,16 @@ def dither_tle(
     out = sk_tle.to_3line()
 
     from sensorkit.astro.common import TLE as _TLE
-    logger.debug(f"dithered TLE by {r:.1f} arcsec at angle {math.degrees(angle):.0f}° (range={range_m/1000:.0f} km, scale={scale:.2f})")
+
+    logger.debug(
+        f"dithered TLE by {r:.1f} arcsec at angle {math.degrees(angle):.0f}° (range={range_m / 1000:.0f} km, scale={scale:.2f})"
+    )
     return _TLE(line0=out[0], line1=out[1], line2=out[2])
 
 
 class ListType(Enum):
     """Enum for object list types."""
+
     WHITELIST = "whitelist"
     GRAYLIST = "graylist"
     BLACKLIST = "blacklist"
@@ -332,5 +515,3 @@ class ObjectListManager:
 
         logger.debug(f"moved {obj} from {from_list.value} to {to_list.value}")
         return True
-
-

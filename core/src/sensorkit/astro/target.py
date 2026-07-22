@@ -399,6 +399,22 @@ def sample_altaz_series(
                 out.append((a.alt.deg, norm_az_deg(a.az.deg)))
             return out
 
+        case EphemerisTarget(frame=ReferenceFrame.ICRF):
+            # Precomputed ICRF RA/Dec samples keyed by Julian date. For each
+            # requested time pick the nearest sample (the ephemeris is expected to
+            # span the window) and transform that fixed RA/Dec to alt/az.
+            if not target.jds:
+                raise ValueError("EphemerisTarget has no samples")
+            jds = np.asarray(target.jds, dtype=float)
+            for dt in times:
+                t_ast = Time(dt, scale="utc")
+                i = int(np.argmin(np.abs(jds - t_ast.jd)))
+                pt = target.points[i]
+                sc = SkyCoord(ra=pt.ra * u.deg, dec=pt.dec * u.deg, frame=ICRS())
+                a = sc.transform_to(make_altaz_frame(loc, t_ast))
+                out.append((a.alt.deg, norm_az_deg(a.az.deg)))
+            return out
+
     raise TypeError(f"Unsupported target type: {type(target)}")
 
 

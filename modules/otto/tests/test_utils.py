@@ -190,3 +190,126 @@ class TestListType:
         assert ListType.WHITELIST.value == "whitelist"
         assert ListType.GRAYLIST.value == "graylist"
         assert ListType.BLACKLIST.value == "blacklist"
+
+
+class TestHorizonsClassification:
+    def test_is_horizons(self):
+        from sensorkit.otto.utils import is_horizons
+
+        assert is_horizons("horizons:433 Eros")
+        assert not is_horizons("25544")
+        assert not is_horizons("horizon:433")  # singular is not the scheme
+
+    def test_horizons_query_strips_prefix(self):
+        from sensorkit.otto.utils import horizons_query
+
+        assert horizons_query("horizons:433 Eros") == "433 Eros"
+        assert horizons_query("horizons:  -170  ") == "-170"
+
+
+class TestCalculateHorizonsPosition:
+    """calculate_horizons_position + build_horizons_target with the core client mocked."""
+
+    @pytest.fixture
+    def horizons_client(self, monkeypatch):
+        """Patch the core Horizons client's resolve/ephemeris in otto.utils."""
+        from sensorkit.astro.horizons import HorizonsResolution, HorizonsSample
+
+        state = {}
+
+        def configure(*, resolved=True, is_sun=False, samples=None):
+            state["resolution"] = HorizonsResolution(
+                resolved=resolved,
+                command="433;",
+                name="433 Eros (A898 PA)",
+                kind="small",
+                is_sun=is_sun,
+            )
+            state["samples"] = samples
+
+        async def fake_resolve(query):
+            return state["resolution"]
+
+        async def fake_ephemeris(**kwargs):
+            return state["samples"]
+
+        monkeypatch.setattr("sensorkit.astro.horizons.resolve", fake_resolve)
+        monkeypatch.setattr("sensorkit.astro.horizons.ephemeris", fake_ephemeris)
+        return configure, HorizonsSample
+
+    @pytest.mark.asyncio
+    async def test_returns_altaz_and_rising(self, horizons_client):
+        from sensorkit.otto.utils import calculate_horizons_position
+
+        configure, Sample = horizons_client
+        # Two samples 60s apart; second higher in the sky (contrived RA/Dec near zenith).
+        configure(
+            samples=[
+                Sample(
+                    jd=2461243.5,
+                    utc="",
+                    ra=45.0,
+                    dec=33.0,
+                    ra_rate_arcsec_hr=10.0,
+                    dec_rate_arcsec_hr=0.0,
+                ),
+                Sample(jd=2461243.5 + 60 / 86400.0, utc="", ra=45.1, dec=33.1),
+            ]
+        )
+        result = await calculate_horizons_position(
+            "433 Eros", latitude=33.0, longitude=-117.0, elevation=100.0
+        )
+        assert result is not None
+        altitude, azimuth, rising, rate = result
+        assert -90.0 <= altitude <= 90.0
+        assert 0.0 <= azimuth < 360.0
+        assert rising in (True, False)
+        assert rate == pytest.approx(10.0)
+
+    @pytest.mark.asyncio
+    async def test_unresolved_returns_none(self, horizons_client):
+        from sensorkit.otto.utils import calculate_horizons_position
+
+        configure, _ = horizons_client
+        configure(resolved=False)
+        result = await calculate_horizons_position(
+            "zzz", latitude=33.0, longitude=-117.0, elevation=100.0
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_sun_refused(self, horizons_client):
+        from sensorkit.otto.utils import calculate_horizons_position
+
+        configure, _ = horizons_client
+        configure(is_sun=True, samples=[])
+        result = await calculate_horizons_position(
+            "sun", latitude=33.0, longitude=-117.0, elevation=100.0
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_build_target(self, horizons_client):
+        from sensorkit.astro.common import ReferenceFrame
+        from sensorkit.otto.utils import build_horizons_target
+
+        configure, Sample = horizons_client
+        configure(
+            samples=[
+                Sample(jd=2461243.5, utc="", ra=45.0, dec=33.0),
+                Sample(jd=2461243.6, utc="", ra=45.1, dec=33.1),
+            ]
+        )
+        built = await build_horizons_target(
+            "433 Eros",
+            latitude=33.0,
+            longitude=-117.0,
+            elevation=100.0,
+            duration_seconds=120.0,
+        )
+        assert built is not None
+        target, name = built
+        assert target.target_type == "ephemeris"
+        assert target.frame == ReferenceFrame.ICRF
+        assert len(target.jds) == 2
+        assert name == "433 Eros (A898 PA)"
