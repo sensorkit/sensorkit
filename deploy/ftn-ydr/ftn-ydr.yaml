@@ -319,7 +319,7 @@ otto:
   - id: Otto
     controller: FTN-YDR
     task:
-      objects: [ "12345" ]
+      tles: [ "12345" ]
       tle_update_interval_hours: 4
       graylist_interval_minutes: 15
       end_time_deadband_seconds: 300

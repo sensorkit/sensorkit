@@ -1,39 +1,51 @@
 # Otto Module
 
-Otto is an autonomous satellite observation program, meant for collecting large
-training data sets. Given a list of NORAD IDs and/or orbit regimes, it fetches
-TLEs, tracks object visibility, and continuously generates `StandardCollectTask`
-offers over the configured camera parameter grid (filters × exposures × binnings).
-Collected FITS imagery can optionally be published to Google Drive, Dropbox, and/or
-the UDL SkyImagery filedrop. Some supported features:
+Otto is an autonomous observation program, meant for collecting large training
+data sets. Given NORAD IDs, orbit regimes, and/or JPL Horizons object names, it
+fetches the ephemeris data for each, tracks object visibility, and continuously
+generates `StandardCollectTask` offers over the configured camera parameter grid
+(filters × exposures × binnings). Collected FITS imagery can optionally be
+published to Google Drive, Dropbox, and/or the UDL SkyImagery filedrop. Some
+supported features:
 
-- **Target selection** — random whitelist selection by default or via orbit class
-- (i.e. LEO/MEO/GEO/HEO), both supporting `scan_mode`, which
-  orders all visible objects by hour angle to walk the sky in one direction and
-  cross the meridian only once (one pier flip per pass).
-- **Visibility** — explicit `task.objects` move between a whitelist (visible now), a
-  graylist (below the altitude floor but rising; re-promoted periodically), and
-  a blacklist (below the floor and setting, or no TLE). Lists are persisted
-  across restarts. A future `TODO` item will populate these lists from object
-  SNR as measured by SENPAI.
+- **Target selection** — four sources, freely mixed: `task.tles` (NORAD IDs),
+  `task.orbits` (LEO/MEO/GEO/HEO orbit classes), `task.horizons` (solar system
+  bodies and deep-space hardware, for which no TLE exists), and `task.stars`
+  (fixed sidereal targets). Random whitelist selection by default; all four
+  support `scan_mode`, which orders all visible objects by hour angle to walk
+  the sky in one direction and cross the meridian only once (one pier flip per
+  pass).
+- **Visibility** — explicitly named objects (`task.tles`, `task.horizons`, and
+  `task.stars`) move between a whitelist (visible now), a graylist (below the
+  altitude floor but rising; re-promoted periodically), and a blacklist (below
+  the floor and setting, or no ephemeris data). Stars and Horizons objects are
+  the exception: they set diurnally and return the following night, so on
+  setting they are graylisted rather than blacklisted; only a satellite whose
+  pass has ended is blacklisted. Lists are persisted across restarts. A future `TODO` item
+  will populate these lists from object SNR as measured by SENPAI.
 - **Collection** — `track_mode` selects per-frame tracking: `rate` (follow the
-  TLE throughout), `rate_sidereal` (append a sidereally tracked frame to an
-  otherwise rate tracked sequence), or `sidereal` (slew to the TLE and begin tracking
-  sidereally); optional dithering about the TLE center to randomize where the object
-  lands on the focal plane.
+  target throughout), `rate_sidereal` (append a sidereally tracked frame to an
+  otherwise rate tracked sequence), or `sidereal` (slew to the target and begin
+  tracking sidereally); optional dithering about the target center to randomize
+  where the object lands on the focal plane.
 - **Publishing** — use a DataGraph to publish data and metadata to one or more apps.
 
 ## How It Works
 
 1. Otto fetches TLEs from Spacebook for the configured NORAD IDs and orbit
-   regimes (and re-fetches every `tle_update_interval_hours`)
-2. It evaluates satellite visibility (altitude, rising/setting) from the
+   regimes (and re-fetches every `tle_update_interval_hours`), a coarse JPL
+   Horizons ephemeris for each `task.horizons` object (every
+   `horizons_update_interval_hours`), and resolves each `task.stars` name to
+   fixed coordinates once
+2. It evaluates object visibility (altitude, rising/setting) from the
    controller's site position and maintains the whitelist / graylist / blacklist;
    orbit-regime members are instead selected live — whichever are above the
    altitude floor at task-generation time
 3. Visible objects are queued as `StandardCollectTask` entries — one task per
    filter × exposure × binning combination, `num_frames` frames each — and
-   offered to the agent scheduler
+   offered to the agent scheduler. Satellites are tasked as a `TLETarget`,
+   Horizons objects as an `EphemerisTarget`, and stars as a fixed `ICRSTarget`
+   (see below)
 4. Tasks are created in order of *filter* -> *exposure* -> *binning*, i.e. for a given
    exposure time, each binning setting is collected.
 5. The agent scheduler picks up task offers and drives the controller through
@@ -44,9 +56,59 @@ the UDL SkyImagery filedrop. Some supported features:
    context_from_fits -> app_sink`) picks up each new FITS file and dispatches it
    to all configured publishers
 
-Object lists, the TLE cache, and program state are persisted to the KV store.
-The config is also watched live — changing `task.objects` resets the lists and
+Object lists, the TLE cache, the Horizons cache, resolved star coordinates, and
+program state are persisted to the KV store. The config is also watched live —
+changing `task.tles`, `task.horizons`, or `task.stars` resets the lists and
 starts fresh.
+
+## JPL Horizons Targets
+
+`task.horizons` takes object names as they appear in the JPL Horizons Observer
+Table. Otto sends each one to Horizons verbatim; Horizons searches major bodies
+first and falls back to its small-body index on its own, so catalog numbers,
+designations, and names all work as typed:
+
+```yaml
+horizons: ["433", "Apophis", "2026 AB", "Ceres"]
+```
+
+Every resolution is logged at startup, e.g.
+`Horizons resolved '433' -> 433 Eros (A898 PA)`. Two cases need your attention:
+
+- **Ambiguous names** are not guessed at. `Jupiter` matches both `5 Jupiter
+  Barycenter` and `599 Jupiter`, so Otto logs the candidate ID#s, blacklists
+  that one entry, and keeps tasking the rest of the list. Put the ID# in the
+  config to disambiguate.
+- **The major-body search wildcards**, so a bare name can match something you
+  did not mean — `Eros` resolves to *Kerberos*, a moon of Pluto, with no
+  ambiguity warning. Append `;` to force the small-body record (`Eros;`) or use
+  the catalog number (`433`). Check the resolution line in the log.
+
+An unknown name (a typo) is warned about and blacklisted; the rest of the list
+keeps running.
+
+Each Horizons object carries two ephemerides. A coarse one covering the refresh
+interval drives the altitude / rising checks and hour-angle ordering, using the
+az/el Horizons computes for the site; readings are interpolated between its
+samples, since at that spacing the preceding sample alone would be up to a
+couple of degrees of Earth rotation stale. Then, when a target's tasks are generated,
+Otto fetches a fresh dense ephemeris spanning that whole block of tasks — plus
+`end_time_deadband_seconds` on the future end, the same slack the tasks
+themselves get — and every task in the block shares it as an ICRF
+`EphemerisTarget`. Sample density adapts to the object's current sky motion, so
+a fast NEO is sampled finely and a slow outer-solar-system body is not
+over-sampled. If Horizons is unreachable at that moment the object is skipped
+and retried on the next pass; TLE targets are unaffected, and vice versa.
+
+## Star Targets
+
+`task.stars` takes star names, resolved through the CDS Sesame service
+(SIMBAD/NED/VizieR) via astropy. Proper names, Bright Star Catalogue numbers,
+Hipparcos numbers, Bayer designations, and deep-sky identifiers all work:
+
+```yaml
+stars: ["Vega", "HR 7001", "HIP 32349", "alf Lyr", "M31"]
+```
 
 ## Example Config
 
@@ -56,9 +118,12 @@ key: OttoConfig
 value:
   controller: controller1                # named controller for the agent to task
   task:
-    objects: ["40105", "38833", "42741"] # NORAD IDs to observe
+    tles: ["40105", "38833", "42741"]    # NORAD IDs to observe
     orbits: []                           # Orbit regimes to observe (LEO/MEO/GEO/HEO), e.g. ["GEO"]
+    horizons: ["433", "Apophis"]         # JPL Horizons objects (see above)
+    stars: ["Vega", "M31"]               # Star / deep-sky names (see above)
     tle_update_interval_hours: 4         # How often to poll Spacebook for new TLEs
+    horizons_update_interval_hours: 6    # How often to refresh Horizons ephemerides
     graylist_interval_minutes: 15        # How often to promote graylist -> whitelist
     end_time_deadband_seconds: 300       # Extra time added to each task's deadline
     inter_task_delay_seconds: 0          # Fixed pause after each completed task (0 = back-to-back)
@@ -67,7 +132,7 @@ value:
     track_mode: rate_sidereal            # rate | sidereal | rate_sidereal (see above)
     scan_mode: false                     # walk all visible objects by hour angle
     scan_direction: eastward             # eastward | westward (scan_mode only)
-    dither: false                        # randomly perturb the TLE pointing per task
+    dither: false                        # randomly perturb the pointing per task
     dither_amount_arcsec: 500            # max on-sky offset, uniform in [0, this]
     filters: ["Filter 1"]                # filters to cycle ([] = no filter selection)
     exposure_min: 1                      # exposure set lower bound (seconds)

@@ -10,7 +10,8 @@ from sensorkit.otto.models import (
     TaskConfig,
     UDLPublishConfig,
 )
-from sensorkit.otto.program import OttoState, TLECache
+from sensorkit.otto.program import OttoState
+from sensorkit.otto.tles import TLECache
 
 
 class TestOttoState:
@@ -35,27 +36,33 @@ class TestOttoState:
 
 class TestTaskConfig:
     def test_defaults(self):
-        config = TaskConfig(objects=["25544"])
-        assert config.objects == ["25544"]
+        config = TaskConfig(tles=["25544"])
+        assert config.tles == ["25544"]
         assert config.tle_update_interval_hours == 24
+        assert config.horizons_update_interval_hours == 6
         assert config.graylist_interval_minutes == 300
         assert config.end_time_deadband_seconds == 60
 
-    def test_multiple_objects(self):
-        config = TaskConfig(objects=["25544", "42738", "39120"])
-        assert len(config.objects) == 3
+    def test_multiple_tles(self):
+        config = TaskConfig(tles=["25544", "42738", "39120"])
+        assert len(config.tles) == 3
 
     def test_orbits_only(self):
         config = TaskConfig(orbits=["GEO", "HEO"])
-        assert config.objects == []
+        assert config.tles == []
         assert config.orbits == ["GEO", "HEO"]
 
-    def test_objects_and_orbits(self):
-        config = TaskConfig(objects=["25544"], orbits=["GEO"])
-        assert config.objects == ["25544"]
+    def test_tles_and_orbits(self):
+        config = TaskConfig(tles=["25544"], orbits=["GEO"])
+        assert config.tles == ["25544"]
         assert config.orbits == ["GEO"]
 
-    def test_requires_objects_or_orbits(self):
+    def test_horizons_only(self):
+        config = TaskConfig(horizons=["433", "Apophis"])
+        assert config.horizons == ["433", "Apophis"]
+        assert config.tles == []
+
+    def test_requires_a_target_source(self):
         with pytest.raises(ValidationError):
             TaskConfig()
 
@@ -129,3 +136,10 @@ class TestTLECache:
         restored = TLECache.model_validate(data)
         assert "25544" in restored.tles
         assert restored.tles["25544"]["line0"] == "0 25544"
+
+
+class TestNamedObjects:
+    def test_combines_every_named_source(self):
+        config = TaskConfig(tles=["25544"], orbits=["GEO"], horizons=["433"], stars=["Vega"])
+        # Orbit regimes are selected live, never list-managed, so they stay out
+        assert config.named_objects == ["Vega", "25544", "433"]

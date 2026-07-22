@@ -1,138 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for Otto utility functions."""
 
-from types import SimpleNamespace
-
 import pytest
 
 from sensorkit.otto.program import OttoState
 from sensorkit.otto.utils import (
     ListType,
     ObjectListManager,
-    _satellite,
-    _time_at,
-    calculate_satellite_position,
-    classify_orbit,
-    fetch_tles,
+    dither_offset,
+    interpolate_angle,
+    normalize_degrees,
+    sidereal_frames,
 )
-
-LEO_LINE1 = "1 25544U 98067A   24100.50000000  .00016717  00000-0  10270-3 0  9002"
-LEO_LINE2 = "2 25544  51.6400 200.0000 0001234  90.0000 270.0000 15.49000000400000"
-
-
-def line2_with_mean_motion(mean_motion: float) -> str:
-    """A valid TLE line 2 with the given mean motion (columns 53-63)."""
-    return LEO_LINE2[:52] + f"{mean_motion:11.8f}" + LEO_LINE2[63:]
-
-
-class TestClassifyOrbit:
-    def test_leo(self):
-        assert classify_orbit(LEO_LINE2) == "LEO"
-
-    def test_meo(self):
-        assert classify_orbit(line2_with_mean_motion(2.0056)) == "MEO"  # GPS
-
-    def test_geo(self):
-        assert classify_orbit(line2_with_mean_motion(1.0027)) == "GEO"
-
-    def test_heo(self):
-        assert classify_orbit(line2_with_mean_motion(1.2)) == "HEO"
-
-    def test_leo_meo_boundary(self):
-        assert classify_orbit(line2_with_mean_motion(11.26)) == "LEO"
-        assert classify_orbit(line2_with_mean_motion(11.25)) == "MEO"
-
-    def test_unparseable_is_other(self):
-        assert classify_orbit("") == "OTHER"
-        assert classify_orbit("2 25544 garbage") == "OTHER"
-
-
-class TestCalculateSatellitePosition:
-    # Same TLE re-stamped with a mid-2026 epoch so propagation stays sane
-    FRESH_LINE1 = LEO_LINE1[:18] + "26191.50000000" + LEO_LINE1[32:]
-    TLES = {"25544": {"line0": "0 25544", "line1": FRESH_LINE1, "line2": LEO_LINE2}}
-
-    def test_returns_position(self):
-        result = calculate_satellite_position(
-            tles=self.TLES, object="25544", latitude=33.0, longitude=-117.0, elevation=100.0
-        )
-        assert result is not None
-        altitude, azimuth, rising, hour_angle = result
-        assert -90.0 <= altitude <= 90.0
-        assert 0.0 <= azimuth < 360.0
-        assert rising in (True, False)
-        assert -12.0 <= hour_angle < 12.0
-
-    def test_missing_object_returns_none(self):
-        result = calculate_satellite_position(
-            tles={}, object="25544", latitude=33.0, longitude=-117.0, elevation=100.0
-        )
-        assert result is None
-
-    def test_caches_shared(self):
-        assert _satellite("0 25544", self.FRESH_LINE1, LEO_LINE2) is _satellite(
-            "0 25544", self.FRESH_LINE1, LEO_LINE2
-        )
-        assert _time_at(1_780_000_000) is _time_at(1_780_000_000)
-
-
-class TestFetchTLEs:
-    """fetch_tles filtering of the full Spacebook catalog."""
-
-    GEO_LINE1 = "1 19548U" + LEO_LINE1[8:]
-    GEO_LINE2 = "2 19548" + line2_with_mean_motion(1.0027)[7:]
-    CATALOG = "\n".join([LEO_LINE1, LEO_LINE2, GEO_LINE1, GEO_LINE2])
-
-    @pytest.fixture
-    def spacebook(self, monkeypatch):
-        """Serve a canned Spacebook catalog response to fetch_tles."""
-
-        def set_response(text, status_code=200):
-            response = SimpleNamespace(text=text, status_code=status_code)
-
-            class FakeClient:
-                def __init__(self, **kwargs):
-                    pass
-
-                async def __aenter__(self):
-                    return self
-
-                async def __aexit__(self, *exc):
-                    return False
-
-                async def get(self, url):
-                    return response
-
-            monkeypatch.setattr("sensorkit.otto.utils.httpx.AsyncClient", FakeClient)
-
-        return set_response
-
-    @pytest.mark.asyncio
-    async def test_filter_by_objects(self, spacebook):
-        spacebook(self.CATALOG)
-        tles, status = await fetch_tles(objects=["25544"])
-        assert status == 200
-        assert set(tles) == {"25544"}
-
-    @pytest.mark.asyncio
-    async def test_filter_by_orbits(self, spacebook):
-        spacebook(self.CATALOG)
-        tles, status = await fetch_tles(objects=[], orbits=["GEO"])
-        assert status == 200
-        assert set(tles) == {"19548"}
-
-    @pytest.mark.asyncio
-    async def test_objects_and_orbits_union(self, spacebook):
-        spacebook(self.CATALOG)
-        tles, _ = await fetch_tles(objects=["25544"], orbits=["GEO"])
-        assert set(tles) == {"25544", "19548"}
-
-    @pytest.mark.asyncio
-    async def test_error_status_returns_empty(self, spacebook):
-        spacebook("", status_code=503)
-        tles, status = await fetch_tles(objects=["25544"], orbits=["GEO"])
-        assert tles == {}
-        assert status == 503
 
 
 class TestObjectListManager:
@@ -152,8 +31,7 @@ class TestObjectListManager:
     @pytest.mark.asyncio
     async def test_move_whitelist_to_graylist(self, state, manager):
         mgr, save = manager
-        result = await mgr.move_object("25544", ListType.WHITELIST, ListType.GRAYLIST)
-        assert result is True
+        await mgr.move_object("25544", ListType.WHITELIST, ListType.GRAYLIST)
         assert "25544" not in state.whitelist
         assert "25544" in state.graylist
         save.assert_awaited()
@@ -161,8 +39,7 @@ class TestObjectListManager:
     @pytest.mark.asyncio
     async def test_move_whitelist_to_blacklist(self, state, manager):
         mgr, save = manager
-        result = await mgr.move_object("42738", ListType.WHITELIST, ListType.BLACKLIST)
-        assert result is True
+        await mgr.move_object("42738", ListType.WHITELIST, ListType.BLACKLIST)
         assert "42738" not in state.whitelist
         assert "42738" in state.blacklist
 
@@ -190,3 +67,74 @@ class TestListType:
         assert ListType.WHITELIST.value == "whitelist"
         assert ListType.GRAYLIST.value == "graylist"
         assert ListType.BLACKLIST.value == "blacklist"
+
+
+class TestSiderealFrames:
+    """track_mode -> per-frame sidereal switches on the StandardCollectTask."""
+
+    def test_rate_pins_no_frames(self):
+        assert sidereal_frames("rate", 5) == []
+
+    def test_rate_sidereal_pins_final_frame(self):
+        assert sidereal_frames("rate_sidereal", 5) == [4]
+
+    def test_sidereal_pins_every_frame(self):
+        assert sidereal_frames("sidereal", 3) == [0, 1, 2]
+
+
+class TestDitherOffset:
+    def test_offset_within_requested_magnitude(self):
+        import math
+
+        for _ in range(50):
+            delta_ra, delta_dec = dither_offset(dec=0.0, dither_arcsec=500)
+            on_sky = math.hypot(delta_ra, delta_dec) * 3600
+            assert 0 <= on_sky <= 500
+
+    def test_ra_is_deprojected_by_cos_dec(self):
+        """At high declination a given on-sky offset needs a larger RA step."""
+        from unittest.mock import patch
+
+        with patch("sensorkit.otto.utils.random.uniform", side_effect=[500.0, 0.0]):
+            equator_ra, _ = dither_offset(dec=0.0, dither_arcsec=500)
+        with patch("sensorkit.otto.utils.random.uniform", side_effect=[500.0, 0.0]):
+            polar_ra, _ = dither_offset(dec=60.0, dither_arcsec=500)
+
+        # cos(60°) = 0.5, so the RA offset should double
+        assert polar_ra == pytest.approx(equator_ra * 2, rel=1e-6)
+
+    def test_no_offset_when_amount_is_zero(self):
+        assert dither_offset(dec=0.0, dither_arcsec=0) == (0.0, 0.0)
+
+
+class TestNormalizeDegrees:
+    def test_leaves_in_range_angles_alone(self):
+        assert normalize_degrees(0.0) == 0.0
+        assert normalize_degrees(180.0) == 180.0
+        assert normalize_degrees(359.9) == pytest.approx(359.9)
+
+    def test_wraps_out_of_range_angles(self):
+        assert normalize_degrees(370.0) == pytest.approx(10.0)
+        assert normalize_degrees(-10.0) == pytest.approx(350.0)
+
+    def test_never_returns_360(self):
+        """A tiny negative wraps to exactly 360.0 under plain modulo."""
+        assert (-1e-16) % 360.0 == 360.0  # the trap this guards
+        assert normalize_degrees(-1e-16) == 0.0
+
+
+class TestInterpolateAngle:
+    def test_midpoint(self):
+        assert interpolate_angle(10.0, 20.0, 0.5) == pytest.approx(15.0)
+
+    def test_endpoints(self):
+        assert interpolate_angle(10.0, 20.0, 0.0) == pytest.approx(10.0)
+        assert interpolate_angle(10.0, 20.0, 1.0) == pytest.approx(20.0)
+
+    def test_takes_the_short_way_across_north(self):
+        assert interpolate_angle(359.0, 1.0, 0.5) == pytest.approx(0.0)
+        assert interpolate_angle(1.0, 359.0, 0.5) == pytest.approx(0.0)
+
+    def test_short_way_result_stays_in_range(self):
+        assert 0.0 <= interpolate_angle(359.0, 1.0, 0.25) < 360.0
+        assert interpolate_angle(359.0, 1.0, 0.25) == pytest.approx(359.5)

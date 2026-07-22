@@ -208,7 +208,7 @@ otto:
   - id: Otto
     controller: OmniSim
     task:
-      objects: [ "21639" ]
+      tles: [ "21639" ]
       tle_update_interval_hours: 4
       graylist_interval_minutes: 15
       end_time_deadband_seconds: 300

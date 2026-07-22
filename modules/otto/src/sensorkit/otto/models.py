@@ -9,18 +9,31 @@ OrbitRegime = Literal["LEO", "MEO", "GEO", "HEO"]
 
 
 class TaskConfig(BaseModel):
-    objects: List[str] = Field(default_factory=list)
+    stars: List[str] = Field(default_factory=list)
     orbits: List[OrbitRegime] = Field(default_factory=list)
+    tles: List[str] = Field(default_factory=list)
+    horizons: List[str] = Field(default_factory=list)
     tle_update_interval_hours: int = 24
+    horizons_update_interval_hours: int = 6
     graylist_interval_minutes: int = 300
     end_time_deadband_seconds: int = 60
     inter_task_delay_seconds: float = 0.0
 
     @model_validator(mode="after")
     def _require_targets(self):
-        if not self.objects and not self.orbits:
-            raise ValueError("at least one of task.objects or task.orbits is required")
+        if not self.stars and not self.orbits and not self.tles and not self.horizons:
+            raise ValueError(
+                "at least one of task.stars, task.orbits, task.tles, "
+                "or task.horizons is required"
+            )
         return self
+
+    @property
+    def named_objects(self) -> List[str]:
+        """Explicitly named objects across every source: star names, NORAD IDs,
+        and Horizons names. These share the whitelist/graylist/blacklist
+        machinery; orbit regimes are selected live and never list-managed."""
+        return [*self.stars, *self.tles, *self.horizons]
 
 
 class CollectConfig(BaseModel):
@@ -36,10 +49,6 @@ class CollectConfig(BaseModel):
     exposure_delta: int = 1
     binning: List[int] = Field(default_factory=lambda: [1, 2, 4])
     num_frames: int = 3
-
-
-# Publisher credentials never live in config — each publisher reads them from
-# publish.env_file, falling back to the process environment (see publishers.py).
 
 
 class GDrivePublishConfig(BaseModel):

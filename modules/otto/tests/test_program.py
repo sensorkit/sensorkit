@@ -2,27 +2,21 @@
 """Tests for OttoProgram task factory."""
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import ISS_TLE, make_task
 
-from sensorkit.otto.program import OttoProgram, OttoState, _sidereal_frames
+from sensorkit.astro.common import ReferenceFrame, SitePosition
+from sensorkit.astro.coords import Equatorial
+from sensorkit.astro.target import ICRSTarget
+from sensorkit.otto.horizons import HorizonsObject, HorizonsSample
+from sensorkit.otto.models import CollectConfig, OttoConfig, PublishConfig, TaskConfig
+from sensorkit.otto.program import OttoProgram, OttoState
 from sensorkit.otto.task_queue import TaskQueue
-
-
-class TestSiderealFrames:
-    """track_mode -> per-frame sidereal switches on the StandardCollectTask."""
-
-    def test_rate_pins_no_frames(self):
-        assert _sidereal_frames("rate", 5) == []
-
-    def test_rate_sidereal_pins_final_frame(self):
-        assert _sidereal_frames("rate_sidereal", 5) == [4]
-
-    def test_sidereal_pins_every_frame(self):
-        assert _sidereal_frames("sidereal", 3) == [0, 1, 2]
+from sensorkit.otto.utils import ListType, ObjectListManager, to_jd
 
 
 def _resolved_execution():
@@ -218,7 +212,7 @@ class TestObjectListManagement:
 def orbit_program(program):
     """Program configured for orbits-only tasking with one fetched GEO member."""
     program.state = OttoState()
-    program.config.task.objects = []
+    program.config.task.tles = []
     program.config.task.orbits = ["GEO"]
     program.config.collect.altitude_min = 20.0
     program.config.collect.scan_mode = False
@@ -254,15 +248,15 @@ class TestOrbitTargets:
             "33333": (60.0, 180.0, True, 3.0),  # up, west of meridian
         }
         monkeypatch.setattr(
-            "sensorkit.otto.program.calculate_satellite_position",
-            lambda **kwargs: positions[kwargs["object"]],
+            "sensorkit.otto.tles.position",
+            lambda **kwargs: positions[kwargs["tle_data"]["id"]],
         )
         program.config.collect.altitude_min = 20.0
         program.config.collect.scan_direction = "eastward"
         program.latitude = 33.0
         program.longitude = -117.0
         program.altitude_km = 0.1
-        program.tles = {}
+        program.tles = {oid: {"id": oid} for oid in positions}
 
         # eastward scan: descending hour angle, below-floor objects dropped
         targets = await program._visible_targets(["11111", "22222", "33333"])
@@ -271,7 +265,7 @@ class TestOrbitTargets:
     @pytest.mark.asyncio
     async def test_orbit_member_tasked_without_list_management(self, orbit_program, monkeypatch):
         monkeypatch.setattr(
-            "sensorkit.otto.program.calculate_satellite_position",
+            "sensorkit.otto.tles.position",
             lambda **kwargs: (45.0, 180.0, True, 1.0),
         )
         gen = asyncio.create_task(orbit_program.generate_tasks())
@@ -289,7 +283,7 @@ class TestOrbitTargets:
         # Visible when the scan list is built, below the floor by execution time
         results = iter([(45.0, 180.0, True, 1.0)])
         monkeypatch.setattr(
-            "sensorkit.otto.program.calculate_satellite_position",
+            "sensorkit.otto.tles.position",
             lambda **kwargs: next(results, (5.0, 180.0, False, 1.0)),
         )
         orbit_program.config.collect.scan_mode = True
@@ -309,3 +303,573 @@ class TestProgramDeinit:
         """program_deinit should save state."""
         await program.program_deinit()
         program.program.kv_put_model.assert_awaited()
+
+
+@pytest.fixture
+def horizons_program(program):
+    """Program configured for a single Horizons object with a cached ephemeris."""
+    program.state = OttoState(whitelist=["433"])
+    program.config.task.tles = []
+    program.config.task.orbits = []
+    program.config.task.horizons = ["433"]
+    program.config.task.horizons_update_interval_hours = 6
+    program.config.collect.dither = False
+    program.config.collect.dither_amount_arcsec = 0
+    program.latitude = 33.0
+    program.longitude = -117.0
+    program.altitude_km = 0.1
+    program.tles = {}
+    program.horizons = {
+        "433": HorizonsObject(
+            command="433;",
+            name="433 Eros (A898 PA)",
+            samples=_horizons_samples(datetime.now(UTC) - timedelta(minutes=1)),
+        )
+    }
+    program.list_manager = MagicMock()
+    program.list_manager.move_object = AsyncMock()
+    return program
+
+
+def _horizons_samples(start, count=3, step_minutes=15):
+    return [
+        HorizonsSample(
+            jd=to_jd(start + timedelta(minutes=step_minutes * i)),
+            ra=180.0 + i * 0.01,
+            dec=-15.0 - i * 0.001,
+            ra_rate=100.0,
+            dec_rate=-30.0,
+            azimuth=90.0,
+            elevation=45.0 + i,
+        )
+        for i in range(count)
+    ]
+
+
+class TestObjectPositionDispatch:
+    """Horizons objects and TLE objects share one visibility contract."""
+
+    def test_horizons_object_uses_the_cached_ephemeris(self, horizons_program, monkeypatch):
+        monkeypatch.setattr(
+            "sensorkit.otto.tles.position",
+            lambda **kwargs: pytest.fail("Horizons object must not take the TLE path"),
+        )
+
+        altitude, azimuth, rising, _ = horizons_program._object_position("433")
+
+        # The fixture starts 1 minute back on a 15-minute step from 45° to 46°
+        assert altitude == pytest.approx(45.0 + (1 / 15), abs=1e-3)
+        assert azimuth == pytest.approx(90.0)
+        assert rising is True
+
+    def test_satellite_falls_through_to_the_tle_path(self, horizons_program, monkeypatch):
+        monkeypatch.setattr(
+            "sensorkit.otto.tles.position",
+            lambda **kwargs: (12.0, 34.0, False, 1.5),
+        )
+        horizons_program.tles = {"25544": {"line0": "0 25544"}}
+        assert horizons_program._object_position("25544") == (12.0, 34.0, False, 1.5)
+
+    def test_missing_tle_reads_as_no_position(self, horizons_program):
+        horizons_program.tles = {}
+        assert horizons_program._object_position("25544") is None
+
+    def test_stale_ephemeris_reads_as_no_position(self, horizons_program):
+        horizons_program.horizons["433"].samples = _horizons_samples(
+            datetime.now(UTC) - timedelta(days=2)
+        )
+        assert horizons_program._object_position("433") is None
+
+
+class TestHorizonsTarget:
+    @pytest.mark.asyncio
+    async def test_builds_an_icrf_ephemeris_target(self, horizons_program):
+        now = datetime.now(UTC)
+        samples = _horizons_samples(now)
+        with patch(
+            "sensorkit.otto.horizons.fetch_ephemeris", AsyncMock(return_value=samples)
+        ):
+            target = await horizons_program._target_for("433", True, 120, now)
+
+        assert target.frame == ReferenceFrame.ICRF
+        assert target.jds == [s.jd for s in samples]
+        assert target.points[0].ra == pytest.approx(samples[0].ra)
+        assert target.points[0].dec == pytest.approx(samples[0].dec)
+
+    @pytest.mark.asyncio
+    async def test_window_pads_only_the_future_end_by_the_deadband(self, horizons_program):
+        """A task dispatched late must still land inside the fetched ephemeris.
+
+        The window starts at generation time: execution can never precede it,
+        and padding the past end would only dilute the sampling.
+        """
+        now = datetime.now(UTC)
+        horizons_program.config.task.end_time_deadband_seconds = 300
+        fetch = AsyncMock(return_value=_horizons_samples(now))
+        with patch("sensorkit.otto.horizons.fetch_ephemeris", fetch):
+            await horizons_program._target_for("433", True, 600, now)
+
+        kwargs = fetch.await_args.kwargs
+        assert kwargs["command"] == "433;"
+        assert kwargs["start"] == now
+        assert kwargs["stop"] == now + timedelta(seconds=900)
+
+    @pytest.mark.asyncio
+    async def test_deadband_does_not_dilute_the_sampling(self, horizons_program):
+        """A large deadband must not spend the interval budget on unobserved time."""
+        now = datetime.now(UTC)
+        fetch = AsyncMock(return_value=_horizons_samples(now))
+
+        with patch("sensorkit.otto.horizons.fetch_ephemeris", fetch):
+            horizons_program.config.task.end_time_deadband_seconds = 300
+            await horizons_program._target_for("433", True, 600, now)
+            modest = fetch.await_args.kwargs["intervals"]
+
+            horizons_program.config.task.end_time_deadband_seconds = 3600
+            await horizons_program._target_for("433", True, 600, now)
+            huge = fetch.await_args.kwargs["intervals"]
+
+        # A 12x deadband still buys intervals, but the 600s block keeps its own
+        # density — it is no longer paying for the deadband twice over.
+        assert huge > modest
+
+    @pytest.mark.asyncio
+    async def test_dither_shifts_every_sample_equally(self, horizons_program):
+        """The whole path shifts together, so the object stays tracked off-center."""
+        now = datetime.now(UTC)
+        samples = _horizons_samples(now)
+        horizons_program.config.collect.dither = True
+        horizons_program.config.collect.dither_amount_arcsec = 500
+
+        with (
+            patch("sensorkit.otto.horizons.fetch_ephemeris", AsyncMock(return_value=samples)),
+            patch("sensorkit.otto.horizons.dither_offset", return_value=(0.02, -0.01)),
+        ):
+            target = await horizons_program._target_for("433", True, 120, now)
+
+        for point, sample in zip(target.points, samples, strict=True):
+            assert point.ra == pytest.approx(sample.ra + 0.02)
+            assert point.dec == pytest.approx(sample.dec - 0.01)
+
+    @pytest.mark.asyncio
+    async def test_fetch_failure_skips_the_target(self, horizons_program):
+        with patch(
+            "sensorkit.otto.horizons.fetch_ephemeris",
+            AsyncMock(side_effect=RuntimeError("Horizons unreachable")),
+        ):
+            assert await horizons_program._target_for("433", True, 120, datetime.now(UTC)) is None
+
+    @pytest.mark.asyncio
+    async def test_single_sample_is_rejected(self, horizons_program):
+        """Mounts finite-difference a rate from adjacent samples; one point can't."""
+        now = datetime.now(UTC)
+        with patch(
+            "sensorkit.otto.horizons.fetch_ephemeris",
+            AsyncMock(return_value=_horizons_samples(now, count=1)),
+        ):
+            assert await horizons_program._target_for("433", True, 120, now) is None
+
+
+async def _one_horizons_pass(program):
+    """Drive the Horizons updater through exactly one pass, then stop it.
+
+    Making the loop's trailing sleep raise keeps this deterministic — the body
+    runs once and the coroutine exits, with no timing assumptions.
+    """
+    with patch(
+        "sensorkit.otto.program.asyncio.sleep",
+        AsyncMock(side_effect=asyncio.CancelledError),
+    ):
+        with contextlib.suppress(asyncio.CancelledError):
+            await program.update_horizons_loop()
+
+
+class TestHorizonsUpdate:
+    @pytest.mark.asyncio
+    async def test_resolves_and_caches_new_objects(self, horizons_program):
+        horizons_program.horizons = {}
+        now = datetime.now(UTC)
+
+        with (
+            patch(
+                "sensorkit.otto.horizons.resolve",
+                AsyncMock(return_value=("433;", "433 Eros (A898 PA)")),
+            ),
+            patch(
+                "sensorkit.otto.horizons.fetch_ephemeris",
+                AsyncMock(return_value=_horizons_samples(now)),
+            ),
+        ):
+            await _one_horizons_pass(horizons_program)
+
+        assert horizons_program.horizons["433"].command == "433;"
+        assert horizons_program.horizons["433"].name == "433 Eros (A898 PA)"
+        horizons_program.program.kv_put_model.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_known_object_is_not_re_resolved(self, horizons_program):
+        """Resolutions are sticky, so a refresh costs one JPL call, not two."""
+        resolve = AsyncMock()
+        with (
+            patch("sensorkit.otto.horizons.resolve", resolve),
+            patch(
+                "sensorkit.otto.horizons.fetch_ephemeris",
+                AsyncMock(return_value=_horizons_samples(datetime.now(UTC))),
+            ),
+        ):
+            await _one_horizons_pass(horizons_program)
+
+        resolve.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_name_is_blacklisted(self, horizons_program):
+        horizons_program.horizons = {}
+        horizons_program.config.task.horizons = ["Jupiter", "433"]
+
+        async def resolve(name, *args, **kwargs):
+            return None if name == "Jupiter" else ("433;", "433 Eros (A898 PA)")
+
+        with (
+            patch("sensorkit.otto.horizons.resolve", AsyncMock(side_effect=resolve)),
+            patch(
+                "sensorkit.otto.horizons.fetch_ephemeris",
+                AsyncMock(return_value=_horizons_samples(datetime.now(UTC))),
+            ),
+        ):
+            horizons_program.state.whitelist = ["Jupiter", "433"]
+            await _one_horizons_pass(horizons_program)
+
+        horizons_program.list_manager.move_object.assert_awaited_once_with(
+            "Jupiter", ListType.WHITELIST, ListType.BLACKLIST
+        )
+        # The rest of the list keeps tasking
+        assert "433" in horizons_program.horizons
+
+    @pytest.mark.asyncio
+    async def test_failed_refresh_keeps_the_previous_ephemeris(self, horizons_program):
+        """A JPL outage must not strand a target that still has usable samples."""
+        previous = horizons_program.horizons["433"].samples
+
+        with patch(
+            "sensorkit.otto.horizons.fetch_ephemeris",
+            AsyncMock(side_effect=RuntimeError("Horizons unreachable")),
+        ):
+            await _one_horizons_pass(horizons_program)
+
+        assert horizons_program.horizons["433"].samples == previous
+
+    @pytest.mark.asyncio
+    async def test_removed_object_drops_out_of_the_cache(self, horizons_program):
+        horizons_program.config.task.horizons = []
+        await _one_horizons_pass(horizons_program)
+        assert horizons_program.horizons == {}
+
+
+
+class TestEphemerisCoversTheBlock:
+    """The fetched ephemeris must span every task it is attached to."""
+
+    @pytest.mark.asyncio
+    async def test_window_ends_at_the_last_task_deadline(self, horizons_program):
+        """Ephemeris stop == the final queued task's end_time.
+
+        One ephemeris is shared by the whole block of tasks generated for an
+        object, so its window has to reach the last of them. `end_time` already
+        carries `end_time_deadband_seconds`, so matching it exactly gives the
+        block its integration time plus one deadband of slack.
+        """
+        horizons_program.config.task.end_time_deadband_seconds = 300
+        horizons_program.config.task.inter_task_delay_seconds = 0
+        horizons_program.config.collect.altitude_min = 20.0
+        horizons_program.config.collect.scan_mode = False
+        horizons_program.config.collect.track_mode = "rate"
+        horizons_program.config.collect.dither = False
+        horizons_program.config.collect.filters = ["Lum", "R"]
+        horizons_program.config.collect.exposure_min = 2
+        horizons_program.config.collect.exposure_max = 4
+        horizons_program.config.collect.exposure_delta = 2
+        horizons_program.config.collect.binning = [1, 2]
+        horizons_program.config.collect.num_frames = 3
+
+        fetch = AsyncMock(return_value=_horizons_samples(datetime.now(UTC)))
+        with patch("sensorkit.otto.horizons.fetch_ephemeris", fetch):
+            gen = asyncio.create_task(horizons_program.generate_tasks())
+            await asyncio.sleep(0.1)
+            gen.cancel()
+
+        # 2 filters x 2 exposures x 2 binnings
+        assert len(horizons_program.task_queue) == 8
+        latest = max(q.task.end_time for q in horizons_program.task_queue.tasks)
+        assert fetch.await_args.kwargs["stop"] == latest
+
+    @pytest.mark.asyncio
+    async def test_window_is_blind_to_slew_and_readout_overhead(self, horizons_program):
+        """Known gap: the block estimate is integration time only.
+
+        Real wall-clock adds slew/settle, readout, and inter_task_delay, so a
+        long block can outrun its ephemeris and the mounts fall back to
+        extrapolating from the final samples.
+        """
+        now = datetime.now(UTC)
+        horizons_program.config.task.end_time_deadband_seconds = 0
+        fetch = AsyncMock(return_value=_horizons_samples(now))
+        with patch("sensorkit.otto.horizons.fetch_ephemeris", fetch):
+            await horizons_program._target_for("433", True, 600, now)
+
+        assert fetch.await_args.kwargs["stop"] == now + timedelta(seconds=600)
+
+
+@pytest.fixture
+def star_program(program):
+    """Program configured for a single resolved star."""
+    program.state = OttoState(whitelist=["Vega"])
+    program.config.task.tles = []
+    program.config.task.orbits = []
+    program.config.task.horizons = []
+    program.config.task.stars = ["Vega"]
+    program.config.collect.dither = False
+    program.config.collect.dither_amount_arcsec = 0
+    program.config.collect.altitude_min = 20.0
+    program.latitude, program.longitude, program.altitude_km = 40.0, 0.0, 0.1
+    program.tles = {}
+    program.horizons = {}
+    program.stars = {"Vega": Equatorial(ra=279.23473, dec=38.78369)}
+    program.list_manager = MagicMock()
+    program.list_manager.move_object = AsyncMock()
+    return program
+
+
+class TestStarTargets:
+    def test_position_uses_the_fixed_coordinates(self, star_program, monkeypatch):
+        monkeypatch.setattr(
+            "sensorkit.otto.tles.position",
+            lambda **kwargs: pytest.fail("a star must not take the TLE path"),
+        )
+        altitude, azimuth, rising, ha = star_program._object_position("Vega")
+
+        assert -90.0 <= altitude <= 90.0
+        assert 0.0 <= azimuth < 360.0
+        assert isinstance(rising, bool)
+        assert -12.0 <= ha < 12.0
+
+    @pytest.mark.asyncio
+    async def test_builds_a_fixed_icrf_target(self, star_program):
+        target = await star_program._target_for("Vega", True, 0, datetime.now(UTC))
+
+        assert isinstance(target, ICRSTarget)
+        assert target.frame == ReferenceFrame.ICRF
+        assert target.coords.ra == pytest.approx(279.23473)
+        assert target.coords.dec == pytest.approx(38.78369)
+
+    @pytest.mark.asyncio
+    async def test_dither_offsets_the_pointing(self, star_program):
+        star_program.config.collect.dither = True
+        star_program.config.collect.dither_amount_arcsec = 500
+
+        with patch("sensorkit.otto.stars.dither_offset", return_value=(0.02, -0.01)):
+            target = await star_program._target_for("Vega", True, 0, datetime.now(UTC))
+
+        assert target.coords.ra == pytest.approx(279.23473 + 0.02)
+        assert target.coords.dec == pytest.approx(38.78369 - 0.01)
+
+
+class TestStarListManagement:
+    """A star always comes back, so it must never be permanently blacklisted."""
+
+    @pytest.mark.asyncio
+    async def test_set_star_graylists_rather_than_blacklists(self, star_program, monkeypatch):
+        # Below the floor and west of the meridian: setting
+        monkeypatch.setattr(
+            star_program, "_object_position", lambda obj: (5.0, 270.0, False, 3.0)
+        )
+        star_program.config.collect.scan_mode = False
+
+        gen = asyncio.create_task(star_program.generate_tasks())
+        await asyncio.sleep(0.1)
+        gen.cancel()
+
+        star_program.list_manager.move_object.assert_awaited_with(
+            "Vega", ListType.WHITELIST, ListType.GRAYLIST
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_satellite_still_blacklists(self, orbit_program, monkeypatch):
+        """The diurnal-return exemption must not change satellite behaviour."""
+        orbit_program.state.whitelist = ["25544"]
+        orbit_program.stars = {}
+        orbit_program.tles["25544"] = {"line0": "0 25544"}
+        monkeypatch.setattr(
+            "sensorkit.otto.tles.position",
+            lambda **kwargs: (5.0, 270.0, False, 3.0),
+        )
+
+        gen = asyncio.create_task(orbit_program.generate_tasks())
+        await asyncio.sleep(0.1)
+        gen.cancel()
+
+        orbit_program.list_manager.move_object.assert_awaited_with(
+            "25544", ListType.WHITELIST, ListType.BLACKLIST
+        )
+
+
+class TestStarResolution:
+    @pytest.mark.asyncio
+    async def test_resolves_and_caches(self, star_program):
+        star_program.stars = {}
+        with patch(
+            "sensorkit.otto.stars.resolve",
+            AsyncMock(return_value=Equatorial(ra=279.23473, dec=38.78369)),
+        ):
+            await star_program.update_stars()
+
+        assert star_program.stars["Vega"].ra == pytest.approx(279.23473)
+        star_program.program.kv_put_model.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_known_star_is_not_re_resolved(self, star_program):
+        """Positions are static, so a cached name never hits the network again."""
+        resolve = AsyncMock()
+        with patch("sensorkit.otto.stars.resolve", resolve):
+            await star_program.update_stars()
+
+        resolve.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_name_is_blacklisted(self, star_program):
+        star_program.stars = {}
+        with patch("sensorkit.otto.stars.resolve", AsyncMock(return_value=None)):
+            await star_program.update_stars()
+
+        assert star_program.stars == {}
+        star_program.list_manager.move_object.assert_awaited_once_with(
+            "Vega", ListType.WHITELIST, ListType.BLACKLIST
+        )
+
+    @pytest.mark.asyncio
+    async def test_previously_blacklisted_name_recovers_when_it_resolves(self, star_program):
+        """A resolver outage blacklists; resolving on a later run must undo that.
+
+        For stars that later run is a restart or a `task.stars` edit, since
+        resolution is one-shot.
+        """
+        star_program.stars = {}
+        star_program.state.whitelist = []
+        star_program.state.blacklist = ["Vega"]
+        # Use the real list manager so the move is actually applied
+        star_program.list_manager = ObjectListManager(star_program.state, AsyncMock())
+
+        with patch(
+            "sensorkit.otto.stars.resolve",
+            AsyncMock(return_value=Equatorial(ra=279.23473, dec=38.78369)),
+        ):
+            await star_program.update_stars()
+
+        assert star_program.state.blacklist == []
+        assert star_program.state.whitelist == ["Vega"]
+
+    @pytest.mark.asyncio
+    async def test_removed_star_drops_out_of_the_cache(self, star_program):
+        star_program.config.task.stars = []
+        await star_program.update_stars()
+        assert star_program.stars == {}
+
+
+class TestDiurnalReturnExemption:
+    """Sources that set diurnally and return (stars, Horizons objects) graylist;
+    only a satellite whose pass has ended blacklists."""
+
+    @pytest.mark.asyncio
+    async def test_set_horizons_object_graylists_rather_than_blacklists(
+        self, horizons_program, monkeypatch
+    ):
+        # Below the floor and west of the meridian: setting — but an asteroid
+        # is back tomorrow night, so blacklisting would lose it forever
+        monkeypatch.setattr(
+            horizons_program, "_object_position", lambda obj: (5.0, 270.0, False, 3.0)
+        )
+        horizons_program.config.collect.scan_mode = False
+        horizons_program.config.collect.altitude_min = 20.0
+        horizons_program.tles = {}
+
+        gen = asyncio.create_task(horizons_program.generate_tasks())
+        await asyncio.sleep(0.1)
+        gen.cancel()
+
+        horizons_program.list_manager.move_object.assert_awaited_with(
+            "433", ListType.WHITELIST, ListType.GRAYLIST
+        )
+
+
+class TestUnresolvedNamesAreNotMisfiled:
+    """A configured star/Horizons name whose resolution hasn't completed must
+    not fall through to the TLE path and be blacklisted as 'no TLE available'."""
+
+    @pytest.mark.asyncio
+    async def test_unresolved_star_is_skipped_not_blacklisted(self, star_program):
+        # TLEs are ready, but Vega hasn't resolved yet (startup race): the
+        # whitelist filter passes it, and _object_position finds it nowhere
+        star_program.stars = {}
+        star_program.tles = {"99999": {"line0": "0 99999"}}
+        star_program.tles_dt = datetime.now(UTC)
+        star_program.config.collect.scan_mode = False
+
+        gen = asyncio.create_task(star_program.generate_tasks())
+        await asyncio.sleep(0.1)
+        gen.cancel()
+
+        star_program.list_manager.move_object.assert_not_awaited()
+
+
+class TestStartupOrdering:
+    @pytest.mark.asyncio
+    async def test_site_position_is_set_before_the_updaters_start(
+        self, mock_program_binding, monkeypatch
+    ):
+        """The Horizons updater asks JPL for ephemerides at the observing site.
+
+        Starting it before the site position is fetched leaves every fetch
+        raising AttributeError on self.latitude — caught per-object, so the
+        cache silently comes up empty and is not retried until the next refresh.
+        """
+        program = OttoProgram()
+        config = OttoConfig(
+            controller="c1",
+            task=TaskConfig(horizons=["433"]),
+            collect=CollectConfig(track_mode="rate"),
+            publish=PublishConfig(),
+        )
+        site = SitePosition(
+            latitude_degrees=42.3, longitude_degrees=-83.0, altitude_km=0.2
+        )
+
+        async def kv_get_model(model_type):
+            if model_type is OttoConfig:
+                return config
+            raise KeyError(model_type)  # nothing else is cached
+
+        mock_program_binding.kv_get_model = AsyncMock(side_effect=kv_get_model)
+        mock_program_binding.task_group.create_task = MagicMock(
+            side_effect=lambda coro: coro.close()
+        )
+        controller = MagicMock()
+        controller.kv_get_model = AsyncMock(return_value=site)
+        mock_program_binding.sensorkit.return_value.controller.return_value = controller
+
+        # Record whether the site position was already resolved as each
+        # background task was created, without actually running any of them
+        had_site = {}
+
+        def spy(coro, *args, **kwargs):
+            had_site[coro.cr_code.co_name] = hasattr(program, "latitude")
+            coro.close()
+            return MagicMock()
+
+        monkeypatch.setattr(
+            "sensorkit.otto.program.sk.program", lambda: mock_program_binding
+        )
+        monkeypatch.setattr("sensorkit.otto.program.asyncio.create_task", spy)
+
+        await program.program_init()
+
+        assert had_site["update_horizons_loop"] is True
+        assert had_site["generate_tasks"] is True
