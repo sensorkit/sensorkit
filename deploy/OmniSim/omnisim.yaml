@@ -119,31 +119,31 @@ data_flow:
               value: =dec_rate/3600
               comment: measured declination rate [deg/s]
             DATE-OBS:
-              value: =date_obs
+              value: =ExposureInfo.date_obs.replace(tzinfo=None).isoformat()
               comment: date of the observation
             TRKMODE:
               value: =track_mode
               comment: track mode [RATE, SIDEREAL, FIXED]
             INSTRUME:
-              value: =instrume
+              value: =ExposureInfo.instrument
               comment: name of instrument
             FILTER:
               value: =filter_name
               comment: name of filter used during the observation
             CCDTEMP:
-              value: =ccdtemp
+              value: =ExposureInfo.ccd_temperature
               comment: sensor temperature [C]
             READOUTM:
-              value: =readoutm
+              value: =ExposureInfo.readout_mode
               comment: sensor readout mode
             EXPTIME:
-              value: =exptime
+              value: =ExposureInfo.exposure_time
               comment: exposure time [s]
             XBINNING:
-              value: =xbinning
+              value: =ImageInfo.binning[0]
               comment: detector X binning value
             YBINNING:
-              value: =ybinning
+              value: =ImageInfo.binning[1]
               comment: detector Y binning value
             FRAMENUM:
               value: =frame_num
