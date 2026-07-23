@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-from datetime import datetime
+from datetime import UTC
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel
 
 import sensorkit.api as sk
 from sensorkit.std.traits import TemperatureUnit
@@ -153,7 +153,7 @@ class ExposureInfo(BaseModel):
     onto the conventional FITS cards written for a science frame.
 
     Attributes:
-        date_obs: UTC start of the exposure. -> DATE-OBS
+        date_obs: Start of the exposure, as a timezone-aware datetime. -> DATE-OBS
         exposure_time: Actual exposure duration in seconds. -> EXPTIME
         instrument: Instrument / camera identifier. -> INSTRUME
         image_type: Frame type (light, dark, bias, flat). -> IMAGETYP
@@ -165,7 +165,7 @@ class ExposureInfo(BaseModel):
         max_adu: Saturation level in ADU under the active readout configuration. -> SATURATE
     """
 
-    date_obs: datetime
+    date_obs: AwareDatetime
     exposure_time: float
     instrument: str
     image_type: FrameType | None = None
@@ -177,7 +177,9 @@ class ExposureInfo(BaseModel):
     max_adu: int | None = None
 
     def get_fits_cards(self):
-        yield "DATE-OBS", (self.date_obs.replace(tzinfo=None).isoformat(), "UTC start of exposure")
+        utc = self.date_obs.astimezone(UTC).replace(tzinfo=None)
+
+        yield "DATE-OBS", (utc.isoformat(), "UTC start of exposure")
         yield "EXPTIME", (self.exposure_time, "Exposure time [s]")
         yield "INSTRUME", (self.instrument, "Instrument name")
 

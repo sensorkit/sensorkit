@@ -378,7 +378,11 @@ class AlpacaCamera(AlpacaDevice):
                 binning=(bin_x, bin_y),
             ),
             ExposureInfo(
-                date_obs=last_exposure_start_time or date_obs_fallback,
+                date_obs=(
+                    datetime.fromisoformat(last_exposure_start_time).replace(tzinfo=UTC)
+                    if last_exposure_start_time
+                    else date_obs_fallback
+                ),
                 exposure_time=(
                     last_exposure_duration
                     if last_exposure_duration is not None

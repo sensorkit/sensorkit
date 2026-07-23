@@ -4,6 +4,7 @@ from __future__ import annotations
 import array
 import asyncio
 import uuid
+from datetime import UTC
 from typing import Literal, override
 
 import numpy as np
@@ -261,7 +262,7 @@ class TheSkyCamera(TheSkyDevice):
             cmd.context.set(
                 ImageInfo(array=array_info, binning=(int(binx), int(biny))),
                 ExposureInfo(
-                    date_obs=Time(jd, format="jd", scale="utc").isot,
+                    date_obs=Time(jd, format="jd", scale="utc").to_datetime(timezone=UTC),
                     exposure_time=cmd.integration_time,
                     instrument=instrume,
                     image_type=FrameType.LIGHT,
