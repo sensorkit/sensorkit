@@ -271,7 +271,6 @@ class EphemerisTarget(FrameTarget):
     target_type: Literal["ephemeris"] = "ephemeris"
     jds: Sequence[float]
     points: Sequence[Coordinates]
-    name: str | None = None
     # FIXME: Needs velocity too.
 
 

@@ -10,13 +10,7 @@ from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
-from sensorkit.astro.target import (
-    CatalogTarget,
-    EphemerisTarget,
-    FrameTarget,
-    ICRSTarget,
-    TLETarget,
-)
+from sensorkit.astro.target import CatalogTarget, FrameTarget, ICRSTarget, TLETarget
 from sensorkit.std.collect import Collect, StandardCollectTask
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.std.instrument import Binning, CameraCapture, ConfigureCameraSensor
@@ -267,8 +261,6 @@ class SensorControl:
                 if isinstance(task.target, TLETarget)
                 else task.target.object
                 if isinstance(task.target, CatalogTarget)
-                else task.target.name
-                if isinstance(task.target, EphemerisTarget)
                 else None
             ),
         )
