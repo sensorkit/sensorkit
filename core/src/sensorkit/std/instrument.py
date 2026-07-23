@@ -177,7 +177,7 @@ class ExposureInfo(BaseModel):
     max_adu: int | None = None
 
     def get_fits_cards(self):
-        yield "DATE-OBS", (self.date_obs.isoformat(), "UTC start of exposure")
+        yield "DATE-OBS", (self.date_obs.replace(tzinfo=None).isoformat(), "UTC start of exposure")
         yield "EXPTIME", (self.exposure_time, "Exposure time [s]")
         yield "INSTRUME", (self.instrument, "Instrument name")
 
