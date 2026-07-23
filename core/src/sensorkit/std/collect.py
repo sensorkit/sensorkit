@@ -60,12 +60,12 @@ class Collect(BaseModel):
     @property
     def track_mode(self) -> Literal["fixed", "sidereal", "rate", "unknown"]:
         match self.target:
+            case TLETarget() | RateTarget() | EphemerisTarget() | StateVectorTarget():
+                return "rate"
             case ICRSTarget() | FrameTarget(frame=ReferenceFrame.ICRF):
                 return "sidereal"
             case AltAzTarget() | FrameTarget(frame=ReferenceFrame.ALTAZ):
                 return "fixed"
-            case TLETarget() | RateTarget() | EphemerisTarget() | StateVectorTarget():
-                return "rate"
             case FrameTarget():
                 return "rate"
 
