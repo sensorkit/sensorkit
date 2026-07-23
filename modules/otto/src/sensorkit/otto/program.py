@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
 import random
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Dict, List
 
@@ -19,6 +20,21 @@ from sensorkit.otto.task_queue import TaskQueue
 from sensorkit.otto.tles import TLECache
 from sensorkit.otto.utils import ListType, ObjectListManager, sidereal_frames
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
+
+
+@sk.declare_keyword
+class OttoContext(BaseModel):
+    """Otto's per-visit correlation id, attached to every collect task Otto emits for one
+    target-visit.
+
+    All the filter/exposure/binning tasks of a single visit — and every frame fanned out
+    from them — share one `visit_id`, so downstream processing can regroup a whole visit
+    (e.g. combine multi-band frames into a colour). Distinct visits differ. Reachable from
+    FITS-header exprs and filename templates as `OttoContext.visit_id`. Namespaced so it
+    does not collide with the flat keys the std controller injects (target_id, track_mode, ...).
+    """
+
+    visit_id: str
 
 
 class OttoState(BaseModel):
@@ -380,7 +396,7 @@ class OttoProgram:
                 # `end_time` is the domain scheduling deadline; pass it through as the
                 # execution `expiry_time` so the controller enforces the same deadline. Await the
                 # yielded execution so completion (and any failure) surfaces here.
-                await (yield task.submit(expiry_time=task.end_time))
+                await (yield task.submit(context=queued.context, expiry_time=task.end_time))
                 logger.info(f"task ({queued.id}) finished execution successfully.")
                 # Optional fixed gap after each completed task. Skipped on
                 # cancellation/failure so those propagate without delay.
@@ -663,6 +679,10 @@ class OttoProgram:
                     if target is None:
                         continue
 
+                    # One correlation id per visit to this target: every filter/exposure/binning
+                    # task below shares it, so downstream can regroup the whole visit.
+                    visit_id = str(uuid.uuid4())
+
                     # Map track_mode onto per-frame sidereal switches
                     frames = sidereal_frames(
                         self.config.collect.track_mode, self.config.collect.num_frames
@@ -691,7 +711,9 @@ class OttoProgram:
                                     ),
                                     sidereal_frames=frames,
                                 )
-                                await self.task_queue.push_task(task)
+                                await self.task_queue.push_task(
+                                    task, context=sk.KeywordDict(OttoContext(visit_id=visit_id))
+                                )
 
                     # Wait for this target's tasks to drain before generating
                     # tasks for the next target.  This prevents far-future tasks

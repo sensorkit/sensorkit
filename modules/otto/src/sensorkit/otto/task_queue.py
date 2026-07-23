@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from loguru import logger
 
+import sensorkit.api as sk
 from sensorkit.std.collect import StandardCollectTask
 
 
@@ -19,10 +20,13 @@ class QueuedTask:
     Attributes:
         task: The queued collect task.
         id: Otto's client-side identifier for this queued task.
+        context: Submission context to attach when the task is dispatched (e.g. the
+            per-visit OttoContext keyword). Preserved by the controller onto the execution.
     """
 
     task: StandardCollectTask
     id: uuid.UUID = field(default_factory=uuid.uuid4)
+    context: "sk.KeywordDict | None" = None
 
 
 class TaskQueue:
@@ -33,17 +37,20 @@ class TaskQueue:
         self.program_binding = program_binding
         self._lock = asyncio.Lock()
 
-    async def push_task(self, task: StandardCollectTask) -> QueuedTask:
+    async def push_task(
+        self, task: StandardCollectTask, context: "sk.KeywordDict | None" = None
+    ) -> QueuedTask:
         """Add a task to the queue and update offers.
 
         Args:
             task: The collect task to enqueue.
+            context: Submission context to attach at dispatch (e.g. the per-visit OttoContext).
 
         Returns:
             The queued task, including its assigned client-side id.
         """
         async with self._lock:
-            queued = QueuedTask(task=task)
+            queued = QueuedTask(task=task, context=context)
             self.tasks.append(queued)
             # Sort tasks by end_time to maintain priority
             self.tasks.sort(key=lambda q: q.task.end_time)
