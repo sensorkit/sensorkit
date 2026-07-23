@@ -154,35 +154,38 @@ class AgentState(sk.EventSourcedState):
     scheduler_state: AgentSchedulerState
 
     async def apply_to_operator(self, operator: VirtualOperator, configs: ControllerConfigMap):
-        """Push this state into the VirtualOperator: programs, overrides, and lifecycle gates."""
-        async with self.update_lock:
-            if self.scheduler_state.scheduling_enabled:
-                await operator.programs.global_enable()
+        """Push this state into the VirtualOperator: programs, overrides, and lifecycle gates.
+
+        Reads only from this instance, so call it on a consistent snapshot (see update's
+        return_snapshot) when concurrent updates are possible.
+        """
+        if self.scheduler_state.scheduling_enabled:
+            await operator.programs.global_enable()
+        else:
+            await operator.programs.global_disable()
+
+        for program in operator.programs.all_programs:
+            if program in self.scheduler_state.excluded_programs:
+                await operator.programs.disable(program)
             else:
-                await operator.programs.global_disable()
+                await operator.programs.enable(program)
 
-            for program in operator.programs.all_programs:
-                if program in self.scheduler_state.excluded_programs:
-                    await operator.programs.disable(program)
-                else:
-                    await operator.programs.enable(program)
+        for controller in configs:
+            info = self.operating_state.controllers.get(controller)
 
-            for controller in configs:
-                info = self.operating_state.controllers.get(controller)
+            if info:
+                operator.election.vote(
+                    source="override", subject=controller, vote=info.demand_override
+                )
 
-                if info:
-                    operator.election.vote(
-                        source="override", subject=controller, vote=info.demand_override
-                    )
+            lifecycle = operator.drivers[controller].lifecycle
 
-                lifecycle = operator.drivers[controller].lifecycle
+            if self.operating_state.global_control_enabled:
+                if info is None or info.control_enabled:
+                    lifecycle.enable()
+                    continue
 
-                if self.operating_state.global_control_enabled:
-                    if info is None or info.control_enabled:
-                        lifecycle.enable()
-                        continue
-
-                lifecycle.disable()
+            lifecycle.disable()
 
 
 class AgentConfigureRequest(BaseModel):
@@ -242,15 +245,17 @@ async def agent_service(service: sk.Service):
 
     async def _agent_configure_request(request: AgentConfigureRequest):
         async with _configure_lock:
-            # Apply the configuration into the current state.
-            await state.update(
+            # Apply the configuration into the current state, taking a consistent snapshot to
+            # configure the operator against without racing the publish loop's updates.
+            snapshot = await state.update(
                 service.context,
                 state.scheduler_state.derive_for_request(request),
                 state.operating_state.derive_for_request(request),
+                return_snapshot=True,
             )
 
             # Configure the virtual operator to reflect the new state.
-            await state.apply_to_operator(operator, config.controllers)
+            await snapshot.apply_to_operator(operator, config.controllers)
 
         return state
 

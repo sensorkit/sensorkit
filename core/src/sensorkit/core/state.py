@@ -57,11 +57,6 @@ class EventSourcedState(BaseModel):
 
         return event_fields
 
-    @property
-    def update_lock(self):
-        """Async lock that serialises concurrent state updates."""
-        return self._update_lock
-
     async def update(
         self,
         entity: EntityImpl,
