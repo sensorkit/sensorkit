@@ -9,6 +9,7 @@ sensorkit:
     - sensorkit.auto.agent
     - sensorkit.senpai.service
     - sensorkit.slack.service
+    - sensorkit.sky_transmission.service
     - sensorkit.webapi
 
 automation:
@@ -48,7 +49,6 @@ automation:
             - when: time_range
               start: sunset + 30m
               end: sunrise - 30m
-
 
       constraints:
         # GMX600.
@@ -443,6 +443,24 @@ senpai:
   id: SENPAI
   senpai_config: /opt/sk/senpai_TakoTruck.yaml
   senpai_output_dir: /opt/sk/data/processed/senpai
+
+sky_transmission:
+  - id: OMEA
+    controllers:
+      - TakoTruck
+    acquisition:
+      mode: watch_directory
+      watch_path: /opt/sk/data/sky_transmission
+      watch_pattern: "*.fits"
+      watch_recursive: true
+    allclear:
+      instrument_model_path: /opt/sk/instrument_model_TakoTruck.json
+      clear_threshold: 0.7
+    output:
+      directory: /opt/sk/data/processed/sky_transmission
+    server:
+      host: 0.0.0.0
+      port: 8200
 
 config:
   TakoTruck:

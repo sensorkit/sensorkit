@@ -11,6 +11,7 @@ sensorkit:
     - sensorkit.auto.agent
     - sensorkit.senpai.service
     - sensorkit.slack.service
+    - sensorkit.sky_transmission.service
     - sensorkit.webapi
 
 automation:
@@ -61,6 +62,15 @@ automation:
             threshold: false
           ttl: 180
           hold: 900
+        - kind: conditional
+          entity: OMEA
+          keyword: SkyTransmission
+          field: clear_fraction
+          condition:
+            kind: below
+            threshold: 0.7
+          optional: true
+          ttl: 120
 
       tasking:
         - program: Burr
@@ -419,6 +429,24 @@ senpai:
   id: SENPAI
   senpai_config: C:/sk/senpai_DAO-01.yaml
   senpai_output_dir: C:/sk/data/processed/senpai
+
+sky_transmission:
+  - id: OMEA
+    controllers:
+      - DAO-01
+    acquisition:
+      mode: watch_directory
+      watch_path: C:/sk/data/sky_transmission
+      watch_pattern: "*.fits"
+      watch_recursive: true
+    allclear:
+      instrument_model_path: C:/sk/instrument_model_DAO-01.json
+      clear_threshold: 0.7
+    output:
+      directory: C:/sk/data/processed/sky_transmission
+    server:
+      host: 0.0.0.0
+      port: 8200
 
 config:
   DAO-01:

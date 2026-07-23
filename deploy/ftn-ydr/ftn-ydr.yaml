@@ -51,7 +51,6 @@ automation:
               start: sunset + 30m
               end: sunrise - 30m
 
-
       constraints:
         # AAGSolo.
         - kind: conditional
@@ -472,7 +471,7 @@ sky_transmission:
       - FTN-YDR
     acquisition:
       mode: watch_directory
-      watch_path: C:/sk/data
+      watch_path: C:/sk/data/sky_transmission
       watch_pattern: "*.fits"
       watch_recursive: true
     allclear:

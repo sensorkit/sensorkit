@@ -43,7 +43,7 @@ services:
       context: ../..
       dockerfile: docker/Dockerfile
       args:
-        EXTRAS: alpaca,pwi4,burr,otto,senpai,slack
+        EXTRAS: alpaca,pwi4,burr,otto,senpai,slack,sky-transmission
     image: sensorkit
     pull_policy: never
     command: config load -v /sensorkit.yaml
@@ -178,6 +178,23 @@ services:
         condition: service_started
       pwi4:
         condition: service_started
+
+  sky_transmission:
+    image: sensorkit
+    pull_policy: never
+    command: service run OMEA sensorkit.sky_transmission.service
+    environment:
+      <<: *common-env
+    ports:
+      - "8200:8200"
+    volumes:
+      - *config-file
+      - *data-dir
+      - "/opt/sk/instrument_model_TakoTruck.json:/opt/sk/instrument_model_TakoTruck.json:ro"
+    restart: unless-stopped
+    depends_on:
+      config:
+        condition: service_completed_successfully
 
   # Slack notifications (slack.id == slack_service) — needs .env for the token.
   slack:

@@ -48,7 +48,7 @@ services:
       context: ../..
       dockerfile: docker/Dockerfile
       args:
-        EXTRAS: alpaca,indigo,thesky,burr,otto,senpai,slack
+        EXTRAS: alpaca,indigo,thesky,burr,otto,senpai,slack,sky-transmission
     image: sensorkit
     pull_policy: never
     command: config load -v /sensorkit.yaml
