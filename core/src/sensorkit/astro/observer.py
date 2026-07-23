@@ -5,13 +5,11 @@ from datetime import datetime
 from typing import ClassVar, cast
 
 from astropy.coordinates import EarthLocation
-from astropy.units import Unit
 from skyfield import almanac as almanac
 from skyfield import api as skyfield
 from skyfield.jpllib import SpiceKernel
 
-DEG = Unit("deg")
-METERS = Unit("m")
+from sensorkit.astro.coords import astropy_unit
 
 
 # TODO: Present incarnation is largely driven by Agent configuration usage. This may change
@@ -57,10 +55,11 @@ class EarthObserver:
     @functools.cache
     def to_astropy(self):
         """Return an astropy EarthLocation for this observer (cached)."""
+        deg = astropy_unit("deg")
         return EarthLocation(
-            lon=self.topos.longitude.degrees * DEG,
-            lat=self.topos.latitude.degrees * DEG,
-            height=self.topos.elevation.m * METERS,
+            lon=self.topos.longitude.degrees * deg,
+            lat=self.topos.latitude.degrees * deg,
+            height=self.topos.elevation.m * astropy_unit("m"),
         )
 
     def get_sunrise_times(self, from_time: datetime, to_time: datetime):

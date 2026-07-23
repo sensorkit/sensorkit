@@ -4,17 +4,28 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import numpy as np
-from astropy import coordinates as ac
-from astropy.units import Unit
 
 from sensorkit.astro.common import ReferenceFrame
 
-DEG = Unit("deg")
-KM = Unit("km")
-METERS = Unit("m")
-SEC = Unit("s")
+if TYPE_CHECKING:
+    from astropy.coordinates import SkyCoord
+    from astropy.units import Unit
+
+
+@functools.lru_cache
+def astropy_unit(spec: str | Unit) -> Unit:
+    """Resolve a unit spec to an astropy Unit, memoizing the parse.
+
+    Passing an already-resolved Unit is a cheap identity check; string specs are
+    parsed once and cached, which matters for compound units like "m/s" whose
+    grammar parse is otherwise paid on every call.
+    """
+    from astropy.units import Unit
+
+    return Unit(spec)
 
 
 type Coordinates = Horizontal | Equatorial | Geodetic | Cartesian
@@ -28,10 +39,13 @@ class Horizontal:
 
     def to_astropy(
         self,
-        units: Unit = DEG,
+        units: str | Unit = "deg",
         **kwargs,
     ):
         """Convert to an astropy SkyCoord in the AltAz frame."""
+        from astropy import coordinates as ac
+
+        units = astropy_unit(units)
         return ac.SkyCoord(
             az=self.az * units,
             alt=self.alt * units,
@@ -48,15 +62,19 @@ class Equatorial:
 
     def to_astropy(
         self,
-        units: Unit = DEG,
-        ra_units: Unit | None = None,
+        units: str | Unit = "deg",
+        ra_units: str | Unit | None = None,
         frame: ReferenceFrame = ReferenceFrame.ICRF,
         **kwargs,
     ):
         """Convert to an astropy SkyCoord in the given equatorial frame."""
+        from astropy import coordinates as ac
+
+        dec_unit = astropy_unit(units)
+        ra_unit = astropy_unit(ra_units) if ra_units is not None else dec_unit
         return ac.SkyCoord(
-            ra=self.ra * (ra_units if ra_units is not None else units),
-            dec=self.dec * units,
+            ra=self.ra * ra_unit,
+            dec=self.dec * dec_unit,
             frame=frame.to_astropy(),
             **kwargs,
         )
@@ -89,12 +107,16 @@ class Geodetic:
     elev: float
 
     @functools.cache
-    def to_astropy(self, angle_units: Unit = DEG, distance_units: Unit = METERS):
+    def to_astropy(self, angle_units: str | Unit = "deg", distance_units: str | Unit = "m"):
         """Convert to an astropy EarthLocation (result is cached)."""
+        from astropy import coordinates as ac
+
+        angle = astropy_unit(angle_units)
+        distance = astropy_unit(distance_units)
         return ac.EarthLocation(
-            lon=self.lon * angle_units,
-            lat=self.lat * angle_units,
-            height=self.elev * distance_units,
+            lon=self.lon * angle,
+            lat=self.lat * angle,
+            height=self.elev * distance,
         )
 
 
@@ -129,41 +151,47 @@ class StateVector:
     @classmethod
     def from_astropy(
         cls,
-        coord: ac.SkyCoord,
-        position_units: Unit = METERS,
-        velocity_units: Unit = METERS / SEC,
+        coord: SkyCoord,
+        position_units: str | Unit = "m",
+        velocity_units: str | Unit = "m/s",
     ):
         """Construct a StateVector from an astropy SkyCoord with Cartesian position and velocity."""
+        pos = astropy_unit(position_units)
+        vel = astropy_unit(velocity_units)
         r = coord.cartesian
         v = coord.velocity
         return cls(
             coord.obstime.to_datetime(UTC),
             Cartesian(
-                r.x.to_value(position_units),
-                r.y.to_value(position_units),
-                r.z.to_value(position_units),
+                r.x.to_value(pos),
+                r.y.to_value(pos),
+                r.z.to_value(pos),
             ),
             Cartesian(
-                v.d_x.to_value(velocity_units),
-                v.d_y.to_value(velocity_units),
-                v.d_z.to_value(velocity_units),
+                v.d_x.to_value(vel),
+                v.d_y.to_value(vel),
+                v.d_z.to_value(vel),
             ),
         )
 
     def to_astropy(
         self,
-        position_units: Unit = METERS,
-        velocity_units: Unit = METERS / SEC,
+        position_units: str | Unit = "m",
+        velocity_units: str | Unit = "m/s",
         frame: ReferenceFrame = ReferenceFrame.ICRF,
     ):
         """Convert to an astropy SkyCoord with Cartesian representation and differential."""
+        from astropy import coordinates as ac
+
+        pos = astropy_unit(position_units)
+        vel = astropy_unit(velocity_units)
         return ac.SkyCoord(
-            x=self.r.x * position_units,
-            y=self.r.y * position_units,
-            z=self.r.z * position_units,
-            v_x=self.v.x * velocity_units,
-            v_y=self.v.y * velocity_units,
-            v_z=self.v.z * velocity_units,
+            x=self.r.x * pos,
+            y=self.r.y * pos,
+            z=self.r.z * pos,
+            v_x=self.v.x * vel,
+            v_y=self.v.y * vel,
+            v_z=self.v.z * vel,
             frame=frame.to_astropy(),
             representation_type="cartesian",
             differential_type="cartesian",

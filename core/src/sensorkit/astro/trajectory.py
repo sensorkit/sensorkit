@@ -7,13 +7,9 @@ from typing import Self
 import satkit
 from astropy.coordinates import GCRS
 from astropy.time import Time
-from astropy.units import Unit
 
 from sensorkit.astro.common import TLE
-from sensorkit.astro.coords import Cartesian, StateVector
-
-METERS = Unit("m")
-SEC = Unit("s")
+from sensorkit.astro.coords import Cartesian, StateVector, astropy_unit
 
 
 class Trajectory(ABC):
@@ -54,13 +50,15 @@ class OrbitalTrajectory(Trajectory):
     def sample(self, epoch: datetime | None = None):
         t = satkit.time.now() if epoch is None else satkit.time.from_datetime(epoch)
         vec = self._result.interp(t)
+        m = astropy_unit("m")
+        mps = astropy_unit("m/s")
         return GCRS(
-            x=vec[0] * METERS,
-            y=vec[1] * METERS,
-            z=vec[2] * METERS,
-            v_x=vec[3] * METERS / SEC,
-            v_y=vec[4] * METERS / SEC,
-            v_z=vec[5] * METERS / SEC,
+            x=vec[0] * m,
+            y=vec[1] * m,
+            z=vec[2] * m,
+            v_x=vec[3] * mps,
+            v_y=vec[4] * mps,
+            v_z=vec[5] * mps,
             obstime=Time(t.as_jd(), format="jd"),
             representation_type="cartesian",
         )
@@ -81,13 +79,15 @@ class TLETrajectory(Trajectory):
         q = satkit.frametransform.qteme2gcrf(t)
         gcrf_p = q * teme_p
         gcrf_v = q * teme_v
+        m = astropy_unit("m")
+        mps = astropy_unit("m/s")
         return GCRS(
-            x=gcrf_p[0] * METERS,
-            y=gcrf_p[1] * METERS,
-            z=gcrf_p[2] * METERS,
-            v_x=gcrf_v[0] * METERS / SEC,
-            v_y=gcrf_v[1] * METERS / SEC,
-            v_z=gcrf_v[2] * METERS / SEC,
+            x=gcrf_p[0] * m,
+            y=gcrf_p[1] * m,
+            z=gcrf_p[2] * m,
+            v_x=gcrf_v[0] * mps,
+            v_y=gcrf_v[1] * mps,
+            v_z=gcrf_v[2] * mps,
             obstime=Time(t.as_jd(), format="jd"),
             representation_type="cartesian",
         )
