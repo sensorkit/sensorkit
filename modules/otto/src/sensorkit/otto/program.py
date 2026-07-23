@@ -683,6 +683,12 @@ class OttoProgram:
                     # task below shares it, so downstream can regroup the whole visit.
                     visit_id = str(uuid.uuid4())
 
+                    # The collect's target_id is the operator's object identifier, passed
+                    # through on the task (whitespace-collapsed so it stays filename/FITS-card
+                    # safe). Ephemeris and star targets carry no intrinsic id, so this is their
+                    # only source of one; for a TLE it just matches the configured id.
+                    target_id = "_".join(object.split())
+
                     # Map track_mode onto per-frame sidereal switches
                     frames = sidereal_frames(
                         self.config.collect.track_mode, self.config.collect.num_frames
@@ -695,6 +701,7 @@ class OttoProgram:
                                 cumulative_exposure += exposure * self.config.collect.num_frames
                                 task = StandardCollectTask(
                                     target=target,
+                                    target_id=target_id,
                                     end_time=(
                                         now
                                         + timedelta(seconds=cumulative_exposure)

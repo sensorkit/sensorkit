@@ -599,6 +599,9 @@ class TestEphemerisCoversTheBlock:
 
         # 2 filters x 2 exposures x 2 binnings
         assert len(horizons_program.task_queue) == 8
+        # An ephemeris target has no intrinsic id, so the operator's object identifier is
+        # passed through as target_id (the collect's only source of one for this target type).
+        assert all(q.task.target_id == "433" for q in horizons_program.task_queue.tasks)
         latest = max(q.task.end_time for q in horizons_program.task_queue.tasks)
         assert fetch.await_args.kwargs["stop"] == latest
 
