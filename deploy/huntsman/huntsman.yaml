@@ -159,13 +159,14 @@ data_flow:
     producer:
       simple:
         - op: app_source
-        - op: array_to_fits
-          header:
-            TASKID: =task_id
-            TARGETID: =target_id
-            SKCTRL:
-              value: =controller_name
-              comment: SensorKit controller ID
+        - op: fits_header
+          option:
+            TASKID: =BurrContext.seq
+        - op: fits_header
+          include: all
+          option:
+            TASKID: =OttoContext.visit_id
+          define:
             SITELAT:
               value: =latitude
               comment: geographic latitude [+/-] of the observation
@@ -199,39 +200,13 @@ data_flow:
             DEC_RATE:
               value: =dec_rate/3600
               comment: measured declination rate [deg/s]
-            DATE-OBS:
-              value: =ExposureInfo.date_obs.replace(tzinfo=None).isoformat()
-              comment: date of the observation
-            TRKMODE:
-              value: =track_mode
-              comment: track mode [RATE, SIDEREAL, FIXED]
-            INSTRUME:
-              value: =ExposureInfo.instrument
-              comment: name of instrument
             FILTER:
               value: =filter_name
               comment: name of filter used during the observation
-            CCDTEMP:
-              value: =ExposureInfo.ccd_temperature
-              comment: sensor temperature [C]
-            READOUTM:
-              value: =ExposureInfo.readout_mode
-              comment: sensor readout mode
-            EXPTIME:
-              value: =ExposureInfo.exposure_time
-              comment: exposure time [s]
-            XBINNING:
-              value: =ImageInfo.binning[0]
-              comment: detector X binning value
-            YBINNING:
-              value: =ImageInfo.binning[1]
-              comment: detector Y binning value
-            FRAMENUM:
-              value: =frame_num
-              comment: frame number out of FRAMECNT
             FRAMECNT:
               value: =frame_count
               comment: total requested frame count
+        - op: array_to_fits
         - op: compress_fits
         - op: write_file
           directory: f"/opt/sk/data/raw/{program_name}/{controller_name}"
@@ -250,7 +225,7 @@ data_flow:
         read_context:
           op: context_from_fits
           keyword_map:
-            task_id: TASKID
+            task_id: SKTASKID
             frame_num: FRAMENUM
             frame_count: FRAMECNT
             exptime: EXPTIME
