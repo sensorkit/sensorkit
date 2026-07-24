@@ -18,6 +18,10 @@ from sensorkit.std import Connect, Connected, Disconnect, Stop
 from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
 
 
+class AlpacaRotatorState(AlpacaDeviceState):
+    device_type: Literal["rotator"] = "rotator"
+
+
 @sk.declare_keyword
 class AlpacaRotatorStatus(BaseModel):
     """IRotatorV4 properties."""
@@ -37,18 +41,11 @@ class AlpacaRotator(AlpacaDevice):
 
     config: AlpacaRotatorConfig
     device_name = "Rotator"
+    state_model = AlpacaRotatorState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        # Restore state
-        try:
-            self.state = await device.kv_get_model(AlpacaRotatorState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AlpacaRotatorState()
+        await self.restore_state()
 
         self.rotator_position: float | None = None
 
@@ -173,7 +170,3 @@ class AlpacaRotatorConfig(AlpacaDeviceConfig[AlpacaRotator]):
     @override
     def create_device(self):
         return AlpacaRotator(self)
-
-
-class AlpacaRotatorState(AlpacaDeviceState):
-    device_type: Literal["rotator"] = "rotator"

@@ -67,6 +67,9 @@ alpaca = [
     "alpyca>=3.1.1",
     "numpy>=1.24.0",
 ]
+autoslew = [
+    "sensorkit[alpaca]",
+]
 burr = [
     "astro-burr",
 ]
@@ -177,10 +180,12 @@ type = "layers"
 # models module is pydantic-only (no astro-senpai import).
 ignore_imports = [
     "sensorkit.udl.publishers -> sensorkit.senpai.models",
+    "sensorkit.autoslew.** -> sensorkit.alpaca.**",
 ]
 layers = [
     """
     sensorkit.alpaca |
+    sensorkit.autoslew |
     sensorkit.burr |
     sensorkit.indigo |
     sensorkit.nina |
@@ -227,6 +232,7 @@ packages = ["core/src/sensorkit"]
 dev-mode-dirs = [
     "core/src",
     "modules/alpaca/src",
+    "modules/autoslew/src",
     "modules/burr/src",
     "modules/indigo/src",
     "modules/nina/src",
@@ -245,6 +251,7 @@ dev-mode-dirs = [
 path = "hatch_build.py"
 modules = [
     "alpaca",
+    "autoslew",
     "burr",
     "indigo",
     "nina",

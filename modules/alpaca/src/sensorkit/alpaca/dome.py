@@ -69,24 +69,22 @@ class AlpacaDomeStatus(BaseModel):
     can_sync_azimuth: bool = False
 
 
+class AlpacaDomeState(AlpacaDeviceState):
+    device_type: Literal["dome"] = "dome"
+    has_been_homed: bool = False
+
+
 @sk.declare_device
 class AlpacaDome(AlpacaDevice):
     """Alpaca Dome implementation."""
 
     config: AlpacaDomeConfig
     device_name = "Dome"
+    state_model = AlpacaDomeState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        # Restore state
-        try:
-            self.state = await device.kv_get_model(AlpacaDomeState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AlpacaDomeState()
+        await self.restore_state()
 
         # Initialize the dome
         await self._initialize()
@@ -355,8 +353,3 @@ class AlpacaDomeConfig(AlpacaDeviceConfig[AlpacaDome]):
     @override
     def create_device(self):
         return AlpacaDome(self)
-
-
-class AlpacaDomeState(AlpacaDeviceState):
-    device_type: Literal["dome"] = "dome"
-    has_been_homed: bool = False
