@@ -68,8 +68,7 @@ alpaca = [
     "numpy>=1.24.0",
 ]
 autoslew = [
-    "alpyca>=3.1.1",
-    "numpy>=1.24.0",
+    "sensorkit[alpaca]",
 ]
 burr = [
     "astro-burr",
