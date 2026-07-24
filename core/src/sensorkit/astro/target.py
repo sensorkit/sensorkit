@@ -164,26 +164,21 @@ class BaseTarget(BaseModel, ABC):
 
                     return gcrs.transform_to(output_frame())
 
-        # Build the output by sampling the propagated trajectory. The heavy lifting should have
-        # already been done by the propagator, but the operations performed here can also amount to
-        # significant work depending on the number of samples, the reference frame transform
-        # being applied, and the details of the particular `sample()` implementation. We background
-        # the entire loop to be safe.
+        # Build the output by sampling the propagated trajectory.
         def _sample_series():
-            t = start_time
-            jds = []
-            points = []
-            coord = None
+            epochs = [start_time + (i + 1) * step for i in range(duration // step)]
 
-            for _ in range(duration // step):
-                t += step
-                gcrs = trajectory.sample(epoch=t)
-                coord = transform_to_output_frame(gcrs)
-                jds.append(gcrs.obstime.jd)
-                points.append(Equatorial(ra=coord.ra.deg, dec=coord.dec.deg))
+            if not epochs:
+                return [], []
 
-            if coord:
-                logger.debug(f"generated EphemerisTarget ending at ra={coord.ra} dec={coord.dec}")
+            gcrs = trajectory.sample(epochs)
+            coord = transform_to_output_frame(gcrs)
+            jds = list(gcrs.obstime.jd)
+            points = [
+                Equatorial(ra=ra, dec=dec)
+                for ra, dec in zip(coord.ra.deg, coord.dec.deg)
+            ]
+            logger.debug(f"generated EphemerisTarget ending at ra={coord.ra[-1]} dec={coord.dec[-1]}")
 
             return jds, points
 

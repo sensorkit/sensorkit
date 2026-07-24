@@ -18,7 +18,7 @@ def test_tle_trajectory_sample():
     traj = TLETrajectory(_ISS_TLE)
     # Sample near the TLE epoch.
     epoch = datetime(2025, 1, 15, 9, 32, 0, tzinfo=UTC)
-    gcrs = traj.sample(epoch)
+    gcrs = traj.sample([epoch])
 
     # ISS orbits at ~400 km altitude → ~6778 km from Earth centre.
     import numpy as np

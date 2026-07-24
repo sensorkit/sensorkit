@@ -1,15 +1,37 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Self
 
+import numpy as np
 import satkit
 from astropy.coordinates import GCRS
 from astropy.time import Time
 
 from sensorkit.astro.common import TLE
 from sensorkit.astro.coords import Cartesian, StateVector, astropy_unit
+
+
+def _gcrs_cartesian(pos: np.ndarray, vel: np.ndarray, jds: np.ndarray | float) -> GCRS:
+    """Build a vectorized GCRS coordinate from position/velocity arrays and Julian dates.
+
+    `pos` and `vel` are shaped `(..., 3)` in meters and meters per second; `jds`
+    broadcasts against the leading axis.
+    """
+    m = astropy_unit("m")
+    mps = astropy_unit("m/s")
+    return GCRS(
+        x=pos[..., 0] * m,
+        y=pos[..., 1] * m,
+        z=pos[..., 2] * m,
+        v_x=vel[..., 0] * mps,
+        v_y=vel[..., 1] * mps,
+        v_z=vel[..., 2] * mps,
+        obstime=Time(jds, format="jd"),
+        representation_type="cartesian",
+    )
 
 
 class Trajectory(ABC):
@@ -20,8 +42,12 @@ class Trajectory(ABC):
         """Propagate the trajectory to the given point in time."""
 
     @abstractmethod
-    def sample(self, epoch: datetime | None = None) -> GCRS:
-        """Interpolate the state at the given time and return as an astropy coordinate."""
+    def sample(self, epochs: Sequence[datetime] | None = None) -> GCRS:
+        """Interpolate the state at each epoch.
+
+        With no epochs, samples once at the current time and returns a scalar
+        coordinate. A sequence yields one array-valued GCRS spanning the epochs.
+        """
 
 
 class OrbitalTrajectory(Trajectory):
@@ -47,21 +73,16 @@ class OrbitalTrajectory(Trajectory):
             _result=result,
         )
 
-    def sample(self, epoch: datetime | None = None):
-        t = satkit.time.now() if epoch is None else satkit.time.from_datetime(epoch)
-        vec = self._result.interp(t)
-        m = astropy_unit("m")
-        mps = astropy_unit("m/s")
-        return GCRS(
-            x=vec[0] * m,
-            y=vec[1] * m,
-            z=vec[2] * m,
-            v_x=vec[3] * mps,
-            v_y=vec[4] * mps,
-            v_z=vec[5] * mps,
-            obstime=Time(t.as_jd(), format="jd"),
-            representation_type="cartesian",
+    def sample(self, epochs: Sequence[datetime] | None = None) -> GCRS:
+        times = (
+            [satkit.time.now()]
+            if epochs is None
+            else [satkit.time.from_datetime(e) for e in epochs]
         )
+        vecs = np.array([self._result.interp(t) for t in times])
+        jds = np.array([t.as_jd() for t in times])
+        gcrs = _gcrs_cartesian(vecs[:, :3], vecs[:, 3:], jds)
+        return gcrs[0] if epochs is None else gcrs
 
 
 class TLETrajectory(Trajectory):
@@ -73,21 +94,20 @@ class TLETrajectory(Trajectory):
     async def propagate(self, when: datetime | timedelta) -> Self:
         return self
 
-    def sample(self, epoch: datetime | None = None) -> GCRS:
-        t = satkit.time.now() if epoch is None else satkit.time.from_datetime(epoch)
-        teme_p, teme_v = satkit.sgp4(self.tle, t)
-        q = satkit.frametransform.qteme2gcrf(t)
-        gcrf_p = q * teme_p
-        gcrf_v = q * teme_v
-        m = astropy_unit("m")
-        mps = astropy_unit("m/s")
-        return GCRS(
-            x=gcrf_p[0] * m,
-            y=gcrf_p[1] * m,
-            z=gcrf_p[2] * m,
-            v_x=gcrf_v[0] * mps,
-            v_y=gcrf_v[1] * mps,
-            v_z=gcrf_v[2] * mps,
-            obstime=Time(t.as_jd(), format="jd"),
-            representation_type="cartesian",
+    def sample(self, epochs: Sequence[datetime] | None = None) -> GCRS:
+        times = (
+            [satkit.time.now()]
+            if epochs is None
+            else [satkit.time.from_datetime(e) for e in epochs]
         )
+        pos, vel, jds = [], [], []
+
+        for t in times:
+            teme_p, teme_v = satkit.sgp4(self.tle, t)
+            q = satkit.frametransform.qteme2gcrf(t)
+            pos.append(q * teme_p)
+            vel.append(q * teme_v)
+            jds.append(t.as_jd())
+
+        gcrs = _gcrs_cartesian(np.array(pos), np.array(vel), np.array(jds))
+        return gcrs[0] if epochs is None else gcrs
