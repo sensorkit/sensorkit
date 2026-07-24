@@ -156,8 +156,13 @@ class BaseTarget(BaseModel, ABC):
                         )
                     )
             case _:
+                output_frame = frame.to_astropy()
+
                 def transform_to_output_frame(gcrs: SkyCoord):
-                    return gcrs.transform_to(frame.to_astropy())
+                    if "obstime" in output_frame.frame_attributes:
+                        return gcrs.transform_to(output_frame(obstime=gcrs.obstime))
+
+                    return gcrs.transform_to(output_frame())
 
         # Build the output by sampling the propagated trajectory. The heavy lifting should have
         # already been done by the propagator, but the operations performed here can also amount to
