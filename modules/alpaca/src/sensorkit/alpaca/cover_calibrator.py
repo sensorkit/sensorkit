@@ -64,24 +64,21 @@ class AlpacaCoverCalibratorStatus(BaseModel):
     max_brightness: int | None = None
 
 
+class AlpacaCoverCalibratorState(AlpacaDeviceState):
+    device_type: Literal["cover_calibrator"] = "cover_calibrator"
+
+
 @sk.declare_device
 class AlpacaCoverCalibrator(AlpacaDevice):
     """Alpaca CoverCalibrator implementation."""
 
     config: AlpacaCoverCalibratorConfig
     device_name = "CoverCalibrator"
+    state_model = AlpacaCoverCalibratorState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        # Restore state
-        try:
-            self.state = await device.kv_get_model(AlpacaCoverCalibratorState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AlpacaCoverCalibratorState()
+        await self.restore_state()
 
         # Initialize the cover calibrator
         await self._initialize()
@@ -204,7 +201,3 @@ class AlpacaCoverCalibratorConfig(AlpacaDeviceConfig[AlpacaCoverCalibrator]):
     @override
     def create_device(self):
         return AlpacaCoverCalibrator(self)
-
-
-class AlpacaCoverCalibratorState(AlpacaDeviceState):
-    device_type: Literal["cover_calibrator"] = "cover_calibrator"

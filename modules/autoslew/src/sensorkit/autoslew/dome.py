@@ -19,11 +19,8 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.autoslew.device import (
-    AutoslewDevice,
-    AutoslewDeviceConfig,
-    AutoslewDeviceState,
-)
+from sensorkit.alpaca.device import AlpacaDeviceConfig, AlpacaDeviceState
+from sensorkit.autoslew.device import AutoslewDevice
 from sensorkit.std import Connect, Connected, Disconnect, Opened
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 
@@ -35,23 +32,21 @@ class AutoslewDomeStatus(BaseModel):
     in_scope_position: bool = False
 
 
+class AutoslewDomeState(AlpacaDeviceState):
+    device_type: Literal["dome"] = "dome"
+
+
 @sk.declare_device
 class AutoslewDome(AutoslewDevice):
     """ASA Autoslew enclosure shutter, driven via the Telescope backbone."""
 
     config: AutoslewDomeConfig
     device_name = "Dome"
+    state_model = AutoslewDomeState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        try:
-            self.state = await device.kv_get_model(AutoslewDomeState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AutoslewDomeState()
+        await self.restore_state()
 
         self._is_open: bool | None = None
 
@@ -117,7 +112,7 @@ class AutoslewDome(AutoslewDevice):
             await asyncio.sleep(self.config.status_frequency)
 
 
-class AutoslewDomeConfig(AutoslewDeviceConfig[AutoslewDome]):
+class AutoslewDomeConfig(AlpacaDeviceConfig[AutoslewDome]):
     device_type: Literal["dome"] = "dome"
     status_frequency: float = 1.0
     timeout: float = 60.0
@@ -125,7 +120,3 @@ class AutoslewDomeConfig(AutoslewDeviceConfig[AutoslewDome]):
     @override
     def create_device(self):
         return AutoslewDome(self)
-
-
-class AutoslewDomeState(AutoslewDeviceState):
-    device_type: Literal["dome"] = "dome"

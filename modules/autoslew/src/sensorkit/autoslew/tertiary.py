@@ -20,12 +20,8 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.autoslew.device import (
-    AutoslewDevice,
-    AutoslewDeviceConfig,
-    AutoslewDeviceState,
-    _num,
-)
+from sensorkit.alpaca.device import AlpacaDeviceConfig, AlpacaDeviceState
+from sensorkit.autoslew.device import AutoslewDevice, _num
 from sensorkit.std import Connect, Connected, Disconnect, Stop
 
 
@@ -36,23 +32,21 @@ class AutoslewTertiaryStatus(BaseModel):
     port: int | None = None
 
 
+class AutoslewTertiaryState(AlpacaDeviceState):
+    device_type: Literal["tertiary"] = "tertiary"
+
+
 @sk.declare_device
 class AutoslewTertiary(AutoslewDevice):
     """ASA Autoslew tertiary (Nasmyth) selector, via the Telescope backbone."""
 
     config: AutoslewTertiaryConfig
     device_name = "Tertiary"
+    state_model = AutoslewTertiaryState
 
     @sk.on_attach
     async def entity_init(self):
-        device = sk.device()
-
-        try:
-            self.state = await device.kv_get_model(AutoslewTertiaryState)
-            logger.debug(f"restored state for {device.entity}")
-        except Exception:
-            logger.warning(f"No saved state for {device.entity}")
-            self.state = AutoslewTertiaryState()
+        await self.restore_state()
 
         self._port: int | None = None
 
@@ -108,7 +102,7 @@ class AutoslewTertiary(AutoslewDevice):
             await asyncio.sleep(self.config.status_frequency)
 
 
-class AutoslewTertiaryConfig(AutoslewDeviceConfig[AutoslewTertiary]):
+class AutoslewTertiaryConfig(AlpacaDeviceConfig[AutoslewTertiary]):
     device_type: Literal["tertiary"] = "tertiary"
     status_frequency: float = 1.0
     timeout: float = 60.0
@@ -116,7 +110,3 @@ class AutoslewTertiaryConfig(AutoslewDeviceConfig[AutoslewTertiary]):
     @override
     def create_device(self):
         return AutoslewTertiary(self)
-
-
-class AutoslewTertiaryState(AutoslewDeviceState):
-    device_type: Literal["tertiary"] = "tertiary"
