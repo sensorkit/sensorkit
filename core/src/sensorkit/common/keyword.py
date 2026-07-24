@@ -44,32 +44,13 @@ _keyword_adapter = TypeAdapter(Keyword)
 _keyword_index: dict[type, KeywordInfo] = {}
 
 
-@overload
-def declare_keyword[M](
-    *,
-    key: str | None = ...,
-    ns: str | None = ...,
-    kind: KeywordKind = ...,
-) -> partial[type[M]]: ...
-
-
-@overload
-def declare_keyword[M](
-    cls: type[M],
-    *,
-    key: str | None = ...,
-    ns: str | None = ...,
-    kind: KeywordKind = ...,
-) -> type[M]: ...
-
-
 def declare_keyword[M](
     cls: type[M] | None = None,
     *,
     key: str | None = None,
     ns: str | None = None,
     kind: KeywordKind = "stream",
-):
+) -> partial[type[M]] | type[M]:
     """Decorator to register a type as a Keyword.
 
     Args:
