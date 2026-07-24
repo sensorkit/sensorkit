@@ -416,6 +416,14 @@ class AlpacaCamera(AlpacaDevice):
                     context["gps_seqn"] = gps_meta.get("GPS-SEQN")
                     context["gps_lat"] = gps_meta.get("GPS-LAT")
                     context["gps_lon"] = gps_meta.get("GPS-LON")
+                # Surface GPS lock state per frame so it's visible in the
+                # sensorkit log without inspecting the camera container.
+                gps_stat = gps_meta.get("GPS-STAT")
+                if gps_stat is not None:
+                    logger.info(
+                        f"GPS {gps_stat} (time_src={gps_meta.get('TIME-SRC')}, "
+                        f"lat={gps_meta.get('GPS-LAT')}, lon={gps_meta.get('GPS-LON')})"
+                    )
         except Exception:
             pass  # Camera doesn't support this endpoint — defaults remain None
 
