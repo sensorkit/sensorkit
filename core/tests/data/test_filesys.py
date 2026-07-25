@@ -116,7 +116,7 @@ async def test_write_file_dynamic_directory():
         test_data = b"Dynamic directory test data"
         context = Context()
         context.set(FileNameTemplate(template="image.fits"))
-        context["program_name"] = "survey_north"
+        context.set_value("program_name", "survey_north")
 
         writer = await incoming_edge.send(context)
         writer.write(test_data)

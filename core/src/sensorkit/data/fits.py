@@ -575,7 +575,7 @@ class ContextFromFITS(DataOp):
             # Map FITS keywords to context based on keyword map
             for meta_key, fits_key in self.keyword_map.items():
                 if fits_key in header:
-                    context[meta_key] = header[fits_key]
+                    context.set_value(meta_key, header[fits_key])
 
         # Pass through the original buffer
         await outgoing[0].send(context, buffer)

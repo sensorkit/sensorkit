@@ -99,7 +99,7 @@ async def test_array_to_fits():
 
     context = Context()
     context.set(ArrayInfo(shape=(height, width), dtype="uint16", order="C"))
-    context["mycontextval"] = 42
+    context.set_value("mycontextval", 42)
 
     async def receiver():
         out_context, fits_buffer = await outgoing_edge.receive("buffer")
@@ -620,8 +620,8 @@ async def test_build_fits_header_define_and_option():
         option={"CCDTEMP": "=ccdtemp", "FILTER": "=missing"},
     )
     ctx = Context()
-    ctx["exptime"] = 30.0
-    ctx["ccdtemp"] = -10.0
+    ctx.set_value("exptime", 30.0)
+    ctx.set_value("ccdtemp", -10.0)
 
     out_ctx, out_buf = await _run_dataop(op, ctx, b"raw-passthrough")
 
@@ -659,7 +659,7 @@ async def test_build_fits_header_mutate_rename_remove():
     )
     ctx = Context()
     ctx.set(FITSHeader({"GAIN": "1.0", "OLD": "moved", "JUNK": "x"}))
-    ctx["gain"] = 2.5
+    ctx.set_value("gain", 2.5)
 
     out_ctx, _ = await _run_dataop(op, ctx, b"")
 
@@ -748,7 +748,7 @@ async def test_build_fits_header_include_all_skips_non_providers():
     op = BuildFITSHeader(include="all")
     ctx = Context()
     ctx.set(_StubCamera(), _StubNotAProvider())
-    ctx["exptime"] = 30.0  # a plain context value, not a declared keyword
+    ctx.set_value("exptime", 30.0)  # a plain context value, not a declared keyword
 
     out_ctx, _ = await _run_dataop(op, ctx, b"")
 
@@ -794,7 +794,7 @@ async def test_build_fits_header_comment_preserved():
     """A [value, comment] card keeps its comment through resolution."""
     op = BuildFITSHeader(define={"CCDTEMP": ["=ccdtemp", "sensor temperature, C"]})
     ctx = Context()
-    ctx["ccdtemp"] = -12.3
+    ctx.set_value("ccdtemp", -12.3)
 
     out_ctx, _ = await _run_dataop(op, ctx, b"")
 
@@ -810,7 +810,7 @@ async def test_build_fits_header_feeds_array_to_fits():
 
     ctx = Context()
     ctx.set(ArrayInfo(shape=(height, width), dtype="uint16", order="C"))
-    ctx["exptime"] = 30.0
+    ctx.set_value("exptime", 30.0)
 
     build = BuildFITSHeader(
         include={"_StubCamera"},

@@ -4,7 +4,9 @@ from typing import ClassVar, Literal
 
 import pytest
 from loguru import logger
+from pydantic import BaseModel
 
+from sensorkit.common.keyword import declare_keyword
 from sensorkit.data.context import Context
 from sensorkit.data.graph import (
     DataFlow,
@@ -28,7 +30,7 @@ async def test_data_flow():
 
     # Send as stream
     context = Context()
-    context["source"] = "test"
+    context.set_value("source", "test")
     writer = await edge.send(context)
 
     # Write to the stream
@@ -39,6 +41,11 @@ async def test_data_flow():
     await receiver_task
 
 
+@declare_keyword
+class Count(BaseModel):
+    count: int = 0
+
+
 class TestOp(DataOp):
     __test__: ClassVar[bool] = False
     op: Literal["test_op"] = "test_op"
@@ -47,7 +54,7 @@ class TestOp(DataOp):
 
     async def process(self, incoming: list[DataFlow], outgoing: list[DataFlow]):
         context, data = await incoming[0].receive(self.in_kind)
-        context["count"] += 1
+        context.set(Count(count=context[Count].count + 1))
 
         if self.out_kind == "buffer":
             if self.in_kind == "buffer":
@@ -111,14 +118,15 @@ async def test_data_graph(n: int, size: int, in_kind: str, out_kind: str):
     graph.start()
 
     source.produce(
-        Context(count=0),
+        Context(Count()),
         b"x" * size,
     )
 
-    async for context, buf in sink.consume():
-        assert context["count"] == n - 2
-        assert len(buf) == size
-        break
+    async with asyncio.timeout(5.0):
+        async for context, buf in sink.consume():
+            assert context[Count].count == n - 2
+            assert len(buf) == size
+            break
 
     await graph.stop()
 
@@ -171,7 +179,7 @@ async def test_data_graph_from_json():
     sink = graph.nodes["sink"]
 
     # Send test data through the graph
-    source.produce(Context(count=0), b"test data")
+    source.produce(Context({"count": 0}), b"test data")
 
     async for _context, buf in sink.consume():
         assert buf == b"test data"

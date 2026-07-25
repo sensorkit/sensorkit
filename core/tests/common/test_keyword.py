@@ -55,88 +55,9 @@ def test_keyword_dict():
     assert d[Baz] is baz
     assert d["Baz"] is baz
 
-    d["myfoo"] = "bar"
+    d.set_value("myfoo", "bar")
     assert d.get("myfoo") == "bar"
     assert d["myfoo"] == "bar"
-
-
-def test_keyword_dict_set_composite():
-    @declare_keyword
-    class Part(BaseModel):
-        x: int
-
-    @declare_keyword
-    class Whole(BaseModel):
-        part: Part
-
-        def composed_keywords(self):
-            yield self.part
-
-    d = KeywordDict()
-    whole = Whole(part=Part(x=42))
-
-    # Setting the composite also sets what it composes, under that keyword's own key.
-    d.set(whole)
-    assert d[Whole] is whole
-    assert d[Part] is whole.part
-
-    # Writes follow argument order, so a part given after the composite replaces the composed
-    # one, and a part given before it does not.
-    other = Part(x=7)
-    d.set(whole, other)
-    assert d[Part] is other
-
-    d.set(other, whole)
-    assert d[Part] is whole.part
-
-
-def test_keyword_dict_set_composite_nested():
-    @declare_keyword
-    class Leaf(BaseModel):
-        x: int
-
-    @declare_keyword
-    class Branch(BaseModel):
-        leaf: Leaf
-
-        def composed_keywords(self):
-            yield self.leaf
-
-    @declare_keyword
-    class Trunk(BaseModel):
-        branch: Branch
-
-        def composed_keywords(self):
-            yield self.branch
-
-    d = KeywordDict()
-    trunk = Trunk(branch=Branch(leaf=Leaf(x=42)))
-
-    # Expansion is transitive: the leaf is reachable only through the branch, but setting the
-    # trunk must still make it available under its own key.
-    d.set(trunk)
-    assert d[Trunk] is trunk
-    assert d[Branch] is trunk.branch
-    assert d[Leaf] is trunk.branch.leaf
-
-
-def test_keyword_dict_set_composite_cycle():
-    @declare_keyword
-    class Ouroboros(BaseModel):
-        x: int
-        other: "Ouroboros | None" = None
-
-        def composed_keywords(self):
-            if self.other is not None:
-                yield self.other
-
-    d = KeywordDict()
-    snake = Ouroboros(x=42)
-    snake.other = snake
-
-    # A keyword that composes itself terminates rather than recurring forever.
-    d.set(snake)
-    assert d[Ouroboros] is snake
 
 
 def test_keyword_dict_serde():
@@ -145,7 +66,7 @@ def test_keyword_dict_serde():
         x: int
 
     d = KeywordDict()
-    d["x"] = 42
+    d.set_value("x", 42)
     d.set(Bot(x=42))
 
     kd_adapter = TypeAdapter(KeywordDict)

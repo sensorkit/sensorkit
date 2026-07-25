@@ -9,24 +9,148 @@ from sensorkit.common.keyword import KeywordDict, declare_keyword
 from sensorkit.data.context import Context, ContextSubscription
 
 
-def test_context():
-    assert Context() == Context({})
-    assert Context({"x": 11}) == Context(x=11)
-    assert Context(x=11) == Context((("x", 11,),))
+# --- Composite keyword expansion --------------------------------------------------------
+
+
+def test_set_composite_expands():
+    @declare_keyword
+    class Part(BaseModel):
+        x: int
+
+    @declare_keyword
+    class Whole(BaseModel):
+        part: Part
+
+        def composed_keywords(self):
+            yield self.part
+
+    ctx = Context()
+    whole = Whole(part=Part(x=42))
+
+    # Setting the composite also makes what it composes available under that keyword's own key.
+    ctx.set(whole)
+    assert ctx[Whole] is whole
+    assert ctx[Part] is whole.part
+
+    # Writes follow argument order, so a part given after the composite replaces the composed
+    # one, and a part given before it does not.
+    other = Part(x=7)
+    ctx.set(whole, other)
+    assert ctx[Part] is other
+
+    ctx.set(other, whole)
+    assert ctx[Part] is whole.part
+
+
+def test_set_composite_expands_nested():
+    @declare_keyword
+    class Leaf(BaseModel):
+        x: int
+
+    @declare_keyword
+    class Branch(BaseModel):
+        leaf: Leaf
+
+        def composed_keywords(self):
+            yield self.leaf
+
+    @declare_keyword
+    class Trunk(BaseModel):
+        branch: Branch
+
+        def composed_keywords(self):
+            yield self.branch
+
+    ctx = Context()
+    trunk = Trunk(branch=Branch(leaf=Leaf(x=42)))
+
+    # Expansion is transitive: the leaf is reachable only through the branch, but setting the
+    # trunk must still make it available under its own key.
+    ctx.set(trunk)
+    assert ctx[Trunk] is trunk
+    assert ctx[Branch] is trunk.branch
+    assert ctx[Leaf] is trunk.branch.leaf
+
+
+def test_set_composite_expands_on_cycle():
+    @declare_keyword
+    class Ouroboros(BaseModel):
+        x: int
+        other: "Ouroboros | None" = None
+
+        def composed_keywords(self):
+            if self.other is not None:
+                yield self.other
+
+    ctx = Context()
+    snake = Ouroboros(x=42)
+    snake.other = snake
+
+    # A keyword that composes itself terminates rather than recurring forever.
+    ctx.set(snake)
+    assert ctx[Ouroboros] is snake
+
+
+def test_composite_expands_from_keyword_dict_source():
+    @declare_keyword
+    class Piece(BaseModel):
+        x: int
+
+    @declare_keyword
+    class Bundle(BaseModel):
+        piece: Piece
+
+        def composed_keywords(self):
+            yield self.piece
+
+    bundle = Bundle(piece=Piece(x=42))
+
+    # A bare KeywordDict does not expand, so its composed keyword is absent...
+    stored = KeywordDict()
+    stored.set(bundle)
+    assert stored.get(Piece) is None
+
+    # ...but building a Context over it expands on the way in.
+    ctx = Context(stored)
+    assert ctx[Bundle] is bundle
+    assert ctx[Piece] is bundle.piece
+
+
+def test_composite_expands_via_update():
+    @declare_keyword
+    class Sub(BaseModel):
+        x: int
+
+    @declare_keyword
+    class Super(BaseModel):
+        sub: Sub
+
+        def composed_keywords(self):
+            yield self.sub
+
+    sup = Super(sub=Sub(x=42))
+
+    source = KeywordDict()
+    source.set(sup)
+
+    ctx = Context()
+    ctx.update(source)
+    assert ctx[Super] is sup
+    assert ctx[Sub] is sup.sub
 
 
 # --- Context.eval -----------------------------------------------------------------------
 
 
-def test_eval_expression():
-    ctx = Context(frame_num=7)
-    assert ctx.eval("frame_num + 1") == 8
-    assert ctx.eval("frame_num * 2") == 14
-
-
 def test_eval_keyword_attribute():
     ctx = Context(_Temperature(celsius=22.5))
     assert ctx.eval("_Temperature.celsius") == 22.5
+
+
+def test_eval_keyword_expression():
+    ctx = Context(_FrameInfo(frame_num=7))
+    assert ctx.eval("_FrameInfo.frame_num + 1") == 8
+    assert ctx.eval("_FrameInfo.frame_num * 2") == 14
 
 
 def test_eval_missing_name_raises():
@@ -42,24 +166,23 @@ def test_eval_missing_name_returns_default():
 def test_eval_non_name_error_propagates_past_default():
     # A missing *attribute* on a present value is a real error, not an absent keyword,
     # so it propagates even when a default is supplied.
-    ctx = Context(frame_num=7)
+    ctx = Context(_FrameInfo(frame_num=7))
     with pytest.raises(AttributeError):
-        ctx.eval("frame_num.no_such_attr", default=None)
+        ctx.eval("_FrameInfo.no_such_attr", default=None)
 
 
 # --- Context.resolve (Grammar A: =expr | f"..." | literal) ------------------------------
 
 
 def test_resolve_literal_verbatim():
-    ctx = Context(frame_num=7)
     # No prefix and no "{...}" -> returned exactly as-is: no interpolation, no escapes.
-    assert ctx.resolve("/Temp/SimulatedSensor") == "/Temp/SimulatedSensor"
-    assert ctx.resolve(r"C:\Temp\new") == r"C:\Temp\new"
+    assert Context().resolve("/Temp/SimulatedSensor") == "/Temp/SimulatedSensor"
+    assert Context().resolve(r"C:\Temp\new") == r"C:\Temp\new"
 
 
 def test_resolve_expression_keeps_native_type():
-    ctx = Context(frame_num=7)
-    result = ctx.resolve("=frame_num + 1")
+    ctx = Context(_FrameInfo(frame_num=7))
+    result = ctx.resolve("=_FrameInfo.frame_num + 1")
     assert result == 8 and isinstance(result, int)
 
 
@@ -69,16 +192,16 @@ def test_resolve_expression_keyword_method():
 
 
 def test_resolve_fstring_returns_string():
-    ctx = Context(frame_num=7)
-    assert ctx.resolve('f"{frame_num}.fits"') == "7.fits"
-    assert ctx.resolve('f"{frame_num:03d}.fits"') == "007.fits"
-    assert ctx.resolve("f'{frame_num}'") == "7"
+    ctx = Context(_FrameInfo(frame_num=7))
+    assert ctx.resolve('f"{_FrameInfo.frame_num}.fits"') == "7.fits"
+    assert ctx.resolve('f"{_FrameInfo.frame_num:03d}.fits"') == "007.fits"
+    assert ctx.resolve("f'{_FrameInfo.frame_num}'") == "7"
 
 
 @pytest.mark.parametrize("prefix", ["f", "F"])
 def test_resolve_fstring_prefix_variants(prefix):
-    ctx = Context(frame_num=7)
-    assert ctx.resolve(f'{prefix}"{{frame_num}}.fits"') == "7.fits"
+    ctx = Context(_FrameInfo(frame_num=7))
+    assert ctx.resolve(f'{prefix}"{{_FrameInfo.frame_num}}.fits"') == "7.fits"
 
 
 def test_resolve_default_forwarded_to_eval():
@@ -98,18 +221,18 @@ def test_resolve_missing_name_raises_without_default():
 
 def test_resolve_brace_template_interpolates():
     # An un-prefixed value containing "{...}" is a raw-f-string template.
-    ctx = Context(frame_num=7, program_name="survey_north")
-    assert ctx.resolve("{program_name}/{frame_num}.fits") == "survey_north/7.fits"
+    ctx = Context(_FrameInfo(frame_num=7), _Temperature(celsius=22.5))
+    assert ctx.resolve("{_Temperature.celsius}/{_FrameInfo.frame_num}.fits") == "22.5/7.fits"
     # Full expression power inside fields, not just bare names.
-    assert ctx.resolve("{frame_num + 1:03d}.fits") == "008.fits"
+    assert ctx.resolve("{_FrameInfo.frame_num + 1:03d}.fits") == "008.fits"
 
 
 def test_resolve_brace_template_keeps_backslashes():
     # The headline win: a backslash path that *also* interpolates stays literal.
-    ctx = Context(frame_num=7)
-    assert ctx.resolve(r"C:\Temp\{frame_num}.fits") == r"C:\Temp\7.fits"
+    ctx = Context(_FrameInfo(frame_num=7))
+    assert ctx.resolve(r"C:\Temp\{_FrameInfo.frame_num}.fits") == r"C:\Temp\7.fits"
     # Backslash escapes are NOT processed in template mode.
-    assert ctx.resolve(r"a\t{frame_num}") == "a\\t7"
+    assert ctx.resolve(r"a\t{_FrameInfo.frame_num}") == "a\\t7"
 
 
 def test_resolve_brace_template_literal_brace():
@@ -136,22 +259,22 @@ def test_resolve_gate_passes_brace_free_values_verbatim():
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ("{frame_num}\\", "7\\"),              # template ending in a single backslash
-        ("C:\\d\\{frame_num}\\", "C:\\d\\7\\"),  # backslash path template ending in "\"
-        ('{frame_num}"', '7"'),                # template ending in a quote
-        ('say "{frame_num}"', 'say "7"'),      # quotes around an interpolation
-        ('{frame_num}"""', '7"""'),            # trailing triple-quote (peeled)
+        ("{_FrameInfo.frame_num}\\", "7\\"),              # template ending in a backslash
+        ("C:\\d\\{_FrameInfo.frame_num}\\", "C:\\d\\7\\"),  # backslash path ending in "\"
+        ('{_FrameInfo.frame_num}"', '7"'),                # template ending in a quote
+        ('say "{_FrameInfo.frame_num}"', 'say "7"'),      # quotes around an interpolation
+        ('{_FrameInfo.frame_num}"""', '7"""'),            # trailing triple-quote (peeled)
     ],
 )
 def test_resolve_brace_template_quote_and_backslash_tails(value, expected):
     # Trailing quotes/backslashes are handled, not rejected.
-    assert Context(frame_num=7).resolve(value) == expected
+    assert Context(_FrameInfo(frame_num=7)).resolve(value) == expected
 
 
 def test_resolve_brace_template_embedded_triple_quote_raises():
     # A mid-value triple-quote is unsupported (implausible in real config) and errors.
     with pytest.raises(SyntaxError):
-        Context(frame_num=7).resolve('a"""b{frame_num}')
+        Context(_FrameInfo(frame_num=7)).resolve('a"""b{_FrameInfo.frame_num}')
 
 
 @declare_keyword
@@ -162,6 +285,11 @@ class _Temperature(BaseModel):
 @declare_keyword
 class _Humidity(BaseModel):
     percent: float
+
+
+@declare_keyword
+class _FrameInfo(BaseModel):
+    frame_num: int
 
 
 def _make_mock_client(*type_value_pairs):
@@ -211,8 +339,8 @@ async def test_context_subscription_basic():
 
 
 @pytest.mark.asyncio
-async def test_context_subscription_snapshot_base_and_kwargs():
-    """Snapshot merges base context, cached models, and kwargs."""
+async def test_context_subscription_snapshot_merges_base():
+    """Snapshot merges a given base context with the cached keyword models."""
     temp = _Temperature(celsius=20.0)
     client = _make_mock_client(_Temperature, [temp])
 
@@ -221,10 +349,11 @@ async def test_context_subscription_snapshot_base_and_kwargs():
     await sub.start()
     await asyncio.sleep(0)
 
-    ctx = KeywordDict(source="sensor1")
-    sub.snapshot(ctx)
+    base = Context(_Humidity(percent=50.0))
+    ctx = sub.snapshot(base)
 
-    assert ctx["source"] == "sensor1"
+    assert ctx is base
+    assert ctx.get(_Humidity) == _Humidity(percent=50.0)
     assert ctx.get(_Temperature) == temp
 
     await sub.stop()

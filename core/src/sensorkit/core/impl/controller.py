@@ -244,7 +244,9 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             device.subscription.snapshot(into=ctx)
 
         ctx.set(*args)
-        ctx.update(kwargs)
+
+        for key, value in kwargs.items():
+            ctx.set_value(key, value)
 
         await self._state.update(
             self,

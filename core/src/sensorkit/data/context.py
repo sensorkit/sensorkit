@@ -5,11 +5,11 @@ import asyncio
 import builtins
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, overload
+from typing import TYPE_CHECKING, Any, Unpack, overload, override
 
 from pydantic import BaseModel
 
-from sensorkit.common.keyword import KeywordDict
+from sensorkit.common.keyword import CompositeKeyword, KeywordDict
 
 if TYPE_CHECKING:
     from sensorkit.core.entity import EntityClient
@@ -63,7 +63,67 @@ def _raw_fstring_source(value: str) -> str:
 
 
 class Context(KeywordDict):
-    """A KeywordDict for storing data context."""
+    """A `KeywordDict` read view that expands composite keywords.
+
+    A `KeywordDict` stores only what is explicitly set, so its serialized form stays minimal.
+    A `Context` is the resolvable view over that data: as keywords enter it, any
+    `CompositeKeyword` also makes its composed keywords available under their own keys, so a
+    consumer can look up (and `eval` against) a composed keyword without knowing which
+    composite carried it. Expansion happens eagerly on every write path — construction,
+    `set`, and `update` — because the data pipeline mutates a context in flight, so a
+    one-shot expand at construction would not hold.
+
+    A `Context` source is trusted to already be expanded; any other source (a bare
+    `KeywordDict`, an iterable of items from deserialization, keyword arguments) is expanded on
+    the way in.
+    """
+
+    def __init__(
+        self,
+        arg: Any = None,
+        *objs: Unpack[tuple[object, ...]],
+    ):
+        super().__init__(arg, *objs)
+
+        if not isinstance(arg, Context):
+            self._expand_all()
+
+    @override
+    def update(self, other):
+        super().update(other)
+
+        # Expand only what `other` just contributed.
+        if not isinstance(other, Context):
+            self._expand_values(other.values())
+
+    @override
+    def set_keyword(self, obj):
+        if isinstance(obj, CompositeKeyword):
+            self._expand(obj, {id(obj)})
+
+        super().set_keyword(obj)
+
+    def _expand_all(self):
+        self._expand_values(self.values())
+
+    def _expand_values(self, values):
+        for value in list(values):
+            if isinstance(value, CompositeKeyword):
+                self._expand(value, {id(value)})
+
+    def _expand(self, obj: CompositeKeyword, visited: set[int]):
+        # DFS over composed keywords, storing each under its own key. `super()._set_keyword`
+        # keeps the walk explicit and avoids re-entering this class's expanding `_set_keyword`.
+        for composed in obj.composed_keywords():
+            if id(composed) in visited:
+                continue
+
+            visited.add(id(composed))
+
+            if isinstance(composed, CompositeKeyword):
+                self._expand(composed, visited)
+
+            super().set_keyword(composed)
 
     def eval(self, expr: str, *, default: object = _MISSING):
         """Evaluate a Python expression with this Context as the namespace.

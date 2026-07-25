@@ -491,7 +491,7 @@ def _add_compat_context(context: sk.Context):
 
     for key, expr in compat.items():
         with contextlib.suppress(Exception):
-            context[key] = context.eval(expr)
+            context.set_value(key, context.eval(expr))
 
     # Fold legacy flat file_name/file_path keys into FileNameTemplate / FileInfo keywords.
     # A file_name is an input naming template; a file_path is an explicit output location.

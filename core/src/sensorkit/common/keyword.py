@@ -2,7 +2,7 @@
 """Keyword registration, lookup, and serialization for the sensorkit data model."""
 
 import functools
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from functools import partial
 from typing import (
     Annotated,
@@ -123,13 +123,24 @@ class KeywordError(Exception):
 
 @runtime_checkable
 class CompositeKeyword(Protocol):
-    """Protocol for a keyword that exports other keywords."""
+    """Protocol for a keyword that exports other keywords.
 
-    def composed_keywords(self) -> Iterable[object]: ...
+    Composite keywords may only compose a set of keywords that are a pure projection over
+    its own fields. Expansion runs wherever a composite is read into a `Context`, including
+    on the consumer side after deserialization, so anything not carried in the keyword's own
+    serialized fields would simply be absent there.
+    """
+
+    def composed_keywords(self) -> Iterable[object]:
+        """Yield the child keywords this keyword carries."""
 
 
-class KeywordDict(dict[str, Any]):
-    """A dict with keyword-specific methods and overloads."""
+class KeywordDict(Mapping[str, Any]):
+    """A mapping of keywords, keyed by their registered keyword key.
+
+    Values are inserted through `set` (keyword objects, keyed by their type) or `set_value` (a
+    named non-keyword value). Some, but not all, of the `MutableMapping` interface is supported.
+    """
 
     NO_DEFAULT: ClassVar[object] = object()
 
@@ -137,47 +148,46 @@ class KeywordDict(dict[str, Any]):
         self,
         arg: Any = None,
         *objs: Unpack[tuple[object, ...]],
-        **kwargs,
     ):
+        self._data: dict[str, Any] = {}
+
         match arg:
             case None:
-                super().__init__(**kwargs)
+                pass
             case _ if type(arg) in _keyword_index:
-                super().__init__(**kwargs)
                 self.set(arg)
             case KeywordDict():
-                super().__init__(arg.items(), **kwargs)
+                self.update(arg)
+            case Mapping():
+                for key, value in arg.items():
+                    self.set_value(key, value)
             case Iterable():
-                super().__init__(arg, **kwargs)
+                for key, value in arg:
+                    self.set_value(key, value)
             case _:
                 raise RuntimeError(f"KeywordDict arg has invalid type {type(arg)}")
 
-        if objs:
-            self.set(*objs)
-
-    def _set_composed(self, obj: CompositeKeyword, visited: set[int]):
-        # DFS over composed keywords.
-        for composed in obj.composed_keywords():
-            if id(composed) in visited:
-                continue
-
-            visited.add(id(composed))
-
-            if isinstance(composed, CompositeKeyword):
-                self._set_composed(composed, visited)
-
-            self[type(composed)] = composed
+        self.set(*objs)
 
     def set(self, *objs: Unpack[tuple[object, ...]]):
-        """Insert one or more keyword objects, keying each by its registered keyword key.
-
-        If a keyword is a `CompositeKeyword`, first insert its composed keywords, recursively.
-        """
+        """Insert keywords."""
         for obj in objs:
-            if isinstance(obj, CompositeKeyword):
-                self._set_composed(obj, {id(obj)})
+            self.set_keyword(obj)
 
-            self[type(obj)] = obj
+    def set_keyword(self, obj: object):
+        """Insert a keyword."""
+        self._data[_keyword_index[type(obj)].key] = obj
+
+    def set_value(self, key: str, value: Any):
+        """Insert a named non-keyword value, reachable by that name.
+
+        Transitional accommodation for values not (yet) modeled as keywords.
+        """
+        self._data[key] = value
+
+    def update(self, other: Mapping[str, Any]):
+        """Copy every entry from another mapping into this one, overwriting on key collision."""
+        self._data.update(other._data if isinstance(other, KeywordDict) else other)
 
     @classmethod
     def _validate(cls, obj):
@@ -209,9 +219,30 @@ class KeywordDict(dict[str, Any]):
             ),
         )
 
-    @override
     def copy(self) -> Self:
         return self.__class__(self)
+
+    @override
+    def __iter__(self):
+        return iter(self._data)
+
+    @override
+    def __len__(self):
+        return len(self._data)
+
+    def __eq__(self, other: object) -> bool:
+        match other:
+            case KeywordDict():
+                return self._data == other._data
+            case Mapping():
+                return self._data == dict(other)
+            case _:
+                return NotImplemented
+
+    __hash__ = None
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self._data!r})"
 
     @overload
     def get[M](self, cls: type[M], default: M | None = None) -> M | None: ...
@@ -223,16 +254,16 @@ class KeywordDict(dict[str, Any]):
     def get(self, key, default=None):
         if isinstance(key, type):
             entry = _keyword_index.get(key)
-            return default if entry is None else super().get(entry.key, default)
-        return super().get(key, default)
+            return default if entry is None else self._data.get(entry.key, default)
+
+        return self._data.get(key, default)
 
     @overload
-    def pop[M](self, cls: type[M], default: Any = NO_DEFAULT) -> M | None: ...
+    def pop[M](self, cls: type[M], default: Any = ...) -> M | None: ...
 
     @overload
-    def pop(self, key: str, default: Any = NO_DEFAULT) -> Any: ...
+    def pop(self, key: str, default: Any = ...) -> Any: ...
 
-    @override
     def pop(self, key, default=NO_DEFAULT):
         if isinstance(key, type):
             entry = _keyword_index.get(key)
@@ -242,13 +273,12 @@ class KeywordDict(dict[str, Any]):
                     raise KeyError(key.__name__)
                 return default
 
-            return (
-                super().pop(entry.key)
-                if default is self.NO_DEFAULT
-                else super().pop(entry.key, default)
-            )
+            key = entry.key
 
-        return super().pop(key) if default is self.NO_DEFAULT else super().pop(key, default)
+        if default is self.NO_DEFAULT:
+            return self._data.pop(key)
+
+        return self._data.pop(key, default)
 
     @overload
     def __getitem__[M](self, cls: type[M]) -> M: ...
@@ -259,8 +289,8 @@ class KeywordDict(dict[str, Any]):
     @override
     def __getitem__(self, key, /):
         if isinstance(key, type):
-            return super().__getitem__(_keyword_index[key].key)
-        return super().__getitem__(key)
+            return self._data[_keyword_index[key].key]
+        return self._data[key]
 
     @overload
     def __delitem__(self, cls: type) -> None: ...
@@ -268,22 +298,8 @@ class KeywordDict(dict[str, Any]):
     @overload
     def __delitem__(self, key: str) -> None: ...
 
-    @override
     def __delitem__(self, key, /):
         if isinstance(key, type):
-            super().__delitem__(_keyword_index[key].key)
+            del self._data[_keyword_index[key].key]
         else:
-            super().__delitem__(key)
-
-    @overload
-    def __setitem__(self, cls: type, value: Any) -> None: ...
-
-    @overload
-    def __setitem__(self, key: str, value: Any) -> None: ...
-
-    @override
-    def __setitem__(self, key, value, /):
-        if isinstance(key, type):
-            super().__setitem__(_keyword_index[key].key, value)
-        else:
-            super().__setitem__(key, value)
+            del self._data[key]
