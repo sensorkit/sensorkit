@@ -9,18 +9,6 @@ import pytest_asyncio
 from sensorkit.api import Service
 from sensorkit.core.client import SensorKit
 
-_localonly = os.getenv("ENV", "").lower() != "local"
-
-
-def pytest_collection_modifyitems(items):
-    if not _localonly:
-        return
-
-    skip = pytest.mark.skip(reason="local only test; enable by setting `ENV=local`")
-    for item in items:
-        if "localonly" in item.keywords:
-            item.add_marker(skip)
-
 
 class BackendKind(StrEnum):
     FAKE = "fake"
@@ -28,13 +16,6 @@ class BackendKind(StrEnum):
 
 
 backend_impl = BackendKind(os.getenv("SK_TEST_BACKEND", "fake"))
-
-
-def get_backend_list():
-    yield BackendKind.FAKE
-
-    if not _localonly:
-        yield BackendKind.NATS
 
 
 def skip_if_no_testcontainers():
@@ -72,7 +53,12 @@ async def get_backend(kind: BackendKind):
                 yield Backend(impl=await NATSBackendImpl.create(uri))
 
 
-@pytest_asyncio.fixture(params=get_backend_list())
+@pytest_asyncio.fixture(
+    params=[
+        BackendKind.FAKE,
+        pytest.param(BackendKind.NATS, marks=pytest.mark.localonly),
+    ]
+)
 async def _backend(request):
     """Backend fixture for internal backend tests.
 
