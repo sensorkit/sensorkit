@@ -42,7 +42,6 @@ async def get_backend(kind: BackendKind):
             yield Backend(impl=await FakeBackendImpl.create())
         case BackendKind.NATS:
             skip_if_no_testcontainers()
-            pytest.importorskip("sensorkit.backend.nats", reason="nats unavailable")
 
             from testcontainers.nats import NatsContainer
 
@@ -56,7 +55,7 @@ async def get_backend(kind: BackendKind):
 @pytest_asyncio.fixture(
     params=[
         BackendKind.FAKE,
-        pytest.param(BackendKind.NATS, marks=pytest.mark.localonly),
+        pytest.param(BackendKind.NATS, marks=pytest.mark.docker),
     ]
 )
 async def _backend(request):

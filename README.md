@@ -73,11 +73,15 @@ git clone <repo-url>
 cd sensorkit
 uv sync --all-extras
 
-# Run the test suite
+# Run the test suite. Backend tests are parametrized over the fake backend and a
+# real NATS server in a container; the latter is skipped when Docker is absent.
 uv run pytest core/tests
 
-# Run tests against a live NATS server (requires Docker)
-SK_TEST_BACKEND=nats ENV=local uv run pytest core/tests
+# Force every test onto a live NATS server instead of the fake backend
+SK_TEST_BACKEND=nats uv run pytest core/tests
+
+# Also run tests needing site-local hardware or services
+ENV=local uv run pytest core/tests
 
 # Lint and check import-layer contracts
 uv run ruff check core modules

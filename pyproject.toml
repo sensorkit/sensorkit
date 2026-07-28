@@ -166,7 +166,10 @@ line-ending = "auto"
 
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
-markers = ["localonly: test requires ENV=local"]
+markers = [
+    "localonly: test requires ENV=local",
+    "docker: test requires a Docker daemon running Linux containers",
+]
 filterwarnings = ["ignore::pytest.PytestUnraisableExceptionWarning"]
 
 [tool.coverage.report]
