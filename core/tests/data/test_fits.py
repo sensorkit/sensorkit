@@ -585,6 +585,58 @@ async def test_compress_fits_passthrough_header():
     await task
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dtype, expected_zbitpix",
+    [(np.uint16, 16), (np.int16, 16), (np.int32, 32), (np.float32, -32)],
+)
+async def test_compress_fits_bitpix_no_structural_leak(dtype, expected_zbitpix):
+    """ZBITPIX matches the data dtype and primary-array structural keywords
+    do not leak into the compressed image HDU.
+
+    Regression: the primary HDU header was passed verbatim into CompImageHDU,
+    leaking SIMPLE/BITPIX/BZERO/BSCALE into the binary-table header so readers
+    that inspect the stored header saw the wrong BITPIX (the table's 8, not the
+    image bit depth).
+    """
+    # Offset uint16 into the BZERO range to exercise BSCALE/BZERO handling.
+    image_data = (np.arange(64, dtype=dtype).reshape(8, 8))
+    if np.issubdtype(dtype, np.unsignedinteger):
+        image_data = image_data + 40000
+    fits_buf = _make_fits_buffer(image_data, {"INSTRUME": "TestCam", "EXPTIME": 30.0})
+
+    op = CompressFITS()
+    incoming = DataFlow()
+    outgoing = DataFlow()
+    task = asyncio.create_task(op.process([incoming], [outgoing]))
+
+    async def receiver():
+        _, compressed_buf = await outgoing.receive("buffer")
+        # Raw stored table header: no leaked primary-array structural keywords.
+        with fits.open(
+            io.BytesIO(compressed_buf), disable_image_compression=True
+        ) as hdul:
+            raw = hdul[1].header
+            assert raw["ZBITPIX"] == expected_zbitpix
+            # SIMPLE is a primary-only keyword; its presence in the extension
+            # header is the unambiguous signature of the leak. (BZERO/BSCALE
+            # may legitimately be emitted by astropy to encode unsigned ints.)
+            assert "SIMPLE" not in raw, "SIMPLE leaked into compressed HDU header"
+        # Reconstructed image view: correct BITPIX, observational cards survive.
+        with fits.open(io.BytesIO(compressed_buf)) as hdul:
+            hdr = hdul[1].header
+            assert "SIMPLE" not in hdr
+            assert hdr["BITPIX"] == expected_zbitpix
+            assert hdr["INSTRUME"] == "TestCam"
+            assert hdr["EXPTIME"] == 30.0
+            np.testing.assert_array_equal(hdul[1].data, image_data)
+
+    recv = asyncio.create_task(receiver())
+    await incoming.send(Context(), fits_buf)
+    await recv
+    await task
+
+
 # --- BuildFITSHeader tests ---
 
 

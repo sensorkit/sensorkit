@@ -528,10 +528,29 @@ class CompressFITS(DataOp):
         compressed = await asyncio.to_thread(self._compress, buffer)
         await outgoing[0].send(context, compressed)
 
+    # Primary-array structural keywords that describe the uncompressed
+    # primary HDU. They must not be carried into the compressed image HDU:
+    # astropy derives the compressed image's structure (ZBITPIX, ZNAXIS*,
+    # ZBZERO, ...) from `data`, and leaking these leaves stray SIMPLE/BITPIX/
+    # BZERO/BSCALE cards in the binary-table header that misreport the image
+    # bit depth to readers that inspect them directly.
+    _STRUCTURAL_KEYWORDS = (
+        "SIMPLE", "XTENSION", "BITPIX", "EXTEND",
+        "PCOUNT", "GCOUNT", "BSCALE", "BZERO",
+    )
+
     def _compress(self, buffer: bytes) -> bytes:
         with fits.open(io.BytesIO(buffer)) as hdul:
             data = hdul[0].data
-            header = hdul[0].header
+            header = hdul[0].header.copy()
+
+            # Strip primary-array structural keywords before handing the
+            # header to CompImageHDU (see _STRUCTURAL_KEYWORDS above).
+            for kw in self._STRUCTURAL_KEYWORDS:
+                header.remove(kw, ignore_missing=True, remove_all=True)
+            for kw in list(header):
+                if kw == "NAXIS" or (kw.startswith("NAXIS") and kw[5:].isdigit()):
+                    header.remove(kw, ignore_missing=True, remove_all=True)
 
             algorithm = self.algorithm
 

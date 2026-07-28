@@ -42,6 +42,24 @@ def make_fits(path: pathlib.Path, data=None, *, comments=(), history=(), **heade
     return path
 
 
+def make_compressed_fits(path: pathlib.Path, data=None, **header) -> pathlib.Path:
+    """Write a tile-compressed FITS file: empty primary HDU + CompImageHDU.
+
+    Mirrors the layout the `compress_fits` data op produces, where the image
+    and all its cards live in the extension rather than the primary HDU.
+    """
+    if data is None:
+        data = np.arange(64, dtype=np.int32).reshape(8, 8)
+
+    comp = fits.CompImageHDU(data=data, compression_type="RICE_1")
+    for key, value in header.items():
+        comp.header[key] = value
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fits.HDUList([fits.PrimaryHDU(), comp]).writeto(path, overwrite=True)
+    return path
+
+
 @contextlib.asynccontextmanager
 async def running_handler(config: ServeLocalFITSConfig):
     """Start a ServeLocalFITSHandler and wait until its initial listing is ready."""
@@ -144,6 +162,31 @@ async def test_handler_controller_from_metadata(tmp_path):
 
         assert ("metactrl", "x.fits") in pairs
         assert handler.get_metadata("metactrl", "x.fits")[FITSHeader]["SKCTRL"] == "metactrl"
+
+
+@pytest.mark.asyncio
+async def test_handler_reads_cards_from_compressed_frame(tmp_path):
+    """Metadata for a tile-compressed frame comes from the image extension.
+
+    Regression: the reader used hdul[0].header unconditionally, so a
+    CompImageHDU frame (empty primary HDU) yielded only the sparse primary
+    cards — SensorView's header panel showed SIMPLE/BITPIX/NAXIS/EXTEND and
+    nothing else. The full cards live in the compressed extension.
+    """
+    make_compressed_fits(tmp_path / "c.fits", SKCTRL="metactrl", INSTRUME="TestCam", TARGET=42)
+
+    config = ServeLocalFITSConfig(root_directory=str(tmp_path), controller_id="from_metadata")
+
+    async with running_handler(config) as handler:
+        pairs = {(info.controller_id, info.product_id) for info in await handler.get_listing()}
+        # Controller-ID resolution from metadata must also see the extension cards.
+        assert ("metactrl", "c.fits") in pairs
+
+        cards = handler.get_metadata("metactrl", "c.fits")[FITSHeader]
+        assert cards["INSTRUME"] == "TestCam"
+        assert cards["TARGET"] == 42
+        # NAXIS reflects the real image (2), not the empty primary stub (0).
+        assert cards["NAXIS"] == 2
 
 
 @pytest.mark.asyncio

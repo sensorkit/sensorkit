@@ -192,6 +192,15 @@ class ServeLocalFITSHandler(ServeHandler):
                 stat = path.stat()
                 if stat.st_size < sum(hdu.filebytes() for hdu in hdul):
                     return None
+                # Read the header from the HDU that actually holds the image.
+                # For tile-compressed frames (CompImageHDU) the primary HDU is
+                # an empty stub and the image plus all its cards live in an
+                # extension, so the primary header would be near-empty. Pick
+                # the first HDU with image dimensions; a CompImageHDU presents
+                # the reconstructed image header without decompressing pixels.
+                for hdu in hdul:
+                    if hdu.header.get("NAXIS", 0) > 0:
+                        return stat, hdu.header
                 return stat, hdul[0].header
 
         for _ in range(_SETTLE_ATTEMPTS):
