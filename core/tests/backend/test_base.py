@@ -253,15 +253,26 @@ async def test_kv_monitor_all_deep(_backend):
     assert b"child_val" in seen
 
 
-# FIXME: Remove when TTL expiry monitoring is implemented in nats-py.
-def _should_skip_ttl_monitor(backend):
+@pytest.fixture
+def ttl_expiry_delivery(_backend, request):
+    """Expect failure on backends that never deliver the TTL expiry to a watcher.
+
+    FIXME: Drop once nats-py publishes KV deletes on TTL expiry. The mark is
+    strict, so the test starts failing as soon as that lands.
+    """
     from sensorkit.backend.nats import NATSBackendImpl
 
-    return isinstance(backend.impl, NATSBackendImpl)
+    if isinstance(_backend.impl, NATSBackendImpl):
+        request.applymarker(
+            pytest.mark.xfail(
+                reason="nats-py does not deliver KV TTL expiry to watchers",
+                strict=True,
+            )
+        )
 
 
 @pytest.mark.asyncio
-async def test_kv_ttl(_backend):
+async def test_kv_ttl(_backend, ttl_expiry_delivery):
     key_value = _backend.key_value(Entity.at("mydevice"))
 
     async def monitor(ready: asyncio.Event):
@@ -288,11 +299,8 @@ async def test_kv_ttl(_backend):
         assert entry is not None
         assert entry.value == b"expiring value"
 
-        if _should_skip_ttl_monitor(_backend):
-            await asyncio.sleep(1.2)
-        else:
-            # Wait for TTL to expire
-            await monitor_task
+        # Wait for TTL to expire
+        await monitor_task
 
         # Verify key no longer exists
         with pytest.raises(KeyNotFound):
