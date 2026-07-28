@@ -23,6 +23,8 @@ import sys
 import pytest
 import pytest_asyncio
 
+pytestmark = pytest.mark.localonly
+
 # Device entity name as registered in indigo_config.yaml
 DEVICE_NAME = "weather"
 
