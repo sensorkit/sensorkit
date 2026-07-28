@@ -169,6 +169,9 @@ asyncio_default_fixture_loop_scope = "function"
 markers = ["localonly: test requires ENV=local"]
 filterwarnings = ["ignore::pytest.PytestUnraisableExceptionWarning"]
 
+[tool.coverage.report]
+include_namespace_packages = true
+
 [tool.importlinter]
 root_packages = ["sensorkit"]
 exclude_type_checking_imports = true
