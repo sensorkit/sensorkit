@@ -42,6 +42,20 @@ def make_fits(path: pathlib.Path, data=None, *, comments=(), history=(), **heade
     return path
 
 
+def make_compressed_fits(path: pathlib.Path, data=None, **header) -> pathlib.Path:
+    """Write a tile-compressed FITS file: an empty primary stub plus a CompImageHDU."""
+    if data is None:
+        data = np.arange(64, dtype=np.float32).reshape(8, 8)
+
+    hdu = fits.CompImageHDU(data=data)
+    for key, value in header.items():
+        hdu.header[key] = value
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(path, overwrite=True)
+    return path
+
+
 @contextlib.asynccontextmanager
 async def running_handler(config: ServeLocalFITSConfig):
     """Start a ServeLocalFITSHandler and wait until its initial listing is ready."""
@@ -195,6 +209,43 @@ async def test_handler_skips_a_frame_that_never_completes(tmp_path):
 
     with patch.object(serve_mod, "_SETTLE_ATTEMPTS", 2), patch.object(serve_mod, "_SETTLE_POLL_S", 0.01):
         assert await handler._read_whole_frame(path) is None
+
+
+@pytest.mark.asyncio
+async def test_handler_reads_metadata_from_a_compressed_frame(tmp_path):
+    """A tile-compressed frame carries its cards in an extension, not the primary stub."""
+    make_compressed_fits(tmp_path / "x.fits", SKCTRL="metactrl", INSTRUME="TestCam")
+
+    config = ServeLocalFITSConfig(root_directory=str(tmp_path), controller_id="from_metadata")
+
+    async with running_handler(config) as handler:
+        listing = await handler.get_listing()
+        pairs = {(info.controller_id, info.product_id) for info in listing}
+
+        assert ("metactrl", "x.fits") in pairs
+        assert handler.get_metadata("metactrl", "x.fits")[FITSHeader]["INSTRUME"] == "TestCam"
+
+
+@pytest.mark.asyncio
+async def test_handler_reads_metadata_past_a_table_extension(tmp_path):
+    """Table extensions declare axes of their own, but hold no image to describe."""
+    path = tmp_path / "ctrlA" / "frame1.fits"
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    table = fits.BinTableHDU.from_columns(
+        [fits.Column(name="X", format="E", array=np.zeros(4, dtype=np.float32))]
+    )
+    image = fits.CompImageHDU(data=np.arange(64, dtype=np.float32).reshape(8, 8))
+    image.header["INSTRUME"] = "TestCam"
+    fits.HDUList([fits.PrimaryHDU(), table, image]).writeto(path, overwrite=True)
+
+    config = ServeLocalFITSConfig(root_directory=str(tmp_path), controller_id="from_path")
+    handler = ServeLocalFITSHandler(config)
+
+    _, header = await handler._read_whole_frame(path)
+
+    assert header["XTENSION"] == "IMAGE"
+    assert header["INSTRUME"] == "TestCam"
 
 
 # ---------------------------------------------------------------------------

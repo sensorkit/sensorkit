@@ -192,6 +192,16 @@ class ServeLocalFITSHandler(ServeHandler):
                 stat = path.stat()
                 if stat.st_size < sum(hdu.filebytes() for hdu in hdul):
                     return None
+
+                # Metadata comes from the HDU that carries the image. A
+                # tile-compressed frame leaves an empty stub in the primary HDU
+                # and holds the image and its cards in an extension, so the
+                # shape test is what distinguishes the two. Neither is_image nor
+                # shape touches pixel data, so nothing is decompressed here.
+                for hdu in hdul:
+                    if hdu.is_image and hdu.shape:
+                        return stat, hdu.header
+
                 return stat, hdul[0].header
 
         for _ in range(_SETTLE_ATTEMPTS):
