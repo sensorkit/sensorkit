@@ -46,7 +46,7 @@ class TestFocuserConnect:
 class TestFocuserCommands:
     @pytest.mark.asyncio
     async def test_move(self, client, focuser):
-        await focuser.focuser_move(ChangeFocusPosition(position=6000))
+        await focuser.focuser_change(ChangeFocusPosition(position=6000))
         reqs = client.find_requests("/equipment/focuser/move")
         assert len(reqs) == 1
         assert reqs[0][1]["position"] == 6000

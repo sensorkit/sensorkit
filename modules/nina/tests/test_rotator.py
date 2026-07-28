@@ -45,7 +45,7 @@ class TestRotatorConnect:
 class TestRotatorCommands:
     @pytest.mark.asyncio
     async def test_move(self, client, rotator):
-        await rotator.rotator_move(ChangeRotatorPosition(position=45.0))
+        await rotator.rotator_change(ChangeRotatorPosition(position=45.0))
         reqs = client.find_requests("/equipment/rotator/move")
         assert len(reqs) == 1
         assert reqs[0][1]["positionAngle"] == 45.0

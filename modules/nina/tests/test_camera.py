@@ -55,6 +55,7 @@ class TestCameraConnect:
 class TestCameraCommands:
     @pytest.mark.asyncio
     async def test_set_binning(self, client, camera):
+        client.set_info(BinX=2, BinY=2)
         await camera.camera_set_binning(
             ConfigureCameraSensor(binning=Binning(x=2, y=2))
         )

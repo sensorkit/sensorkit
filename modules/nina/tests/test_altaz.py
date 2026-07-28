@@ -32,6 +32,7 @@ def mount(client):
     m._client = client
     m.state = NinaMountState()
     m.device_connected = True
+    m._fast_status_task = None
     m._site_lat = 32.0
     m._site_lon = -110.0
     m._site_elev = 700.0

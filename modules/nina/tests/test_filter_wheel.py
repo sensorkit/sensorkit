@@ -28,7 +28,7 @@ def filter_wheel(client):
     fw._client = client
     fw.state = NinaFilterWheelState()
     fw.device_connected = True
-    fw.filter_position = 0
+    fw.filter_wheel_position = 0
     fw._filter_names = ["Red", "Green", "Blue"]
     fw._name_to_id = {"Red": 0, "Green": 1, "Blue": 2}
     return fw
@@ -52,7 +52,7 @@ class TestFilterWheelCommands:
     async def test_set_filter_by_name(self, client, filter_wheel):
         # Mock returns SelectedFilter with matching Id after change
         client.set_info(SelectedFilter={"Name": "Green", "Id": 1, "Position": 1})
-        await filter_wheel.filter_wheel_set(SetFilter(filter="Green"))
+        await filter_wheel.filter_wheel_set_filter(SetFilter(filter="Green"))
         reqs = client.find_requests("/equipment/filterwheel/change-filter")
         assert len(reqs) == 1
         assert reqs[0][1]["filterId"] == 1
@@ -60,7 +60,7 @@ class TestFilterWheelCommands:
     @pytest.mark.asyncio
     async def test_set_filter_by_index(self, client, filter_wheel):
         client.set_info(SelectedFilter={"Name": "Blue", "Id": 2, "Position": 2})
-        await filter_wheel.filter_wheel_set(SetFilter(filter=2))
+        await filter_wheel.filter_wheel_set_filter(SetFilter(filter=2))
         reqs = client.find_requests("/equipment/filterwheel/change-filter")
         assert len(reqs) == 1
         assert reqs[0][1]["filterId"] == 2
@@ -68,6 +68,6 @@ class TestFilterWheelCommands:
     @pytest.mark.asyncio
     async def test_set_filter_invalid_name(self, client, filter_wheel):
         """Invalid filter name logs error and returns without issuing a request."""
-        await filter_wheel.filter_wheel_set(SetFilter(filter="InvalidFilter"))
+        await filter_wheel.filter_wheel_set_filter(SetFilter(filter="InvalidFilter"))
         reqs = client.find_requests("/equipment/filterwheel/change-filter")
         assert len(reqs) == 0
