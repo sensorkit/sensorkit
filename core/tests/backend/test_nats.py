@@ -1,9 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for NATS backend specifics not covered by the generic backend suite.
-
-Integration tests require Docker (via testcontainers) and are skipped when
-`ENV` is not set to `local`. Unit tests (mocked KeyWatcher) always run.
-"""
+"""Tests for NATS backend specifics not covered by the generic backend suite."""
 
 from __future__ import annotations
 
