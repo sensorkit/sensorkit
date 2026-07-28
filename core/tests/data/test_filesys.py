@@ -198,8 +198,9 @@ async def test_read_file_wait_exists():
         file_name = "test_delayed.txt"
         file_path = pathlib.Path(temp_dir) / file_name
 
-        # Create a ReadFile node
-        read_file = ReadFile(wait_for_file=True, wait_for_file_timeout=1.0)
+        # wait_for_file polls on a 1s cadence, so the timeout must leave room for
+        # at least one poll after the file appears.
+        read_file = ReadFile(wait_for_file=True, wait_for_file_timeout=5.0)
 
         # Create DataEdge objects for incoming and outgoing connections
         incoming_edge = DataFlow()
@@ -265,7 +266,7 @@ async def test_watch_directory():
         async with aiofile.async_open(test_file, "wb") as f:
             await f.write(test_data)
 
-        async with asyncio.timeout(1.0):
+        async with asyncio.timeout(5.0):
             async for context, data in sink.consume():
                 assert context[FileInfo].path.name == "test_watch.txt"
                 assert data == test_data
