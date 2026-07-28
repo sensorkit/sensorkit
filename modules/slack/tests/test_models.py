@@ -94,7 +94,6 @@ class TestChannelConfig:
 class TestSlackConfig:
     def test_parse_from_dict(self):
         config = SlackConfig.model_validate({
-            "entity": "slack_notifier",
             "channels": {
                 "alerts": {
                     "channel": "#observatory-alerts",
@@ -121,7 +120,6 @@ class TestSlackConfig:
             ],
         })
 
-        assert config.entity == "slack_notifier"
         assert config.env_file == ".env"
         assert len(config.channels) == 2
         assert len(config.rules) == 1
@@ -129,8 +127,5 @@ class TestSlackConfig:
         assert config.rules[0].deduplicate == 300
 
     def test_empty_rules(self):
-        config = SlackConfig(
-            entity="test",
-            channels={"log": ChannelConfig(channel="#log")},
-        )
+        config = SlackConfig(channels={"log": ChannelConfig(channel="#log")})
         assert config.rules == []
