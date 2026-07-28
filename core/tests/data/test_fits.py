@@ -585,6 +585,39 @@ async def test_compress_fits_passthrough_header():
     await task
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dtype, expected_bitpix",
+    [(np.uint16, 16), (np.int16, 16), (np.int32, 32), (np.float32, -32)],
+)
+async def test_compress_fits_image_hdu_is_an_extension(dtype, expected_bitpix):
+    """The compressed HDU describes an IMAGE extension, not a primary array."""
+    # Offset the unsigned case into the BZERO range to exercise BSCALE/BZERO handling.
+    image_data = np.arange(64, dtype=dtype).reshape(8, 8)
+    if np.issubdtype(dtype, np.unsignedinteger):
+        image_data = image_data + 40000
+
+    fits_buf = _make_fits_buffer(image_data, {"INSTRUME": "TestCam", "EXPTIME": 30.0})
+    _, compressed_buf = await _run_dataop(CompressFITS(), Context(), fits_buf)
+
+    # The stored table header must describe the decompressed image as an extension.
+    # ZSIMPLE would instead declare it a primary array.
+    with fits.open(io.BytesIO(compressed_buf), disable_image_compression=True) as hdul:
+        stored = hdul[1].header
+        assert stored["ZTENSION"] == "IMAGE"
+        assert "ZSIMPLE" not in stored
+        assert stored["ZBITPIX"] == expected_bitpix
+
+    # The reconstructed image header agrees, and the payload is untouched.
+    with fits.open(io.BytesIO(compressed_buf)) as hdul:
+        header = hdul[1].header
+        assert header["XTENSION"] == "IMAGE"
+        assert header["BITPIX"] == expected_bitpix
+        assert header["INSTRUME"] == "TestCam"
+        assert header["EXPTIME"] == 30.0
+        np.testing.assert_array_equal(hdul[1].data, image_data)
+
+
 # --- BuildFITSHeader tests ---
 
 

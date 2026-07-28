@@ -531,7 +531,14 @@ class CompressFITS(DataOp):
     def _compress(self, buffer: bytes) -> bytes:
         with fits.open(io.BytesIO(buffer)) as hdul:
             data = hdul[0].data
-            header = hdul[0].header
+
+            # CompImageHDU derives the compressed HDU's structure from data, so the
+            # source header must contribute observational cards only. Without strip(),
+            # astropy carries the primary array's SIMPLE over as ZSIMPLE and the
+            # reconstructed image header declares itself a primary array rather than
+            # an IMAGE extension.
+            header = hdul[0].header.copy()
+            header.strip()
 
             algorithm = self.algorithm
 
