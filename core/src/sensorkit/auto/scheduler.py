@@ -16,6 +16,7 @@ from sensorkit.common.interval import (
     stack_interval_trees,
     stamp_interval_trees,
 )
+from sensorkit.core.program import OfferInterval
 from sensorkit.core.task import TaskContextOverlay
 
 
@@ -76,7 +77,7 @@ class Scheduler:
     def update(
         self,
         *,
-        offers_dict: dict[str, IntervalTree],
+        offers_dict: dict[str, Sequence[OfferInterval]],
         enabled_programs: set[str],
         mode_context: dict[str, Any] | None = None
     ):
@@ -150,9 +151,9 @@ def create_schedule(
     modes: Iterable[Mode],
     evaluated_modes: Iterable[IntervalTree],
     programs: Iterable[str],
-    offers: Iterable[IntervalTree],
+    offers: Iterable[Iterable[OfferInterval]],
 ):
-    """Build a combined schedule from evaluated mode intervals and program offer trees.
+    """Build a combined schedule from evaluated mode intervals and program offer windows.
 
     Returns `(combined_offers, schedule)` where *schedule* is an IntervalTree whose
     intervals carry `ScheduleIntent` objects with the active mode and candidate programs.

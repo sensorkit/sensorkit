@@ -34,8 +34,7 @@ class Mode(BaseModel):
                 # We can short-circuit if any evaluation returns no intervals.
                 return tree
 
-            # Merge overlaps to make the resulting tree disjoint and sorted, which will enable us
-            # to employ line sweep to find the intersection.
+            # Merge overlaps to make the resulting tree disjoint.
             tree.merge_overlaps(strict=False)
             trees.append(tree)
 

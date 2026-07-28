@@ -57,6 +57,21 @@ def test_intersect_interval_trees_with_empty_input():
     assert len(out) == 0
 
 
+def test_interval_trees_from_unsorted_inputs():
+    a = [(i * 10, i * 10 + 7) for i in range(12)]
+    b = [(i * 10 + 3, i * 10 + 12) for i in range(12)]
+
+    tree_a = IntervalTree.from_tuples(a)
+    tree_b = IntervalTree.from_tuples(b)
+
+    assert _to_tuples(intersect_interval_trees(tree_a, tree_b)) == _to_tuples(
+        intersect_interval_trees(a, b)
+    )
+    assert _dump(combine_interval_trees(tree_a, tree_b, data=("A", "B"))) == _dump(
+        combine_interval_trees(a, b, data=("A", "B"))
+    )
+
+
 def test_stack_interval_trees_splitting_and_labels():
     # Build stack: add A, then B, then C; later intervals override earlier ones
     segments_a = [(0, 10)]

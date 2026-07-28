@@ -3,6 +3,7 @@
 
 import collections
 import heapq
+import operator
 from collections.abc import Hashable, Sequence
 from typing import Any, Callable, Iterable
 
@@ -18,8 +19,8 @@ def combine_interval_trees(
 ):
     """Construct an IntervalTree combining the data fields of all input interval collections.
 
-    Each collection of intervals must be disjoint and sorted in ascending order. Assuming the
-    inputs are IntervalTrees, this can be achieved using the `merge_overlaps()` method.
+    Each collection of intervals must be disjoint. Assuming the inputs are IntervalTrees, this can
+    be achieved using the `merge_overlaps()` method.
     """
     target = IntervalTree() if target is None else target
 
@@ -32,9 +33,9 @@ def combine_interval_trees(
             # Make sure the data iterable is materialized for random access.
             data = tuple(data)
 
-    # Line sweep, making sure to preserve the input ordering.
+    # Line sweep, making sure to preserve the input ordering. Each input tree is sorted here.
     def tagged_tree(i, tree):
-        return ((iv[0], i, iv[1]) for iv in tree)
+        return sorted((iv[0], i, iv[1]) for iv in tree)
 
     tagged_inputs = (tagged_tree(i, tree) for i, tree in enumerate(inputs))
     events: list[tuple[Any, bool, int]] = []
@@ -84,16 +85,18 @@ def intersect_interval_trees(
 ):
     """Construct an IntervalTree containing the intersection of all input interval collections.
 
-    Each collection of intervals must be disjoint and sorted in ascending order. Assuming the
-    inputs are IntervalTrees, this can be achieved using the `merge_overlaps()` method.
+    Each collection of intervals must be disjoint. Assuming the inputs are IntervalTrees, this can
+    be achieved using the `merge_overlaps()` method.
     """
     target = IntervalTree() if target is None else target
+    interval_key = operator.itemgetter(0, 1)
 
-    # Line sweep.
+    # Line sweep. Each input tree is sorted here.
+    sorted_inputs = (sorted(inp, key=interval_key) for inp in inputs)
     events: list[tuple[Any, bool]] = []
     endpoints = []
 
-    for iv in heapq.merge(*inputs):
+    for iv in heapq.merge(*sorted_inputs, key=interval_key):
         while endpoints and endpoints[0] <= iv[0]:
             end = heapq.heappop(endpoints)
             events.append((end, False))

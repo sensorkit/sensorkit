@@ -9,7 +9,7 @@ from abc import abstractmethod
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
-from intervaltree import Interval, IntervalTree
+from intervaltree import Interval
 from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 
@@ -238,7 +238,7 @@ class ControllerOffers:
         self.controller = controller
         self.program_discovery = program_discovery
         self._monitors: dict[str, asyncio.Task] = {}
-        self._offers: dict[str, IntervalTree] = {}
+        self._offers: dict[str, list[OfferInterval]] = {}
 
     async def start(self, *, task_group: Any = asyncio):
         """Start the program-offer discovery loop, waiting until the first update is received."""
@@ -272,7 +272,7 @@ class ControllerOffers:
 
     async def _monitor_program(self, program: str, initial_update: asyncio.Event):
         logger.debug(f"starting offer monitor for program {program}")
-        self._offers[program] = IntervalTree()
+        self._offers[program] = []
 
         try:
             # Suppress propagation of cancellation to the parent task group.
@@ -284,14 +284,17 @@ class ControllerOffers:
                 initial_update.set()
 
                 async for _, offering in stream:
-                    self._offers[program] = IntervalTree(offering.offer_windows)
+                    self._offers[program] = sorted(offering.offer_windows)
         finally:
             initial_update.set()
             del self._offers[program]
             logger.debug(f"cancelled offer monitor for program {program}")
 
     def get_offers(self):
-        """Return a snapshot of the current offer IntervalTrees keyed by program name."""
+        """Return a snapshot of the current offer windows keyed by program name.
+
+        Each program's offer windows are sorted in ascending order.
+        """
         return self._offers.copy()
 
 
