@@ -188,7 +188,6 @@ async def test_read_file():
             )
 
 
-@pytest.mark.localonly
 @pytest.mark.asyncio
 async def test_read_file_wait_exists():
     # Test ReadFile with a file that doesn't exist yet
@@ -245,7 +244,6 @@ async def test_read_file_wait_exists():
         await asyncio.gather(create_file_task, receiver_task, process_task)
 
 
-@pytest.mark.localonly
 @pytest.mark.asyncio
 async def test_watch_directory():
     with tempfile.TemporaryDirectory() as temp_dir:
