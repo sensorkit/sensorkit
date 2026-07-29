@@ -6,7 +6,6 @@ import contextlib
 import json
 import pathlib
 from datetime import UTC, datetime
-from unittest.mock import patch
 
 import httpx
 import numpy as np
@@ -198,17 +197,19 @@ async def test_handler_waits_for_a_frame_still_being_written(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_handler_skips_a_frame_that_never_completes(tmp_path):
+async def test_handler_skips_a_frame_that_never_completes(tmp_path, monkeypatch):
     """A frame that stays truncated is skipped, not served with a bad size."""
     path = tmp_path / "ctrlA" / "frame1.fits"
     full = make_fits(path).read_bytes()
     path.write_bytes(full[:2880])
 
+    monkeypatch.setattr(serve_mod, "_SETTLE_ATTEMPTS", 2)
+    monkeypatch.setattr(serve_mod, "_SETTLE_POLL_S", 0.01)
+
     config = ServeLocalFITSConfig(root_directory=str(tmp_path), controller_id="from_path")
     handler = ServeLocalFITSHandler(config)
 
-    with patch.object(serve_mod, "_SETTLE_ATTEMPTS", 2), patch.object(serve_mod, "_SETTLE_POLL_S", 0.01):
-        assert await handler._read_whole_frame(path) is None
+    assert await handler._read_whole_frame(path) is None
 
 
 @pytest.mark.asyncio

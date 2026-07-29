@@ -4,24 +4,24 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock
+from dataclasses import dataclass
 
 import pytest
 
 from sensorkit.backend.nats import NATSBackendImpl
 
 
-def _mock_entry(key: str, value: bytes, revision: int = 1):
-    """Create a mock KeyValue.Entry with the attributes _kv_entry expects."""
-    entry = MagicMock()
-    entry.key = key
-    entry.value = value
-    entry.operation = None  # not a delete
-    entry.revision = revision
-    return entry
+@dataclass
+class Entry:
+    """Stands in for a nats.js KeyValue.Entry, carrying what `_kv_entry` reads off one."""
+
+    key: str
+    value: bytes
+    revision: int = 1
+    operation: str | None = None  # None means "not a delete"
 
 
-class MockKeyWatcher:
+class FakeKeyWatcher:
     """Simulates nats.js KeyValue.KeyWatcher yielding entries then a None sentinel.
 
     Entries are yielded in order: initial entries, None (end-of-initial sentinel),
@@ -61,14 +61,14 @@ async def test_kv_iterator_separates_initial_from_live():
     None.key) or an infinite hang.
     """
     initial = [
-        _mock_entry("sensorkit.kv.device.key_a", b"value_a", revision=1),
-        _mock_entry("sensorkit.kv.device.key_b", b"value_b", revision=2),
+        Entry("sensorkit.kv.device.key_a", b"value_a", revision=1),
+        Entry("sensorkit.kv.device.key_b", b"value_b", revision=2),
     ]
     live = [
-        _mock_entry("sensorkit.kv.device.key_c", b"value_c", revision=3),
+        Entry("sensorkit.kv.device.key_c", b"value_c", revision=3),
     ]
 
-    watcher = MockKeyWatcher(initial, live)
+    watcher = FakeKeyWatcher(initial, live)
 
     batches = []
     async with asyncio.timeout(2.0):
@@ -91,10 +91,10 @@ async def test_kv_iterator_separates_initial_from_live():
 async def test_kv_iterator_empty_initial():
     """_kv_iterator handles the case where no keys exist yet (sentinel immediately)."""
     live = [
-        _mock_entry("sensorkit.kv.device.key_a", b"first", revision=1),
+        Entry("sensorkit.kv.device.key_a", b"first", revision=1),
     ]
 
-    watcher = MockKeyWatcher(initial=[], live=live)
+    watcher = FakeKeyWatcher(initial=[], live=live)
 
     batches = []
     async with asyncio.timeout(2.0):

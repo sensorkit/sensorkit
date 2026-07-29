@@ -7,8 +7,11 @@ from pydantic import TypeAdapter
 
 from sensorkit.astro.observer import EarthObserver
 from sensorkit.auto.mode import (
-    Mode, ModeList, TimeRangeCriterion, TaskingAvailableCriterion,
     AfterActivityCriterion,
+    Mode,
+    ModeList,
+    TaskingAvailableCriterion,
+    TimeRangeCriterion,
 )
 from sensorkit.common.time import parse_time_range
 

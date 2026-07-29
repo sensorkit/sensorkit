@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytest_asyncio
 from pydantic import BaseModel
 
 from sensorkit.common.keyword import KeywordDict, declare_keyword
 from sensorkit.data.context import Context, ContextSubscription
-
 
 # --- Composite keyword expansion --------------------------------------------------------
 
@@ -143,14 +142,14 @@ def test_composite_expands_via_update():
 
 
 def test_eval_keyword_attribute():
-    ctx = Context(_Temperature(celsius=22.5))
-    assert ctx.eval("_Temperature.celsius") == 22.5
+    ctx = Context(SampleTemperature(celsius=22.5))
+    assert ctx.eval("SampleTemperature.celsius") == 22.5
 
 
 def test_eval_keyword_expression():
-    ctx = Context(_FrameInfo(frame_num=7))
-    assert ctx.eval("_FrameInfo.frame_num + 1") == 8
-    assert ctx.eval("_FrameInfo.frame_num * 2") == 14
+    ctx = Context(SampleFrameInfo(frame_num=7))
+    assert ctx.eval("SampleFrameInfo.frame_num + 1") == 8
+    assert ctx.eval("SampleFrameInfo.frame_num * 2") == 14
 
 
 def test_eval_missing_name_raises():
@@ -166,9 +165,9 @@ def test_eval_missing_name_returns_default():
 def test_eval_non_name_error_propagates_past_default():
     # A missing *attribute* on a present value is a real error, not an absent keyword,
     # so it propagates even when a default is supplied.
-    ctx = Context(_FrameInfo(frame_num=7))
+    ctx = Context(SampleFrameInfo(frame_num=7))
     with pytest.raises(AttributeError):
-        ctx.eval("_FrameInfo.no_such_attr", default=None)
+        ctx.eval("SampleFrameInfo.no_such_attr", default=None)
 
 
 # --- Context.resolve (Grammar A: =expr | f"..." | literal) ------------------------------
@@ -181,27 +180,27 @@ def test_resolve_literal_verbatim():
 
 
 def test_resolve_expression_keeps_native_type():
-    ctx = Context(_FrameInfo(frame_num=7))
-    result = ctx.resolve("=_FrameInfo.frame_num + 1")
+    ctx = Context(SampleFrameInfo(frame_num=7))
+    result = ctx.resolve("=SampleFrameInfo.frame_num + 1")
     assert result == 8 and isinstance(result, int)
 
 
 def test_resolve_expression_keyword_method():
-    ctx = Context(_Temperature(celsius=22.5))
-    assert ctx.resolve("=str(_Temperature.celsius)") == "22.5"
+    ctx = Context(SampleTemperature(celsius=22.5))
+    assert ctx.resolve("=str(SampleTemperature.celsius)") == "22.5"
 
 
 def test_resolve_fstring_returns_string():
-    ctx = Context(_FrameInfo(frame_num=7))
-    assert ctx.resolve('f"{_FrameInfo.frame_num}.fits"') == "7.fits"
-    assert ctx.resolve('f"{_FrameInfo.frame_num:03d}.fits"') == "007.fits"
-    assert ctx.resolve("f'{_FrameInfo.frame_num}'") == "7"
+    ctx = Context(SampleFrameInfo(frame_num=7))
+    assert ctx.resolve('f"{SampleFrameInfo.frame_num}.fits"') == "7.fits"
+    assert ctx.resolve('f"{SampleFrameInfo.frame_num:03d}.fits"') == "007.fits"
+    assert ctx.resolve("f'{SampleFrameInfo.frame_num}'") == "7"
 
 
 @pytest.mark.parametrize("prefix", ["f", "F"])
 def test_resolve_fstring_prefix_variants(prefix):
-    ctx = Context(_FrameInfo(frame_num=7))
-    assert ctx.resolve(f'{prefix}"{{_FrameInfo.frame_num}}.fits"') == "7.fits"
+    ctx = Context(SampleFrameInfo(frame_num=7))
+    assert ctx.resolve(f'{prefix}"{{SampleFrameInfo.frame_num}}.fits"') == "7.fits"
 
 
 def test_resolve_default_forwarded_to_eval():
@@ -221,18 +220,18 @@ def test_resolve_missing_name_raises_without_default():
 
 def test_resolve_brace_template_interpolates():
     # An un-prefixed value containing "{...}" is a raw-f-string template.
-    ctx = Context(_FrameInfo(frame_num=7), _Temperature(celsius=22.5))
-    assert ctx.resolve("{_Temperature.celsius}/{_FrameInfo.frame_num}.fits") == "22.5/7.fits"
+    ctx = Context(SampleFrameInfo(frame_num=7), SampleTemperature(celsius=22.5))
+    assert ctx.resolve("{SampleTemperature.celsius}/{SampleFrameInfo.frame_num}.fits") == "22.5/7.fits"
     # Full expression power inside fields, not just bare names.
-    assert ctx.resolve("{_FrameInfo.frame_num + 1:03d}.fits") == "008.fits"
+    assert ctx.resolve("{SampleFrameInfo.frame_num + 1:03d}.fits") == "008.fits"
 
 
 def test_resolve_brace_template_keeps_backslashes():
     # The headline win: a backslash path that *also* interpolates stays literal.
-    ctx = Context(_FrameInfo(frame_num=7))
-    assert ctx.resolve(r"C:\Temp\{_FrameInfo.frame_num}.fits") == r"C:\Temp\7.fits"
+    ctx = Context(SampleFrameInfo(frame_num=7))
+    assert ctx.resolve(r"C:\Temp\{SampleFrameInfo.frame_num}.fits") == r"C:\Temp\7.fits"
     # Backslash escapes are NOT processed in template mode.
-    assert ctx.resolve(r"a\t{_FrameInfo.frame_num}") == "a\\t7"
+    assert ctx.resolve(r"a\t{SampleFrameInfo.frame_num}") == "a\\t7"
 
 
 def test_resolve_brace_template_literal_brace():
@@ -259,147 +258,123 @@ def test_resolve_gate_passes_brace_free_values_verbatim():
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ("{_FrameInfo.frame_num}\\", "7\\"),              # template ending in a backslash
-        ("C:\\d\\{_FrameInfo.frame_num}\\", "C:\\d\\7\\"),  # backslash path ending in "\"
-        ('{_FrameInfo.frame_num}"', '7"'),                # template ending in a quote
-        ('say "{_FrameInfo.frame_num}"', 'say "7"'),      # quotes around an interpolation
-        ('{_FrameInfo.frame_num}"""', '7"""'),            # trailing triple-quote (peeled)
+        ("{SampleFrameInfo.frame_num}\\", "7\\"),              # template ending in a backslash
+        ("C:\\d\\{SampleFrameInfo.frame_num}\\", "C:\\d\\7\\"),  # backslash path ending in "\"
+        ('{SampleFrameInfo.frame_num}"', '7"'),                # template ending in a quote
+        ('say "{SampleFrameInfo.frame_num}"', 'say "7"'),      # quotes around an interpolation
+        ('{SampleFrameInfo.frame_num}"""', '7"""'),            # trailing triple-quote (peeled)
     ],
 )
 def test_resolve_brace_template_quote_and_backslash_tails(value, expected):
     # Trailing quotes/backslashes are handled, not rejected.
-    assert Context(_FrameInfo(frame_num=7)).resolve(value) == expected
+    assert Context(SampleFrameInfo(frame_num=7)).resolve(value) == expected
 
 
 def test_resolve_brace_template_embedded_triple_quote_raises():
     # A mid-value triple-quote is unsupported (implausible in real config) and errors.
     with pytest.raises(SyntaxError):
-        Context(_FrameInfo(frame_num=7)).resolve('a"""b{_FrameInfo.frame_num}')
+        Context(SampleFrameInfo(frame_num=7)).resolve('a"""b{SampleFrameInfo.frame_num}')
 
 
 @declare_keyword
-class _Temperature(BaseModel):
+class SampleTemperature(BaseModel):
     celsius: float
 
 
 @declare_keyword
-class _Humidity(BaseModel):
+class SampleHumidity(BaseModel):
     percent: float
 
 
 @declare_keyword
-class _FrameInfo(BaseModel):
+class SampleFrameInfo(BaseModel):
     frame_num: int
 
 
-def _make_mock_client(*type_value_pairs):
-    """Create a mock EntityClient whose monitor() yields values by type.
+@pytest_asyncio.fixture
+async def subscription(kit, device_impl):
+    """A ContextSubscription reading the keywords `device_impl` publishes."""
+    sub = ContextSubscription(kit.entity(device_impl.entity))
 
-    Args:
-        *type_value_pairs: Alternating (keyword_type, values_list) pairs,
-            or a single (keyword_type, values_list) pair.
-    """
-    # Build a mapping from keyword type to its value sequence.
-    if len(type_value_pairs) == 2 and isinstance(type_value_pairs[1], list):
-        # Legacy-style single pair: _make_mock_client(Type, [vals])
-        registry = {type_value_pairs[0]: type_value_pairs[1]}
-    else:
-        # Pairs: _make_mock_client((Type1, [vals1]), (Type2, [vals2]))
-        registry = {t: v for t, v in type_value_pairs}
-
-    async def _monitor(model_type):
-        async def _gen():
-            for v in registry.get(model_type, []):
-                yield (None, v)
-        return _gen()
-
-    client = MagicMock()
-    client.monitor = AsyncMock(side_effect=_monitor)
-    return client
-
-
-@pytest.mark.asyncio
-async def test_context_subscription_basic():
-    """Subscription caches latest values and snapshot includes them."""
-    temp = _Temperature(celsius=22.5)
-    client = _make_mock_client(_Temperature, [temp])
-
-    sub = ContextSubscription(client)
-    sub.add(_Temperature)
-
-    await sub.start()
-
-    # Allow the monitor task to run.
-    await asyncio.sleep(0)
-
-    ctx = sub.snapshot()
-    assert ctx.get(_Temperature) == temp
+    yield sub
 
     await sub.stop()
 
 
+async def cached(sub, keyword, expected, timeout=2.0):
+    """Wait until the subscription's snapshot holds `expected` for the keyword, and return it.
+
+    Raises:
+        TimeoutError: if that value never arrives.
+    """
+    async with asyncio.timeout(timeout):
+        while sub.snapshot().get(keyword) != expected:
+            await asyncio.sleep(0.01)
+
+    return expected
+
+
 @pytest.mark.asyncio
-async def test_context_subscription_snapshot_merges_base():
+async def test_context_subscription_basic(subscription, device_impl):
+    """Subscription caches latest values and snapshot includes them."""
+    temp = SampleTemperature(celsius=22.5)
+    subscription.add(SampleTemperature)
+    await subscription.start()
+
+    await device_impl.publish(temp)
+
+    assert await cached(subscription, SampleTemperature, temp)
+
+
+@pytest.mark.asyncio
+async def test_context_subscription_snapshot_merges_base(subscription, device_impl):
     """Snapshot merges a given base context with the cached keyword models."""
-    temp = _Temperature(celsius=20.0)
-    client = _make_mock_client(_Temperature, [temp])
+    temp = SampleTemperature(celsius=20.0)
+    subscription.add(SampleTemperature)
+    await subscription.start()
 
-    sub = ContextSubscription(client)
-    sub.add(_Temperature)
-    await sub.start()
-    await asyncio.sleep(0)
+    await device_impl.publish(temp)
+    await cached(subscription, SampleTemperature, temp)
 
-    base = Context(_Humidity(percent=50.0))
-    ctx = sub.snapshot(base)
+    base = Context(SampleHumidity(percent=50.0))
+    ctx = subscription.snapshot(base)
 
     assert ctx is base
-    assert ctx.get(_Humidity) == _Humidity(percent=50.0)
-    assert ctx.get(_Temperature) == temp
-
-    await sub.stop()
+    assert ctx.get(SampleHumidity) == SampleHumidity(percent=50.0)
+    assert ctx.get(SampleTemperature) == temp
 
 
 @pytest.mark.asyncio
-async def test_context_subscription_multiple_keywords():
+async def test_context_subscription_multiple_keywords(subscription, device_impl):
     """Multiple keyword types are subscribed and cached independently."""
-    temp = _Temperature(celsius=15.0)
-    hum = _Humidity(percent=65.0)
+    temp = SampleTemperature(celsius=15.0)
+    hum = SampleHumidity(percent=65.0)
 
-    client = _make_mock_client((_Temperature, [temp]), (_Humidity, [hum]))
+    subscription.add(SampleTemperature)
+    subscription.add(SampleHumidity)
+    await subscription.start()
 
-    sub = ContextSubscription(client)
-    sub.add(_Temperature)
-    sub.add(_Humidity)
-    await sub.start()
-    await asyncio.sleep(0)
+    await device_impl.publish(temp)
+    await device_impl.publish(hum)
 
-    ctx = sub.snapshot()
-    assert ctx.get(_Temperature) == temp
-    assert ctx.get(_Humidity) == hum
-
-    await sub.stop()
+    assert await cached(subscription, SampleTemperature, temp)
+    assert await cached(subscription, SampleHumidity, hum)
 
 
 @pytest.mark.asyncio
-async def test_context_subscription_latest_value_wins():
+async def test_context_subscription_latest_value_wins(subscription, device_impl):
     """When multiple values arrive, the cache holds the latest."""
-    temps = [_Temperature(celsius=10.0), _Temperature(celsius=20.0), _Temperature(celsius=30.0)]
-    client = _make_mock_client(_Temperature, temps)
+    subscription.add(SampleTemperature)
+    await subscription.start()
 
-    sub = ContextSubscription(client)
-    sub.add(_Temperature)
-    await sub.start()
-    await asyncio.sleep(0)
+    for celsius in (10.0, 20.0, 30.0):
+        await device_impl.publish(SampleTemperature(celsius=celsius))
 
-    ctx = sub.snapshot()
-    assert ctx.get(_Temperature) == _Temperature(celsius=30.0)
-
-    await sub.stop()
+    assert await cached(subscription, SampleTemperature, SampleTemperature(celsius=30.0))
 
 
 @pytest.mark.asyncio
-async def test_context_subscription_stop_idempotent():
+async def test_context_subscription_stop_idempotent(kit, device_impl):
     """Calling stop() when no tasks are running does not raise."""
-    client = MagicMock()
-    sub = ContextSubscription(client)
+    sub = ContextSubscription(kit.entity(device_impl.entity))
     await sub.stop()  # no-op, should not raise

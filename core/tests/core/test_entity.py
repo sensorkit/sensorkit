@@ -6,9 +6,9 @@ import asyncio
 import pytest
 from pydantic import BaseModel
 
+from sensorkit.backend.event import Event
 from sensorkit.common.keyword import UnknownKeyword, declare_keyword
 from sensorkit.core.entity import EntityRef
-from sensorkit.backend.event import Event
 
 
 def test_entity_ref_unset_and_unresolved_behavior():

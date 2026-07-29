@@ -6,9 +6,9 @@ import contextlib
 import os
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 
 from sensorkit.api.declarative import Service, command_handler, declare_device
 from sensorkit.astro.common import RADecPointing, SitePosition
@@ -65,20 +65,97 @@ def _site():
     return SitePosition(latitude_degrees=33.0, longitude_degrees=-117.0, altitude_km=0.5)
 
 
-def _mock_impl():
-    """Return a mock ControllerImpl whose control_device() yields AsyncMock clients."""
-    impl = AsyncMock()
-    clients = {}
+SENSOR_COMMANDS = (
+    Init,
+    Deinit,
+    Stop,
+    OpenEnclosure,
+    CloseEnclosure,
+    OpenMirrorCover,
+    CloseMirrorCover,
+)
+"""Every command a Sensor issues while bringing its devices up and down."""
 
-    def _control_device(name, *, subscribe=None):
-        if name not in clients:
-            client = AsyncMock()
-            client.command = AsyncMock()
-            clients[name] = client
-        return clients[name]
 
-    impl.use_device = _control_device
-    return impl, clients
+class DeviceLog:
+    """Records the commands one device received.
+
+    Command types added to `reject` are recorded and then refused, standing in for hardware that
+    does not implement them.
+    """
+
+    def __init__(self):
+        self.commands = []
+        self.reject: set[type] = set()
+
+    async def handle(self, cmd):
+        self.commands.append(cmd)
+
+        if type(cmd) in self.reject:
+            raise RuntimeError(f"{type(cmd).__name__} unsupported")
+
+    def types(self) -> list[type]:
+        """The type of each command received, in order."""
+        return [type(cmd) for cmd in self.commands]
+
+    def count(self, command: type) -> int:
+        """How many commands of the given type were received."""
+        return self.types().count(command)
+
+
+def recording_device(name: str) -> tuple[declare_device, DeviceLog]:
+    """Declare a device that answers every sensor command by recording it."""
+    device = declare_device(name=name)
+    log = DeviceLog()
+
+    for command in SENSOR_COMMANDS:
+
+        async def handler(cmd, _log=log):
+            await _log.handle(cmd)
+
+        handler.__annotations__ = {"cmd": command}
+        handler.__name__ = f"handle_{name}_{command.__name__}"
+        command_handler(device)(handler)
+
+    return device, log
+
+
+class SensorStack:
+    """A running service whose devices record every command a Sensor sends them."""
+
+    DEVICES = ("mount", "camera", "dome", "cover")
+
+    def __init__(self, controller, logs: dict[str, DeviceLog]):
+        self.controller = controller
+        self.logs = logs
+
+    def sensor(self, policies: SensorPolicies | None = None, **devices) -> Sensor:
+        """Build a Sensor over the named subset of the running devices."""
+        return Sensor(self.controller, SensorDevices(**devices), policies or SensorPolicies())
+
+    def log(self, name: str) -> DeviceLog:
+        return self.logs[name]
+
+
+@pytest_asyncio.fixture
+async def sensor_stack():
+    svc = Service("test-sensor-devices", "0.1.0")
+    logs = {}
+
+    for name in SensorStack.DEVICES:
+        device, log = recording_device(name)
+        svc.add(device)
+        logs[name] = log
+
+    svc_task = await run_service(svc)
+    controller = await svc.context.register_controller("ctrl")
+
+    yield SensorStack(controller, logs)
+
+    await svc.context.shutdown()
+
+    with contextlib.suppress(asyncio.CancelledError):
+        await svc_task
 
 
 def _bypass_pointing_monitor(sc: SensorControl):
@@ -258,230 +335,210 @@ async def test_sensor_all_devices(service_context):
         mount="m", camera="c", focuser="f", rotator="r",
         filter_wheel="fw", mirror_cover="mc", dome="d",
     )
-    sensor = Sensor(impl, devices, SensorPolicies())
+    Sensor(impl, devices, SensorPolicies())
     assert len(impl.all_devices()) == 7
 
 
 @pytest.mark.asyncio
-async def test_sensor_init_mount():
-    impl, clients = _mock_impl()
-    sensor = Sensor(impl, SensorDevices(mount="m", camera="c"), SensorPolicies())
+async def test_sensor_init_mount(sensor_stack):
+    sensor = sensor_stack.sensor(mount="mount", camera="camera")
     await sensor.init_mount()
-    clients["m"].command.assert_awaited_once()
-    cmd = clients["m"].command.call_args[0][0]
-    assert isinstance(cmd, Init)
+
+    assert sensor_stack.log("mount").types() == [Init]
 
 
 @pytest.mark.asyncio
-async def test_sensor_deinit_mount():
-    impl, _ = _mock_impl()
-    sensor = Sensor(impl, SensorDevices(mount="m", camera="c"), SensorPolicies())
+async def test_sensor_deinit_mount(sensor_stack):
+    sensor = sensor_stack.sensor(mount="mount", camera="camera")
     await sensor.deinit_mount()
-    cmd = sensor.mount.command.call_args[0][0]
-    assert isinstance(cmd, Deinit)
+
+    assert sensor_stack.log("mount").types() == [Deinit]
 
 
 @pytest.mark.asyncio
-async def test_sensor_init_dome_present():
+async def test_sensor_init_dome_present(sensor_stack):
     """Sequential policy: Init fully completes before the aperture is opened."""
-    impl, _ = _mock_impl()
-    sensor = Sensor(impl, SensorDevices(mount="m", camera="c", dome="d"), SensorPolicies())
+    sensor = sensor_stack.sensor(mount="mount", camera="camera", dome="dome")
     await sensor.init_dome()
 
-    cmds = [call[0][0] for call in sensor.dome.command.call_args_list]
-    assert [type(c) for c in cmds] == [Init, OpenEnclosure]
+    assert sensor_stack.log("dome").types() == [Init, OpenEnclosure]
 
 
 @pytest.mark.asyncio
-async def test_sensor_init_dome_concurrent():
+async def test_sensor_init_dome_concurrent(sensor_stack):
     """Concurrent policy: both commands are issued, order unconstrained."""
-    impl, _ = _mock_impl()
-    sensor = Sensor(
-        impl,
-        SensorDevices(mount="m", camera="c", dome="d"),
+    sensor = sensor_stack.sensor(
         SensorPolicies(concurrent_dome_init_open=True),
+        mount="mount",
+        camera="camera",
+        dome="dome",
     )
     await sensor.init_dome()
 
-    cmds = [call[0][0] for call in sensor.dome.command.call_args_list]
-    assert {type(c) for c in cmds} == {Init, OpenEnclosure}
+    assert set(sensor_stack.log("dome").types()) == {Init, OpenEnclosure}
 
 
 @pytest.mark.asyncio
-async def test_sensor_init_dome_absent():
-    impl, _ = _mock_impl()
-    sensor = Sensor(impl, SensorDevices(mount="m", camera="c"), SensorPolicies())
+async def test_sensor_init_dome_absent(sensor_stack):
+    sensor = sensor_stack.sensor(mount="mount", camera="camera")
     await sensor.init_dome()  # should be a no-op
 
+    assert sensor_stack.log("dome").types() == []
+
 
 @pytest.mark.asyncio
-async def test_sensor_deinit_dome_present():
+async def test_sensor_deinit_dome_present(sensor_stack):
     """Stop is hoisted here so a module Deinit can never abort the close mid-flight."""
-    impl, _ = _mock_impl()
-    sensor = Sensor(impl, SensorDevices(mount="m", camera="c", dome="d"), SensorPolicies())
+    sensor = sensor_stack.sensor(mount="mount", camera="camera", dome="dome")
     await sensor.deinit_dome()
 
-    cmds = [call[0][0] for call in sensor.dome.command.call_args_list]
-    assert [type(c) for c in cmds] == [Stop, CloseEnclosure, Deinit]
+    assert sensor_stack.log("dome").types() == [Stop, CloseEnclosure, Deinit]
 
 
 @pytest.mark.asyncio
-async def test_sensor_deinit_dome_concurrent():
-    impl, _ = _mock_impl()
-    sensor = Sensor(
-        impl,
-        SensorDevices(mount="m", camera="c", dome="d"),
+async def test_sensor_deinit_dome_concurrent(sensor_stack):
+    sensor = sensor_stack.sensor(
         SensorPolicies(concurrent_dome_deinit_close=True),
+        mount="mount",
+        camera="camera",
+        dome="dome",
     )
     await sensor.deinit_dome()
 
-    cmds = [call[0][0] for call in sensor.dome.command.call_args_list]
-    assert type(cmds[0]) is Stop
-    assert {type(c) for c in cmds[1:]} == {CloseEnclosure, Deinit}
+    issued = sensor_stack.log("dome").types()
+    assert issued[0] is Stop
+    assert set(issued[1:]) == {CloseEnclosure, Deinit}
 
 
 @pytest.mark.asyncio
-async def test_sensor_deinit_dome_closes_despite_failed_stop():
+async def test_sensor_deinit_dome_closes_despite_failed_stop(sensor_stack):
     """A dome that rejects Stop must still be closed."""
-    impl, _ = _mock_impl()
-    sensor = Sensor(impl, SensorDevices(mount="m", camera="c", dome="d"), SensorPolicies())
+    sensor_stack.log("dome").reject.add(Stop)
 
-    async def _command(cmd):
-        if isinstance(cmd, Stop):
-            raise RuntimeError("stop unsupported")
-
-    sensor.dome.command.side_effect = _command
+    sensor = sensor_stack.sensor(mount="mount", camera="camera", dome="dome")
     await sensor.deinit_dome()
 
-    cmds = [call[0][0] for call in sensor.dome.command.call_args_list]
-    assert [type(c) for c in cmds] == [Stop, CloseEnclosure, Deinit]
+    assert sensor_stack.log("dome").types() == [Stop, CloseEnclosure, Deinit]
 
 
 @pytest.mark.asyncio
-async def test_sensor_deinit_dome_absent():
-    impl, _ = _mock_impl()
-    sensor = Sensor(impl, SensorDevices(mount="m", camera="c"), SensorPolicies())
+async def test_sensor_deinit_dome_absent(sensor_stack):
+    sensor = sensor_stack.sensor(mount="mount", camera="camera")
     await sensor.deinit_dome()  # should be a no-op
 
+    assert sensor_stack.log("dome").types() == []
+
 
 @pytest.mark.asyncio
-async def test_sensor_init_mirror_cover_present():
-    impl, _ = _mock_impl()
-    sensor = Sensor(impl, SensorDevices(mount="m", camera="c", mirror_cover="mc"), SensorPolicies())
+async def test_sensor_init_mirror_cover_present(sensor_stack):
+    sensor = sensor_stack.sensor(mount="mount", camera="camera", mirror_cover="cover")
     await sensor.init_mirror_cover()
-    cmd = sensor.mirror_cover.command.call_args[0][0]
-    assert isinstance(cmd, OpenMirrorCover)
+
+    assert sensor_stack.log("cover").types() == [OpenMirrorCover]
 
 
 @pytest.mark.asyncio
-async def test_sensor_init_mirror_cover_absent():
-    impl, _ = _mock_impl()
-    sensor = Sensor(impl, SensorDevices(mount="m", camera="c"), SensorPolicies())
+async def test_sensor_init_mirror_cover_absent(sensor_stack):
+    sensor = sensor_stack.sensor(mount="mount", camera="camera")
     await sensor.init_mirror_cover()  # should be a no-op
 
+    assert sensor_stack.log("cover").types() == []
+
 
 @pytest.mark.asyncio
-async def test_sensor_deinit_mirror_cover_present():
-    impl, _ = _mock_impl()
-    sensor = Sensor(impl, SensorDevices(mount="m", camera="c", mirror_cover="mc"), SensorPolicies())
+async def test_sensor_deinit_mirror_cover_present(sensor_stack):
+    sensor = sensor_stack.sensor(mount="mount", camera="camera", mirror_cover="cover")
     await sensor.deinit_mirror_cover()
-    cmd = sensor.mirror_cover.command.call_args[0][0]
-    assert isinstance(cmd, CloseMirrorCover)
+
+    assert sensor_stack.log("cover").types() == [CloseMirrorCover]
 
 
 @pytest.mark.asyncio
-async def test_sensor_stop_all_required_only():
-    impl, _ = _mock_impl()
-    sensor = Sensor(impl, SensorDevices(mount="m", camera="c"), SensorPolicies())
+async def test_sensor_stop_all_required_only(sensor_stack):
+    sensor = sensor_stack.sensor(mount="mount", camera="camera")
     await sensor.stop_all()
-    cmd = sensor.mount.command.call_args[0][0]
-    assert isinstance(cmd, Stop)
+
+    assert sensor_stack.log("mount").types() == [Stop]
 
 
 @pytest.mark.asyncio
-async def test_sensor_stop_all_with_optional():
-    impl, _ = _mock_impl()
-    sensor = Sensor(
-        impl,
-        SensorDevices(mount="m", camera="c", dome="d", mirror_cover="mc"),
-        SensorPolicies(),
+async def test_sensor_stop_all_with_optional(sensor_stack):
+    sensor = sensor_stack.sensor(
+        mount="mount", camera="camera", dome="dome", mirror_cover="cover"
     )
     await sensor.stop_all()
-    for dev in (sensor.mount, sensor.dome, sensor.mirror_cover):
-        cmd = dev.command.call_args[0][0]
-        assert isinstance(cmd, Stop)
+
+    for name in ("mount", "dome", "cover"):
+        assert sensor_stack.log(name).types() == [Stop]
 
 
 @pytest.mark.asyncio
-async def test_sensor_stop_all_suppresses_exceptions():
-    impl, _ = _mock_impl()
-    sensor = Sensor(
-        impl,
-        SensorDevices(mount="m", camera="c", dome="d"),
-        SensorPolicies(),
-    )
-    sensor.mount.command.side_effect = RuntimeError("mount error")
-    sensor.dome.command.side_effect = RuntimeError("dome error")
+async def test_sensor_stop_all_suppresses_exceptions(sensor_stack):
+    sensor_stack.log("mount").reject.add(Stop)
+    sensor_stack.log("dome").reject.add(Stop)
+
+    sensor = sensor_stack.sensor(mount="mount", camera="camera", dome="dome")
     # Should not raise
     await sensor.stop_all()
 
+    assert sensor_stack.log("dome").types() == [Stop]
+
 
 @pytest.mark.asyncio
-async def test_sensor_init_all_sequential():
+async def test_sensor_init_all_sequential(sensor_stack):
     """Default policies: dome → mount → mirror cover sequentially."""
-    impl, _ = _mock_impl()
-    policies = SensorPolicies(
-        concurrent_dome_and_mount_init=False,
-        concurrent_mount_and_mirror_cover_init=False,
-    )
-    sensor = Sensor(
-        impl,
-        SensorDevices(mount="m", camera="c", dome="d", mirror_cover="mc"),
-        policies,
+    sensor = sensor_stack.sensor(
+        SensorPolicies(
+            concurrent_dome_and_mount_init=False,
+            concurrent_mount_and_mirror_cover_init=False,
+        ),
+        mount="mount",
+        camera="camera",
+        dome="dome",
+        mirror_cover="cover",
     )
 
     async with asyncio.TaskGroup() as tg:
         await sensor.init_all(tg)
 
     # The dome takes both an Init and an OpenEnclosure.
-    assert sensor.dome.command.await_count == 2
-    assert sensor.mount.command.await_count == 1
-    assert sensor.mirror_cover.command.await_count == 1
+    assert sensor_stack.log("dome").types() == [Init, OpenEnclosure]
+    assert sensor_stack.log("mount").types() == [Init]
+    assert sensor_stack.log("cover").types() == [OpenMirrorCover]
 
 
 @pytest.mark.asyncio
-async def test_sensor_init_all_concurrent():
+async def test_sensor_init_all_concurrent(sensor_stack):
     """With concurrent policies all three init calls still complete."""
-    impl, _ = _mock_impl()
-    policies = SensorPolicies(
-        concurrent_dome_and_mount_init=True,
-        concurrent_mount_and_mirror_cover_init=True,
-    )
-    sensor = Sensor(
-        impl,
-        SensorDevices(mount="m", camera="c", dome="d", mirror_cover="mc"),
-        policies,
+    sensor = sensor_stack.sensor(
+        SensorPolicies(
+            concurrent_dome_and_mount_init=True,
+            concurrent_mount_and_mirror_cover_init=True,
+        ),
+        mount="mount",
+        camera="camera",
+        dome="dome",
+        mirror_cover="cover",
     )
 
     async with asyncio.TaskGroup() as tg:
         await sensor.init_all(tg)
 
     # The dome takes both an Init and an OpenEnclosure.
-    assert sensor.dome.command.await_count == 2
-    assert sensor.mount.command.await_count == 1
-    assert sensor.mirror_cover.command.await_count == 1
+    assert set(sensor_stack.log("dome").types()) == {Init, OpenEnclosure}
+    assert sensor_stack.log("mount").types() == [Init]
+    assert sensor_stack.log("cover").types() == [OpenMirrorCover]
 
 
 @pytest.mark.asyncio
-async def test_sensor_init_all_no_optional_devices():
+async def test_sensor_init_all_no_optional_devices(sensor_stack):
     """init_all with only mount+camera still inits the mount."""
-    impl, _ = _mock_impl()
-    sensor = Sensor(impl, SensorDevices(mount="m", camera="c"), SensorPolicies())
+    sensor = sensor_stack.sensor(mount="mount", camera="camera")
 
     async with asyncio.TaskGroup() as tg:
         await sensor.init_all(tg)
 
-    assert sensor.mount.command.await_count == 1
+    assert sensor_stack.log("mount").types() == [Init]
 
 
 @pytest.mark.asyncio

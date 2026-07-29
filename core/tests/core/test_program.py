@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from sensorkit.core.program import ProgramOffering, ProgramState, ProgramTaskingState
 from sensorkit.core.impl.program import ProgramImpl
+from sensorkit.core.program import ProgramOffering, ProgramState, ProgramTaskingState
 from sensorkit.core.task import CollectTask
 
 

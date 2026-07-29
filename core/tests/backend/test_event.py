@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
 import pytest
+import pytest_asyncio
 from pydantic import ValidationError
 
 from sensorkit.backend.base import KVError
@@ -23,9 +22,20 @@ class SampleEvent3(Event):
     flag: bool
 
 
-class MockState(EventSourcedState):
+class SampleState(EventSourcedState):
     event1: SampleEvent1
     event2: SampleEvent2
+
+
+@pytest.fixture
+def state() -> SampleState:
+    return SampleState(event1=SampleEvent1(value=1), event2=SampleEvent2(name="test"))
+
+
+@pytest_asyncio.fixture
+async def emitted(kit, entity_impl):
+    """A subscription to the entity's SampleEvent1 stream, opened before anything is emitted."""
+    return await kit.entity(entity_impl.entity).monitor_event(SampleEvent1)
 
 
 @pytest.mark.asyncio
@@ -92,10 +102,10 @@ async def test_event_multiplexer_all_events():
 
 @pytest.mark.asyncio
 async def test_event_sourced_state_inheritance():
-    class SubMockState(MockState):
+    class SubSampleState(SampleState):
         event3: SampleEvent3
 
-    state = SubMockState(
+    state = SubSampleState(
         event1=SampleEvent1(value=1),
         event2=SampleEvent2(name="test"),
         event3=SampleEvent3(flag=True),
@@ -109,14 +119,12 @@ async def test_event_sourced_state_inheritance():
     assert state._event_fields[SampleEvent3] == "event3"
 
     # Ensure that the base class fields are not affected by the subclass
-    assert SampleEvent3 not in MockState._event_fields
-    assert MockState._event_fields is not SubMockState._event_fields
+    assert SampleEvent3 not in SampleState._event_fields
+    assert SampleState._event_fields is not SubSampleState._event_fields
 
 
 @pytest.mark.asyncio
-async def test_event_sourced_state_introspection():
-    state = MockState(event1=SampleEvent1(value=1), event2=SampleEvent2(name="test"))
-
+async def test_event_sourced_state_introspection(state):
     # Check that introspection happened and fields are correctly mapped
     assert SampleEvent1 in state._event_fields
     assert state._event_fields[SampleEvent1] == "event1"
@@ -139,67 +147,54 @@ async def test_event_sourced_state_duplicate_error():
 
 
 @pytest.mark.asyncio
-async def test_event_sourced_state_update():
-    state = MockState(event1=SampleEvent1(value=1), event2=SampleEvent2(name="test"))
-
-    entity = AsyncMock()
-
+async def test_event_sourced_state_update(state, entity_impl, emitted):
     new_event = SampleEvent1(value=2)
-    await state.update(entity, new_event)
+    await state.update(entity_impl, new_event)
 
     assert state.event1 == new_event
-    entity.emit_event.assert_awaited_once_with(new_event)
-    entity.kv_put_model.assert_awaited_once_with(state)
+    assert await anext(emitted) == new_event
+    assert await entity_impl.kv_get_model(SampleState) == state
 
 
 @pytest.mark.asyncio
-async def test_event_sourced_state_update_no_publish():
-    state = MockState(event1=SampleEvent1(value=1), event2=SampleEvent2(name="test"))
-
-    entity = AsyncMock()
-
+async def test_event_sourced_state_update_no_publish(state, entity_impl, emitted):
     new_event = SampleEvent1(value=2)
-    await state.update(entity, new_event, publish_state=False)
+    await state.update(entity_impl, new_event, publish_state=False)
 
     assert state.event1 == new_event
-    entity.emit_event.assert_awaited_once_with(new_event)
-    entity.kv_put_model.assert_not_called()
+    assert await anext(emitted) == new_event
+
+    # The event is the source of truth; nothing was written to KV alongside it.
+    with pytest.raises(KVError):
+        await entity_impl.kv_get_model(SampleState)
 
 
 @pytest.mark.asyncio
-async def test_event_sourced_state_update_invalid_event():
-    state = MockState(event1=SampleEvent1(value=1), event2=SampleEvent2(name="test"))
-
-    entity = AsyncMock()
-
+async def test_event_sourced_state_update_invalid_event(state, entity_impl):
     class AnotherUnknownEvent(Event):
         pass
 
-    # This should fail because AnotherUnknownEvent is not in MockState's fields
+    # This should fail because AnotherUnknownEvent is not in SampleState's fields
     with pytest.raises(KeyError):
-        await state.update(entity, AnotherUnknownEvent())
+        await state.update(entity_impl, AnotherUnknownEvent())
 
 
 @pytest.mark.asyncio
-async def test_event_sourced_state_recover():
-    state = MockState(event1=SampleEvent1(value=1), event2=SampleEvent2(name="test"))
+async def test_event_sourced_state_recover(state, entity_impl):
+    await entity_impl.kv_put_model(state)
 
-    entity = AsyncMock()
-    entity.kv_get_model.return_value = state
-
-    recovered = await MockState.recover(entity)
+    recovered = await SampleState.recover(entity_impl)
 
     assert recovered.event1 == state.event1
     assert recovered.event2 == state.event2
-    entity.kv_get_model.assert_awaited_once_with(MockState)
 
-    entity.reset_mock()
-    entity.kv_get_model.side_effect = KVError("Key not found")
 
-    new = await MockState.recover_or_init(
-        entity, event1=SampleEvent1(value=2), event2=SampleEvent2(name="init")
+@pytest.mark.asyncio
+async def test_event_sourced_state_recover_or_init(entity_impl):
+    new = await SampleState.recover_or_init(
+        entity_impl, event1=SampleEvent1(value=2), event2=SampleEvent2(name="init")
     )
 
     assert new.event1.value == 2
     assert new.event2.name == "init"
-    entity.kv_put_model.assert_awaited_once_with(new)
+    assert await entity_impl.kv_get_model(SampleState) == new
