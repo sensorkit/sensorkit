@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 
+from .fakes import FakeSlackClient
+from sensorkit.common.condition import BecomesCondition, ChangesCondition
 from sensorkit.slack.models import (
     ChannelConfig,
     NotificationRule,
@@ -14,24 +14,15 @@ from sensorkit.slack.models import (
     SlackConfig,
     StateWatch,
 )
-from sensorkit.common.condition import BecomesCondition, ChangesCondition
 
 
 @pytest.fixture(autouse=True)
-def _mock_sk_entity(monkeypatch):
-    """Mock sk.entity() globally for all tests."""
+def _entity_context(entity_impl):
+    """Run every Slack test inside a live entity context.
 
-    mock_entity = MagicMock()
-    mock_entity.publish = AsyncMock()
-
-    import sensorkit.slack.notifier as notifier_mod
-
-    monkeypatch.setattr(notifier_mod, "sk", MagicMock())
-    notifier_mod.sk.entity.return_value = mock_entity
-    notifier_mod.sk.declare_entity = lambda cls: cls
-    notifier_mod.sk.declare_keyword = lambda cls: cls
-    notifier_mod.sk.on_attach = lambda fn: fn
-    notifier_mod.sk.on_detach = lambda fn: fn
+    A live service enters the entity context around every lifecycle hook, so the `sk.entity()`
+    calls the notifier makes when publishing its status resolve without any special-casing here.
+    """
 
 
 @pytest.fixture
@@ -89,11 +80,7 @@ def sample_config() -> SlackConfig:
 
 
 @pytest.fixture
-def mock_slack_client():
-    """A mock SlackClient."""
+def slack_client() -> FakeSlackClient:
+    """A SlackClient stand-in that records what was posted instead of calling Slack."""
 
-    client = AsyncMock()
-    client.post_message = AsyncMock(return_value=("C0123456789", "1234567890.123456"))
-    client.add_reaction = AsyncMock(return_value=True)
-    client.close = AsyncMock()
-    return client
+    return FakeSlackClient()

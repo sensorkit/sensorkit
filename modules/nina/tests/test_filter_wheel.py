@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
-from conftest import MockNinaClient
 
+from .fakes import FakeNinaClient
 from sensorkit.nina.filter_wheel import NinaFilterWheelConfig, NinaFilterWheelState
 from sensorkit.std import Connect, Disconnect
 from sensorkit.std.optics import SetFilter
@@ -9,16 +9,18 @@ from sensorkit.std.optics import SetFilter
 
 @pytest.fixture
 def client():
-    return MockNinaClient(info_response={
-        "Connected": True,
-        "Position": 0,
-        "SelectedFilter": {"Name": "Red", "Position": 0},
-        "Filters": [
-            {"Name": "Red", "Position": 0},
-            {"Name": "Green", "Position": 1},
-            {"Name": "Blue", "Position": 2},
-        ],
-    })
+    return FakeNinaClient(
+        info_response={
+            "Connected": True,
+            "Position": 0,
+            "SelectedFilter": {"Name": "Red", "Position": 0},
+            "Filters": [
+                {"Name": "Red", "Position": 0},
+                {"Name": "Green", "Position": 1},
+                {"Name": "Blue", "Position": 2},
+            ],
+        }
+    )
 
 
 @pytest.fixture

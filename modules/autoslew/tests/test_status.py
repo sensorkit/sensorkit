@@ -9,16 +9,14 @@ from sensorkit.autoslew.telescope import jnow_to_icrs
 
 
 @pytest.mark.asyncio
-async def test_status_publishes_icrf_converted_from_jnow(telescope, _mock_sk_device):
+async def test_status_publishes_icrf_converted_from_jnow(telescope, recorder):
+    published = await recorder()
     telescope.telescope._properties["RightAscension"] = 6.0  # JNow hours
     telescope.telescope._properties["Declination"] = 20.0  # JNow deg
 
     await telescope._publish_telescope_status()
 
-    published = [c.args[0] for c in _mock_sk_device.publish.call_args_list]
-    radec = [p for p in published if isinstance(p, RADecPointing)]
-    assert radec, "expected a RADecPointing publish"
-    r = radec[-1]
+    r = await published.wait_for(RADecPointing)
 
     # Explicit ICRF, converted from the JNow reads (never the implicit default).
     assert r.reference_frame == ReferenceFrame.ICRF

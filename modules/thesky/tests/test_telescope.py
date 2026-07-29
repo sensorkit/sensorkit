@@ -142,9 +142,7 @@ async def test_telescope_stop(telescope):
     [(-1, False), (0, True), (1, False)],  # -1 = IsSlewComplete unsupported by mount
 )
 @pytest.mark.asyncio
-async def test_status_publish_slew_state(
-    telescope, _mock_sk_device, slew_complete, expected_slewing
-):
+async def test_status_publish_slew_state(telescope, recorder, slew_complete, expected_slewing):
     # _location is only set in entity_init; None skips the AxisRates math we aren't testing.
     telescope._location = None
 
@@ -153,10 +151,7 @@ async def test_status_publish_slew_state(
         return f"1,10,0,20,0,45,180,{slew_complete},0,-1"
 
     telescope.execute = execute
+    published = await recorder()
     await telescope._publish_telescope_status()
 
-    published = [
-        c.args[0] for c in _mock_sk_device.publish.call_args_list
-        if isinstance(c.args[0], Slewing)
-    ]
-    assert published and published[-1].is_slewing is expected_slewing
+    assert (await published.wait_for(Slewing)).is_slewing is expected_slewing

@@ -2,7 +2,6 @@
 """Tests for the Alpaca base device class."""
 
 import asyncio
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -12,6 +11,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceState,
     DeviceConnectionError,
 )
+from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 
 
 class TestAlpacaDeviceConfig:
@@ -92,12 +92,9 @@ class TestAlpacaDevice:
 
         from alpaca.exceptions import NotImplementedException
 
-        mock_dev = MagicMock()
-        type(mock_dev).SomeProperty = property(
-            lambda self: (_ for _ in ()).throw(NotImplementedException("not impl"))
-        )
+        sdk_device = FakeAlpacaSDKDevice(SomeProperty=NotImplementedException("not impl"))
 
-        result = await device.get(mock_dev, "SomeProperty", "default_val")
+        result = await device.get(sdk_device, "SomeProperty", "default_val")
         assert result == "default_val"
 
     @pytest.mark.asyncio
@@ -105,10 +102,9 @@ class TestAlpacaDevice:
         config = AlpacaDeviceConfig(host="localhost")
         device = AlpacaDevice(config)
 
-        mock_dev = MagicMock()
-        mock_dev.Temperature = 25.5
+        sdk_device = FakeAlpacaSDKDevice(Temperature=25.5)
 
-        result = await device.get(mock_dev, "Temperature", None)
+        result = await device.get(sdk_device, "Temperature", None)
         assert result == 25.5
 
     @pytest.mark.asyncio
@@ -116,9 +112,9 @@ class TestAlpacaDevice:
         config = AlpacaDeviceConfig(host="localhost")
         device = AlpacaDevice(config)
 
-        mock_dev = MagicMock()
-        await device.put(mock_dev, "BinX", 2)
-        assert mock_dev.BinX == 2
+        sdk_device = FakeAlpacaSDKDevice()
+        await device.put(sdk_device, "BinX", 2)
+        assert sdk_device.BinX == 2
 
     @pytest.mark.asyncio
     async def test_start_stop_status_loop(self):

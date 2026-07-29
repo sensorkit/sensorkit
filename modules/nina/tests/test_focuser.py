@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
-from conftest import MockNinaClient
 
+from .fakes import FakeNinaClient
 from sensorkit.nina.focuser import NinaFocuserConfig, NinaFocuserState
 from sensorkit.std import Connect, Disconnect, Stop
 from sensorkit.std.optics import ChangeFocusPosition
@@ -9,14 +9,16 @@ from sensorkit.std.optics import ChangeFocusPosition
 
 @pytest.fixture
 def client():
-    return MockNinaClient(info_response={
-        "Connected": True,
-        "Position": 5000,
-        "IsMoving": False,
-        "Temperature": 20.0,
-        "MaxStep": 50000,
-        "StepSize": 1.0,
-    })
+    return FakeNinaClient(
+        info_response={
+            "Connected": True,
+            "Position": 5000,
+            "IsMoving": False,
+            "Temperature": 20.0,
+            "MaxStep": 50000,
+            "StepSize": 1.0,
+        }
+    )
 
 
 @pytest.fixture

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
-from conftest import MockNinaClient
 
+from .fakes import FakeNinaClient
 from sensorkit.nina.rotator import NinaRotatorConfig, NinaRotatorState
 from sensorkit.std import Connect, Disconnect, Stop
 from sensorkit.std.instrument import ChangeRotatorPosition
@@ -9,13 +9,15 @@ from sensorkit.std.instrument import ChangeRotatorPosition
 
 @pytest.fixture
 def client():
-    return MockNinaClient(info_response={
-        "Connected": True,
-        "MechanicalPosition": 0.0,
-        "Position": 0.0,
-        "IsMoving": False,
-        "StepSize": 1.0,
-    })
+    return FakeNinaClient(
+        info_response={
+            "Connected": True,
+            "MechanicalPosition": 0.0,
+            "Position": 0.0,
+            "IsMoving": False,
+            "StepSize": 1.0,
+        }
+    )
 
 
 @pytest.fixture

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
-from conftest import MockNinaClient
 
+from .fakes import FakeNinaClient
 from sensorkit.astro.coords import Equatorial
 from sensorkit.astro.target import ICRSTarget
 from sensorkit.nina.mount import NinaMountConfig, NinaMountState
@@ -10,19 +10,21 @@ from sensorkit.std import FollowTarget
 
 @pytest.fixture
 def client():
-    return MockNinaClient(info_response={
-        "Connected": True,
-        "Slewing": False,
-        "Tracking": True,
-        "AtHome": False,
-        "AtPark": False,
-        "RightAscension": 6.0,
-        "Declination": 20.0,
-        "Altitude": 45.0,
-        "Azimuth": 180.0,
-        "RightAscensionRate": 0.0,
-        "DeclinationRate": 0.0,
-    })
+    return FakeNinaClient(
+        info_response={
+            "Connected": True,
+            "Slewing": False,
+            "Tracking": True,
+            "AtHome": False,
+            "AtPark": False,
+            "RightAscension": 6.0,
+            "Declination": 20.0,
+            "Altitude": 45.0,
+            "Azimuth": 180.0,
+            "RightAscensionRate": 0.0,
+            "DeclinationRate": 0.0,
+        }
+    )
 
 
 @pytest.fixture

@@ -2,12 +2,12 @@
 """Tests for Alpaca rotator device."""
 
 import pytest
-from conftest import MockAlpacaSDKDevice
 
 from sensorkit.alpaca.rotator import (
     AlpacaRotatorConfig,
     AlpacaRotatorState,
 )
+from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 from sensorkit.std import Connect, Disconnect
 
 
@@ -17,7 +17,7 @@ def rotator():
     r = config.create_device()
     r.state = AlpacaRotatorState()
     r.device_name = "Rotator"
-    mock = MockAlpacaSDKDevice(
+    device = FakeAlpacaSDKDevice(
         Connected=True,
         Connecting=False,
         MechanicalPosition=90.0,
@@ -27,7 +27,7 @@ def rotator():
         CanReverse=False,
         StepSize=0.1,
     )
-    r.rotator = mock
+    r.rotator = device
     r.device_connected = True
     r.rotator_position = 90.0
     r._can_reverse = False

@@ -6,10 +6,11 @@ by the alpaca module's tests; only the ASA extension is exercised here.
 """
 
 import pytest
-from conftest import MockAutoslewSDKDevice
 
 from sensorkit.autoslew.focuser import AutoslewFocuserConfig, AutoslewFocuserState
 from sensorkit.std import Home
+
+from .fakes import FakeAutoslewSDKDevice
 
 
 @pytest.fixture
@@ -17,8 +18,8 @@ def focuser():
     config = AutoslewFocuserConfig(host="localhost", timeout=5.0, status_frequency=0.05)
     d = config.create_device()
     d.state = AutoslewFocuserState()
-    d.focuser = MockAutoslewSDKDevice(Connected=True, Position=1000.0, IsMoving=False)
-    d.telescope = MockAutoslewSDKDevice(Connected=True)  # ASA backbone
+    d.focuser = FakeAutoslewSDKDevice(Connected=True, Position=1000.0, IsMoving=False)
+    d.telescope = FakeAutoslewSDKDevice(Connected=True)  # ASA backbone
     d.device_connected = True
     d.focuser_position = 1000.0
     return d

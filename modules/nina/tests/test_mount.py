@@ -1,29 +1,31 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
-from conftest import MockNinaClient
 
+from .fakes import FakeNinaClient
 from sensorkit.nina.mount import NinaMountConfig, NinaMountState
 from sensorkit.std import Connect, Disconnect, Home, MoveToPark, Stop
 
 
 @pytest.fixture
 def client():
-    return MockNinaClient(info_response={
-        "Connected": True,
-        "Slewing": False,
-        "Tracking": False,
-        "AtHome": True,
-        "AtPark": False,
-        "SiteLatitude": 32.0,
-        "SiteLongitude": -110.0,
-        "SiteElevation": 700.0,
-        "RightAscension": 12.0,
-        "Declination": 30.0,
-        "Altitude": 45.0,
-        "Azimuth": 180.0,
-        "RightAscensionRate": 0.0,
-        "DeclinationRate": 0.0,
-    })
+    return FakeNinaClient(
+        info_response={
+            "Connected": True,
+            "Slewing": False,
+            "Tracking": False,
+            "AtHome": True,
+            "AtPark": False,
+            "SiteLatitude": 32.0,
+            "SiteLongitude": -110.0,
+            "SiteElevation": 700.0,
+            "RightAscension": 12.0,
+            "Declination": 30.0,
+            "Altitude": 45.0,
+            "Azimuth": 180.0,
+            "RightAscensionRate": 0.0,
+            "DeclinationRate": 0.0,
+        }
+    )
 
 
 @pytest.fixture

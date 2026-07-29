@@ -2,22 +2,24 @@
 """Tests for Alpaca telescope device (lifecycle only)."""
 
 import pytest
-from conftest import MockAlpacaSDKDevice
 
 from sensorkit.alpaca.telescope import (
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
 )
+from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 from sensorkit.std import Connect, Disconnect, Home, MoveToPark, Stop
 
 
 @pytest.fixture
 def telescope():
-    config = AlpacaTelescopeConfig(host="localhost", timeout=5.0, status_frequency=0.1)
+    config = AlpacaTelescopeConfig(
+        host="localhost", timeout=5.0, status_frequency=0.1, status_frequency_slow=0.05
+    )
     t = config.create_device()
     t.state = AlpacaTelescopeState()
     t.device_name = "Telescope"
-    mock = MockAlpacaSDKDevice(
+    device = FakeAlpacaSDKDevice(
         Connected=True,
         Connecting=False,
         Slewing=False,
@@ -51,7 +53,7 @@ def telescope():
         CanSyncAltAz=False,
         TrackingRates=[],
     )
-    t.telescope = mock
+    t.telescope = device
     t.device_connected = True
     t._can_slew = True
     t._can_slew_async = True

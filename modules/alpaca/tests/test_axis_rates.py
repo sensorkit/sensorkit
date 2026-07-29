@@ -15,13 +15,13 @@ still moves the alt/az axes at the diurnal rate.
 import astropy.units as u
 import pytest
 from astropy.coordinates import EarthLocation
-from conftest import MockAlpacaSDKDevice
 
 from sensorkit.alpaca.telescope import (
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
     radec_rates_to_altaz_rates,
 )
+from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 from sensorkit.std import AxisRates
 
 _SIDEREAL_RATE_DEG_S = 15.04107 / 3600.0
@@ -39,7 +39,7 @@ def telescope():
     t.state = AlpacaTelescopeState()
     t.device_name = "Telescope"
     # A southeast, rising pointing (matches a real near-GEO rate-track frame).
-    t.telescope = MockAlpacaSDKDevice(
+    t.telescope = FakeAlpacaSDKDevice(
         Connected=True,
         RightAscension=16.337573641588563,  # hours
         Declination=-5.1555390419601235,
@@ -59,23 +59,16 @@ def telescope():
     return t
 
 
-def _published_axis_rates(mock_device) -> AxisRates:
-    for call in mock_device.publish.call_args_list:
-        (arg,) = call.args
-        if isinstance(arg, AxisRates):
-            return arg
-    raise AssertionError("no AxisRates published")
-
-
 @pytest.mark.asyncio
-async def test_near_geo_rate_track_altaz_rates_near_zero(telescope, _mock_sk_device):
+async def test_near_geo_rate_track_altaz_rates_near_zero(telescope, recorder):
     """A near-GEO rate track (RA offset == sidereal, Dec offset 0) is nearly
     fixed in alt/az -> alt/az axis rates ~ 0."""
+    published = await recorder()
     telescope.telescope.RightAscensionRate = _SIDEREAL_RA_RATE
     telescope.telescope.DeclinationRate = 0.0
 
     await telescope._publish_telescope_status()
-    rates = _published_axis_rates(_mock_sk_device)
+    rates = await published.wait_for(AxisRates)
 
     # Inertial RA/Dec rates pass through unchanged (used by sdasim, FITS *_RATE).
     assert rates.right_ascension.velocity == pytest.approx(_SIDEREAL_RATE_DEG_S, rel=1e-6)
@@ -86,13 +79,14 @@ async def test_near_geo_rate_track_altaz_rates_near_zero(telescope, _mock_sk_dev
 
 
 @pytest.mark.asyncio
-async def test_altaz_rates_fed_inertial_offset(telescope, _mock_sk_device, monkeypatch):
+async def test_altaz_rates_fed_inertial_offset(telescope, recorder, monkeypatch):
     """The alt/az axis rates are the obstime-advancing conversion fed the ICRF
     offset directly (NOT offset - sidereal). Uses a non-GEO rate track with
     distinct nonzero offsets and a pinned time so the expected values are
     deterministic."""
     from astropy.time import Time
 
+    published = await recorder()
     fixed = Time("2026-06-21T05:56:53.826", scale="utc")
 
     class _FixedTime:
@@ -108,7 +102,7 @@ async def test_altaz_rates_fed_inertial_offset(telescope, _mock_sk_device, monke
     telescope.telescope.DeclinationRate = dec_rate_arcsec
 
     await telescope._publish_telescope_status()
-    rates = _published_axis_rates(_mock_sk_device)
+    rates = await published.wait_for(AxisRates)
 
     ra_offset = ra_rate_ascom * 15.0 / 3600.0
     dec_offset = dec_rate_arcsec / 3600.0

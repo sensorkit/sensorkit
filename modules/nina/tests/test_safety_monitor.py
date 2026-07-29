@@ -1,18 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
-from conftest import MockNinaClient
 
-import sensorkit.api as sk
+from .fakes import FakeNinaClient
 from sensorkit.nina.safety_monitor import NinaSafetyMonitorConfig, NinaSafetyMonitorState
 from sensorkit.std import Connect, Disconnect
 
 
 @pytest.fixture
 def client():
-    return MockNinaClient(info_response={
-        "Connected": True,
-        "IsSafe": True,
-    })
+    return FakeNinaClient(
+        info_response={
+            "Connected": True,
+            "IsSafe": True,
+        }
+    )
 
 
 @pytest.fixture

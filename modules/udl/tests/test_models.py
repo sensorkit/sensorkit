@@ -22,18 +22,22 @@ class TestResponseStatus:
 class TestUDLReferenceFrame:
     def test_j2000_to_gcrf(self):
         from sensorkit.astro.common import ReferenceFrame
+
         assert UDLReferenceFrame.J2000.to_sensorkit_frame() == ReferenceFrame.GCRF
 
     def test_icrf_to_gcrf(self):
         from sensorkit.astro.common import ReferenceFrame
+
         assert UDLReferenceFrame.ICRF.to_sensorkit_frame() == ReferenceFrame.GCRF
 
     def test_teme_to_teme(self):
         from sensorkit.astro.common import ReferenceFrame
+
         assert UDLReferenceFrame.TEME.to_sensorkit_frame() == ReferenceFrame.TEME
 
     def test_efg_tdr_to_itrf(self):
         from sensorkit.astro.common import ReferenceFrame
+
         assert UDLReferenceFrame.EFG_TDR.to_sensorkit_frame() == ReferenceFrame.ITRF
 
 
@@ -118,9 +122,7 @@ class TestPollFilterConfig:
         assert config.poll_filter == "id_sensor"
 
     def test_orig_sensor_id_accepted(self):
-        config = UDLAPIConfig(
-            id_sensor="SENSOR-01", source="DAO", poll_filter="orig_sensor_id"
-        )
+        config = UDLAPIConfig(id_sensor="SENSOR-01", source="DAO", poll_filter="orig_sensor_id")
         assert config.poll_filter == "orig_sensor_id"
 
     def test_invalid_filter_rejected(self):

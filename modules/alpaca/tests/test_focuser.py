@@ -2,12 +2,12 @@
 """Tests for Alpaca focuser device."""
 
 import pytest
-from conftest import MockAlpacaSDKDevice
 
 from sensorkit.alpaca.focuser import (
     AlpacaFocuserConfig,
     AlpacaFocuserState,
 )
+from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 from sensorkit.std import Connect, Disconnect
 
 
@@ -17,7 +17,7 @@ def focuser():
     f = config.create_device()
     f.state = AlpacaFocuserState()
     f.device_name = "Focuser"
-    mock = MockAlpacaSDKDevice(
+    device = FakeAlpacaSDKDevice(
         Connected=True,
         Connecting=False,
         Position=5000,
@@ -30,7 +30,7 @@ def focuser():
         TempComp=False,
         Temperature=20.0,
     )
-    f.focuser = mock
+    f.focuser = device
     f.device_connected = True
     f.focuser_position = 5000.0
     f._absolute = True

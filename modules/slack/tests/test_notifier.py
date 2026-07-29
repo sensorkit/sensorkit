@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from sensorkit.slack.models import (
@@ -14,11 +12,10 @@ from sensorkit.slack.notifier import SlackNotifier, _cache_key, _safe_durable_na
 
 
 @pytest.fixture
-def notifier(sample_config, mock_slack_client):
-    """Create a SlackNotifier with mocked dependencies."""
+def notifier(sample_config, slack_client, kit):
+    """A notifier posting to the recording Slack client, over the fake backend."""
 
-    sk_client = MagicMock()
-    return SlackNotifier(sample_config, mock_slack_client, sk_client)
+    return SlackNotifier(sample_config, slack_client, kit)
 
 
 class TestSeverityRouting:
@@ -34,25 +31,23 @@ class TestSeverityRouting:
 
     def test_summary_channel_excluded(self, notifier):
         # Summary channels should not appear in any severity routing
-        for sev, channels in notifier._severity_channels.items():
+        for channels in notifier._severity_channels.values():
             channel_names = [ch.channel for ch in channels]
             assert "#summary" not in channel_names
 
     @pytest.mark.asyncio
-    async def test_route_message_posts_to_matching_channels(self, notifier, mock_slack_client):
+    async def test_route_message_posts_to_matching_channels(self, notifier, slack_client):
         await notifier._route_message(
             SeverityLevel.CRITICAL,
             [{"type": "section", "text": {"type": "mrkdwn", "text": "test"}}],
             "fallback",
         )
 
-        # Should post to #alerts (the only channel with critical severity)
-        mock_slack_client.post_message.assert_awaited_once()
-        call_kwargs = mock_slack_client.post_message.call_args.kwargs
-        assert call_kwargs["channel"] == "#alerts"
+        # #alerts is the only channel with critical severity
+        assert slack_client.channels() == ["#alerts"]
 
     @pytest.mark.asyncio
-    async def test_route_message_increments_count(self, notifier, mock_slack_client):
+    async def test_route_message_increments_count(self, notifier):
         assert notifier._messages_sent == 0
 
         await notifier._route_message(
@@ -93,25 +88,19 @@ class TestDeduplication:
 
 class TestAlertLifecycle:
     @pytest.mark.asyncio
-    async def test_resolved_posts_thread_reply(self, notifier, mock_slack_client):
+    async def test_resolved_posts_thread_reply(self, notifier, slack_client):
         # Simulate an active alert
         alert_key = "test_key"
         notifier._active_alerts[alert_key] = [("#alerts", "111.222", SeverityLevel.CRITICAL)]
 
         await notifier._route_resolved(alert_key, "Device reconnected")
 
-        # Should post a thread reply
-        post_calls = mock_slack_client.post_message.call_args_list
-        assert len(post_calls) == 1
-        assert post_calls[0].kwargs["thread_ts"] == "111.222"
-
-        # Should add checkmark reaction
-        mock_slack_client.add_reaction.assert_awaited_once_with(
-            "#alerts", "111.222", "white_check_mark"
-        )
+        assert len(slack_client.posts) == 1
+        assert slack_client.posts[0]["thread_ts"] == "111.222"
+        assert slack_client.reactions == [("#alerts", "111.222", "white_check_mark")]
 
     @pytest.mark.asyncio
-    async def test_resolved_clears_active_alerts(self, notifier, mock_slack_client):
+    async def test_resolved_clears_active_alerts(self, notifier):
         alert_key = "test_key"
         notifier._active_alerts[alert_key] = [("#alerts", "111.222", SeverityLevel.CRITICAL)]
 
@@ -122,31 +111,25 @@ class TestAlertLifecycle:
 
 class TestStateEvaluation:
     @pytest.mark.asyncio
-    async def test_first_value_does_not_notify(self, notifier, mock_slack_client):
+    async def test_first_value_does_not_notify(self, notifier, slack_client):
         rule = notifier.config.rules[2]  # weather_change
         watch = rule.state_watches[0]
 
-        await notifier._evaluate_state_watch(
-            rule, "safety1", watch, {"is_safe": True}
-        )
+        await notifier._evaluate_state_watch(rule, "safety1", watch, {"is_safe": True})
 
-        mock_slack_client.post_message.assert_not_awaited()
+        assert slack_client.posts == []
 
     @pytest.mark.asyncio
-    async def test_change_triggers_notification(self, notifier, mock_slack_client):
+    async def test_change_triggers_notification(self, notifier, slack_client):
         rule = notifier.config.rules[2]  # weather_change (ChangesCondition)
         watch = rule.state_watches[0]
 
         # First value — cached
-        await notifier._evaluate_state_watch(
-            rule, "safety1", watch, {"is_safe": True}
-        )
+        await notifier._evaluate_state_watch(rule, "safety1", watch, {"is_safe": True})
         # Second value — changed
-        await notifier._evaluate_state_watch(
-            rule, "safety1", watch, {"is_safe": False}
-        )
+        await notifier._evaluate_state_watch(rule, "safety1", watch, {"is_safe": False})
 
-        mock_slack_client.post_message.assert_awaited()
+        assert slack_client.channels() == ["#alerts"]
 
 
 class TestHelpers:

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 from pydantic import ValidationError
-from tests_common import make_result
 
+from .fakes import make_result
 from sensorkit.senpai.models import Detection, SenpaiConfig
 
 

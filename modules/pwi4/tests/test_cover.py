@@ -2,13 +2,14 @@
 """Test PWI4 mirror cover device."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import MockPWI4Client
 
 from sensorkit.pwi4.cover import PWI4Cover, PWI4CoverConfig
 from sensorkit.pwi4.device import DeviceConnectionError
+from sensorkit.std import Opened, Stop
+
+from .fakes import FakePWI4Client
 
 
 class TestPWI4CoverConfig:
@@ -19,7 +20,7 @@ class TestPWI4CoverConfig:
 
     def test_create_device(self):
         config = PWI4CoverConfig()
-        client = MockPWI4Client()
+        client = FakePWI4Client()
         device = config.create_device(client)
         assert isinstance(device, PWI4Cover)
 
@@ -27,7 +28,7 @@ class TestPWI4CoverConfig:
 class TestPWI4Cover:
     @pytest.mark.asyncio
     async def test_init_connects(self):
-        client = MockPWI4Client()
+        client = FakePWI4Client()
         config = PWI4CoverConfig()
         cover = PWI4Cover(config=config, client=client)
 
@@ -39,12 +40,13 @@ class TestPWI4Cover:
     @pytest.mark.asyncio
     async def test_open(self):
         # cover_open polls until the cover reports "Open"; reflect that end-state.
-        client = MockPWI4Client(status_overrides={"mirrorcover.overall_state_name": "Open"})
+        client = FakePWI4Client(status_overrides={"mirrorcover.overall_state_name": "Open"})
         config = PWI4CoverConfig()
         cover = PWI4Cover(config=config, client=client)
         cover.device_connected = True
 
         from sensorkit.std.optics import OpenMirrorCover
+
         await cover.cover_open(OpenMirrorCover())
 
         reqs = client.find_requests("/mirrorcover/open")
@@ -52,12 +54,13 @@ class TestPWI4Cover:
 
     @pytest.mark.asyncio
     async def test_close(self):
-        client = MockPWI4Client()
+        client = FakePWI4Client()
         config = PWI4CoverConfig()
         cover = PWI4Cover(config=config, client=client)
         cover.device_connected = True
 
         from sensorkit.std.optics import CloseMirrorCover
+
         await cover.cover_close(CloseMirrorCover())
 
         reqs = client.find_requests("/mirrorcover/close")
@@ -65,30 +68,31 @@ class TestPWI4Cover:
 
     @pytest.mark.asyncio
     async def test_open_requires_connected(self):
-        client = MockPWI4Client()
+        client = FakePWI4Client()
         config = PWI4CoverConfig()
         cover = PWI4Cover(config=config, client=client)
         cover.device_connected = False
 
         from sensorkit.std.optics import OpenMirrorCover
+
         with pytest.raises(DeviceConnectionError):
             await cover.cover_open(OpenMirrorCover())
 
     @pytest.mark.asyncio
     async def test_stop(self):
-        client = MockPWI4Client()
+        client = FakePWI4Client()
         config = PWI4CoverConfig()
         cover = PWI4Cover(config=config, client=client)
         cover.device_connected = True
 
-        await cover.cover_stop(MagicMock())
+        await cover.cover_stop(Stop())
 
         reqs = client.find_requests("/mirrorcover/stop")
         assert len(reqs) == 1
 
     @pytest.mark.asyncio
     async def test_deinit_stops_and_closes(self):
-        client = MockPWI4Client()
+        client = FakePWI4Client()
         config = PWI4CoverConfig()
         cover = PWI4Cover(config=config, client=client)
         cover.device_connected = True
@@ -102,31 +106,17 @@ class TestPWI4Cover:
         assert len(close_reqs) == 1
 
     @pytest.mark.asyncio
-    async def test_status_publishes_open_state(self):
-        client = MockPWI4Client()
+    async def test_status_publishes_open_state(self, recorder):
+        client = FakePWI4Client()
         client.set_status(**{"mirrorcover.overall_state_name": "Open"})
         config = PWI4CoverConfig(status_frequency=0.05)
         cover = PWI4Cover(config=config, client=client)
+        published = await recorder()
 
-        with patch("sensorkit.pwi4.cover.sk") as mock_sk:
-            mock_device = MagicMock()
-            mock_device.publish = AsyncMock()
-            mock_sk.device.return_value = mock_device
+        task = asyncio.create_task(cover.status_publish())
 
-            from sensorkit.std import Connected, Opened
-            mock_sk.Connected = Connected
-            mock_sk.Opened = Opened
-
-            task = asyncio.create_task(cover.status_publish())
-            await asyncio.sleep(0.15)
-            task.cancel()
-
+        try:
+            assert (await published.wait_for(Opened)).is_open is True
             assert cover.device_connected is True
-
-            # Find the Opened publish call
-            opened_calls = [
-                c for c in mock_device.publish.call_args_list
-                if isinstance(c.args[0], Opened)
-            ]
-            assert len(opened_calls) >= 1
-            assert opened_calls[0].args[0].is_open is True
+        finally:
+            task.cancel()

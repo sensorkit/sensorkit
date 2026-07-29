@@ -2,12 +2,12 @@
 """Tests for Alpaca filter wheel device."""
 
 import pytest
-from conftest import MockAlpacaSDKDevice
 
 from sensorkit.alpaca.filter_wheel import (
     AlpacaFilterWheelConfig,
     AlpacaFilterWheelState,
 )
+from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 from sensorkit.std import Connect, Disconnect
 
 
@@ -17,13 +17,13 @@ def filter_wheel():
     fw = config.create_device()
     fw.state = AlpacaFilterWheelState()
     fw.device_name = "FilterWheel"
-    mock = MockAlpacaSDKDevice(
+    device = FakeAlpacaSDKDevice(
         Connected=True,
         Connecting=False,
         Position=0,
         Names=["Red", "Green", "Blue", "Luminance"],
     )
-    fw.filter_wheel = mock
+    fw.filter_wheel = device
     fw.device_connected = True
     fw.filter_wheel_position = 0
     fw._filter_names = ["Red", "Green", "Blue", "Luminance"]

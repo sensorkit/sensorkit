@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+"""Shared test data for the Otto suite."""
 
-import pytest
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
 
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
+from sensorkit.otto.models import CollectConfig, OttoConfig, PublishConfig, TaskConfig
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 
 ISS_TLE = TLE(
@@ -15,6 +17,21 @@ ISS_TLE = TLE(
 )
 
 
+def make_config(**overrides) -> OttoConfig:
+    """Create an OttoConfig with sensible defaults.
+
+    `TaskConfig` requires at least one target source, so the default names a satellite; tests
+    that task a different source override `task` wholesale or edit the returned config.
+    """
+    defaults = dict(
+        controller="testcontroller",
+        task=TaskConfig(tles=["25544"]),
+        collect=CollectConfig(track_mode="rate"),
+        publish=PublishConfig(),
+    )
+    return OttoConfig(**(defaults | overrides))
+
+
 def make_task(
     end_time=None,
     integration_time=10.0,
@@ -22,7 +39,7 @@ def make_task(
     filter_name=None,
     binning=1,
     target=None,
-):
+) -> StandardCollectTask:
     """Create a StandardCollectTask with sensible defaults."""
     return StandardCollectTask(
         target=target or TLETarget(tle=ISS_TLE),
@@ -35,13 +52,3 @@ def make_task(
             binning_y=binning,
         ),
     )
-
-
-@pytest.fixture
-def mock_program_binding():
-    """Mock for the program binding used by TaskQueue."""
-    mock = MagicMock()
-    mock.clear_offers = MagicMock()
-    mock.add_offer = MagicMock()
-    mock.publish_offers = AsyncMock()
-    return mock

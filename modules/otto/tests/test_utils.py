@@ -25,16 +25,21 @@ class TestObjectListManager:
 
     @pytest.fixture
     def manager(self, state):
-        save_callback = pytest.importorskip("unittest.mock").AsyncMock()
-        return ObjectListManager(state, save_callback), save_callback
+        """The manager, paired with the list of states its save callback was handed."""
+        saved: list[OttoState] = []
+
+        async def save():
+            saved.append(state.model_copy(deep=True))
+
+        return ObjectListManager(state, save), saved
 
     @pytest.mark.asyncio
     async def test_move_whitelist_to_graylist(self, state, manager):
-        mgr, save = manager
+        mgr, saved = manager
         await mgr.move_object("25544", ListType.WHITELIST, ListType.GRAYLIST)
         assert "25544" not in state.whitelist
         assert "25544" in state.graylist
-        save.assert_awaited()
+        assert saved[-1].graylist == ["25544"]
 
     @pytest.mark.asyncio
     async def test_move_whitelist_to_blacklist(self, state, manager):
@@ -91,14 +96,15 @@ class TestDitherOffset:
             on_sky = math.hypot(delta_ra, delta_dec) * 3600
             assert 0 <= on_sky <= 500
 
-    def test_ra_is_deprojected_by_cos_dec(self):
+    def test_ra_is_deprojected_by_cos_dec(self, monkeypatch):
         """At high declination a given on-sky offset needs a larger RA step."""
-        from unittest.mock import patch
+        # Each call draws a magnitude then a position angle; pin both to the full offset
+        # due east so only the cos(dec) de-projection varies.
+        draws = iter([500.0, 0.0, 500.0, 0.0])
+        monkeypatch.setattr("sensorkit.otto.utils.random.uniform", lambda *_: next(draws))
 
-        with patch("sensorkit.otto.utils.random.uniform", side_effect=[500.0, 0.0]):
-            equator_ra, _ = dither_offset(dec=0.0, dither_arcsec=500)
-        with patch("sensorkit.otto.utils.random.uniform", side_effect=[500.0, 0.0]):
-            polar_ra, _ = dither_offset(dec=60.0, dither_arcsec=500)
+        equator_ra, _ = dither_offset(dec=0.0, dither_arcsec=500)
+        polar_ra, _ = dither_offset(dec=60.0, dither_arcsec=500)
 
         # cos(60°) = 0.5, so the RA offset should double
         assert polar_ra == pytest.approx(equator_ra * 2, rel=1e-6)

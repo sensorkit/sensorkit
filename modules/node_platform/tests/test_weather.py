@@ -2,14 +2,16 @@
 """Tests for Node Platform weather device."""
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
 
 import pytest
-from conftest import (
-    MockNodePlatformAPI,
+
+from .fakes import (
+    FakeNodePlatformAPI,
+    SystemMetric,
+    SystemMetricNames,
+    SystemMetrics,
     make_weather_station_status,
 )
-
 from sensorkit.node_platform.weather import (
     NodePlatformWeather,
     NodePlatformWeatherConfig,
@@ -19,7 +21,7 @@ from sensorkit.node_platform.weather import (
 
 @pytest.fixture
 def api():
-    return MockNodePlatformAPI()
+    return FakeNodePlatformAPI()
 
 
 @pytest.fixture
@@ -55,9 +57,7 @@ class TestWeatherOperationMode:
     @pytest.mark.asyncio
     async def test_assisted_mode_set_on_init(self, api):
         """Weather entity_init should set assisted mode when configured."""
-        metric_names = MagicMock()
-        metric_names.metric_names = []
-        api.set_response("v1_get_system_metric_names", metric_names)
+        api.set_response("v1_get_system_metric_names", SystemMetricNames())
         api.set_response("v1_enable_assisted_operation", None)
 
         config = NodePlatformWeatherConfig(
@@ -72,7 +72,7 @@ class TestWeatherOperationMode:
 
         # Simulate the init steps (excluding status loop and wait)
         w._weather_metric_names = []
-        names_resp = await api.call("v1_get_system_metric_names")
+        await api.call("v1_get_system_metric_names")
         await api.call("v1_enable_assisted_operation")
 
         assert len(api.find_calls("v1_enable_assisted_operation")) == 1
@@ -92,19 +92,16 @@ class TestWeatherStatus:
     @pytest.mark.asyncio
     async def test_build_weather_keywords(self):
         """_build_weather_keywords should return BasicWeather from metrics."""
-        api = MockNodePlatformAPI()
+        api = FakeNodePlatformAPI()
         ws_status = make_weather_station_status(connected=True)
         api.set_response("v1_get_weather_station_status", ws_status)
 
-        from conftest import SimpleNamespace
-
-        metric = SimpleNamespace(
+        metric = SystemMetric(
             name="node_controller.weather_monitor.air_temperature",
             value=20.0,
             measured_at=datetime.now(UTC),
         )
-        metrics_resp = SimpleNamespace(metrics=[metric])
-        api.set_response("v1_get_system_metrics", metrics_resp)
+        api.set_response("v1_get_system_metrics", SystemMetrics(metrics=[metric]))
 
         config = NodePlatformWeatherConfig(device_type="weather", host="localhost")
         w = NodePlatformWeather(config)
@@ -121,7 +118,7 @@ class TestWeatherStatus:
     @pytest.mark.asyncio
     async def test_build_weather_keywords_disconnected(self):
         """_build_weather_keywords should return None when weather station disconnected."""
-        api = MockNodePlatformAPI()
+        api = FakeNodePlatformAPI()
         ws_status = make_weather_station_status(connected=False)
         api.set_response("v1_get_weather_station_status", ws_status)
 

@@ -12,16 +12,16 @@ from sensorkit.slack.summary import SummaryAccumulator
 
 
 @pytest.fixture
-def accumulator(mock_slack_client):
-    """Create a SummaryAccumulator with test config."""
+def accumulator(slack_client, kit):
+    """An accumulator posting to the recording Slack client, over the fake backend."""
 
     ch = ChannelConfig(
         channel="#summary",
         post_at="06:00",
         timezone="UTC",
     )
-    sk_client = None  # Not needed for unit tests of accumulation logic
-    return SummaryAccumulator(mock_slack_client, ch, sk_client)
+
+    return SummaryAccumulator(slack_client, ch, kit)
 
 
 class TestAccumulation:
@@ -77,14 +77,13 @@ class TestScheduling:
 
 class TestPostSummary:
     @pytest.mark.asyncio
-    async def test_posts_to_channel(self, accumulator, mock_slack_client):
+    async def test_posts_to_channel(self, accumulator, slack_client):
         accumulator._observation_counts["attempted"] = 5
         accumulator._observation_counts["completed"] = 4
         accumulator._observation_counts["failed"] = 1
 
         await accumulator._post_summary()
 
-        mock_slack_client.post_message.assert_awaited_once()
-        call_kwargs = mock_slack_client.post_message.call_args.kwargs
-        assert call_kwargs["channel"] == "#summary"
-        assert "blocks" in call_kwargs
+        assert len(slack_client.posts) == 1
+        assert slack_client.posts[0]["channel"] == "#summary"
+        assert slack_client.posts[0]["blocks"]

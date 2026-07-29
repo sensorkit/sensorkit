@@ -68,9 +68,7 @@ def make_frame(image, *, detections=(), streak_candidates=(), fit=True, exposure
         detections=SimpleNamespace(detections=list(detections)) if detections else None,
         streak_candidates=list(streak_candidates),
         photometry_summary=None,
-        frame_metadata=(
-            SimpleNamespace(exposure_time_seconds=exposure) if exposure else None
-        ),
+        frame_metadata=(SimpleNamespace(exposure_time_seconds=exposure) if exposure else None),
         seeing=SimpleNamespace(pixel_fwhm=3.2, pixel_fwhm_stdev=0.4),
         streak=SimpleNamespace(fwhm=4.2),
     )
@@ -185,9 +183,7 @@ class TestProcessFrames:
     def test_failed_run_still_returns_results(self, monkeypatch):
         """A collect with no solved frames returns unsolved results without raising."""
         images = {"a.fits": make_image(file_path="a.fits")}
-        results = run_pipeline(
-            monkeypatch, [inp("a.fits", task_id="t9")], images, completed=False
-        )
+        results = run_pipeline(monkeypatch, [inp("a.fits", task_id="t9")], images, completed=False)
         assert [r.file_path for r in results] == ["a.fits"]
         assert results[0].solved is False
         assert results[0].track_mode == "UNKNOWN"

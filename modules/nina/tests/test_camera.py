@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
-from conftest import MockNinaClient
 
 import sensorkit.api as sk
+from .fakes import FakeNinaClient
 from sensorkit.nina.camera import NinaCameraConfig, NinaCameraState
 from sensorkit.std import Connect, Disconnect, TemperatureUnit
 from sensorkit.std.instrument import (
@@ -15,14 +15,16 @@ from sensorkit.std.instrument import (
 
 @pytest.fixture
 def client():
-    return MockNinaClient(info_response={
-        "Connected": True,
-        "CameraXSize": 4096,
-        "CameraYSize": 4096,
-        "BinX": 1,
-        "BinY": 1,
-        "CCDTemperature": -10.0,
-    })
+    return FakeNinaClient(
+        info_response={
+            "Connected": True,
+            "CameraXSize": 4096,
+            "CameraYSize": 4096,
+            "BinX": 1,
+            "BinY": 1,
+            "CCDTemperature": -10.0,
+        }
+    )
 
 
 @pytest.fixture
@@ -56,9 +58,7 @@ class TestCameraCommands:
     @pytest.mark.asyncio
     async def test_set_binning(self, client, camera):
         client.set_info(BinX=2, BinY=2)
-        await camera.camera_set_binning(
-            ConfigureCameraSensor(binning=Binning(x=2, y=2))
-        )
+        await camera.camera_set_binning(ConfigureCameraSensor(binning=Binning(x=2, y=2)))
         reqs = client.find_requests("/equipment/camera/set-binning")
         assert len(reqs) == 1
         assert reqs[0][1]["binning"] == "2x2"

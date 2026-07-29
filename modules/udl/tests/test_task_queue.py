@@ -1,71 +1,69 @@
 # SPDX-License-Identifier: Apache-2.0
-import pytest
-from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+"""Tests for the UDL CollectRequest queue and the offer windows it publishes."""
 
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from .fakes import tle_request
+from sensorkit.core.program import ProgramOffering
 from sensorkit.udl.task_queue import TaskQueue
 
-from conftest import MockCollectRequest
-
 
 @pytest.fixture
-def binding():
-    mock = MagicMock()
-    mock.clear_offers = MagicMock()
-    mock.add_offer = MagicMock()
-    mock.publish_offers = AsyncMock()
-    return mock
-
-
-@pytest.fixture
-def queue(binding):
-    return TaskQueue(binding)
+def queue(program_impl):
+    return TaskQueue(program_impl)
 
 
 class TestTaskQueuePush:
     @pytest.mark.asyncio
     async def test_push_single(self, queue):
-        request = MockCollectRequest.with_tle()
-        await queue.push_task(request)
+        await queue.push_task(tle_request())
         assert len(queue) == 1
 
     @pytest.mark.asyncio
     async def test_push_sorted_by_start_time(self, queue):
         now = datetime.now(UTC)
 
-        r1 = MockCollectRequest.with_tle(
+        later = tle_request(
             id="later",
             start_time=now + timedelta(minutes=10),
             end_time=now + timedelta(minutes=20),
         )
-        r2 = MockCollectRequest.with_tle(
+        sooner = tle_request(
             id="sooner",
             start_time=now + timedelta(minutes=1),
             end_time=now + timedelta(minutes=11),
         )
 
-        await queue.push_task(r1)
-        await queue.push_task(r2)
+        await queue.push_task(later)
+        await queue.push_task(sooner)
 
         tasks = list(queue.iter())
         assert tasks[0].id == "sooner"
         assert tasks[1].id == "later"
 
     @pytest.mark.asyncio
-    async def test_push_updates_offers(self, queue, binding):
-        request = MockCollectRequest.with_tle()
+    async def test_push_updates_offers(self, queue, program_impl, recorder):
+        published = await recorder()
+        request = tle_request()
+
         await queue.push_task(request)
 
-        binding.clear_offers.assert_called()
-        binding.add_offer.assert_called_once()
-        binding.publish_offers.assert_awaited()
+        (offer,) = program_impl.get_offers()
+        assert (offer.begin, offer.end) == (request.start_time, request.end_time)
+
+        # The request id rides along as interval data locally, but is not part of the published
+        # window, so compare the bounds.
+        offering = await published.wait_for(ProgramOffering)
+        (window,) = offering.offer_windows
+        assert (window.begin, window.end) == (offer.begin, offer.end)
 
 
 class TestTaskQueuePop:
     @pytest.mark.asyncio
     async def test_pop_returns_task(self, queue):
-        request = MockCollectRequest.with_tle()
-        await queue.push_task(request)
+        await queue.push_task(tle_request())
 
         result = await queue.pop_task()
         assert result is not None
@@ -74,21 +72,17 @@ class TestTaskQueuePop:
 
     @pytest.mark.asyncio
     async def test_pop_empty_returns_none(self, queue):
-        result = await queue.pop_task()
-        assert result is None
+        assert await queue.pop_task() is None
 
     @pytest.mark.asyncio
     async def test_pop_removes_expired(self, queue):
-        expired = MockCollectRequest.with_tle(
+        now = datetime.now(UTC)
+        expired = tle_request(
             id="expired",
-            start_time=datetime.now(UTC) - timedelta(hours=2),
-            end_time=datetime.now(UTC) - timedelta(hours=1),
+            start_time=now - timedelta(hours=2),
+            end_time=now - timedelta(hours=1),
         )
-        valid = MockCollectRequest.with_tle(
-            id="valid",
-            start_time=datetime.now(UTC),
-            end_time=datetime.now(UTC) + timedelta(hours=1),
-        )
+        valid = tle_request(id="valid", start_time=now, end_time=now + timedelta(hours=1))
 
         await queue.push_task(expired)
         await queue.push_task(valid)
@@ -100,30 +94,24 @@ class TestTaskQueuePop:
 class TestTaskQueueRemove:
     @pytest.mark.asyncio
     async def test_remove_existing(self, queue):
-        request = MockCollectRequest.with_tle(id="to-remove")
-        await queue.push_task(request)
+        await queue.push_task(tle_request(id="to-remove"))
 
-        removed = await queue.remove_task("to-remove")
-        assert removed is True
+        assert await queue.remove_task("to-remove") is True
         assert len(queue) == 0
 
     @pytest.mark.asyncio
     async def test_remove_nonexistent(self, queue):
-        removed = await queue.remove_task("nonexistent")
-        assert removed is False
+        assert await queue.remove_task("nonexistent") is False
 
 
 class TestTaskQueuePeek:
     @pytest.mark.asyncio
     async def test_peek_does_not_remove(self, queue):
-        request = MockCollectRequest.with_tle()
-        await queue.push_task(request)
+        await queue.push_task(tle_request())
 
-        result = await queue.peek_task()
-        assert result is not None
+        assert await queue.peek_task() is not None
         assert len(queue) == 1
 
     @pytest.mark.asyncio
     async def test_peek_empty(self, queue):
-        result = await queue.peek_task()
-        assert result is None
+        assert await queue.peek_task() is None

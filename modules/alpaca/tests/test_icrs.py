@@ -4,12 +4,12 @@
 import astropy.units as u
 import pytest
 from astropy.coordinates import EarthLocation
-from conftest import MockAlpacaSDKDevice
 
 from sensorkit.alpaca.telescope import (
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
 )
+from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 from sensorkit.astro.coords import Geodetic
 from sensorkit.std import FollowTarget
 
@@ -20,7 +20,7 @@ def telescope():
     t = config.create_device()
     t.state = AlpacaTelescopeState()
     t.device_name = "Telescope"
-    mock = MockAlpacaSDKDevice(
+    device = FakeAlpacaSDKDevice(
         Connected=True,
         Connecting=False,
         Slewing=False,
@@ -56,7 +56,7 @@ def telescope():
         SideOfPier=-1,
         SiderealTime=0.0,
     )
-    t.telescope = mock
+    t.telescope = device
     t.device_connected = True
     t._can_slew = True
     t._can_slew_async = True
@@ -98,7 +98,7 @@ async def test_telescope_follow_icrs(telescope):
     from sensorkit.astro.coords import Equatorial
     from sensorkit.astro.target import ICRSTarget
 
-    # The mock SlewToCoordinatesAsync is a no-op, Slewing is already False,
+    # The fake's SlewToCoordinatesAsync is a no-op, Slewing is already False,
     # so the wait loop exits immediately.
     await telescope.telescope_follow_target(
         FollowTarget(target=ICRSTarget(coords=Equatorial(ra=90.0, dec=20.0)))

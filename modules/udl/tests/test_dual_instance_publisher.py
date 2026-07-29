@@ -12,11 +12,11 @@ Instance URLs default to localhost:30080 (A) and localhost:31080 (B) and can
 be overridden with UDL_A_BASE_URL / UDL_B_BASE_URL.
 """
 
+import asyncio
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -24,6 +24,7 @@ import pytest_asyncio
 from unifieddatalibrary import AsyncUnifieddatalibrary, omit
 from unifieddatalibrary.types import CollectRequestFull
 
+from . import fakes
 from sensorkit.astro.common import SitePosition
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileInfo
@@ -36,6 +37,7 @@ from sensorkit.udl.models import (
 )
 from sensorkit.udl.program import UDLProgram
 from sensorkit.udl.publishers import SkyImageryPublisher
+from sensorkit.udl.task_queue import TaskQueue
 
 UDL_A_BASE_URL = os.getenv("UDL_A_BASE_URL", "http://localhost:30080")
 UDL_B_BASE_URL = os.getenv("UDL_B_BASE_URL", "http://localhost:31080")
@@ -70,13 +72,7 @@ async def get_skyimagery_from_instance(base_url: str, id_sensor: str) -> list[di
             params={"idSensor": id_sensor, "expStartTime": EPOCH_FILTER},
         )
         if resp.status_code == 200:
-            content = resp.json()
-            print(
-                f"Query {base_url}/udl/skyimagery for idSensor={id_sensor}: "
-                f"{len(content)} results"
-            )
-            return content
-        print(f"Query failed with status {resp.status_code}: {resp.text}")
+            return resp.json()
         return []
 
 
@@ -90,61 +86,8 @@ async def get_collectresponses_from_instance(
             params={"idRequest": id_request, "createdAt": EPOCH_FILTER},
         )
         if resp.status_code == 200:
-            content = resp.json()
-            print(
-                f"Query {base_url}/udl/collectresponse for idRequest={id_request}: "
-                f"{len(content)} results"
-            )
-            return content
-        print(f"Query failed with status {resp.status_code}: {resp.text}")
+            return resp.json()
         return []
-
-
-# ── Data-graph / queue stand-ins ──
-
-
-class _MultiFrameBinding:
-    """Stands in for the bound sk program: provides data_graph() -> app_sink()."""
-
-    def __init__(self, context: dict[str, Any], num_frames: int = 3) -> None:
-        self.context = context
-        self.frames = [
-            (Context({**self.context, "frame_num": i}), f"frame{i}_data".encode("utf-8"))
-            for i in range(num_frames)
-        ]
-
-    async def data_graph(self):
-        return _MultiFrameGraph(self.frames)
-
-
-class _MultiFrameGraph:
-    def __init__(self, frames: list[tuple[dict[str, Any], bytes]]):
-        self._frames = frames
-
-    def app_sink(self):
-        return _MultiFrameSink(self._frames)
-
-
-class _MultiFrameSink:
-    def __init__(self, frames: list[tuple[dict[str, Any], bytes]]):
-        self._frames = frames
-
-    async def consume(self):
-        for context, data in self._frames:
-            yield context, data
-
-
-class _StubQueue:
-    """Minimal TaskQueue stand-in for polling tests (no offer windows)."""
-
-    def __init__(self) -> None:
-        self.pushed: list[CollectRequestFull] = []
-
-    async def push_task(self, request: CollectRequestFull) -> None:
-        self.pushed.append(request)
-
-    def iter(self):
-        return iter(self.pushed)
 
 
 # ── Program builders ──
@@ -152,21 +95,17 @@ class _StubQueue:
 
 def make_collect_request(id_sensor: str, num_frames: int = 3) -> CollectRequestFull:
     """CollectRequest as the program would have received it from polling."""
-    return CollectRequestFull.model_validate(
-        {
-            "id": str(uuid.uuid1()),
-            "classificationMarking": "U",
-            "dataMode": "TEST",
-            "source": TEST_SOURCE,
-            "type": "DIRECTED_SEARCH",
-            "startTime": datetime.now(UTC).isoformat(),
-            "endTime": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
-            "origSensorId": id_sensor,
-            "idSensor": id_sensor,
-            "satNo": 51850,
-            "numFrames": num_frames,
-            "integrationTime": 1500,
-        }
+    return fakes.make_collect_request(
+        id=str(uuid.uuid1()),
+        source=TEST_SOURCE,
+        id_sensor=id_sensor,
+        orig_sensor_id=id_sensor,
+        orig_object_id=None,
+        sat_no=51850,
+        end_time=datetime.now(UTC) + timedelta(minutes=5),
+        integration_time=1500,
+        num_frames=num_frames,
+        task_id=None,
     )
 
 
@@ -174,7 +113,7 @@ def make_program(
     base_url: str,
     id_sensor: str,
     collect_request: CollectRequestFull,
-    binding: _MultiFrameBinding,
+    program_impl,
     upload_base_url: str | None = None,
 ) -> UDLProgram:
     """
@@ -191,11 +130,7 @@ def make_program(
             base_url=base_url,
             id_sensor=id_sensor,
             source=TEST_SOURCE,
-            upload=(
-                UDLEndpointConfig(base_url=upload_base_url)
-                if upload_base_url
-                else None
-            ),
+            upload=(UDLEndpointConfig(base_url=upload_base_url) if upload_base_url else None),
         ),
         publish=PublishConfig(sky_imagery=SkyImageryPublishConfig()),
     )
@@ -226,16 +161,46 @@ def make_program(
         altitude_km=2.0,
     )
     program.tasks = {collect_request.id: collect_request}
-    program.program = binding  # _publish_loop only needs data_graph()
-    program.queue = _StubQueue()
+    program.program = program_impl
+    program.queue = TaskQueue(program_impl)
     program._imagery = SkyImageryPublisher(program)
     return program
 
 
-async def _close_clients(program: UDLProgram) -> None:
+async def publish_frames(
+    program: UDLProgram,
+    graph,
+    context: Context,
+    num_frames: int,
+    timeout: float = 120.0,
+) -> None:
+    """Run the program's publish loop over `num_frames` frames and wait for it to drain them.
+
+    The loop follows the graph sink for as long as the program lives and so never returns on its
+    own; it runs as a task until every frame has been handled.
+    """
+    source = graph.app_source()
+    loop = asyncio.create_task(program._publish_loop())
+
+    try:
+        for frame_num in range(num_frames):
+            source.produce(
+                Context({**context, "frame_num": frame_num}),
+                f"frame{frame_num}_data".encode(),
+            )
+
+        async with asyncio.timeout(timeout):
+            while program.frames_seen < num_frames:
+                await asyncio.sleep(0.05)
+    finally:
+        loop.cancel()
+
+
+async def close_clients(program: UDLProgram) -> None:
     """Close a program's SDK client(s) (the single-endpoint case aliases them)."""
     if program.upload_client is not program.client:
         await program.upload_client.close()
+
     await program.client.close()
 
 
@@ -343,39 +308,32 @@ async def publisher_program(
     request: pytest.FixtureRequest,
     id_sensor: str,
     collect_request: CollectRequestFull,
-    publisher_context: dict[str, Any],
     udl_a_base_url: str,
     udl_b_base_url: str,
+    program_impl,
 ):
-    """A UDLProgram preloaded with one task and a finite data graph, ready to publish.
+    """A UDLProgram preloaded with one task, ready to publish.
 
-    Indirect params (a dict, all keys optional):
-      split:      route SkyImagery to instance B via api.upload (default False)
-      num_frames: frames the data graph emits (default 1)
-
-    Closes the SDK client(s) on teardown.
+    Indirect param `split` routes SkyImagery to instance B via api.upload; it defaults to the
+    single-endpoint configuration. Closes the SDK client(s) on teardown.
     """
     params: dict[str, Any] = getattr(request, "param", {})
-    split = params.get("split", False)
-    num_frames = params.get("num_frames", 1)
 
     program = make_program(
         base_url=udl_a_base_url,
         id_sensor=id_sensor,
         collect_request=collect_request,
-        binding=_MultiFrameBinding(context=publisher_context, num_frames=num_frames),
-        upload_base_url=udl_b_base_url if split else None,
+        program_impl=program_impl,
+        upload_base_url=udl_b_base_url if params.get("split") else None,
     )
     try:
         yield program
     finally:
-        await _close_clients(program)
+        await close_clients(program)
 
 
 @pytest_asyncio.fixture
-async def seeded_collect_request(
-    id_sensor: str, udl_a_base_url: str
-) -> CollectRequestFull:
+async def seeded_collect_request(id_sensor: str, udl_a_base_url: str) -> CollectRequestFull:
     """A CollectRequest tasked into instance A for the poller to discover.
 
     Cleaned up by the id_sensor fixture (it deletes CollectRequests by origSensorId).
@@ -385,21 +343,13 @@ async def seeded_collect_request(
     async with httpx.AsyncClient(base_url=udl_a_base_url, timeout=30.0) as client:
         resp = await client.post("/udl/collectrequest", json=payload)
         assert resp.status_code == 200, f"Failed to seed CollectRequest: {resp.text}"
+
     return seeded
 
 
-@pytest_asyncio.fixture
-async def polling_program(
-    seeded_collect_request: CollectRequestFull,
-    id_sensor: str,
-    udl_a_base_url: str,
-    udl_b_base_url: str,
-):
-    """Split-mode program that must DISCOVER its task by polling instance A.
-
-    tasks start empty — the seeded CollectRequest is waiting in instance A — so
-    the test exercises the real poll path. Closes SDK client(s) on teardown.
-    """
+@pytest.fixture
+def polling_context(seeded_collect_request: CollectRequestFull) -> Context:
+    """Context emitted by the data graph for the polled task's single frame."""
     context = Context(
         {
             "task_id": seeded_collect_request.id,
@@ -409,32 +359,47 @@ async def polling_program(
         }
     )
     context.set(FileInfo(path="polled_frame.fits"))
+    return context
+
+
+@pytest_asyncio.fixture
+async def polling_program(
+    seeded_collect_request: CollectRequestFull,
+    id_sensor: str,
+    udl_a_base_url: str,
+    udl_b_base_url: str,
+    program_impl,
+):
+    """Split-mode program that must DISCOVER its task by polling instance A.
+
+    tasks start empty — the seeded CollectRequest is waiting in instance A — so
+    the test exercises the real poll path. Closes SDK client(s) on teardown.
+    """
     program = make_program(
         base_url=udl_a_base_url,
         id_sensor=id_sensor,
         collect_request=seeded_collect_request,
-        binding=_MultiFrameBinding(context=context, num_frames=1),
+        program_impl=program_impl,
         upload_base_url=udl_b_base_url,
     )
     program.tasks = {}  # poller must discover the task, not find it preloaded
+
     try:
         yield program
     finally:
-        await _close_clients(program)
+        await close_clients(program)
 
 
-@pytest.fixture
-def config(
-    _mock_sk_program,
+@pytest_asyncio.fixture
+async def config(
+    program_impl,
     monkeypatch: pytest.MonkeyPatch,
     udl_a_base_url: str,
 ) -> UDLConfig:
-    """No-certs, no-username/password UDLConfig wired into the mocked sk.program().
+    """No-certs, no-username/password UDLConfig, stored where program_init() reads it.
 
-    Clears the credential env vars and points env_file at a nonexistent path so
-    the program resolves to unauthenticated mode, and makes the mocked
-    sk.program().kv_get_model(UDLConfig) return this config (other models raise,
-    mimicking "no saved state"). monkeypatch restores the environment on teardown.
+    Clears the credential env vars and points env_file at a nonexistent path so the program
+    resolves to unauthenticated mode. monkeypatch restores the environment on teardown.
     """
     monkeypatch.delenv("UDL_USERNAME", raising=False)
     monkeypatch.delenv("UDL_PASSWORD", raising=False)
@@ -448,13 +413,8 @@ def config(
             env_file="/nonexistent/.env",
         ),
     )
+    await program_impl.kv_put_model(config)
 
-    async def _kv_get_model(model):
-        if model is UDLConfig:
-            return config
-        raise Exception("no saved state")
-
-    _mock_sk_program.kv_get_model = AsyncMock(side_effect=_kv_get_model)
     return config
 
 
@@ -468,6 +428,7 @@ async def program(config: UDLConfig):
     """
     program = UDLProgram()
     await program.program_init()
+
     try:
         yield program
     finally:
@@ -478,9 +439,11 @@ async def program(config: UDLConfig):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("publisher_program", [{"split": False, "num_frames": 1}], indirect=True)
+@pytest.mark.parametrize("publisher_program", [{"split": False}], indirect=True)
 async def test_single_endpoint_upload_no_split(
     publisher_program: UDLProgram,
+    program_data_graph,
+    publisher_context: Context,
     collect_request: CollectRequestFull,
     id_sensor: str,
     udl_a_base_url: str,
@@ -496,7 +459,7 @@ async def test_single_endpoint_upload_no_split(
     assert publisher_program.upload_client is publisher_program.client, (
         "Without api.upload the upload client should alias the primary client"
     )
-    await publisher_program._publish_loop()
+    await publish_frames(publisher_program, program_data_graph, publisher_context, 1)
 
     # Assert: SkyImagery exists in instance A
     imagery_a = await get_skyimagery_from_instance(udl_a_base_url, id_sensor)
@@ -517,9 +480,11 @@ async def test_single_endpoint_upload_no_split(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("publisher_program", [{"split": True, "num_frames": 1}], indirect=True)
+@pytest.mark.parametrize("publisher_program", [{"split": True}], indirect=True)
 async def test_split_uploads_imagery_to_b_only(
     publisher_program: UDLProgram,
+    program_data_graph,
+    publisher_context: Context,
     id_sensor: str,
     udl_a_base_url: str,
     udl_b_base_url: str,
@@ -530,7 +495,7 @@ async def test_split_uploads_imagery_to_b_only(
 
     This is the core poll-here/upload-there split.
     """
-    await publisher_program._publish_loop()
+    await publish_frames(publisher_program, program_data_graph, publisher_context, 1)
 
     # Assert: SkyImagery exists ONLY in instance B
     imagery_b = await get_skyimagery_from_instance(udl_b_base_url, id_sensor)
@@ -544,9 +509,11 @@ async def test_split_uploads_imagery_to_b_only(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("publisher_program", [{"split": True, "num_frames": 3}], indirect=True)
+@pytest.mark.parametrize("publisher_program", [{"split": True}], indirect=True)
 async def test_split_multi_frame_upload(
     publisher_program: UDLProgram,
+    program_data_graph,
+    publisher_context: Context,
     collect_request: CollectRequestFull,
     id_sensor: str,
     udl_a_base_url: str,
@@ -557,7 +524,7 @@ async def test_split_multi_frame_upload(
     frame, ALL on the upload endpoint, grouped by imageSetId ==
     CollectRequest.id with 1-based sequenceIds.
     """
-    await publisher_program._publish_loop()
+    await publish_frames(publisher_program, program_data_graph, publisher_context, 3)
 
     # Assert: 3 SkyImagery in instance B
     imagery_b = await get_skyimagery_from_instance(udl_b_base_url, id_sensor)
@@ -582,6 +549,8 @@ async def test_split_multi_frame_upload(
 @pytest.mark.asyncio
 async def test_poll_from_a_respond_to_a_publish_to_b(
     polling_program: UDLProgram,
+    program_data_graph,
+    polling_context: Context,
     seeded_collect_request: CollectRequestFull,
     id_sensor: str,
     udl_a_base_url: str,
@@ -599,18 +568,22 @@ async def test_poll_from_a_respond_to_a_publish_to_b(
     assert seeded_collect_request.id in polling_program.tasks, (
         "Poller should have picked up the seeded request"
     )
-    assert len(polling_program.queue.pushed) == 1, "Request should be queued for execution"
+    assert len(polling_program.queue) == 1, "Request should be queued for execution"
 
     # ACCEPTED CollectResponse landed in A only
-    responses_a = await get_collectresponses_from_instance(udl_a_base_url, seeded_collect_request.id)
-    responses_b = await get_collectresponses_from_instance(udl_b_base_url, seeded_collect_request.id)
+    responses_a = await get_collectresponses_from_instance(
+        udl_a_base_url, seeded_collect_request.id
+    )
+    responses_b = await get_collectresponses_from_instance(
+        udl_b_base_url, seeded_collect_request.id
+    )
     assert len(responses_a) == 1, "Expected ACCEPTED CollectResponse in instance A"
     assert responses_a[0]["status"] == "ACCEPTED"
     assert responses_a[0]["idSensor"] == id_sensor
     assert len(responses_b) == 0, "CollectResponses must stay on the polling endpoint"
 
     # Publish imagery for the polled task
-    await polling_program._publish_loop()
+    await publish_frames(polling_program, program_data_graph, polling_context, 1)
 
     imagery_b = await get_skyimagery_from_instance(udl_b_base_url, id_sensor)
     imagery_a = await get_skyimagery_from_instance(udl_a_base_url, id_sensor)

@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for Node Platform mount device."""
 
-from unittest.mock import AsyncMock, MagicMock
+from dataclasses import replace
 
 import pytest
-from conftest import MockNodePlatformAPI, make_mount_status
 
+from .fakes import (
+    FakeNodePlatformAPI,
+    MountStatus,
+    make_mount_status,
+)
+from sensorkit.astro.coords import Horizontal
+from sensorkit.astro.target import AltAzTarget
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.mount import (
     NodePlatformMount,
@@ -15,9 +21,55 @@ from sensorkit.node_platform.mount import (
 from sensorkit.std import Deinit, FollowTarget, Home, Init, MoveToPark, Stop
 
 
+def install_mount(api: FakeNodePlatformAPI) -> MountStatus:
+    """Install a mount simulation whose motion commands drive its own status.
+
+    The driver's settle wait polls v2_get_mount_status for slew onset and then for the flags to
+    reach their commanded values, so a command has to actually move the simulated mount for it
+    to return.
+    """
+    status = make_mount_status()
+
+    def read(*a, **k):
+        # A commanded slew shows up as motion on the next poll and has settled by the one after,
+        # which is what the driver's onset-then-settle wait expects to see.
+        if status.is_slewing:
+            status.is_slewing = False
+            return replace(status, is_slewing=True)
+
+        return status
+
+    def slew(*, tracking: bool):
+        def command(*a, **k):
+            status.is_slewing = True
+            status.is_tracking = tracking
+
+        return command
+
+    def go_to_coordinates(req, *a, **k):
+        # RA/Dec go-tos leave the mount tracking; alt/az go-tos park it at a fixed pointing.
+        slew(tracking=req.ra is not None)()
+
+    def halt(*a, **k):
+        status.is_slewing = False
+        status.is_tracking = False
+
+    api.set_response("v2_get_mount_status", read)
+    api.set_response("v1_mount_go_to_home", slew(tracking=False))
+    api.set_response("v1_park_mount", slew(tracking=False))
+    api.set_response("v1_mount_follow_tle", slew(tracking=True))
+    api.set_response("v1_start_mount_track_path", slew(tracking=True))
+    api.set_response("v1_go_to_mount_coordinates", go_to_coordinates)
+    api.set_response("v1_halt_mount", halt)
+
+    return status
+
+
 @pytest.fixture
 def api():
-    return MockNodePlatformAPI()
+    api = FakeNodePlatformAPI()
+    install_mount(api)
+    return api
 
 
 @pytest.fixture
@@ -36,13 +88,12 @@ def mount(api):
     m.mount_tracking = False
     m._fast_status_task = None
     m._geodetic = None
-    # mount_enable() reads motor state from v2_get_mount_status; default to an
-    # idle mount (motors present, not slewing/tracking).
-    api.set_response("v2_get_mount_status", lambda *a, **k: make_mount_status())
-    # These tests assert which commands are issued, not the settle polling, so
-    # stub the status-poll wait to keep them deterministic and fast.
-    m._wait_for_mount = AsyncMock()
-    return m
+
+    yield m
+
+    # Following a target starts a status loop that publishes pointing several times a second.
+    # Left running, it accumulates across the session and slows every later test.
+    m._stop_fast_status()
 
 
 class TestMountConfig:
@@ -124,9 +175,10 @@ class TestMountCommands:
     async def test_follow_target_requires_connected(self, mount):
         mount.device_connected = False
 
-        cmd = MagicMock()
         with pytest.raises(DeviceConnectionError):
-            await mount.mount_follow_target(cmd)
+            await mount.mount_follow_target(
+                FollowTarget(target=AltAzTarget(coords=Horizontal(az=180.0, alt=45.0)))
+            )
 
 
 class TestMountFollowTarget:

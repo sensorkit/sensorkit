@@ -148,9 +148,7 @@ class TestFormatSummary:
 
     def test_health_lines_are_capped(self):
         # 30 devices each disconnect once → list capped at _MAX_HEALTH_LINES.
-        events = [
-            (f"03:{i:02d}:00", f"dev{i:02d}", "disconnected") for i in range(30)
-        ]
+        events = [(f"03:{i:02d}:00", f"dev{i:02d}", "disconnected") for i in range(30)]
         blocks, _ = format_summary("2026-04-26", {}, {}, events)
         health_text = blocks[-1]["text"]["text"]
 

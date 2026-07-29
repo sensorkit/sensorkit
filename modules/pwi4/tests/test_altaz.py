@@ -2,30 +2,35 @@
 """Test mount FollowTarget with AltAzTarget."""
 
 import pytest
-from conftest import MockPWI4Client
+
+from sensorkit.astro.coords import Horizontal
+from sensorkit.astro.target import AltAzTarget
+from sensorkit.std import FollowTarget
+
+
+@pytest.fixture
+def altaz_client(client):
+    """A client reporting a settled, non-tracking mount, as after an alt-az goto."""
+    client.set_status(**{"mount.is_slewing": "false", "mount.is_tracking": "false"})
+    return client
 
 
 class TestAltAzTarget:
     @pytest.mark.asyncio
-    async def test_goto_alt_az(self):
-        client = MockPWI4Client()
-
-        await client.request(
-            "/mount/goto_alt_az",
-            params={"alt_degs": 60.0, "az_degs": 180.0},
+    async def test_goto_alt_az(self, altaz_client, mount):
+        await mount.mount_follow_target(
+            FollowTarget(target=AltAzTarget(coords=Horizontal(az=180.0, alt=60.0)))
         )
 
-        reqs = client.find_requests("/mount/goto_alt_az")
+        reqs = altaz_client.find_requests("/mount/goto_alt_az")
         assert len(reqs) == 1
         assert reqs[0][1] == {"alt_degs": 60.0, "az_degs": 180.0}
 
     @pytest.mark.asyncio
-    async def test_poll_slew_complete(self):
-        client = MockPWI4Client()
-        client.set_status(**{"mount.is_slewing": "false"})
-
-        result = await client.poll(
-            lambda s: not client.get_bool(s, "mount.is_slewing"),
+    async def test_altaz_follow_is_not_sidereal(self, altaz_client, mount):
+        await mount.mount_follow_target(
+            FollowTarget(target=AltAzTarget(coords=Horizontal(az=180.0, alt=60.0)))
         )
 
-        assert not client.get_bool(result, "mount.is_slewing")
+        # An alt-az goto holds a fixed horizontal position; nothing tracks the sky.
+        assert mount._sidereal is False

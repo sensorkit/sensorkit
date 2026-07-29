@@ -20,9 +20,9 @@ async def test_follow_icrs_converts_to_jnow_and_tracks(telescope):
     assert telescope._tracking is True
 
     # A slew was issued, and in JNow coordinates — not the raw ICRS pass-through.
-    slews = [c for c in telescope.telescope.calls if c[0] == "SlewToCoordinatesAsync"]
+    slews = telescope.telescope.calls("SlewToCoordinatesAsync")
     assert slews, "expected a SlewToCoordinatesAsync call"
-    ra_hours, dec_deg = slews[-1][1]
+    ra_hours, dec_deg = slews[-1][0]
 
     exp_ra, exp_dec = icrs_to_jnow(90.0, 20.0, Time.now(), telescope._location)
     assert ra_hours == pytest.approx(exp_ra / 15.0, abs=1e-2)

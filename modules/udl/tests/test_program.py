@@ -4,22 +4,21 @@
 import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import MockCollectRequest
+from unifieddatalibrary.types import CollectRequestFull
 
+from .fakes import FakeUDLClient, tle_request
 from sensorkit.core.controller import TaskExecutionResult
 from sensorkit.core.task import TaskExecution
 from sensorkit.udl.models import ResponseStatus, UDLAPIConfig, UDLConfig
-from sensorkit.udl.program import UDLProgram
+from sensorkit.udl.program import UDLProgram, UDLState
 from sensorkit.udl.task_queue import TaskQueue
 
 
 @pytest.fixture
 def config():
     return UDLConfig(
-        entity="udl_program",
         controller="controller1",
         api=UDLAPIConfig(
             id_sensor="SENSOR-01",
@@ -29,86 +28,95 @@ def config():
 
 
 @pytest.fixture
-def program(config):
+def program(config, program_impl):
+    """A UDLProgram wired the way program_init() leaves it, minus the background loops."""
     p = UDLProgram()
     p.config = config
-    p.program = MagicMock()
-    p.program.entity = "udl_program"
-    p.program.kv_put_model = AsyncMock()
-    p.program.clear_offers = MagicMock()
-    p.program.add_offer = MagicMock()
-    p.program.publish_offers = AsyncMock()
-    p.queue = TaskQueue(p.program)
-    p.client = MagicMock()
-    p.client.collect_responses = MagicMock()
-    p.client.collect_responses.create = AsyncMock()
+    p.program = program_impl
+    p.queue = TaskQueue(program_impl)
+    p.client = FakeUDLClient()
     return p
+
+
+def responses(program):
+    """Every CollectResponse the program posted, oldest first."""
+    return program.client.collect_responses.created
 
 
 class TestHandleCollectRequest:
     @pytest.mark.asyncio
     async def test_new_request_accepted(self, program):
-        request = MockCollectRequest.with_tle()
+        request = tle_request()
         await program._handle_collect_request(request)
 
         assert request.id in program.tasks
         assert len(program.queue) == 1
-
-        # Should have sent ACCEPTED response
-        program.client.collect_responses.create.assert_awaited_once()
-        call_kwargs = program.client.collect_responses.create.call_args.kwargs
-        assert call_kwargs["status"] == "ACCEPTED"
+        assert program.client.collect_responses.statuses() == ["ACCEPTED"]
 
     @pytest.mark.asyncio
     async def test_duplicate_request_ignored(self, program):
-        request = MockCollectRequest.with_tle()
+        request = tle_request()
         await program._handle_collect_request(request)
         await program._handle_collect_request(request)
 
-        # Should only be in queue once
         assert len(program.queue) == 1
-        assert program.client.collect_responses.create.await_count == 1
+        assert program.client.collect_responses.statuses() == ["ACCEPTED"]
 
     @pytest.mark.asyncio
     async def test_expired_request_rejected(self, program):
-        request = MockCollectRequest.with_tle(
-            end_time=datetime.now(UTC) - timedelta(hours=1),
-        )
+        request = tle_request(end_time=datetime.now(UTC) - timedelta(hours=1))
         await program._handle_collect_request(request)
 
         assert request.id not in program.tasks
         assert len(program.queue) == 0
-
-        call_kwargs = program.client.collect_responses.create.call_args.kwargs
-        assert call_kwargs["status"] == "REJECTED"
+        assert program.client.collect_responses.statuses() == ["REJECTED"]
 
 
 class TestSendResponse:
     @pytest.mark.asyncio
     async def test_response_uses_config_source(self, program):
-        request = MockCollectRequest.with_tle()
-        await program._send_response(request, ResponseStatus.ACCEPTED)
-
-        call_kwargs = program.client.collect_responses.create.call_args.kwargs
-        assert call_kwargs["source"] == "TEST_SOURCE"
+        await program._send_response(tle_request(), ResponseStatus.ACCEPTED)
+        assert responses(program)[-1]["source"] == "TEST_SOURCE"
 
     @pytest.mark.asyncio
     async def test_response_uses_config_id_sensor(self, program):
-        request = MockCollectRequest.with_tle()
-        await program._send_response(request, ResponseStatus.COLLECTED)
-
-        call_kwargs = program.client.collect_responses.create.call_args.kwargs
-        assert call_kwargs["id_sensor"] == "SENSOR-01"
+        await program._send_response(tle_request(), ResponseStatus.COLLECTED)
+        assert responses(program)[-1]["id_sensor"] == "SENSOR-01"
 
     @pytest.mark.asyncio
     async def test_response_includes_notes(self, program):
-        request = MockCollectRequest.with_tle()
         await program._send_response(
-            request, ResponseStatus.FAILED, notes="Something went wrong"
+            tle_request(), ResponseStatus.FAILED, notes="Something went wrong"
         )
+        assert responses(program)[-1]["notes"] == "Something went wrong"
 
-        call_kwargs = program.client.collect_responses.create.call_args.kwargs
-        assert call_kwargs["notes"] == "Something went wrong"
+
+class TestPersistedState:
+    """Pending tasks survive a restart, so they must round-trip through the KV store."""
+
+    @pytest.mark.asyncio
+    async def test_queued_requests_restore(self, program, program_impl):
+        request = tle_request(id=str(uuid.uuid4()))
+        await program.queue.push_task(request)
+        await program._save_state()
+
+        restored = UDLProgram()
+        restored.program = program_impl
+        await restored._restore_state()
+
+        (task_dict,) = restored.state.pending_tasks
+        revived = CollectRequestFull.model_validate(task_dict)
+        assert revived.id == request.id
+        assert revived.num_frames == request.num_frames
+        assert revived.elset.line1 == request.elset.line1
+
+    @pytest.mark.asyncio
+    async def test_missing_state_starts_empty(self, program_impl):
+        restored = UDLProgram()
+        restored.program = program_impl
+        await restored._restore_state()
+
+        assert restored.state == UDLState()
 
 
 class TestCollectedResponseActualTimes:
@@ -117,8 +125,7 @@ class TestCollectedResponseActualTimes:
         """COLLECTED carries the TaskExecutionResult window (UDL-formatted, ...Z)."""
         # task_id is a UUID on StandardCollectTask, so the request id must parse.
         request_id = str(uuid.uuid4())
-        request = MockCollectRequest.with_tle(id=request_id)
-        await program.queue.push_task(request)
+        await program.queue.push_task(tle_request(id=request_id))
 
         gen = program.generate()
         request_out = await gen.asend(None)
@@ -146,31 +153,18 @@ class TestCollectedResponseActualTimes:
         with pytest.raises(StopAsyncIteration):
             await gen.asend(execution)
 
-        call_kwargs = program.client.collect_responses.create.call_args.kwargs
-        assert call_kwargs["status"] == "COLLECTED"
-        assert call_kwargs["actual_start_time"] == "2026-03-21T07:18:47.000000Z"
-        assert call_kwargs["actual_end_time"] == "2026-03-21T07:19:12.000000Z"
+        sent = responses(program)[-1]
+        assert sent["status"] == "COLLECTED"
+        assert sent["actual_start_time"] == "2026-03-21T07:18:47.000000Z"
+        assert sent["actual_end_time"] == "2026-03-21T07:19:12.000000Z"
 
 
 class TestEnvVarFallback:
-    def test_env_file_default(self):
-        """env_file should default to .env."""
-        config = UDLConfig(
-            entity="udl_program",
-            controller="controller1",
-            api=UDLAPIConfig(
-                id_sensor="SENSOR-01",
-                source="TEST_SOURCE",
-            ),
-        )
-        p = UDLProgram()
-        p.config = config
-        assert p.config.api.env_file == ".env"
+    def test_env_file_default(self, config):
+        assert config.api.env_file == ".env"
 
     def test_env_file_custom(self):
-        """env_file should be configurable."""
         config = UDLConfig(
-            entity="udl_program",
             controller="controller1",
             api=UDLAPIConfig(
                 id_sensor="SENSOR-01",
@@ -178,35 +172,34 @@ class TestEnvVarFallback:
                 env_file="/opt/sk/.env.udl",
             ),
         )
-        p = UDLProgram()
-        p.config = config
-        assert p.config.api.env_file == "/opt/sk/.env.udl"
+        assert config.api.env_file == "/opt/sk/.env.udl"
 
 
 class TestPollFilter:
     @pytest.mark.asyncio
     async def test_default_polls_by_id_sensor(self, program):
-        program.client.collect_requests = MagicMock()
-        program.client.collect_requests.list = AsyncMock(
-            return_value=MagicMock(items=[])
-        )
-
         await program._poll_collect_requests()
 
-        kwargs = program.client.collect_requests.list.call_args.kwargs
-        assert kwargs["extra_query"]["idSensor"] == "SENSOR-01"
-        assert "origSensorId" not in kwargs["extra_query"]
+        (query,) = program.client.collect_requests.queries
+        assert query["extra_query"]["idSensor"] == "SENSOR-01"
+        assert "origSensorId" not in query["extra_query"]
 
     @pytest.mark.asyncio
     async def test_orig_sensor_id_filter(self, program):
         program.config.api.poll_filter = "orig_sensor_id"
-        program.client.collect_requests = MagicMock()
-        program.client.collect_requests.list = AsyncMock(
-            return_value=MagicMock(items=[])
-        )
 
         await program._poll_collect_requests()
 
-        kwargs = program.client.collect_requests.list.call_args.kwargs
-        assert kwargs["extra_query"]["origSensorId"] == "SENSOR-01"
-        assert "idSensor" not in kwargs["extra_query"]
+        (query,) = program.client.collect_requests.queries
+        assert query["extra_query"]["origSensorId"] == "SENSOR-01"
+        assert "idSensor" not in query["extra_query"]
+
+    @pytest.mark.asyncio
+    async def test_polled_requests_are_accepted(self, program):
+        """A page of results is handled, not just fetched."""
+        program.client.collect_requests.page.items = [tle_request(id="polled-1")]
+
+        await program._poll_collect_requests()
+
+        assert "polled-1" in program.tasks
+        assert program.client.collect_responses.statuses() == ["ACCEPTED"]

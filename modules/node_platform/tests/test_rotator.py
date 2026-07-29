@@ -2,8 +2,8 @@
 """Tests for Node Platform rotator device."""
 
 import pytest
-from conftest import MockNodePlatformAPI, make_rotator_status
 
+from .fakes import FakeNodePlatformAPI, make_rotator_status
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.rotator import (
     NodePlatformRotator,
@@ -16,7 +16,7 @@ from sensorkit.std.instrument import ChangeRotatorPosition
 
 @pytest.fixture
 def api():
-    return MockNodePlatformAPI()
+    return FakeNodePlatformAPI()
 
 
 @pytest.fixture
@@ -50,7 +50,9 @@ class TestRotatorInit:
     @pytest.mark.asyncio
     async def test_init_enables_derotation(self, rotator, api):
         rotator.config = NodePlatformRotatorConfig(
-            device_type="rotator", host="localhost", derotate=True,
+            device_type="rotator",
+            host="localhost",
+            derotate=True,
         )
         await rotator._initialize()
 

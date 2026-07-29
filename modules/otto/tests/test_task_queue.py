@@ -6,14 +6,14 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from .data import make_task
+from sensorkit.core.program import ProgramOffering
 from sensorkit.otto.task_queue import TaskQueue
-
-from conftest import make_task
 
 
 @pytest.fixture
-def queue(mock_program_binding):
-    return TaskQueue(mock_program_binding)
+def queue(program_impl):
+    return TaskQueue(program_impl)
 
 
 class TestPushTask:
@@ -36,13 +36,20 @@ class TestPushTask:
         assert popped.task is sooner
 
     @pytest.mark.asyncio
-    async def test_push_updates_offers(self, queue, mock_program_binding):
+    async def test_push_updates_offers(self, queue, program_impl, recorder):
+        published = await recorder()
         task = make_task()
+
         await queue.push_task(task)
 
-        mock_program_binding.clear_offers.assert_called()
-        mock_program_binding.add_offer.assert_called_once()
-        mock_program_binding.publish_offers.assert_awaited()
+        (offer,) = program_impl.get_offers()
+        assert offer.end == task.end_time
+
+        # The queued task's id rides along as interval data locally, but is not part of the
+        # published window, so compare the bounds.
+        offering = await published.wait_for(ProgramOffering)
+        (window,) = offering.offer_windows
+        assert (window.begin, window.end) == (offer.begin, offer.end)
 
 
 class TestPopTask:

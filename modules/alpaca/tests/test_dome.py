@@ -2,9 +2,9 @@
 """Tests for Alpaca dome device."""
 
 import pytest
-from conftest import MockAlpacaSDKDevice
 
 from sensorkit.alpaca.dome import AlpacaDomeConfig, AlpacaDomeState
+from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 from sensorkit.std import Connect, Disconnect, Home, MoveToPark, Stop
 
 
@@ -14,7 +14,7 @@ def dome():
     d = config.create_device()
     d.state = AlpacaDomeState()
     d.device_name = "Dome"
-    mock = MockAlpacaSDKDevice(
+    device = FakeAlpacaSDKDevice(
         Connected=True,
         Connecting=False,
         AtHome=False,
@@ -30,7 +30,7 @@ def dome():
         CanSlave=False,
         CanSyncAzimuth=False,
     )
-    d.dome = mock
+    d.dome = device
     d.device_connected = True
     d._can_find_home = True
     d._can_park = True

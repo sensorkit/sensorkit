@@ -17,6 +17,7 @@ from sensorkit.otto.horizons import (
     VISIBILITY_STEP_MINUTES,
     HorizonsSample,
     adaptive_intervals,
+    candidates,
     current_rate_arcsec_hr,
     fetch_ephemeris,
     fmt_time,
@@ -112,16 +113,12 @@ def _samples(elevations=(10.0, 20.0, 30.0), start=None, step_minutes=15):
 class TestResolve:
     @pytest.mark.asyncio
     async def test_resolves_small_body(self):
-        with patch(
-            "sensorkit.otto.horizons._horizons_get", AsyncMock(return_value=SMALL_BODY)
-        ):
+        with patch("sensorkit.otto.horizons._horizons_get", AsyncMock(return_value=SMALL_BODY)):
             assert await resolve("433") == ("433", "433 Eros (A898 PA)")
 
     @pytest.mark.asyncio
     async def test_resolves_major_body(self):
-        with patch(
-            "sensorkit.otto.horizons._horizons_get", AsyncMock(return_value=MAJOR_BODY)
-        ):
+        with patch("sensorkit.otto.horizons._horizons_get", AsyncMock(return_value=MAJOR_BODY)):
             assert await resolve("599") == ("599", "Jupiter")
 
     @pytest.mark.asyncio
@@ -145,48 +142,13 @@ class TestResolve:
 
     @pytest.mark.asyncio
     async def test_ambiguous_name_is_unresolved(self):
-        with patch(
-            "sensorkit.otto.horizons._horizons_get", AsyncMock(return_value=AMBIGUOUS)
-        ):
+        with patch("sensorkit.otto.horizons._horizons_get", AsyncMock(return_value=AMBIGUOUS)):
             assert await resolve("Jupiter") is None
 
     @pytest.mark.asyncio
-    async def test_ambiguous_name_lists_candidate_ids(self):
-        """The operator needs the ID# to disambiguate, so the warning must carry it."""
-        messages = []
-        with (
-            patch("sensorkit.otto.horizons._horizons_get", AsyncMock(return_value=AMBIGUOUS)),
-            patch("sensorkit.otto.horizons.logger.warning", messages.append),
-        ):
-            await resolve("Jupiter")
-
-        assert len(messages) == 1
-        assert "5 (Jupiter Barycenter)" in messages[0]
-        assert "599 (Jupiter)" in messages[0]
-        # Column rules and banner separators are not candidates
-        assert "---" not in messages[0]
-        assert "***" not in messages[0]
-
-    @pytest.mark.asyncio
     async def test_unknown_name_is_unresolved(self):
-        with patch(
-            "sensorkit.otto.horizons._horizons_get", AsyncMock(return_value=NO_MATCH)
-        ):
+        with patch("sensorkit.otto.horizons._horizons_get", AsyncMock(return_value=NO_MATCH)):
             assert await resolve("Jupiterr") is None
-
-    @pytest.mark.asyncio
-    async def test_unknown_name_is_not_reported_as_ambiguous(self):
-        """A typo has no candidates to offer, so the warning must say so plainly."""
-        messages = []
-        with (
-            patch("sensorkit.otto.horizons._horizons_get", AsyncMock(return_value=NO_MATCH)),
-            patch("sensorkit.otto.horizons.logger.warning", messages.append),
-        ):
-            await resolve("Jupiterr")
-
-        assert len(messages) == 1
-        assert "no match" in messages[0]
-        assert "ambiguous" not in messages[0]
 
     @pytest.mark.asyncio
     async def test_transport_failure_is_unresolved(self):
@@ -195,6 +157,20 @@ class TestResolve:
             AsyncMock(side_effect=RuntimeError("Horizons HTTP 503")),
         ):
             assert await resolve("433") is None
+
+
+class TestCandidates:
+    """What an unresolvable name offers the operator to fix their config with."""
+
+    def test_ambiguous_response_lists_candidate_ids(self):
+        """The operator needs the ID# to disambiguate, so each row must carry it."""
+        # Column rules and banner separators are not candidates
+        assert candidates(AMBIGUOUS) == ["5 (Jupiter Barycenter)", "599 (Jupiter)"]
+
+    def test_no_match_response_has_nothing_to_offer(self):
+        """A typo has no candidates, which is how resolve reports it as unknown
+        rather than ambiguous."""
+        assert candidates(NO_MATCH) == []
 
 
 class TestParseEphemeris:
@@ -317,9 +293,7 @@ class TestPosition:
         samples = [replace(base[0], azimuth=359.0), replace(base[1], azimuth=1.0)]
 
         # Halfway through the step: due north, not due south
-        _, azimuth, _, _ = position(
-            samples, longitude=0.0, now=now + timedelta(minutes=7.5)
-        )
+        _, azimuth, _, _ = position(samples, longitude=0.0, now=now + timedelta(minutes=7.5))
         # Measured as a distance from north, since the midpoint sits exactly on
         # the 0/360 seam and legitimately lands on either side of it
         assert min(azimuth, 360.0 - azimuth) == pytest.approx(0.0, abs=1e-3)
@@ -367,7 +341,6 @@ class TestCurrentRate:
 
     def test_none_without_samples(self):
         assert current_rate_arcsec_hr([]) is None
-
 
 
 class TestVisibilityIntervals:

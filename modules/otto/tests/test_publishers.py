@@ -138,9 +138,7 @@ class TestPublish:
     @pytest.mark.asyncio
     async def test_posts_zip_with_metadata_and_image(self, udl_env):
         pub = make_publisher(frame_count=2)
-        pub._sdk._client.post = AsyncMock(
-            return_value=SimpleNamespace(status_code=200, text="")
-        )
+        pub._sdk._client.post = AsyncMock(return_value=SimpleNamespace(status_code=200, text=""))
 
         await pub.publish({"task_id": "t1", "frame_num": 0}, b"FITSDATA")
 
@@ -161,9 +159,7 @@ class TestPublish:
     @pytest.mark.asyncio
     async def test_unauthenticated_post_has_no_auth_header(self, no_udl_env):
         pub = make_publisher()
-        pub._sdk._client.post = AsyncMock(
-            return_value=SimpleNamespace(status_code=200, text="")
-        )
+        pub._sdk._client.post = AsyncMock(return_value=SimpleNamespace(status_code=200, text=""))
 
         await pub.publish({"frame_num": 0}, b"x")
 

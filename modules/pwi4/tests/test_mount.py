@@ -1,12 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
-from conftest import MockPWI4Client
 
 from sensorkit.pwi4.mount import PWI4Mount, PWI4MountConfig, PWI4MountState
 from sensorkit.std import (
     Connect,
+    Connected,
     DisableAxis,
     Disconnect,
     EnableAxis,
@@ -17,50 +15,30 @@ from sensorkit.std import (
 )
 
 
-@pytest.fixture
-def client():
-    return MockPWI4Client()
-
-
-@pytest.fixture
-def mount(client):
-    config = PWI4MountConfig(device_type="mount")
-    m = PWI4Mount(config=config, client=client)
-    m.state = PWI4MountState()
-    m.device_connected = True
-    return m
-
-
 class TestMountConnect:
     @pytest.mark.asyncio
-    async def test_connect(self, client, mount):
+    async def test_connect(self, client, mount, recorder):
         mount.device_connected = None
+        published = await recorder()
 
-        with patch("sensorkit.pwi4.mount.sk") as mock_sk:
-            mock_device = MagicMock()
-            mock_device.publish = AsyncMock()
-            mock_sk.device.return_value = mock_device
-
-            await mount.mount_connect(Connect())
+        await mount.mount_connect(Connect())
 
         reqs = client.find_requests("/mount/connect")
         assert len(reqs) == 1
         assert mount.device_connected is True
+        assert (await published.wait_for(Connected)).is_connected is True
 
     @pytest.mark.asyncio
-    async def test_disconnect(self, client, mount):
+    async def test_disconnect(self, client, mount, recorder):
         client.set_status(**{"mount.is_connected": "false"})
+        published = await recorder()
 
-        with patch("sensorkit.pwi4.mount.sk") as mock_sk:
-            mock_device = MagicMock()
-            mock_device.publish = AsyncMock()
-            mock_sk.device.return_value = mock_device
-
-            await mount.mount_disconnect(Disconnect())
+        await mount.mount_disconnect(Disconnect())
 
         reqs = client.find_requests("/mount/disconnect")
         assert len(reqs) == 1
         assert mount.device_connected is False
+        assert (await published.wait_for(Connected)).is_connected is False
 
 
 class TestMountHome:
@@ -88,9 +66,7 @@ class TestMountHome:
 class TestMountStop:
     @pytest.mark.asyncio
     async def test_stop(self, client, mount):
-        client.set_status(
-            **{"mount.is_slewing": "false", "mount.is_tracking": "false"}
-        )
+        client.set_status(**{"mount.is_slewing": "false", "mount.is_tracking": "false"})
         await mount.mount_stop(Stop())
 
         reqs = client.find_requests("/mount/stop")
@@ -110,9 +86,7 @@ class TestMountPark:
     @pytest.mark.asyncio
     async def test_park_waits_for_stop(self, client, mount):
         """Park should poll until mount is not slewing and not tracking."""
-        client.set_status(
-            **{"mount.is_slewing": "false", "mount.is_tracking": "false"}
-        )
+        client.set_status(**{"mount.is_slewing": "false", "mount.is_tracking": "false"})
         await mount.mount_park(MoveToPark())
 
         reqs = client.find_requests("/mount/park")

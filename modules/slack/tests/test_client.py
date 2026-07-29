@@ -3,75 +3,60 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
-
 import pytest
+from slack_sdk.errors import SlackApiError
 
+from .fakes import FakeWebClient
+from sensorkit.slack import client as client_mod
 from sensorkit.slack.client import SlackClient
 
 
 @pytest.fixture
-def mock_web_client():
-    """Patch AsyncWebClient and return the mock instance."""
+def web_client(monkeypatch) -> FakeWebClient:
+    """Stand the Slack SDK's web client down so `SlackClient` talks to the fake instead."""
 
-    with patch("sensorkit.slack.client.AsyncWebClient") as MockWebClient:
-        mock_instance = AsyncMock()
-        MockWebClient.return_value = mock_instance
-        yield mock_instance
+    fake = FakeWebClient()
+    monkeypatch.setattr(client_mod, "AsyncWebClient", lambda token: fake)
+
+    return fake
 
 
 class TestPostMessage:
     @pytest.mark.asyncio
-    async def test_returns_ts_on_success(self, mock_web_client):
-        mock_web_client.chat_postMessage = AsyncMock(
-            return_value={"ok": True, "channel": "C0123456789", "ts": "1234567890.123456"}
-        )
-
+    async def test_returns_ts_on_success(self, web_client):
         client = SlackClient("xoxb-test")
         channel_id, ts = await client.post_message("#test", "hello")
 
         assert channel_id == "C0123456789"
         assert ts == "1234567890.123456"
-        mock_web_client.chat_postMessage.assert_awaited_once_with(
-            channel="#test",
-            text="hello",
-            blocks=None,
-            attachments=None,
-            thread_ts=None,
-        )
+        assert web_client.posts == [
+            {
+                "channel": "#test",
+                "text": "hello",
+                "blocks": None,
+                "attachments": None,
+                "thread_ts": None,
+            }
+        ]
 
     @pytest.mark.asyncio
-    async def test_passes_blocks(self, mock_web_client):
-        mock_web_client.chat_postMessage = AsyncMock(
-            return_value={"ok": True, "ts": "123"}
-        )
-
+    async def test_passes_blocks(self, web_client):
         client = SlackClient("xoxb-test")
         blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": "hi"}}]
         await client.post_message("#test", "fallback", blocks=blocks)
 
-        call_kwargs = mock_web_client.chat_postMessage.call_args.kwargs
-        assert call_kwargs["blocks"] == blocks
+        assert web_client.posts[0]["blocks"] == blocks
 
     @pytest.mark.asyncio
-    async def test_passes_thread_ts(self, mock_web_client):
-        mock_web_client.chat_postMessage = AsyncMock(
-            return_value={"ok": True, "ts": "123"}
-        )
-
+    async def test_passes_thread_ts(self, web_client):
         client = SlackClient("xoxb-test")
         await client.post_message("#test", "reply", thread_ts="111.222")
 
-        call_kwargs = mock_web_client.chat_postMessage.call_args.kwargs
-        assert call_kwargs["thread_ts"] == "111.222"
+        assert web_client.posts[0]["thread_ts"] == "111.222"
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_api_error(self, mock_web_client):
-        from slack_sdk.errors import SlackApiError
-
-        mock_web_client.chat_postMessage = AsyncMock(
-            side_effect=SlackApiError("error", response={"error": "channel_not_found"})
-        )
+    async def test_returns_none_on_api_error(self, web_client):
+        web_client.post_response = SlackApiError("error", response={"error": "channel_not_found"})
 
         client = SlackClient("xoxb-test")
         channel_id, ts = await client.post_message("#bad-channel", "hello")
@@ -80,10 +65,8 @@ class TestPostMessage:
         assert ts is None
 
     @pytest.mark.asyncio
-    async def test_returns_none_on_exception(self, mock_web_client):
-        mock_web_client.chat_postMessage = AsyncMock(
-            side_effect=ConnectionError("network down")
-        )
+    async def test_returns_none_on_exception(self, web_client):
+        web_client.post_response = ConnectionError("network down")
 
         client = SlackClient("xoxb-test")
         channel_id, ts = await client.post_message("#test", "hello")
@@ -94,26 +77,18 @@ class TestPostMessage:
 
 class TestAddReaction:
     @pytest.mark.asyncio
-    async def test_returns_true_on_success(self, mock_web_client):
-        mock_web_client.reactions_add = AsyncMock()
-
+    async def test_returns_true_on_success(self, web_client):
         client = SlackClient("xoxb-test")
         result = await client.add_reaction("#test", "123.456", "white_check_mark")
 
         assert result is True
-        mock_web_client.reactions_add.assert_awaited_once_with(
-            channel="#test",
-            timestamp="123.456",
-            name="white_check_mark",
-        )
+        assert web_client.reactions == [
+            {"channel": "#test", "timestamp": "123.456", "name": "white_check_mark"}
+        ]
 
     @pytest.mark.asyncio
-    async def test_returns_false_on_error(self, mock_web_client):
-        from slack_sdk.errors import SlackApiError
-
-        mock_web_client.reactions_add = AsyncMock(
-            side_effect=SlackApiError("error", response={"error": "already_reacted"})
-        )
+    async def test_returns_false_on_error(self, web_client):
+        web_client.reaction_error = SlackApiError("error", response={"error": "already_reacted"})
 
         client = SlackClient("xoxb-test")
         result = await client.add_reaction("#test", "123.456", "white_check_mark")

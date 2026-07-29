@@ -119,8 +119,12 @@ class TaskQueue:
             # Offer window spans from now to the latest task end time
             now = datetime.now(UTC)
 
-            # Add individual offers for each task
+            # Add individual offers for each task. A task whose deadline has already passed
+            # has no window left to offer — it is dropped on the next pop/peek/flush.
             for queued in self.tasks:
+                if queued.task.end_time <= now:
+                    continue
+
                 self.program_binding.add_offer(
                     start=now,
                     end=queued.task.end_time,

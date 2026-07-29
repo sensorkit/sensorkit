@@ -3,20 +3,22 @@
 
 import asyncio
 import contextlib
+import time
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import ISS_TLE, make_task
 
+from .data import ISS_TLE, make_config, make_task
 from sensorkit.astro.common import ReferenceFrame, SitePosition
 from sensorkit.astro.coords import Equatorial
 from sensorkit.astro.target import ICRSTarget
-from sensorkit.otto.horizons import HorizonsObject, HorizonsSample
-from sensorkit.otto.models import CollectConfig, OttoConfig, PublishConfig, TaskConfig
+from sensorkit.otto.horizons import HorizonsCache, HorizonsObject, HorizonsSample
+from sensorkit.otto.models import TaskConfig
 from sensorkit.otto.program import OttoProgram, OttoState
+from sensorkit.otto.stars import StarCache
 from sensorkit.otto.task_queue import TaskQueue
-from sensorkit.otto.utils import ListType, ObjectListManager, to_jd
+from sensorkit.otto.utils import ObjectListManager, to_jd
 
 
 def _resolved_execution():
@@ -30,25 +32,20 @@ def _resolved_execution():
     return fut
 
 
-@pytest.fixture
-def mock_program_binding():
-    mock = MagicMock()
-    mock.clear_offers = MagicMock()
-    mock.add_offer = MagicMock()
-    mock.publish_offers = AsyncMock()
-    mock.kv_put_model = AsyncMock()
-    mock.entity = "otto_program"
-    return mock
+def set_state(program, **lists):
+    """Replace the program's object lists, keeping its list manager pointed at them."""
+    program.state = OttoState(**lists)
+    program.list_manager = ObjectListManager(program.state, program._save_state)
 
 
 @pytest.fixture
-def program(mock_program_binding):
+def program(program_impl):
+    """An OttoProgram bound to a live program entity, as program_init leaves it."""
     p = OttoProgram()
-    p.program = mock_program_binding
-    p.task_queue = TaskQueue(mock_program_binding)
-    p.state = OttoState(whitelist=["25544", "42738"])
-    p.config = MagicMock()
-    p.config.task.end_time_deadband_seconds = 60
+    p.program = program_impl
+    p.task_queue = TaskQueue(program_impl)
+    p.config = make_config()
+    set_state(p, whitelist=["25544", "42738"])
     return p
 
 
@@ -110,8 +107,6 @@ class TestEndTimeRefresh:
         )
         await program.task_queue.push_task(task)
 
-        # Mock config for deadband
-        program.config = MagicMock()
         program.config.task.end_time_deadband_seconds = 60
 
         before = datetime.now(UTC)
@@ -128,7 +123,6 @@ class TestEndTimeRefresh:
     @pytest.mark.asyncio
     async def test_end_time_not_stale(self, program):
         """Even tasks generated hours ago should get a fresh end_time."""
-        old_end = datetime.now(UTC) - timedelta(hours=1)  # Already expired
         # But it's still in queue (not yet popped — pop_task removes expired)
         task = make_task(
             end_time=datetime.now(UTC) + timedelta(seconds=1),  # barely valid
@@ -137,7 +131,6 @@ class TestEndTimeRefresh:
         )
         await program.task_queue.push_task(task)
 
-        program.config = MagicMock()
         program.config.task.end_time_deadband_seconds = 30
 
         gen = program.generate()
@@ -148,44 +141,40 @@ class TestEndTimeRefresh:
 
 
 class TestInterTaskDelay:
+    DELAY = 0.2
+    """Long enough to measure without mocking the clock, short enough not to drag the suite."""
+
     @pytest.mark.asyncio
     async def test_sleeps_after_task_when_delay_configured(self, program):
         """A configured delay should sleep after a task completes."""
-        program.config = MagicMock()
-        program.config.task.end_time_deadband_seconds = 60
-        program.config.task.inter_task_delay_seconds = 5.0
+        program.config.task.inter_task_delay_seconds = self.DELAY
         await program.task_queue.push_task(make_task())
 
         gen = program.generate()
-        result = await gen.__anext__()
-        assert result is not None
+        assert await gen.__anext__() is not None
 
         # Resume past the yield so the post-task delay runs. The factory awaits the value sent
         # back (the execution), so feed it an already-resolved awaitable.
-        with patch(
-            "sensorkit.otto.program.asyncio.sleep", new_callable=AsyncMock
-        ) as mock_sleep:
-            with pytest.raises(StopAsyncIteration):
-                await gen.asend(_resolved_execution())
-            mock_sleep.assert_awaited_once_with(5.0)
+        started = time.monotonic()
+        with pytest.raises(StopAsyncIteration):
+            await gen.asend(_resolved_execution())
+
+        assert time.monotonic() - started >= self.DELAY
 
     @pytest.mark.asyncio
     async def test_no_sleep_when_delay_zero(self, program):
         """The default (0) delay should not sleep between tasks."""
-        program.config = MagicMock()
-        program.config.task.end_time_deadband_seconds = 60
         program.config.task.inter_task_delay_seconds = 0.0
         await program.task_queue.push_task(make_task())
 
         gen = program.generate()
         await gen.__anext__()
 
-        with patch(
-            "sensorkit.otto.program.asyncio.sleep", new_callable=AsyncMock
-        ) as mock_sleep:
-            with pytest.raises(StopAsyncIteration):
-                await gen.asend(_resolved_execution())
-            mock_sleep.assert_not_awaited()
+        started = time.monotonic()
+        with pytest.raises(StopAsyncIteration):
+            await gen.asend(_resolved_execution())
+
+        assert time.monotonic() - started < self.DELAY
 
 
 class TestObjectListManagement:
@@ -211,7 +200,7 @@ class TestObjectListManagement:
 @pytest.fixture
 def orbit_program(program):
     """Program configured for orbits-only tasking with one fetched GEO member."""
-    program.state = OttoState()
+    set_state(program)
     program.config.task.tles = []
     program.config.task.orbits = ["GEO"]
     program.config.collect.altitude_min = 20.0
@@ -232,8 +221,6 @@ def orbit_program(program):
         "19548": {"line0": ISS_TLE.line0, "line1": ISS_TLE.line1, "line2": ISS_TLE.line2}
     }
     program.tles_dt = datetime.now(UTC)
-    program.list_manager = MagicMock()
-    program.list_manager.move_object = AsyncMock()
     return program
 
 
@@ -275,8 +262,8 @@ class TestOrbitTargets:
         queued = await orbit_program.task_queue.pop_task()
         assert queued is not None
         assert queued.task.target.tle.line1 == ISS_TLE.line1
-        assert orbit_program.state.whitelist == []
-        orbit_program.list_manager.move_object.assert_not_awaited()
+        # Tasking the member left every list untouched
+        assert orbit_program.state == OttoState()
 
     @pytest.mark.asyncio
     async def test_stale_orbit_member_skipped_not_blacklisted(self, orbit_program, monkeypatch):
@@ -293,22 +280,21 @@ class TestOrbitTargets:
         gen.cancel()
 
         assert len(orbit_program.task_queue) == 0
-        assert orbit_program.state.blacklist == []
-        orbit_program.list_manager.move_object.assert_not_awaited()
+        assert orbit_program.state == OttoState()
 
 
 class TestProgramDeinit:
     @pytest.mark.asyncio
-    async def test_deinit_saves_state(self, program):
+    async def test_deinit_saves_state(self, program, program_impl):
         """program_deinit should save state."""
         await program.program_deinit()
-        program.program.kv_put_model.assert_awaited()
+        assert await program_impl.kv_get_model(OttoState) == program.state
 
 
 @pytest.fixture
 def horizons_program(program):
     """Program configured for a single Horizons object with a cached ephemeris."""
-    program.state = OttoState(whitelist=["433"])
+    set_state(program, whitelist=["433"])
     program.config.task.tles = []
     program.config.task.orbits = []
     program.config.task.horizons = ["433"]
@@ -326,8 +312,6 @@ def horizons_program(program):
             samples=_horizons_samples(datetime.now(UTC) - timedelta(minutes=1)),
         )
     }
-    program.list_manager = MagicMock()
-    program.list_manager.move_object = AsyncMock()
     return program
 
 
@@ -386,9 +370,7 @@ class TestHorizonsTarget:
     async def test_builds_an_icrf_ephemeris_target(self, horizons_program):
         now = datetime.now(UTC)
         samples = _horizons_samples(now)
-        with patch(
-            "sensorkit.otto.horizons.fetch_ephemeris", AsyncMock(return_value=samples)
-        ):
+        with patch("sensorkit.otto.horizons.fetch_ephemeris", AsyncMock(return_value=samples)):
             target = await horizons_program._target_for("433", True, 120, now)
 
         assert target.frame == ReferenceFrame.ICRF
@@ -473,20 +455,20 @@ class TestHorizonsTarget:
 async def _one_horizons_pass(program):
     """Drive the Horizons updater through exactly one pass, then stop it.
 
-    Making the loop's trailing sleep raise keeps this deterministic — the body
-    runs once and the coroutine exits, with no timing assumptions.
+    The loop's trailing sleep is the configured refresh interval — hours — so a brief yield
+    lets the body run once and no more.
     """
-    with patch(
-        "sensorkit.otto.program.asyncio.sleep",
-        AsyncMock(side_effect=asyncio.CancelledError),
-    ):
-        with contextlib.suppress(asyncio.CancelledError):
-            await program.update_horizons_loop()
+    updater = asyncio.create_task(program.update_horizons_loop())
+    await asyncio.sleep(0.1)
+    updater.cancel()
+
+    with contextlib.suppress(asyncio.CancelledError):
+        await updater
 
 
 class TestHorizonsUpdate:
     @pytest.mark.asyncio
-    async def test_resolves_and_caches_new_objects(self, horizons_program):
+    async def test_resolves_and_caches_new_objects(self, horizons_program, program_impl):
         horizons_program.horizons = {}
         now = datetime.now(UTC)
 
@@ -504,7 +486,9 @@ class TestHorizonsUpdate:
 
         assert horizons_program.horizons["433"].command == "433;"
         assert horizons_program.horizons["433"].name == "433 Eros (A898 PA)"
-        horizons_program.program.kv_put_model.assert_awaited()
+
+        cached = await program_impl.kv_get_model(HorizonsCache)
+        assert cached.objects == horizons_program.horizons
 
     @pytest.mark.asyncio
     async def test_known_object_is_not_re_resolved(self, horizons_program):
@@ -539,10 +523,9 @@ class TestHorizonsUpdate:
             horizons_program.state.whitelist = ["Jupiter", "433"]
             await _one_horizons_pass(horizons_program)
 
-        horizons_program.list_manager.move_object.assert_awaited_once_with(
-            "Jupiter", ListType.WHITELIST, ListType.BLACKLIST
-        )
+        assert horizons_program.state.blacklist == ["Jupiter"]
         # The rest of the list keeps tasking
+        assert horizons_program.state.whitelist == ["433"]
         assert "433" in horizons_program.horizons
 
     @pytest.mark.asyncio
@@ -563,7 +546,6 @@ class TestHorizonsUpdate:
         horizons_program.config.task.horizons = []
         await _one_horizons_pass(horizons_program)
         assert horizons_program.horizons == {}
-
 
 
 class TestEphemerisCoversTheBlock:
@@ -625,7 +607,7 @@ class TestEphemerisCoversTheBlock:
 @pytest.fixture
 def star_program(program):
     """Program configured for a single resolved star."""
-    program.state = OttoState(whitelist=["Vega"])
+    set_state(program, whitelist=["Vega"])
     program.config.task.tles = []
     program.config.task.orbits = []
     program.config.task.horizons = []
@@ -637,8 +619,6 @@ def star_program(program):
     program.tles = {}
     program.horizons = {}
     program.stars = {"Vega": Equatorial(ra=279.23473, dec=38.78369)}
-    program.list_manager = MagicMock()
-    program.list_manager.move_object = AsyncMock()
     return program
 
 
@@ -682,18 +662,14 @@ class TestStarListManagement:
     @pytest.mark.asyncio
     async def test_set_star_graylists_rather_than_blacklists(self, star_program, monkeypatch):
         # Below the floor and west of the meridian: setting
-        monkeypatch.setattr(
-            star_program, "_object_position", lambda obj: (5.0, 270.0, False, 3.0)
-        )
+        monkeypatch.setattr(star_program, "_object_position", lambda obj: (5.0, 270.0, False, 3.0))
         star_program.config.collect.scan_mode = False
 
         gen = asyncio.create_task(star_program.generate_tasks())
         await asyncio.sleep(0.1)
         gen.cancel()
 
-        star_program.list_manager.move_object.assert_awaited_with(
-            "Vega", ListType.WHITELIST, ListType.GRAYLIST
-        )
+        assert star_program.state == OttoState(graylist=["Vega"])
 
     @pytest.mark.asyncio
     async def test_set_satellite_still_blacklists(self, orbit_program, monkeypatch):
@@ -710,14 +686,12 @@ class TestStarListManagement:
         await asyncio.sleep(0.1)
         gen.cancel()
 
-        orbit_program.list_manager.move_object.assert_awaited_with(
-            "25544", ListType.WHITELIST, ListType.BLACKLIST
-        )
+        assert orbit_program.state == OttoState(blacklist=["25544"])
 
 
 class TestStarResolution:
     @pytest.mark.asyncio
-    async def test_resolves_and_caches(self, star_program):
+    async def test_resolves_and_caches(self, star_program, program_impl):
         star_program.stars = {}
         with patch(
             "sensorkit.otto.stars.resolve",
@@ -726,7 +700,9 @@ class TestStarResolution:
             await star_program.update_stars()
 
         assert star_program.stars["Vega"].ra == pytest.approx(279.23473)
-        star_program.program.kv_put_model.assert_awaited()
+
+        cached = await program_impl.kv_get_model(StarCache)
+        assert cached.stars == star_program.stars
 
     @pytest.mark.asyncio
     async def test_known_star_is_not_re_resolved(self, star_program):
@@ -744,9 +720,7 @@ class TestStarResolution:
             await star_program.update_stars()
 
         assert star_program.stars == {}
-        star_program.list_manager.move_object.assert_awaited_once_with(
-            "Vega", ListType.WHITELIST, ListType.BLACKLIST
-        )
+        assert star_program.state == OttoState(blacklist=["Vega"])
 
     @pytest.mark.asyncio
     async def test_previously_blacklisted_name_recovers_when_it_resolves(self, star_program):
@@ -756,10 +730,7 @@ class TestStarResolution:
         resolution is one-shot.
         """
         star_program.stars = {}
-        star_program.state.whitelist = []
-        star_program.state.blacklist = ["Vega"]
-        # Use the real list manager so the move is actually applied
-        star_program.list_manager = ObjectListManager(star_program.state, AsyncMock())
+        set_state(star_program, blacklist=["Vega"])
 
         with patch(
             "sensorkit.otto.stars.resolve",
@@ -767,8 +738,7 @@ class TestStarResolution:
         ):
             await star_program.update_stars()
 
-        assert star_program.state.blacklist == []
-        assert star_program.state.whitelist == ["Vega"]
+        assert star_program.state == OttoState(whitelist=["Vega"])
 
     @pytest.mark.asyncio
     async def test_removed_star_drops_out_of_the_cache(self, star_program):
@@ -798,9 +768,7 @@ class TestDiurnalReturnExemption:
         await asyncio.sleep(0.1)
         gen.cancel()
 
-        horizons_program.list_manager.move_object.assert_awaited_with(
-            "433", ListType.WHITELIST, ListType.GRAYLIST
-        )
+        assert horizons_program.state == OttoState(graylist=["433"])
 
 
 class TestUnresolvedNamesAreNotMisfiled:
@@ -820,13 +788,13 @@ class TestUnresolvedNamesAreNotMisfiled:
         await asyncio.sleep(0.1)
         gen.cancel()
 
-        star_program.list_manager.move_object.assert_not_awaited()
+        assert star_program.state == OttoState(whitelist=["Vega"])
 
 
 class TestStartupOrdering:
     @pytest.mark.asyncio
     async def test_site_position_is_set_before_the_updaters_start(
-        self, mock_program_binding, monkeypatch
+        self, program_impl, kit, monkeypatch
     ):
         """The Horizons updater asks JPL for ephemerides at the observing site.
 
@@ -835,28 +803,11 @@ class TestStartupOrdering:
         cache silently comes up empty and is not retried until the next refresh.
         """
         program = OttoProgram()
-        config = OttoConfig(
-            controller="c1",
-            task=TaskConfig(horizons=["433"]),
-            collect=CollectConfig(track_mode="rate"),
-            publish=PublishConfig(),
-        )
-        site = SitePosition(
-            latitude_degrees=42.3, longitude_degrees=-83.0, altitude_km=0.2
-        )
+        config = make_config(task=TaskConfig(horizons=["433"]))
+        site = SitePosition(latitude_degrees=42.3, longitude_degrees=-83.0, altitude_km=0.2)
 
-        async def kv_get_model(model_type):
-            if model_type is OttoConfig:
-                return config
-            raise KeyError(model_type)  # nothing else is cached
-
-        mock_program_binding.kv_get_model = AsyncMock(side_effect=kv_get_model)
-        mock_program_binding.task_group.create_task = MagicMock(
-            side_effect=lambda coro: coro.close()
-        )
-        controller = MagicMock()
-        controller.kv_get_model = AsyncMock(return_value=site)
-        mock_program_binding.sensorkit.return_value.controller.return_value = controller
+        await program_impl.kv_put_model(config)
+        await kit.controller(config.controller).kv_put_model(site)
 
         # Record whether the site position was already resolved as each
         # background task was created, without actually running any of them
@@ -865,11 +816,8 @@ class TestStartupOrdering:
         def spy(coro, *args, **kwargs):
             had_site[coro.cr_code.co_name] = hasattr(program, "latitude")
             coro.close()
-            return MagicMock()
+            return asyncio.get_running_loop().create_future()
 
-        monkeypatch.setattr(
-            "sensorkit.otto.program.sk.program", lambda: mock_program_binding
-        )
         monkeypatch.setattr("sensorkit.otto.program.asyncio.create_task", spy)
 
         await program.program_init()

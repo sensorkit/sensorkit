@@ -1,18 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
+from .fakes import (
+    make_collect_request,
+    radec_request,
+    state_vector_request,
+    tle_request,
+)
 from sensorkit.astro.common import ReferenceFrame
 from sensorkit.astro.target import ICRSTarget, StateVectorTarget, TLETarget
 from sensorkit.udl.models import UDLAPIConfig, UDLConfig
 from sensorkit.udl.program import UDLProgram
 
-from conftest import MockCollectRequest
-
 
 @pytest.fixture
 def program():
     config = UDLConfig(
-        entity="udl_program",
         controller="controller1",
         api=UDLAPIConfig(
             id_sensor="SENSOR-01",
@@ -26,7 +29,7 @@ def program():
 
 class TestBuildTargetTLE:
     def test_tle_target(self, program):
-        request = MockCollectRequest.with_tle(sat_no=25544)
+        request = tle_request(sat_no=25544)
         target = program._build_target(request)
 
         assert isinstance(target, TLETarget)
@@ -34,8 +37,7 @@ class TestBuildTargetTLE:
         assert "25544" in target.tle.line1
 
     def test_tle_target_no_sat_no(self, program):
-        request = MockCollectRequest.with_tle(sat_no=None, orig_object_id="99999")
-        request.elset.sat_no = None
+        request = tle_request(sat_no=None, orig_object_id="99999")
         target = program._build_target(request)
 
         assert isinstance(target, TLETarget)
@@ -44,7 +46,7 @@ class TestBuildTargetTLE:
 
 class TestBuildTargetStateVector:
     def test_state_vector_target(self, program):
-        request = MockCollectRequest.with_state_vector()
+        request = state_vector_request()
         target = program._build_target(request)
 
         assert isinstance(target, StateVectorTarget)
@@ -58,13 +60,13 @@ class TestBuildTargetStateVector:
         assert target.sv.v.z == 0.0
 
     def test_state_vector_j2000_frame(self, program):
-        request = MockCollectRequest.with_state_vector()
+        request = state_vector_request()
         target = program._build_target(request)
 
         assert target.frame == ReferenceFrame.GCRF
 
     def test_state_vector_teme_frame(self, program):
-        request = MockCollectRequest.with_state_vector()
+        request = state_vector_request()
         request.state_vector.reference_frame = "TEME"
         target = program._build_target(request)
 
@@ -73,7 +75,7 @@ class TestBuildTargetStateVector:
 
 class TestBuildTargetRADec:
     def test_radec_target(self, program):
-        request = MockCollectRequest.with_radec(ra=180.0, dec=45.0)
+        request = radec_request(ra=180.0, dec=45.0)
         target = program._build_target(request)
 
         assert isinstance(target, ICRSTarget)
@@ -84,7 +86,7 @@ class TestBuildTargetRADec:
 class TestBuildTargetPriority:
     def test_tle_preferred_over_radec(self, program):
         """When both TLE and RA/Dec are present, TLE takes priority."""
-        request = MockCollectRequest.with_tle()
+        request = tle_request()
         request.ra = 180.0
         request.dec = 45.0
         target = program._build_target(request)
@@ -93,7 +95,7 @@ class TestBuildTargetPriority:
 
     def test_no_target_data(self, program):
         """Returns None when no target data is available."""
-        request = MockCollectRequest.create()
+        request = make_collect_request()
         target = program._build_target(request)
 
         assert target is None

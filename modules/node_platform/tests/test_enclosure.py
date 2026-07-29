@@ -5,13 +5,13 @@ import asyncio
 
 import ourskyai_node_platform_api as osapi
 import pytest
-from conftest import (
-    MockNodePlatformAPI,
+
+from .fakes import (
+    FakeNodePlatformAPI,
     make_enclosure_status,
     make_operation_status,
     make_safety_status,
 )
-
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.enclosure import (
     NodePlatformEnclosure,
@@ -24,7 +24,7 @@ from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 Shutter = osapi.EnclosureShutterState
 
 
-def install_shutter(api: MockNodePlatformAPI, state: Shutter) -> dict:
+def install_shutter(api: FakeNodePlatformAPI, state: Shutter) -> dict:
     """Install a mutable shutter simulation. Open/close API calls mutate its state."""
     shutter = {"state": state}
 
@@ -44,7 +44,7 @@ def install_shutter(api: MockNodePlatformAPI, state: Shutter) -> dict:
     return shutter
 
 
-def install_safety(api: MockNodePlatformAPI, *, is_safe: bool, autoclose: dict | None = None):
+def install_safety(api: FakeNodePlatformAPI, *, is_safe: bool, autoclose: dict | None = None):
     """Install a safety-status response. If unsafe and *autoclose* is given, simulate the
     Platform's assisted-mode auto-close by flipping that shutter to CLOSED when polled."""
 
@@ -56,14 +56,16 @@ def install_safety(api: MockNodePlatformAPI, *, is_safe: bool, autoclose: dict |
     api.set_response("v1_get_safety_status", _safety)
 
 
-def install_mode(api: MockNodePlatformAPI, mode: str):
+def install_mode(api: FakeNodePlatformAPI, mode: str):
     """Install the live operation-mode response queried by the enclosure ('ASSISTED'/'MANUAL')."""
-    api.set_response("v1_get_system_operation_status", lambda *a, **k: make_operation_status(mode=mode))
+    api.set_response(
+        "v1_get_system_operation_status", lambda *a, **k: make_operation_status(mode=mode)
+    )
 
 
 @pytest.fixture
 def api():
-    return MockNodePlatformAPI()
+    return FakeNodePlatformAPI()
 
 
 @pytest.fixture

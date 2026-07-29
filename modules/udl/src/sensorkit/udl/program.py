@@ -125,8 +125,10 @@ class UDLProgram:
     async def _save_state(self) -> None:
         """Persist current state to KV store."""
         try:
+            # by_alias so the dumped keys are the camelCase ones the SDK validates on the way
+            # back in; its models do not accept their own snake_case attribute names.
             self.state.pending_tasks = (
-                [request.model_dump(mode="json") for request in self.queue.iter()]
+                [request.model_dump(mode="json", by_alias=True) for request in self.queue.iter()]
                 if self.queue
                 else []
             )

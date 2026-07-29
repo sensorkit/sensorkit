@@ -3,9 +3,11 @@
 
 import math
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
+import astropy.units as u
 import pytest
+from astropy.coordinates import SkyCoord
 
 from sensorkit.astro.coords import Equatorial
 from sensorkit.otto import stars
@@ -13,21 +15,14 @@ from sensorkit.otto import stars
 # Vega, as CDS Sesame returns it
 VEGA = Equatorial(ra=279.23473, dec=38.78369)
 
-
-def _fake_skycoord(ra, dec):
-    coord = MagicMock()
-    coord.ra.deg = ra
-    coord.dec.deg = dec
-    return coord
+# Sesame is a network service, so the lookup is stubbed; everything downstream of it is real
+VEGA_SKYCOORD = SkyCoord(ra=VEGA.ra * u.deg, dec=VEGA.dec * u.deg)
 
 
 class TestResolve:
     @pytest.mark.asyncio
     async def test_resolves_a_name(self):
-        with patch(
-            "sensorkit.otto.stars.SkyCoord.from_name",
-            return_value=_fake_skycoord(VEGA.ra, VEGA.dec),
-        ):
+        with patch("sensorkit.otto.stars.SkyCoord.from_name", return_value=VEGA_SKYCOORD):
             coords = await stars.resolve("Vega")
 
         assert coords.ra == pytest.approx(VEGA.ra)
@@ -35,11 +30,16 @@ class TestResolve:
 
     @pytest.mark.asyncio
     async def test_strips_surrounding_whitespace(self):
-        lookup = MagicMock(return_value=_fake_skycoord(VEGA.ra, VEGA.dec))
-        with patch("sensorkit.otto.stars.SkyCoord.from_name", lookup):
+        looked_up = []
+
+        def from_name(name):
+            looked_up.append(name)
+            return VEGA_SKYCOORD
+
+        with patch("sensorkit.otto.stars.SkyCoord.from_name", from_name):
             await stars.resolve("  HR 7001  ")
 
-        lookup.assert_called_once_with("HR 7001")
+        assert looked_up == ["HR 7001"]
 
     @pytest.mark.asyncio
     async def test_unknown_name_is_unresolved(self):
@@ -66,9 +66,7 @@ class TestPosition:
     def test_transits_due_south_below_the_zenith(self):
         """At HA=0 with dec < latitude, the star is on the meridian to the south."""
         coords, now = self._at_hour_angle(0.0, dec=0.0, latitude=40.0)
-        altitude, azimuth, _, ha = stars.position(
-            coords, latitude=40.0, longitude=0.0, now=now
-        )
+        altitude, azimuth, _, ha = stars.position(coords, latitude=40.0, longitude=0.0, now=now)
 
         assert ha == pytest.approx(0.0, abs=1e-6)
         assert azimuth == pytest.approx(180.0, abs=1e-6)
@@ -78,9 +76,7 @@ class TestPosition:
     def test_transits_due_north_above_the_zenith(self):
         """With dec > latitude the meridian crossing is on the north side."""
         coords, now = self._at_hour_angle(0.0, dec=70.0, latitude=40.0)
-        altitude, azimuth, _, _ = stars.position(
-            coords, latitude=40.0, longitude=0.0, now=now
-        )
+        altitude, azimuth, _, _ = stars.position(coords, latitude=40.0, longitude=0.0, now=now)
 
         assert azimuth == pytest.approx(0.0, abs=1e-6)
         assert altitude == pytest.approx(60.0, abs=1e-6)
@@ -97,9 +93,7 @@ class TestPosition:
 
     def test_west_of_meridian_is_setting(self):
         coords, now = self._at_hour_angle(3.0, dec=0.0, latitude=40.0)
-        _, azimuth, rising, ha = stars.position(
-            coords, latitude=40.0, longitude=0.0, now=now
-        )
+        _, azimuth, rising, ha = stars.position(coords, latitude=40.0, longitude=0.0, now=now)
 
         assert ha == pytest.approx(3.0, abs=1e-6)
         assert rising is False
@@ -111,9 +105,9 @@ class TestPosition:
         coords = Equatorial(ra=0.0, dec=80.0)
         now = datetime.now(UTC)
         altitudes = [
-            stars.position(
-                coords, latitude=latitude, longitude=0.0, now=now + timedelta(hours=h)
-            )[0]
+            stars.position(coords, latitude=latitude, longitude=0.0, now=now + timedelta(hours=h))[
+                0
+            ]
             for h in range(24)
         ]
         assert min(altitudes) > latitude - (90.0 - 80.0)

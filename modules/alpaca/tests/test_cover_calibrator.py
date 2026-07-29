@@ -2,7 +2,6 @@
 """Tests for Alpaca cover calibrator device."""
 
 import pytest
-from conftest import MockAlpacaSDKDevice
 
 from sensorkit.alpaca.cover_calibrator import (
     _COVER_CLOSED,
@@ -10,6 +9,7 @@ from sensorkit.alpaca.cover_calibrator import (
     AlpacaCoverCalibratorConfig,
     AlpacaCoverCalibratorState,
 )
+from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 from sensorkit.std import Connect, Disconnect, Stop
 
 
@@ -19,7 +19,7 @@ def cover_calibrator():
     cc = config.create_device()
     cc.state = AlpacaCoverCalibratorState()
     cc.device_name = "CoverCalibrator"
-    mock = MockAlpacaSDKDevice(
+    device = FakeAlpacaSDKDevice(
         Connected=True,
         Connecting=False,
         CoverState=_COVER_CLOSED,
@@ -29,7 +29,7 @@ def cover_calibrator():
         Brightness=0,
         MaxBrightness=255,
     )
-    cc.cover_calibrator = mock
+    cc.cover_calibrator = device
     cc.device_connected = True
     cc._max_brightness = 255
     return cc

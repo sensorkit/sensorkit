@@ -2,44 +2,41 @@
 """Tests for Alpaca camera device."""
 
 import array
-from unittest.mock import MagicMock
 
 import pytest
-from conftest import MockAlpacaSDKDevice
 
 from sensorkit.alpaca.camera import (
     AlpacaCameraConfig,
     AlpacaCameraState,
 )
+from sensorkit.alpaca.testing import FakeAlpacaSDKDevice, Readings
 from sensorkit.std import Connect, Disconnect, Stop
 
 
 class TestCameraCapture:
     def test_do_capture_returns_image_data(self):
-        """Test the synchronous capture method with a mock camera."""
+        """Test the synchronous capture method with a fake camera."""
         config = AlpacaCameraConfig(host="localhost")
         cam = config.create_device()
 
-        # Mock the camera object
-        mock_camera = MagicMock()
-        mock_camera.ImageReady = True
-        mock_camera.ImageArrayRaw = array.array("H", [100, 200, 300, 400, 500, 600])
-        cam.camera = mock_camera
+        cam.camera = FakeAlpacaSDKDevice(
+            ImageReady=True,
+            ImageArrayRaw=array.array("H", [100, 200, 300, 400, 500, 600]),
+        )
 
         result = cam._do_capture(1.0, True, 10.0)
         assert len(result) == 6
-        mock_camera.StartExposure.assert_called_once_with(1.0, True)
+        assert cam.camera.calls("StartExposure") == [((1.0, True), {})]
 
     def test_do_capture_polls_until_ready(self):
         """Test that capture polls ImageReady until True."""
         config = AlpacaCameraConfig(host="localhost")
         cam = config.create_device()
 
-        ready_calls = [False, False, True]
-        mock_camera = MagicMock()
-        type(mock_camera).ImageReady = property(lambda self: ready_calls.pop(0))
-        mock_camera.ImageArrayRaw = array.array("H", [100])
-        cam.camera = mock_camera
+        cam.camera = FakeAlpacaSDKDevice(
+            ImageReady=Readings(False, False, True),
+            ImageArrayRaw=array.array("H", [100]),
+        )
 
         result = cam._do_capture(0.1, True, 10.0)
         assert result == array.array("H", [100])
@@ -49,9 +46,7 @@ class TestCameraCapture:
         config = AlpacaCameraConfig(host="localhost")
         cam = config.create_device()
 
-        mock_camera = MagicMock()
-        mock_camera.ImageReady = False
-        cam.camera = mock_camera
+        cam.camera = FakeAlpacaSDKDevice(ImageReady=False)
 
         with pytest.raises(RuntimeError, match="timed out"):
             cam._do_capture(0.0, True, 0.5)
@@ -63,7 +58,7 @@ def camera():
     cam = config.create_device()
     cam.state = AlpacaCameraState()
     cam.device_name = "Camera"
-    mock = MockAlpacaSDKDevice(
+    device = FakeAlpacaSDKDevice(
         Connected=True,
         Connecting=False,
         ImageReady=False,
@@ -85,7 +80,7 @@ def camera():
         CanPulseGuide=False,
         HasShutter=True,
     )
-    cam.camera = mock
+    cam.camera = device
     cam.device_connected = True
     cam._can_abort_exposure = True
     cam._can_stop_exposure = True
@@ -136,9 +131,7 @@ class TestCameraLifecycle:
     async def test_camera_set_binning(self, camera):
         from sensorkit.std.instrument import Binning, ConfigureCameraSensor
 
-        await camera.camera_set_binning(
-            ConfigureCameraSensor(binning=Binning(x=2, y=2))
-        )
+        await camera.camera_set_binning(ConfigureCameraSensor(binning=Binning(x=2, y=2)))
         assert camera.camera._properties["BinX"] == 2
         assert camera.camera._properties["BinY"] == 2
 

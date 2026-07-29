@@ -1,10 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for Node Platform base device."""
 
-from unittest.mock import MagicMock
-
 import pytest
 
+from .fakes import RecordingSDK
 from sensorkit.node_platform.device import (
     DeviceConnectionError,
     NodePlatformAPI,
@@ -46,29 +45,29 @@ class TestApiRequestTimeout:
     @pytest.mark.asyncio
     async def test_injects_request_timeout(self):
         api = NodePlatformAPI(host="localhost", request_timeout=12.5)
-        api._sdk = MagicMock()
+        api._sdk = RecordingSDK()
 
         await api.call("v1_get_safety_status")
 
-        _, kwargs = api._sdk.v1_get_safety_status.call_args
+        ((_args, kwargs),) = api._sdk.find_calls("v1_get_safety_status")
         assert kwargs["_request_timeout"] == 12.5
 
     @pytest.mark.asyncio
     async def test_not_injected_when_unset(self):
         api = NodePlatformAPI(host="localhost")  # request_timeout defaults to None
-        api._sdk = MagicMock()
+        api._sdk = RecordingSDK()
 
         await api.call("v1_get_safety_status")
 
-        _, kwargs = api._sdk.v1_get_safety_status.call_args
+        ((_args, kwargs),) = api._sdk.find_calls("v1_get_safety_status")
         assert "_request_timeout" not in kwargs
 
     @pytest.mark.asyncio
     async def test_explicit_value_not_overridden(self):
         api = NodePlatformAPI(host="localhost", request_timeout=12.5)
-        api._sdk = MagicMock()
+        api._sdk = RecordingSDK()
 
         await api.call("v1_get_safety_status", _request_timeout=3.0)
 
-        _, kwargs = api._sdk.v1_get_safety_status.call_args
+        ((_args, kwargs),) = api._sdk.find_calls("v1_get_safety_status")
         assert kwargs["_request_timeout"] == 3.0

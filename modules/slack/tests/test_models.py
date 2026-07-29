@@ -42,11 +42,13 @@ class TestStateWatch:
         assert watch.condition.threshold is False
 
     def test_from_dict(self):
-        watch = StateWatch.model_validate({
-            "keyword": "Temperature",
-            "field": "temperature",
-            "condition": {"kind": "crosses_above", "threshold": 30.0},
-        })
+        watch = StateWatch.model_validate(
+            {
+                "keyword": "Temperature",
+                "field": "temperature",
+                "condition": {"kind": "crosses_above", "threshold": 30.0},
+            }
+        )
         assert isinstance(watch.condition, CrossesAboveCondition)
         assert watch.condition.threshold == 30.0
 
@@ -93,32 +95,34 @@ class TestChannelConfig:
 
 class TestSlackConfig:
     def test_parse_from_dict(self):
-        config = SlackConfig.model_validate({
-            "channels": {
-                "alerts": {
-                    "channel": "#observatory-alerts",
-                    "severity": ["critical", "warning"],
+        config = SlackConfig.model_validate(
+            {
+                "channels": {
+                    "alerts": {
+                        "channel": "#observatory-alerts",
+                        "severity": ["critical", "warning"],
+                    },
+                    "log": {
+                        "channel": "#observatory-log",
+                        "severity": ["info"],
+                    },
                 },
-                "log": {
-                    "channel": "#observatory-log",
-                    "severity": ["info"],
-                },
-            },
-            "rules": [
-                {
-                    "name": "device_disconnect",
-                    "severity": "critical",
-                    "state_watches": [
-                        {
-                            "keyword": "Connected",
-                            "field": "is_connected",
-                            "condition": {"kind": "becomes", "threshold": False},
-                        },
-                    ],
-                    "deduplicate": 300,
-                },
-            ],
-        })
+                "rules": [
+                    {
+                        "name": "device_disconnect",
+                        "severity": "critical",
+                        "state_watches": [
+                            {
+                                "keyword": "Connected",
+                                "field": "is_connected",
+                                "condition": {"kind": "becomes", "threshold": False},
+                            },
+                        ],
+                        "deduplicate": 300,
+                    },
+                ],
+            }
+        )
 
         assert config.env_file == ".env"
         assert len(config.channels) == 2

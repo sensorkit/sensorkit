@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
-from conftest import MockNinaClient
 
+from .fakes import FakeNinaClient
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
 from sensorkit.nina.mount import NinaMountConfig, NinaMountState
@@ -10,19 +10,21 @@ from sensorkit.std import FollowTarget
 
 @pytest.fixture
 def client():
-    return MockNinaClient(info_response={
-        "Connected": True,
-        "Slewing": False,
-        "Tracking": True,
-        "AtHome": False,
-        "AtPark": False,
-        "RightAscension": 12.0,
-        "Declination": 30.0,
-        "Altitude": 45.0,
-        "Azimuth": 180.0,
-        "RightAscensionRate": 0.0,
-        "DeclinationRate": 0.0,
-    })
+    return FakeNinaClient(
+        info_response={
+            "Connected": True,
+            "Slewing": False,
+            "Tracking": True,
+            "AtHome": False,
+            "AtPark": False,
+            "RightAscension": 12.0,
+            "Declination": 30.0,
+            "Altitude": 45.0,
+            "Azimuth": 180.0,
+            "RightAscensionRate": 0.0,
+            "DeclinationRate": 0.0,
+        }
+    )
 
 
 @pytest.fixture
@@ -45,7 +47,9 @@ ISS_TLE = TLE(
 )
 
 
-@pytest.mark.xfail(reason="TLE tracking via NINA is best-effort; adapt may fail without live propagation")
+@pytest.mark.xfail(
+    reason="TLE tracking via NINA is best-effort; adapt may fail without live propagation"
+)
 @pytest.mark.asyncio
 async def test_mount_follow_tle(client, mount):
     target = TLETarget(tle=ISS_TLE)

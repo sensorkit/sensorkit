@@ -2,8 +2,8 @@
 """Tests for Node Platform focuser device."""
 
 import pytest
-from conftest import MockNodePlatformAPI, make_focuser_status
 
+from .fakes import FakeNodePlatformAPI, make_focuser_status
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.focuser import (
     NodePlatformFocuser,
@@ -16,7 +16,7 @@ from sensorkit.std.optics import ChangeFocusPosition
 
 @pytest.fixture
 def api():
-    return MockNodePlatformAPI()
+    return FakeNodePlatformAPI()
 
 
 @pytest.fixture

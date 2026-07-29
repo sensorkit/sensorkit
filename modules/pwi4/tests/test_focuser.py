@@ -2,13 +2,14 @@
 """Test PWI4 focuser device."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import MockPWI4Client
 
+from .fakes import FakePWI4Client
 from sensorkit.pwi4.device import DeviceConnectionError
 from sensorkit.pwi4.focuser import PWI4Focuser, PWI4FocuserConfig
+from sensorkit.std import Stop
+from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
 
 
 class TestPWI4FocuserConfig:
@@ -20,7 +21,7 @@ class TestPWI4FocuserConfig:
 
     def test_create_device(self):
         config = PWI4FocuserConfig()
-        client = MockPWI4Client()
+        client = FakePWI4Client()
         device = config.create_device(client)
         assert isinstance(device, PWI4Focuser)
 
@@ -28,7 +29,7 @@ class TestPWI4FocuserConfig:
 class TestPWI4Focuser:
     @pytest.mark.asyncio
     async def test_init_connects_and_enables(self):
-        client = MockPWI4Client()
+        client = FakePWI4Client()
         config = PWI4FocuserConfig()
         focuser = PWI4Focuser(config=config, client=client)
 
@@ -41,14 +42,12 @@ class TestPWI4Focuser:
 
     @pytest.mark.asyncio
     async def test_move(self):
-        client = MockPWI4Client()
+        client = FakePWI4Client()
         config = PWI4FocuserConfig()
         focuser = PWI4Focuser(config=config, client=client)
         focuser.device_connected = True
 
-        cmd = MagicMock()
-        cmd.position = 20000
-        await focuser.focuser_change(cmd)
+        await focuser.focuser_change(ChangeFocusPosition(position=20000))
 
         reqs = client.find_requests("/focuser/goto")
         assert len(reqs) == 1
@@ -56,32 +55,29 @@ class TestPWI4Focuser:
 
     @pytest.mark.asyncio
     async def test_move_requires_connected(self):
-        client = MockPWI4Client()
+        client = FakePWI4Client()
         config = PWI4FocuserConfig()
         focuser = PWI4Focuser(config=config, client=client)
         focuser.device_connected = False
 
-        cmd = MagicMock()
-        cmd.position = 20000
-
         with pytest.raises(DeviceConnectionError):
-            await focuser.focuser_change(cmd)
+            await focuser.focuser_change(ChangeFocusPosition(position=20000))
 
     @pytest.mark.asyncio
     async def test_stop(self):
-        client = MockPWI4Client()
+        client = FakePWI4Client()
         config = PWI4FocuserConfig()
         focuser = PWI4Focuser(config=config, client=client)
         focuser.device_connected = True
 
-        await focuser.focuser_stop(MagicMock())
+        await focuser.focuser_stop(Stop())
 
         reqs = client.find_requests("/focuser/stop")
         assert len(reqs) == 1
 
     @pytest.mark.asyncio
     async def test_deinit_stops_and_disables(self):
-        client = MockPWI4Client()
+        client = FakePWI4Client()
         config = PWI4FocuserConfig()
         focuser = PWI4Focuser(config=config, client=client)
         focuser.device_connected = True
@@ -95,20 +91,17 @@ class TestPWI4Focuser:
         assert len(disable_reqs) == 1
 
     @pytest.mark.asyncio
-    async def test_status_publish(self):
-        client = MockPWI4Client()
+    async def test_status_publish(self, recorder):
+        client = FakePWI4Client()
         config = PWI4FocuserConfig(status_frequency=0.05)
         focuser = PWI4Focuser(config=config, client=client)
+        published = await recorder()
 
-        with patch("sensorkit.pwi4.focuser.sk") as mock_sk:
-            mock_device = MagicMock()
-            mock_device.publish = AsyncMock()
-            mock_sk.device.return_value = mock_device
-            mock_sk.FocusPosition = MagicMock()
+        task = asyncio.create_task(focuser.status_publish())
 
-            task = asyncio.create_task(focuser.status_publish())
-            await asyncio.sleep(0.15)
-            task.cancel()
-
+        try:
+            assert (await published.wait_for(FocusPosition)).position == 15000.0
             assert focuser.device_connected is True
-            assert mock_device.publish.call_count >= 3  # Connected + Enabled + FocusPosition
+            assert published.keys() >= {"Connected", "Enabled", "FocusPosition"}
+        finally:
+            task.cancel()

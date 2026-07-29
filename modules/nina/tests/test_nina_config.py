@@ -93,50 +93,60 @@ class TestNinaConfig:
 class TestDeviceCreation:
     def test_camera(self):
         from sensorkit.nina.camera import NinaCamera
+
         config = NinaCameraConfig(host="localhost")
         assert isinstance(config.create_device(), NinaCamera)
 
     def test_mount(self):
         from sensorkit.nina.mount import NinaMount
+
         config = NinaMountConfig(host="localhost")
         assert isinstance(config.create_device(), NinaMount)
 
     def test_dome(self):
         from sensorkit.nina.dome import NinaDome
+
         config = NinaDomeConfig(host="localhost")
         assert isinstance(config.create_device(), NinaDome)
 
     def test_focuser(self):
         from sensorkit.nina.focuser import NinaFocuser
+
         config = NinaFocuserConfig(host="localhost")
         assert isinstance(config.create_device(), NinaFocuser)
 
     def test_filter_wheel(self):
         from sensorkit.nina.filter_wheel import NinaFilterWheel
+
         config = NinaFilterWheelConfig(host="localhost")
         assert isinstance(config.create_device(), NinaFilterWheel)
 
     def test_rotator(self):
         from sensorkit.nina.rotator import NinaRotator
+
         config = NinaRotatorConfig(host="localhost")
         assert isinstance(config.create_device(), NinaRotator)
 
     def test_guider(self):
         from sensorkit.nina.guider import NinaGuider
+
         config = NinaGuiderConfig(host="localhost")
         assert isinstance(config.create_device(), NinaGuider)
 
     def test_switch(self):
         from sensorkit.nina.switch import NinaSwitch
+
         config = NinaSwitchConfig(host="localhost")
         assert isinstance(config.create_device(), NinaSwitch)
 
     def test_weather(self):
         from sensorkit.nina.weather import NinaWeather
+
         config = NinaWeatherConfig(host="localhost")
         assert isinstance(config.create_device(), NinaWeather)
 
     def test_safety_monitor(self):
         from sensorkit.nina.safety_monitor import NinaSafetyMonitor
+
         config = NinaSafetyMonitorConfig(host="localhost")
         assert isinstance(config.create_device(), NinaSafetyMonitor)

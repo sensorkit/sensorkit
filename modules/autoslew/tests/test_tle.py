@@ -43,6 +43,6 @@ async def test_follow_tle_passes_element_lines(telescope):
     await telescope.telescope_follow_target(FollowTarget(target=TLETarget(tle=_ISS)))
 
     # The staged line1/line2 must be the target's actual TLE lines.
-    calls = {args[0]: args[1] for (m, args, _kw) in telescope.telescope.calls if m == "Action"}
-    assert calls["sat:line1"] == _ISS.line1
-    assert calls["sat:line2"] == _ISS.line2
+    staged = {args[0]: args[1] for args, _ in telescope.telescope.calls("Action")}
+    assert staged["sat:line1"] == _ISS.line1
+    assert staged["sat:line2"] == _ISS.line2

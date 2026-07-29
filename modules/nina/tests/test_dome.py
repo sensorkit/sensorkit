@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
-from conftest import MockNinaClient
 
+from .fakes import FakeNinaClient
 from sensorkit.nina.dome import NinaDomeConfig, NinaDomeState
 from sensorkit.std import Connect, Disconnect, Home, Stop
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
@@ -9,14 +9,16 @@ from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 
 @pytest.fixture
 def client():
-    return MockNinaClient(info_response={
-        "Connected": True,
-        "Slewing": False,
-        "AtHome": True,
-        "AtPark": False,
-        "ShutterStatus": "ShutterClosed",
-        "Azimuth": 180.0,
-    })
+    return FakeNinaClient(
+        info_response={
+            "Connected": True,
+            "Slewing": False,
+            "AtHome": True,
+            "AtPark": False,
+            "ShutterStatus": "ShutterClosed",
+            "Azimuth": 180.0,
+        }
+    )
 
 
 @pytest.fixture

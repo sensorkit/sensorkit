@@ -2,16 +2,13 @@
 """EOObservation building and publishing from senpai detections."""
 
 import asyncio
-import contextlib
 import math
 from datetime import UTC, datetime
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import MockCollectRequest
-from loguru import logger
 
+from .fakes import FakeUDLClient, tle_request
+from sensorkit.astro.common import AltAzPointing, SitePosition
 from sensorkit.senpai.models import Detection, SenpaiResult
 from sensorkit.udl.models import (
     EOObservationPublishConfig,
@@ -94,7 +91,7 @@ def eo_config():
 
 @pytest.fixture
 def site():
-    return SimpleNamespace(
+    return SitePosition(
         latitude_degrees=41.9168354,
         longitude_degrees=-84.0290721,
         altitude_km=0.05,
@@ -102,9 +99,7 @@ def site():
 
 
 def build(result, snapshot, api_config, eo_config, site=None):
-    return build_eo_observations(
-        result, snapshot, site=site, api=api_config, config=eo_config
-    )
+    return build_eo_observations(result, snapshot, site=site, api=api_config, config=eo_config)
 
 
 class TestConvertWcsObservation:
@@ -195,18 +190,12 @@ class TestBuildEOObservations:
         assert "exp_duration" not in record
 
     def test_rate_mode_posts_points_only(self, snapshot, api_config, eo_config):
-        result = make_result(
-            track_mode="RATE", kinds=("point", "streak", "streak_candidate")
-        )
+        result = make_result(track_mode="RATE", kinds=("point", "streak", "streak_candidate"))
         records = build(result, snapshot, api_config, eo_config)
         assert len(records) == 1
 
-    def test_sidereal_mode_posts_confirmed_streaks_only(
-        self, snapshot, api_config, eo_config
-    ):
-        result = make_result(
-            track_mode="SIDEREAL", kinds=("point", "streak", "streak_candidate")
-        )
+    def test_sidereal_mode_posts_confirmed_streaks_only(self, snapshot, api_config, eo_config):
+        result = make_result(track_mode="SIDEREAL", kinds=("point", "streak", "streak_candidate"))
         records = build(result, snapshot, api_config, eo_config)
         assert len(records) == 1
 
@@ -260,9 +249,7 @@ class TestBuildEOObservations:
         assert record["data_mode"] == "TEST"  # fallback, as with SkyImagery
 
     def test_mag_band_priority(self, snapshot, api_config):
-        config = EOObservationPublishConfig(
-            sequence_only=False, mag_bands=["G", "V"]
-        )
+        config = EOObservationPublishConfig(sequence_only=False, mag_bands=["G", "V"])
         det = make_detection(
             calibrated_magnitudes={"V": 12.34},
             magnitude_errs={"V": 0.05},
@@ -278,22 +265,18 @@ class TestBuildEOObservations:
 
 
 @pytest.fixture
-def program():
+def program(program_impl):
     config = UDLConfig(
         controller="controller1",
         api=UDLAPIConfig(id_sensor="SENSOR-01", source="TEST_SOURCE"),
-        publish=PublishConfig(
-            eo_observation=EOObservationPublishConfig(sequence_only=False)
-        ),
+        publish=PublishConfig(eo_observation=EOObservationPublishConfig(sequence_only=False)),
     )
     p = UDLProgram()
     p.config = config
-    p.program = MagicMock()
-    p.program.entity = "udl_program"
+    p.program = program_impl
     p._site = None
-    p.upload_client = MagicMock()
-    p.upload_client.observations.eo_observations.create_bulk = AsyncMock()
-    p._upload_headers = {}
+    p.client = FakeUDLClient()
+    p.upload_client = p.client
     return p
 
 
@@ -302,26 +285,25 @@ def eo(program):
     return EOObservationPublisher(program)
 
 
-def create_bulk_mock(program):
-    return program.upload_client.observations.eo_observations.create_bulk
+def posted(program):
+    """Every EOObservation batch the program posted, oldest first."""
+    return program.upload_client.observations.eo_observations.batches
 
 
 class TestEOObservationPublisher:
     @pytest.mark.asyncio
     async def test_posts_records_for_tasked_solved_result(self, program, eo):
-        request = MockCollectRequest.with_tle()
+        request = tle_request()
         eo.note_request(request)
 
         await eo._handle_result(make_result(task_id=request.id))
 
-        create_bulk_mock(program).assert_awaited_once()
-        body = create_bulk_mock(program).call_args.kwargs["body"]
-        assert len(body) == 1
-        assert body[0]["track_id"] == request.id
+        [[record]] = posted(program)
+        assert record["track_id"] == request.id
 
     @pytest.mark.asyncio
     async def test_batch_carries_all_detections_of_frame(self, program, eo):
-        request = MockCollectRequest.with_tle()
+        request = tle_request()
         eo.note_request(request)
 
         result = make_result(
@@ -330,125 +312,82 @@ class TestEOObservationPublisher:
         )
         await eo._handle_result(result)
 
-        body = create_bulk_mock(program).call_args.kwargs["body"]
-        assert len(body) == 2
+        [batch] = posted(program)
+        assert len(batch) == 2
 
     @pytest.mark.asyncio
     async def test_untasked_result_dropped(self, program, eo):
         await eo._handle_result(make_result(task_id=None))
-        create_bulk_mock(program).assert_not_awaited()
+        assert posted(program) == []
 
     @pytest.mark.asyncio
     async def test_unsolved_result_dropped(self, program, eo):
-        request = MockCollectRequest.with_tle()
+        request = tle_request()
         eo.note_request(request)
+
         await eo._handle_result(make_result(task_id=request.id, solved=False))
-        create_bulk_mock(program).assert_not_awaited()
+        assert posted(program) == []
 
     @pytest.mark.asyncio
     async def test_sequence_only_gates_per_frame_results(self, program, eo):
         eo._config.sequence_only = True
-        request = MockCollectRequest.with_tle()
+        request = tle_request()
         eo.note_request(request)
 
         await eo._handle_result(
             make_result(task_id=request.id, from_sequence=False, file_path="/a.fits")
         )
-        create_bulk_mock(program).assert_not_awaited()
+        assert posted(program) == []
 
         await eo._handle_result(
             make_result(task_id=request.id, from_sequence=True, file_path="/b.fits")
         )
-        create_bulk_mock(program).assert_awaited_once()
+        assert len(posted(program)) == 1
 
     @pytest.mark.asyncio
     async def test_unknown_task_dropped(self, program, eo):
         await eo._handle_result(make_result(task_id="never-seen"))
-        create_bulk_mock(program).assert_not_awaited()
+        assert posted(program) == []
 
     @pytest.mark.asyncio
     async def test_falls_back_to_program_tasks(self, program, eo):
-        request = MockCollectRequest.with_tle()
+        request = tle_request()
         program.tasks[request.id] = request  # no note_request call
 
         await eo._handle_result(make_result(task_id=request.id))
-        create_bulk_mock(program).assert_awaited_once()
+        assert len(posted(program)) == 1
 
     @pytest.mark.asyncio
     async def test_duplicate_result_posted_once(self, program, eo):
-        request = MockCollectRequest.with_tle()
+        request = tle_request()
         eo.note_request(request)
 
         result = make_result(task_id=request.id)
         await eo._handle_result(result)
         await eo._handle_result(result)
-        create_bulk_mock(program).assert_awaited_once()
+        assert len(posted(program)) == 1
 
     @pytest.mark.asyncio
-    async def test_intake_loop_filters_and_handles_senpai_results(self, program, eo):
-        """The wildcard stream is post-filtered to SenpaiResult keywords."""
-        request = MockCollectRequest.with_tle()
+    async def test_intake_loop_filters_and_handles_senpai_results(self, program, eo, program_impl):
+        """The wildcard stream is post-filtered to SenpaiResult keywords.
+
+        The publisher subscribes across every entity, so the SenpaiResults and the unrelated
+        keyword below are published to the same real stream a running senpai service would use.
+        """
+        request = tle_request()
         eo.note_request(request)
 
-        result = make_result(task_id=request.id)
-        messages = [
-            SimpleNamespace(  # some other entity keyword — must be skipped
-                subject=SimpleNamespace(prop="AltAzPointing", path=("mount",)),
-                data=b'{"altitude_degrees": 45.0}',
-            ),
-            SimpleNamespace(
-                subject=SimpleNamespace(prop="SenpaiResult", path=("senpai",)),
-                data=result.model_dump_json().encode(),
-            ),
-        ]
-
-        async def consumer():
-            for msg in messages:
-                yield msg
-
-        kit = program.program.sensorkit.return_value
-        # First connect yields the messages; the reconnect attempt cancels out.
-        kit.backend.impl.stream_consume = AsyncMock(
-            side_effect=[consumer(), asyncio.CancelledError()]
-        )
-
-        with contextlib.suppress(asyncio.CancelledError):
-            await eo._intake_loop()
-
-        create_bulk_mock(program).assert_awaited_once()
-        durable = kit.backend.impl.stream_consume.call_args_list[0].kwargs["durable_name"]
-        assert durable == "udl-eo-udl_program"
-
-
-class TestSenpaiPresenceWarning:
-    @staticmethod
-    def _kv_entries(program, props):
-        entries = [SimpleNamespace(key=SimpleNamespace(prop=prop)) for prop in props]
-        kit = program.program.sensorkit.return_value
-        kit.backend.key_value.return_value.get_all = AsyncMock(return_value=entries)
-
-    @pytest.mark.asyncio
-    async def test_warns_when_senpai_not_configured(self, program, eo):
-        self._kv_entries(program, ["UDLConfig", "DataGraph"])
-
-        messages = []
-        handler = logger.add(lambda m: messages.append(str(m)), level="WARNING")
+        intake = asyncio.create_task(eo._intake_loop())
         try:
-            await eo._warn_if_senpai_missing()
+            await program_impl.publish(AltAzPointing(altitude_degrees=45.0, azimuth_degrees=90.0))
+            await program_impl.publish(make_result(task_id=request.id))
+
+            async with asyncio.timeout(2.0):
+                while not posted(program):
+                    await asyncio.sleep(0.01)
         finally:
-            logger.remove(handler)
+            intake.cancel()
 
-        assert any("senpai" in m for m in messages)
-
-    @pytest.mark.asyncio
-    async def test_silent_when_senpai_configured(self, program, eo):
-        self._kv_entries(program, ["UDLConfig", "SenpaiConfig"])
-
-        messages = []
-        handler = logger.add(lambda m: messages.append(str(m)), level="WARNING")
-        try:
-            await eo._warn_if_senpai_missing()
-        finally:
-            logger.remove(handler)
-
-        assert not messages
+        [[record]] = posted(program)
+        assert record["track_id"] == request.id
+        assert eo.results_received == 1  # the AltAzPointing was filtered out

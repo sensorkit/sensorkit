@@ -153,12 +153,17 @@ def _is_single_resolve(text: str) -> bool:
     )
 
 
-def _candidates(text: str) -> list[str]:
+def candidates(text: str) -> list[str]:
     """Pull operator-facing candidate labels out of an ambiguous-match response.
 
     Major-body tables list an ID# per row, which is what the operator should put
-    in the config; small-body listings are returned as-is for reference.
+    in the config; small-body listings are returned as-is for reference. A
+    response that matched nothing has no candidates to offer, so it yields an
+    empty list — that is how `resolve` tells "ambiguous" from "unknown".
     """
+    if "No matches found" in text:
+        return []
+
     out: list[str] = []
     started = False
     for line in text.splitlines():
@@ -210,10 +215,9 @@ async def resolve(name: str, timeout: float = 30.0) -> tuple[str, str] | None:
         return None
 
     if not _is_single_resolve(text):
-        candidates = [] if "No matches found" in text else _candidates(text)
-        if candidates:
+        if matches := candidates(text):
             logger.warning(
-                f"Horizons object {name!r} is ambiguous; use one of: {', '.join(candidates)}"
+                f"Horizons object {name!r} is ambiguous; use one of: {', '.join(matches)}"
             )
         else:
             logger.warning(f"Horizons has no match for {name!r}")

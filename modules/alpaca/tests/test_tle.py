@@ -12,4 +12,4 @@ async def test_telescope_follow_tle():
     TLE tracking requires a real satellite TLE, Skyfield propagation, and
     realistic timing that is difficult to mock reliably.
     """
-    assert False
+    raise AssertionError("TLE follow is not yet exercised")

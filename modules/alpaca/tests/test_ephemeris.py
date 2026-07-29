@@ -5,12 +5,12 @@ import astropy.units as u
 import pytest
 from astropy.coordinates import EarthLocation
 from astropy.time import Time
-from conftest import MockAlpacaSDKDevice
 
 from sensorkit.alpaca.telescope import (
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
 )
+from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 from sensorkit.astro.common import ReferenceFrame
 from sensorkit.astro.coords import Equatorial, Geodetic
 from sensorkit.astro.target import EphemerisTarget
@@ -25,7 +25,7 @@ def telescope():
     t = config.create_device()
     t.state = AlpacaTelescopeState()
     t.device_name = "Telescope"
-    mock = MockAlpacaSDKDevice(
+    device = FakeAlpacaSDKDevice(
         Connected=True,
         Connecting=False,
         Slewing=False,
@@ -61,7 +61,7 @@ def telescope():
         SideOfPier=-1,
         SiderealTime=0.0,
     )
-    t.telescope = mock
+    t.telescope = device
     t.device_connected = True
     t._can_slew = True
     t._can_slew_async = True

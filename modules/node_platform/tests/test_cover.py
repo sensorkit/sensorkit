@@ -2,8 +2,8 @@
 """Tests for Node Platform cover device."""
 
 import pytest
-from conftest import MockNodePlatformAPI, make_cover_status
 
+from .fakes import FakeNodePlatformAPI, make_cover_status
 from sensorkit.node_platform.cover import (
     NodePlatformCover,
     NodePlatformCoverConfig,
@@ -16,7 +16,7 @@ from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 
 @pytest.fixture
 def api():
-    return MockNodePlatformAPI()
+    return FakeNodePlatformAPI()
 
 
 @pytest.fixture

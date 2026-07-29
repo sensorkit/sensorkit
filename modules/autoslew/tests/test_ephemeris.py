@@ -25,9 +25,9 @@ async def test_follow_ephemeris_reduces_to_position_and_rate(telescope):
     assert telescope._tracking is True
 
     # Slewed to the first sample, converted ICRS -> JNow (not the raw ICRS value).
-    slews = [c for c in telescope.telescope.calls if c[0] == "SlewToCoordinatesAsync"]
+    slews = telescope.telescope.calls("SlewToCoordinatesAsync")
     assert slews
-    ra_hours, _dec = slews[-1][1]
+    ra_hours, _dec = slews[-1][0]
     exp_ra, _ = icrs_to_jnow(90.0, 20.0, Time.now(), telescope._location)
     assert ra_hours == pytest.approx(exp_ra / 15.0, abs=1e-2)
 

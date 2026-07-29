@@ -9,7 +9,6 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from conftest import make_data_graph_writer
 
 from sensorkit.astro.common import RADecPointing
 from sensorkit.data.context import Context
@@ -31,7 +30,12 @@ from sensorkit.std import (
 )
 
 
-def fake_mount_sub(ra_hours: float, dec_degrees: float, ra_rate: float = 0.0, dec_rate: float = 0.0):
+def fake_mount_sub(
+    ra_hours: float,
+    dec_degrees: float,
+    ra_rate: float = 0.0,
+    dec_rate: float = 0.0,
+):
     """A stand-in for a started mount ContextSubscription.
 
     Exposes the same `.cache.get(KeywordType)` surface the camera reads, holding
@@ -81,21 +85,21 @@ def make_camera(**overrides) -> SdasimCamera:
 
 class TestBinning:
     @pytest.mark.asyncio
-    async def test_symmetric_binning_set(self, mock_sk_device):
+    async def test_symmetric_binning_set(self, device_impl):
         camera = make_camera()
         await camera.camera_set_binning(ConfigureCameraSensor(binning=Binning(x=2, y=2)))
         assert camera._bin_x == 2
         assert camera._bin_y == 2
 
     @pytest.mark.asyncio
-    async def test_asymmetric_binning_coerced_to_x(self, mock_sk_device):
+    async def test_asymmetric_binning_coerced_to_x(self, device_impl):
         camera = make_camera()
         await camera.camera_set_binning(ConfigureCameraSensor(binning=Binning(x=3, y=1)))
         assert camera._bin_x == 3
         assert camera._bin_y == 3
 
     @pytest.mark.asyncio
-    async def test_no_binning_field_is_noop(self, mock_sk_device):
+    async def test_no_binning_field_is_noop(self, device_impl):
         camera = make_camera()
         await camera.camera_set_binning(ConfigureCameraSensor())
         assert camera._bin_x == 1
@@ -103,7 +107,7 @@ class TestBinning:
 
 class TestTemperature:
     @pytest.mark.asyncio
-    async def test_setpoint_tracked(self, mock_sk_device):
+    async def test_setpoint_tracked(self, device_impl):
         camera = make_camera()
         await camera.camera_set_temperature(
             ConfigureCameraCooler(
@@ -116,7 +120,7 @@ class TestTemperature:
 
 class TestCapture:
     @pytest.mark.asyncio
-    async def test_capture_passes_pointing_and_rate(self, mock_sk_device):
+    async def test_capture_passes_pointing_and_rate(self, device_impl):
         # render_frame(exposure, point_ra, point_dec, mount_ra_rate, mount_dec_rate, obs_time, bin)
         camera = make_camera()
         await camera.camera_capture(CameraCapture(integration_time=0.0, context=Context()))
@@ -126,7 +130,7 @@ class TestCapture:
         assert camera._num_targets == 3
 
     @pytest.mark.asyncio
-    async def test_capture_falls_back_to_scene_center_without_mount(self, mock_sk_device):
+    async def test_capture_falls_back_to_scene_center_without_mount(self, device_impl):
         camera = make_camera()
         camera._mount_sub = None  # no mount subscription -> scene center, sidereal
         camera._engine.default_point = (123.0, -45.0)
@@ -137,7 +141,7 @@ class TestCapture:
         assert args[3] == 0.0 and args[4] == 0.0  # sidereal fallback
 
     @pytest.mark.asyncio
-    async def test_capture_uses_inertial_mount_rate(self, mock_sk_device):
+    async def test_capture_uses_inertial_mount_rate(self, device_impl):
         # A rate track publishes nonzero ICRF axis rates; they pass straight through.
         camera = make_camera()
         camera._mount_sub = fake_mount_sub(6.0, 20.0, ra_rate=0.5, dec_rate=-0.25)
@@ -147,7 +151,7 @@ class TestCapture:
         assert args[4] == pytest.approx(-0.25)
 
     @pytest.mark.asyncio
-    async def test_capture_no_datagraph_is_safe(self, mock_sk_device):
+    async def test_capture_no_datagraph_is_safe(self, device_impl):
         # data_graph returns None by default -> capture renders but discards.
         # integration_time=0 so the exposure wait is a no-op.
         camera = make_camera()
@@ -155,35 +159,28 @@ class TestCapture:
         camera._engine.render_frame.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_capture_holds_frame_for_exposure(self, mock_sk_device):
+    async def test_capture_holds_frame_for_exposure(self, device_impl):
         # The frame must not be yielded before the commanded integration time.
         import time
 
         camera = make_camera()
         exposure = 0.3
         start = time.perf_counter()
-        await camera.camera_capture(
-            CameraCapture(integration_time=exposure, context=Context())
-        )
+        await camera.camera_capture(CameraCapture(integration_time=exposure, context=Context()))
         elapsed = time.perf_counter() - start
         assert elapsed >= exposure  # render is instant (mocked), so the wait dominates
 
     @pytest.mark.asyncio
-    async def test_capture_writes_to_datagraph(self, mock_sk_device):
-        graph, writer = make_data_graph_writer()
-        mock_sk_device.data_graph.return_value = graph
-
+    async def test_capture_writes_to_datagraph(self, device_impl, data_graph):
         camera = make_camera()
         cmd = CameraCapture(integration_time=0.0, context=Context())
         await camera.camera_capture(cmd)
-        context = cmd.context
+
+        async with asyncio.timeout(2.0):
+            context, written = await anext(data_graph.app_sink().consume())
 
         # Rendered 48x64 uint16 -> 48*64*2 bytes written.
-        writer.write.assert_called_once()
-        written = writer.write.call_args[0][0]
         assert len(written) == 48 * 64 * 2
-        writer.drain.assert_awaited_once()
-        writer.wait_closed.assert_awaited_once()
 
         # Context carries the image structure (as ImageInfo) + acquisition metadata for
         # array_to_fits. BITPIX is derived by astropy at write time, not stored here.
@@ -197,7 +194,7 @@ class TestCapture:
         assert context.get(FileNameTemplate)
 
     @pytest.mark.asyncio
-    async def test_capture_requires_connected(self, mock_sk_device):
+    async def test_capture_requires_connected(self, device_impl):
         camera = make_camera()
         camera.device_connected = False
         with pytest.raises(DeviceConnectionError):

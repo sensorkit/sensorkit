@@ -6,17 +6,18 @@ alpaca module's tests; only the ASA extensions are exercised here.
 """
 
 import pytest
-from conftest import MockAutoslewSDKDevice
 
 from sensorkit.autoslew.rotator import AutoslewRotatorConfig, AutoslewRotatorState
+
+from .fakes import FakeAutoslewSDKDevice
 
 
 def _rotator(**cfg):
     config = AutoslewRotatorConfig(host="localhost", timeout=5.0, status_frequency=0.05, **cfg)
     d = config.create_device()
     d.state = AutoslewRotatorState()
-    d.rotator = MockAutoslewSDKDevice(Connected=True, IsMoving=False, MechanicalPosition=100.0)
-    d.telescope = MockAutoslewSDKDevice(Connected=True)  # ASA backbone
+    d.rotator = FakeAutoslewSDKDevice(Connected=True, IsMoving=False, MechanicalPosition=100.0)
+    d.telescope = FakeAutoslewSDKDevice(Connected=True)  # ASA backbone
     d.device_connected = True
     d.rotator_position = 100.0
     d._can_reverse = False
@@ -34,9 +35,9 @@ async def test_applies_slew_option():
     d = _rotator(slew_option=2)
     await d._apply_asa_settings()
     setslew = [
-        c for c in d.telescope.calls if c[0] == "Action" and c[1][0] == "rotator:setslewoption"
+        args for args, _ in d.telescope.calls("Action") if args[0] == "rotator:setslewoption"
     ]
-    assert setslew and setslew[-1][1][1] == "2"
+    assert setslew and setslew[-1][1] == "2"
 
 
 @pytest.mark.asyncio
