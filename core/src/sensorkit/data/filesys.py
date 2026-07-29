@@ -290,7 +290,8 @@ async def get_file_reader(
 
                 reader.feed_data(chunk)
 
-            reader.feed_eof()
+        # Send the EOF signal after the file has closed.
+        reader.feed_eof()
 
     # Start feeding data in the background.
     task = asyncio.create_task(feed_data())
