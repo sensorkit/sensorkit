@@ -390,6 +390,9 @@ class TheSkyTelescope(TheSkyDevice):
         self._stop_fast_status()
         await self.telescope_unpark()
 
+        # Must first abort any in-progress Raven3.trackLEOCommand.
+        aborted_satellite_track = await self._abort_satellite_track()
+
         target = await cmd.target.adapt(
             ICRSTarget,
             AltAzTarget,
@@ -589,6 +592,11 @@ class TheSkyTelescope(TheSkyDevice):
                         logger.debug("disabled tracking")
                     case ReferenceFrame.ICRF:
                         logger.debug("enabling sidereal tracking")
+                        # If we just aborted a satellite track, the abort latch
+                        # leaves IsSlewComplete stuck; clear it with a real slew
+                        # before SetTracking, or _wait_for_mount would poll forever.
+                        if aborted_satellite_track:
+                            await self._slew_to_current_radec()
                         tracked = await self._set_tracking(1, 1, 0, 0)
                         await self._wait_for_mount(tracking=tracked, await_onset=False)
                         self._start_fast_status()
@@ -685,6 +693,68 @@ class TheSkyTelescope(TheSkyDevice):
             )
             return False
         return True
+
+    async def _abort_satellite_track(self) -> bool:
+        """Abort a Raven3 satellite track and wait for it to become idle.
+
+        Returns True if a track was active and aborted, False if none was
+        running (or the mount doesn't implement Raven3).
+        """
+        try:
+            status = (await self.execute("""Raven3.trackLEOStatus;""")).strip()
+        except CommandNotSupportedError:
+            return False
+
+        if status == "0":
+            return False
+
+        logger.debug("aborting satellite track")
+        await self.execute("""Raven3.trackLEOAbort();""")
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                try:
+                    if (await self.execute("""Raven3.trackLEOStatus;""")).strip() == "0":
+                        break
+                except ProcessAbortedError:
+                    pass  # transient 212 after abort; keep polling
+                await asyncio.sleep(0.2)
+
+        logger.debug("aborted satellite track")
+        return True
+
+    async def _slew_to_current_radec(self):
+        """Slew to the mount's current RA/Dec.
+
+        After trackLEOAbort(), IsSlewComplete stays latched on error 212 until a
+        real slew resets it -- but the mount is NOT command-ready the instant
+        trackLEOStatus reads 0. A slew fired too soon is rejected with error 121
+        ("A Mount command is already in progress"), which leaves the latch stuck
+        forever and _wait_for_mount hanging. Retry the slew until it is *accepted*
+        (bounded by config.timeout), then wait for it to settle.
+        """
+        resp = await self.execute(
+            """
+            var Out;
+            sky6RASCOMTele.GetRaDec();
+            Out = [sky6RASCOMTele.dRa, sky6RASCOMTele.dDec];
+            """
+        )
+        ra, dec = (float(x) for x in resp.split(","))
+
+        async with asyncio.timeout(self.config.timeout):
+            while True:
+                try:
+                    await self.execute(
+                        f"""
+                        sky6RASCOMTele.SlewToRaDec({ra:0.6f}, {dec:0.6f}, "object");
+                        """
+                    )
+                    break
+                except MountCommandInProgressError:
+                    await asyncio.sleep(0.1)
+
+        await self._wait_for_mount(tracking=True)
 
     def _start_fast_status(self):
         if self._fast_status_task is None or self._fast_status_task.done():
