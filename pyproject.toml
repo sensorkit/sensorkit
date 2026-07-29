@@ -165,12 +165,18 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+testpaths = ["core/tests", "modules/*/tests"]
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "localonly: test requires ENV=local",
     "docker: test requires a Docker daemon running Linux containers",
 ]
 filterwarnings = ["ignore::pytest.PytestUnraisableExceptionWarning"]
+
+[tool.coverage.run]
+source = ["core/src", "modules"]
+omit = ["*/tests/*"]
 
 [tool.coverage.report]
 include_namespace_packages = true
