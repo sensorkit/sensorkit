@@ -275,9 +275,6 @@ class TheSkyTelescope(TheSkyDevice):
         await self.telescope_unpark()
         logger.debug("stopping telescope")
 
-        # End any live satellite track before aborting/clearing tracking.
-        await self._end_leo_track()
-
         try:
             await self.execute(
                 """
@@ -393,9 +390,8 @@ class TheSkyTelescope(TheSkyDevice):
         self._stop_fast_status()
         await self.telescope_unpark()
 
-        # Abort any leftover satellite track before switching frames. A live
-        # Raven3 tracker across a sidereal switch is what throws error 7501.
-        ended_leo_track = await self._end_leo_track()
+        # Must first abort any in-progress Raven3.trackLEOCommand.
+        aborted_satellite_track = await self._abort_satellite_track()
 
         target = await cmd.target.adapt(
             ICRSTarget,
@@ -598,9 +594,8 @@ class TheSkyTelescope(TheSkyDevice):
                         logger.debug("enabling sidereal tracking")
                         # If we just aborted a satellite track, the abort latch
                         # leaves IsSlewComplete stuck; clear it with a real slew
-                        # (retrying past the 121 race) before SetTracking, or
-                        # _wait_for_mount below would poll a jammed flag forever.
-                        if ended_leo_track:
+                        # before SetTracking, or _wait_for_mount would poll forever.
+                        if aborted_satellite_track:
                             await self._slew_to_current_radec()
                         tracked = await self._set_tracking(1, 1, 0, 0)
                         await self._wait_for_mount(tracking=tracked, await_onset=False)
@@ -699,16 +694,11 @@ class TheSkyTelescope(TheSkyDevice):
             return False
         return True
 
-    async def _end_leo_track(self) -> bool:
-        """Abort any live Raven3 satellite track and wait for it to wind down.
+    async def _abort_satellite_track(self) -> bool:
+        """Abort a Raven3 satellite track and wait for it to become idle.
 
         Returns True if a track was active and aborted, False if none was
-        running (or the mount doesn't implement Raven3). A live satellite
-        tracker left running across a sidereal switch is what triggers TheSky
-        error 7501 ("Target lost"), so every follow/stop aborts it first.
-
-        Reads can transiently raise 212 (ProcessAbortedError) right after the
-        abort; those are tolerated while polling trackLEOStatus back to 0.
+        running (or the mount doesn't implement Raven3).
         """
         try:
             status = (await self.execute("""Raven3.trackLEOStatus;""")).strip()
@@ -718,7 +708,7 @@ class TheSkyTelescope(TheSkyDevice):
         if status == "0":
             return False
 
-        logger.debug("aborting satellite track before frame handoff")
+        logger.debug("aborting satellite track")
         await self.execute("""Raven3.trackLEOAbort();""")
 
         async with asyncio.timeout(self.config.timeout):
@@ -730,12 +720,11 @@ class TheSkyTelescope(TheSkyDevice):
                     pass  # transient 212 after abort; keep polling
                 await asyncio.sleep(0.2)
 
-        logger.debug("ended satellite track")
+        logger.debug("aborted satellite track")
         return True
 
     async def _slew_to_current_radec(self):
-        """Issue a real slew to the mount's current RA/Dec to clear the abort
-        latch left by a Raven3 track abort, before sidereal tracking is enabled.
+        """Slew to the mount's current RA/Dec.
 
         After trackLEOAbort(), IsSlewComplete stays latched on error 212 until a
         real slew resets it -- but the mount is NOT command-ready the instant
@@ -763,10 +752,7 @@ class TheSkyTelescope(TheSkyDevice):
                     )
                     break
                 except MountCommandInProgressError:
-                    logger.debug(
-                        "mount still busy after LEO abort; retrying latch-clearing slew"
-                    )
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.1)
 
         await self._wait_for_mount(tracking=True)
 
