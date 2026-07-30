@@ -581,6 +581,7 @@ class ControllerLifecycle:
             task = InitTask()
             context = self.demand.contexts.get("init") if self.demand.contexts else None
 
+            self.lifecycle.belief_state = InternalControllerState.UNKNOWN  # FIXME: clear to avoid shutdown no-op
             await self.run_with_cleanup(task, context=context)
 
             # Init was successful.
@@ -658,6 +659,7 @@ class ControllerLifecycle:
             task = StandbyTask()
             context = self.demand.contexts.get("standby") if self.demand.contexts else None
 
+            self.lifecycle.belief_state = InternalControllerState.UNKNOWN  # FIXME: clear to avoid shutdown no-op
             await self.run_with_cleanup(task, context=context)
 
             # Standby was successful.
