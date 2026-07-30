@@ -66,16 +66,7 @@ data_flow:
       simple:
         - op: app_source
         - op: fits_header
-          define:
-            BSCALE: 1
-            BITPIX: =bitpix
-            BZERO: =bzero
-            TASKID: =str(TaskInfo.task_id)
-            FRAMENUM: =Collect.frame_number
-            CENTAZ: =AltAzPointing.azimuth_degrees
-            CENTALT: =AltAzPointing.altitude_degrees
-            RADEG: =RADecPointing.right_ascension_hours * 15
-            DECDEG: =RADecPointing.declination_degrees
+          include: all
         - op: array_to_fits
         - op: write_file
           directory: /Temp/SimulatedSensor
@@ -112,8 +103,8 @@ otto:
     entity: Otto
     controller: SimulatedSensor
     task:
-      tles: [ "21639" ]
-      tle_update_interval_hours: 4
+      orbits:
+        - "GEO"
       graylist_interval_minutes: 15
       end_time_deadband_seconds: 300
     collect:
@@ -128,8 +119,8 @@ otto:
       binning: [ 2 ]
       num_frames: 3
     publish:
-      upload: true
-      sensor_name: "SK-TEST"
+      upload: false
+      sensor_name: "SimulatedSensor"
 
 alpaca:
   - id: Alpaca
