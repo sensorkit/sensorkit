@@ -65,6 +65,8 @@ async def service_run(name, spec, config_file, restart):
     except ValidationError as e:
         raise click.ClickException(f"config validation failed: {e}") from e
 
+    await sk.import_modules()
+
     if config is not None:
         configured_spec = next(
             (svc.python_module for svc in config.services if svc.id == name and svc.python_module),
