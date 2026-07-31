@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import collections
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Literal, override
@@ -14,11 +14,15 @@ import numpy as np
 import satkit
 from astropy.coordinates import (
     CIRS,
+    GCRS,
     ICRS,
     TEME,
     AltAz,
+    BaseCoordinateFrame,
+    CartesianRepresentation,
     EarthLocation,
     SkyCoord,
+    UnitSphericalRepresentation,
     get_body,
     get_sun,
 )
@@ -42,12 +46,104 @@ if TYPE_CHECKING:
     from sensorkit.std.weather import BasicWeather
 
 
+def _topocentric_cartesian(gcrs: GCRS, location: EarthLocation) -> CartesianRepresentation:
+    """Return the site-to-target vector in GCRS axes.
+
+    Relies on *gcrs* carrying the default geocentric origin; a GCRS with a non-zero
+    obsgeoloc is already observer-relative and would be shifted twice.
+    """
+    obsgeoloc, _ = location.get_gcrs_posvel(gcrs.obstime)
+    return gcrs.cartesian.without_differentials() - obsgeoloc
+
+
+def _topocentric_icrs(gcrs: GCRS, location: EarthLocation) -> ICRS:
+    return ICRS(
+        _topocentric_cartesian(gcrs, location).represent_as(UnitSphericalRepresentation)
+    )
+
+
+def _topocentric_cirs(gcrs: GCRS, location: EarthLocation) -> CIRS:
+    topo = _topocentric_cartesian(gcrs, location)
+    cirs = GCRS(topo, obstime=gcrs.obstime).transform_to(CIRS(obstime=gcrs.obstime))
+    return CIRS(cirs.cartesian, obstime=gcrs.obstime, location=location)
+
+
+def _output_frame_transform(
+    frame: ReferenceFrame,
+    location: EarthLocation | None,
+    weather: BasicWeather | None,
+) -> Callable[[GCRS], BaseCoordinateFrame]:
+    """Return the GCRS-to-*frame* conversion used to build ephemeris points.
+
+    ICRF, CIRF and ALTAZ are observer-relative and are all built from the topocentric
+    vector; anything else is a geocentric frame astropy can reach from GCRS on its own.
+    """
+    if location is None and frame in (
+        ReferenceFrame.ICRF,
+        ReferenceFrame.CIRF,
+        ReferenceFrame.ALTAZ,
+    ):
+        raise RuntimeError(f"an observer location is required for {frame}")
+
+    match frame:
+        case ReferenceFrame.ICRF:
+            return lambda gcrs: _topocentric_icrs(gcrs, location)
+        case ReferenceFrame.CIRF:
+            return lambda gcrs: _topocentric_cirs(gcrs, location)
+        case ReferenceFrame.ALTAZ:
+            return lambda gcrs: _topocentric_cirs(gcrs, location).transform_to(
+                AltAz(
+                    obstime=gcrs.obstime,
+                    location=location,
+                    **(weather.to_astropy() if weather else {}),
+                )
+            )
+        case _:
+            output_frame = frame.to_astropy()
+
+            if "obstime" in output_frame.frame_attributes:
+                return lambda gcrs: gcrs.transform_to(output_frame(obstime=gcrs.obstime))
+
+            return lambda gcrs: gcrs.transform_to(output_frame())
+
+
+def _ephemeris_points(frame: ReferenceFrame, coord: BaseCoordinateFrame) -> list[Coordinates]:
+    """Pack a sampled coordinate into the point type native to *frame*.
+
+    Equatorial frames expose ra/dec directly, but ITRF and TEME carry cartesian data and
+    have to be resolved first: ITRF to the sub-satellite geodetic point, TEME to the
+    spherical angles its cartesian representation implies.
+    """
+    match frame:
+        case ReferenceFrame.ALTAZ:
+            return [
+                Horizontal(az=az, alt=alt)
+                for az, alt in zip(coord.az.deg, coord.alt.deg, strict=True)
+            ]
+        case ReferenceFrame.ITRF:
+            lons, lats, heights = coord.earth_location.to_geodetic()
+            return [
+                Geodetic(lon=lon, lat=lat, elev=elev)
+                for lon, lat, elev in zip(
+                    lons.deg, lats.deg, heights.to_value(u.m), strict=True
+                )
+            ]
+        case ReferenceFrame.TEME:
+            usph = coord.represent_as(UnitSphericalRepresentation)
+            return [
+                Equatorial(ra=ra, dec=dec)
+                for ra, dec in zip(usph.lon.deg, usph.lat.deg, strict=True)
+            ]
+        case _:
+            return [
+                Equatorial(ra=ra, dec=dec)
+                for ra, dec in zip(coord.ra.deg, coord.dec.deg, strict=True)
+            ]
+
+
 class BaseTarget(BaseModel, ABC):
     """Abstract base for all target types; discriminated on `target_type`."""
     target_type: Literal[None]
-
-    # FUTURE: When/if bounds for variadic generics are supported...
-    # def adapt[*Ts: BaseTarget](self, *types: *tuple[type[*Ts], ...]) -> Union[*Ts]:
 
     async def adapt(
         self,
@@ -117,52 +213,7 @@ class BaseTarget(BaseModel, ABC):
         """Propagate this target into a pre-computed EphemerisTarget over the given time window."""
         trajectory = await self.to_trajectory().propagate(start_time + duration)
         location = observer.to_astropy() if observer else None
-
-        # Define a function to construct the output frame with parameters it needs.
-        # FIXME: Clean this up.
-        match frame:
-            case ReferenceFrame.ICRF:
-                assert location is not None
-
-                def transform_to_output_frame(gcrs: SkyCoord):
-                    altaz = gcrs.transform_to(
-                        AltAz(obstime=gcrs.obstime, location=location)
-                    )
-                    # FIXME: This returns the ICRF projected from the observer's location. This
-                    #        is what we want, but it feels like this should be explicitly encoded
-                    #        somehow so it's obvious that this isn't "real" ICRF.
-                    return AltAz(
-                        alt=altaz.alt,
-                        az=altaz.az,
-                        obstime=gcrs.obstime,
-                        location=location,
-                    ).transform_to(ICRS())
-            case ReferenceFrame.CIRF:
-                assert location is not None
-
-                def transform_to_output_frame(gcrs: SkyCoord):
-                    return gcrs.transform_to(CIRS(obstime=gcrs.obstime, location=location))
-            case ReferenceFrame.ALTAZ:
-                assert location is not None
-
-                def transform_to_output_frame(gcrs: SkyCoord):
-                    return gcrs.transform_to(
-                        AltAz(
-                            obstime=gcrs.obstime,
-                            location=location,
-                            pressure=weather.pressure if weather else None,
-                            temperature=weather.temperature if weather else None,
-                            relative_humidity=weather.humidity if weather else None,
-                        )
-                    )
-            case _:
-                output_frame = frame.to_astropy()
-
-                def transform_to_output_frame(gcrs: SkyCoord):
-                    if "obstime" in output_frame.frame_attributes:
-                        return gcrs.transform_to(output_frame(obstime=gcrs.obstime))
-
-                    return gcrs.transform_to(output_frame())
+        transform_to_output_frame = _output_frame_transform(frame, location, weather)
 
         # Build the output by sampling the propagated trajectory.
         def _sample_series():
@@ -174,11 +225,8 @@ class BaseTarget(BaseModel, ABC):
             gcrs = trajectory.sample(epochs)
             coord = transform_to_output_frame(gcrs)
             jds = list(gcrs.obstime.jd)
-            points = [
-                Equatorial(ra=ra, dec=dec)
-                for ra, dec in zip(coord.ra.deg, coord.dec.deg)
-            ]
-            logger.debug(f"generated EphemerisTarget ending at ra={coord.ra[-1]} dec={coord.dec[-1]}")
+            points = _ephemeris_points(frame, coord)
+            logger.debug(f"generated EphemerisTarget ending at {points[-1]}")
 
             return jds, points
 
