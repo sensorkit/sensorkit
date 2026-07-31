@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.impl.program import ProgramImpl
 from sensorkit.core.program import ProgramOffering, ProgramState, ProgramTaskingState
 from sensorkit.core.task import CollectTask
@@ -82,7 +83,7 @@ async def test_program_tasking(kit):
 
     @controller.task_handler(CollectTask)
     async def run_task(task: CollectTask):
-        assert ProgramImpl.current.get() is program
+        assert ControllerImpl.current.get() is controller
         assert task == task_obj
         nonlocal task_ran
         task_ran = True
