@@ -167,6 +167,20 @@ class ExtendedCall[R: ExtendedResponse, V: BaseModel](Call[R, V]):
             self._future.set_exception(e)
             raise
 
+        if response.call_state == "failure":
+            # The handler rejected the call. The response is authoritative, so settle here instead
+            # of leaving the caller on the event stream's timeout.
+            try:
+                error = await self._rejection_error(queue, response.call_id)
+            except (asyncio.CancelledError, Exception) as e:
+                context.close()
+                self._future.set_exception(e)
+                raise
+
+            context.close()
+            self._future.set_exception(error)
+            raise error
+
         # Start a background task to receive response progress and end events.
         started = asyncio.Event()
 
@@ -202,6 +216,41 @@ class ExtendedCall[R: ExtendedResponse, V: BaseModel](Call[R, V]):
             )
 
         return response
+
+    async def _rejection_error(
+        self,
+        queue: asyncio.Queue[Event],
+        response_id: uuid.UUID,
+        timeout: float = 1.0,
+    ) -> CallError:
+        """Return the error for a rejected call, carrying the handler's reason where available.
+
+        The reason travels on the failure event rather than the response, and the event stream may
+        be a different transport than the request that just delivered the rejection. The event is
+        published ahead of that response, so it is normally waiting in the queue already; if it
+        does not arrive within timeout seconds, the rejection still stands and is reported without
+        a reason.
+
+        Args:
+            queue: The call's registered CallEvent queue.
+            response_id: The call id to match events against.
+            timeout: How long to wait for the failure event before giving up on the reason.
+        """
+        try:
+            async with asyncio.timeout(timeout):
+                while True:
+                    event = await queue.get()
+                    queue.task_done()
+
+                    if not isinstance(event, CallEvent) or event.call_id != response_id:
+                        continue
+
+                    # Rejecting leaves the response done, so a handler is free to emit progress
+                    # before its failure event. The reason rides on the latter.
+                    if event.call_state == "failure":
+                        return CallError(f"response failed: {event.payload}")
+        except TimeoutError:
+            return CallError("call rejected")
 
     async def _await_response_events(
         self,
