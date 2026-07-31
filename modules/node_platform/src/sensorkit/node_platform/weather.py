@@ -203,10 +203,7 @@ class NodePlatformWeather(NodePlatformDevice):
             for name, metric in latest_by_name.items():
                 field_name = _METRIC_FIELD_MAP.get(name)
                 if field_name is not None:
-                    value = metric.value
-                    if field_name == "pressure":
-                        value *= 100  # hPa -> Pa
-                    fields[field_name] = value
+                    fields[field_name] = metric.value
         except Exception as e:
             logger.debug(f"System metrics unavailable: {e}")
 

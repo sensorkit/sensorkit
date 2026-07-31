@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import functools
-from typing import Literal, override
+from typing import TYPE_CHECKING, Literal, TypedDict, override
 
 from pydantic import BaseModel
 
@@ -11,10 +11,34 @@ from sensorkit.auto.constraint import Constraint, ConstraintEvaluator
 from sensorkit.common.keyword import validate_keyword_json
 from sensorkit.core.client import SensorKit
 
+if TYPE_CHECKING:
+    import astropy.units as u
+
+
+class RefractionArgs(TypedDict):
+    temperature: u.Quantity | None
+    relative_humidity: u.Quantity | None
+    pressure: u.Quantity | None
+
 
 @sk.declare_keyword
 class BasicWeather(BaseModel):
-    """Ambient weather conditions keyword, with all fields optional."""
+    """Ambient weather conditions keyword, with all fields optional.
+
+    Units follow the ASCOM IObservingConditions convention.
+
+    Attributes:
+        temperature: Ambient air temperature, °C.
+        humidity: Relative humidity, percent (0-100).
+        pressure: Barometric pressure, hPa, absolute at the observatory altitude rather
+            than corrected to sea level.
+        cloud_cover: Sky covered by cloud, percent (0-100).
+        dew_point: Dew point temperature, °C.
+        rain_rate: Rainfall intensity, mm/h.
+        wind_direction: Direction the wind blows from, degrees clockwise from true north
+            (0-360).
+        wind_speed: Wind speed, m/s.
+    """
     temperature: float | None = None
     humidity: float | None = None
     pressure: float | None = None
@@ -23,6 +47,21 @@ class BasicWeather(BaseModel):
     rain_rate: float | None = None
     wind_direction: float | None = None
     wind_speed: float | None = None
+
+    def to_astropy(self) -> RefractionArgs:
+        """Return the refraction arguments accepted by astropy's AltAz frame.
+
+        Keys match the AltAz frame attributes, so the result can be splatted straight
+        into AltAz or into SkyCoord with an AltAz frame. Astropy normalizes the percent
+        humidity to the 0-1 fraction it works in.
+        """
+        import astropy.units as u
+
+        return RefractionArgs(
+            temperature=self.temperature * u.deg_C if self.temperature is not None else None,
+            relative_humidity=self.humidity * u.percent if self.humidity is not None else None,
+            pressure=self.pressure * u.hPa if self.pressure is not None else None,
+        )
 
 
 WeatherProvider = sk.declare_trait(
@@ -59,7 +98,20 @@ class WeatherFieldEvaluator:
 
 
 class WeatherConstraint(Constraint):
-    """Constraint that monitors a weather provider and activates when conditions exceed thresholds."""
+    """Constraint that monitors a weather provider and activates when conditions exceed thresholds.
+
+    Thresholds and deadbands are compared directly against the matching BasicWeather field
+    and so carry its units: humidity in percent, wind speed in m/s, rain rate in mm/h.
+
+    Attributes:
+        provider: Entity name of the weather provider to consume BasicWeather from.
+        humidity_max: Relative humidity ceiling, percent.
+        humidity_deadband: Percent below humidity_max the reading must fall to clear.
+        wind_max: Wind speed ceiling, m/s.
+        wind_deadband: m/s below wind_max the reading must fall to clear.
+        rain_max: Rainfall intensity ceiling, mm/h.
+        rain_deadband: mm/h below rain_max the reading must fall to clear.
+    """
 
     kind: Literal["weather"] = "weather"
     provider: str

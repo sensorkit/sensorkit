@@ -238,10 +238,8 @@ class AltAzTarget(FixedTarget[Horizontal]):
         return self.coords.to_astropy(
             obstime=time,
             location=EarthLocation(observer.to_astropy()) if observer else None,
-            pressure=weather.pressure if weather else None,  # FIXME: check units; expects hPa
-            temperature=weather.temperature if weather else None,
-            relative_humidity=weather.humidity if weather else None,
             obswl=wavelength,
+            **(weather.to_astropy() if weather else {}),
         )
 
 

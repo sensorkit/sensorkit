@@ -96,24 +96,35 @@ class TestWeatherStatus:
         ws_status = make_weather_station_status(connected=True)
         api.set_response("v1_get_weather_station_status", ws_status)
 
-        metric = SystemMetric(
-            name="node_controller.weather_monitor.air_temperature",
-            value=20.0,
-            measured_at=datetime.now(UTC),
-        )
-        api.set_response("v1_get_system_metrics", SystemMetrics(metrics=[metric]))
+        metrics = [
+            SystemMetric(
+                name="node_controller.weather_monitor.air_temperature",
+                value=20.0,
+                measured_at=datetime.now(UTC),
+            ),
+            SystemMetric(
+                name="node_controller.weather_monitor.air_pressure",
+                value=1013.25,
+                measured_at=datetime.now(UTC),
+            ),
+        ]
+        api.set_response("v1_get_system_metrics", SystemMetrics(metrics=metrics))
 
         config = NodePlatformWeatherConfig(device_type="weather", host="localhost")
         w = NodePlatformWeather(config)
         w._api = api
         w._weather_metric_names = [
             "node_controller.weather_monitor.air_temperature",
+            "node_controller.weather_monitor.air_pressure",
         ]
 
         weather_kw, _basic_safety, _safety = await w._build_weather_keywords()
 
         assert weather_kw is not None
         assert weather_kw.temperature == 20.0
+
+        # Metrics are already in BasicWeather units; pressure stays hPa.
+        assert weather_kw.pressure == 1013.25
 
     @pytest.mark.asyncio
     async def test_build_weather_keywords_disconnected(self):

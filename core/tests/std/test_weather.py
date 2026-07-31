@@ -23,6 +23,39 @@ async def ev_timeout():
         yield t
 
 
+def test_to_astropy_units():
+    """Readings are wrapped in the units astropy's refraction model expects."""
+    import astropy.units as u
+
+    args = BasicWeather(temperature=12.5, humidity=85.0, pressure=1013.25).to_astropy()
+
+    assert args["temperature"] == 12.5 * u.deg_C
+    assert args["pressure"] == 1013.25 * u.hPa
+    assert args["relative_humidity"] == 85.0 * u.percent
+
+
+def test_to_astropy_missing_fields():
+    """Absent readings stay absent so astropy falls back to its no-refraction defaults."""
+    args = BasicWeather().to_astropy()
+
+    assert args["temperature"] is None
+    assert args["pressure"] is None
+    assert args["relative_humidity"] is None
+
+
+def test_to_astropy_builds_altaz_frame():
+    """The returned keys are AltAz frame attributes and splat in directly."""
+    from astropy.coordinates import AltAz
+
+    frame = AltAz(**BasicWeather(temperature=12.5, humidity=85.0, pressure=1013.25).to_astropy())
+
+    assert frame.temperature.to_value("deg_C") == 12.5
+    assert frame.pressure.to_value("hPa") == 1013.25
+
+    # Astropy normalizes the percent humidity to the 0-1 fraction it works in.
+    assert float(frame.relative_humidity) == pytest.approx(0.85)
+
+
 def test_weather_constraint():
     c = WeatherConstraint(
         provider="dummy",
