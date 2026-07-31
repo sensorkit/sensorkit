@@ -155,11 +155,22 @@ class EntityClient(EntityBase):
                 yield await queue.get()
                 queue.task_done()
 
+    async def _await_event_consumer(self, context: contextlib.ExitStack):
+        """Wait until the entity's event subscription is live, releasing the queue on failure."""
+        try:
+            await self._ec_startup
+        except BaseException:
+            context.close()
+            raise
+
     async def monitor_event[M: Event](self, event_type: type[M]):
         """Return an async generator yielding events of the specified type from the entity's stream."""
         consumer = self.get_event_mux()
         context = contextlib.ExitStack()
         queue: asyncio.Queue[M] = context.enter_context(consumer.event_queue(event_type))
+
+        await self._await_event_consumer(context)
+
         return self._monitor_receive(queue, context)
 
     async def monitor_all_events(self):
@@ -167,6 +178,9 @@ class EntityClient(EntityBase):
         consumer = self.get_event_mux()
         context = contextlib.ExitStack()
         queue = context.enter_context(consumer.all_events())
+
+        await self._await_event_consumer(context)
+
         return self._monitor_receive(queue, context)
 
     async def monitor[M: Keyword | BaseModel](self, model_type: type[M]):
