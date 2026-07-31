@@ -78,7 +78,7 @@ class TestPosition:
         coords, now = self._at_hour_angle(0.0, dec=70.0, latitude=40.0)
         altitude, azimuth, _, _ = stars.position(coords, latitude=40.0, longitude=0.0, now=now)
 
-        assert azimuth == pytest.approx(0.0, abs=1e-6)
+        assert (azimuth + 180.0) % 360.0 - 180.0 == pytest.approx(0.0, abs=1e-6)
         assert altitude == pytest.approx(60.0, abs=1e-6)
 
     def test_east_of_meridian_is_rising(self):
