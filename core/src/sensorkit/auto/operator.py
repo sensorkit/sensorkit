@@ -441,7 +441,7 @@ class VirtualOperator:
         self._loop_task = task_group.create_task(self._virtual_operator())
 
     async def stop(self):
-        """Cancel the main loop and stop all controller drivers."""
+        """Cancel the main loop, stop all controller drivers, and stop program discovery."""
         self._loop_task.cancel()
 
         await asyncio.gather(
@@ -451,6 +451,8 @@ class VirtualOperator:
 
         with contextlib.suppress(asyncio.CancelledError):
             await self._loop_task
+
+        await self.discovery.stop()
 
     async def _virtual_operator(self):
         while True:

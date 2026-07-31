@@ -307,6 +307,8 @@ class ProgramDiscovery:
         self._controllers: dict[str, AsyncObserver[frozenset[str]]] = collections.defaultdict(
             lambda: AsyncObserver(frozenset())
         )
+        self._monitor_tasks: dict[str, asyncio.Task] = {}
+        self._discover_task: asyncio.Task | None = None
 
     async def start(self, client: SensorKit):
         """Begin monitoring the backend for program enable-state changes, waiting for the first update."""
@@ -317,8 +319,25 @@ class ProgramDiscovery:
         self._discover_task = asyncio.create_task(self._discover_programs(ready))
         await ready.wait()
 
+    async def stop(self):
+        """Cancel discovery and every per-program enable-state monitor it started."""
+        if self._discover_task is None:
+            return
+
+        self._discover_task.cancel()
+
+        for task in self._monitor_tasks.values():
+            task.cancel()
+
+        await asyncio.gather(
+            self._discover_task, *self._monitor_tasks.values(), return_exceptions=True
+        )
+
+        self._monitor_tasks.clear()
+        self._discover_task = None
+
     async def _discover_programs(self, initial_update: asyncio.Event):
-        tasks: dict[str, asyncio.Task] = {}
+        tasks = self._monitor_tasks
         kv = self.client.backend.key_value()
 
         # Programs present in the initial snapshot. We're "ready" once each of them
@@ -371,22 +390,25 @@ class ProgramDiscovery:
         monitor = client.monitor_enable_state()
         program = str(client.entity)
 
-        async for state in monitor.observe():
-            observers = [self._enabled_programs]
-            logger.debug(f"discovery for {program} observed {state=}")
+        try:
+            async for state in monitor.observe():
+                observers = [self._enabled_programs]
+                logger.debug(f"discovery for {program} observed {state=}")
 
-            if state:
-                observers.append(self._controllers[state.controller])
+                if state:
+                    observers.append(self._controllers[state.controller])
 
-            for observer in observers:
-                if state and state.enabled:
-                    new_set = observer.value.union({program})
-                else:
-                    new_set = observer.value.difference({program})
+                for observer in observers:
+                    if state and state.enabled:
+                        new_set = observer.value.union({program})
+                    else:
+                        new_set = observer.value.difference({program})
 
-                await observer.notify(new_set)
+                    await observer.notify(new_set)
 
-            initial_update.set()
+                initial_update.set()
+        finally:
+            monitor.stop()
 
     def enabled_programs(self):
         """Return an async generator yielding the current set of enabled program names on each change."""
