@@ -477,6 +477,9 @@ class EOObservationPublisher(Publisher):
         self._intake: asyncio.Task | None = None
         self._watchdog: asyncio.Task | None = None
 
+        # Set once the intake consumer is established, cleared while it reconnects.
+        self.intake_ready = asyncio.Event()
+
     @property
     def name(self) -> str:
         return "eo_observation"
@@ -558,6 +561,8 @@ class EOObservationPublisher(Publisher):
                     subject, durable_name=self._durable_name()
                 )
                 logger.debug("EO intake consuming SenpaiResults")
+                self.intake_ready.set()
+
                 async for msg in consumer:
                     if msg.subject.prop != keyword_key:
                         continue
@@ -580,6 +585,8 @@ class EOObservationPublisher(Publisher):
                     f"{self._RECONNECT_DELAY_S:.0f}s"
                 )
                 await asyncio.sleep(self._RECONNECT_DELAY_S)
+            finally:
+                self.intake_ready.clear()
 
     def _mark_seen(self, file_path: str) -> bool:
         """Record a handled result; returns False when it was already seen."""

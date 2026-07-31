@@ -379,6 +379,9 @@ class TestEOObservationPublisher:
 
         intake = asyncio.create_task(eo._intake_loop())
         try:
+            async with asyncio.timeout(5.0):
+                await eo.intake_ready.wait()
+
             await program_impl.publish(AltAzPointing(altitude_degrees=45.0, azimuth_degrees=90.0))
             await program_impl.publish(make_result(task_id=request.id))
 
