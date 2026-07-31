@@ -52,6 +52,39 @@ class FileInfo(BaseModel):
         )
 
 
+async def wait_until_stable(path: pathlib.Path, settle: float) -> bool:
+    """Wait until `path` stops growing, and report whether it still exists.
+
+    A file becomes visible when the producer creates it, not when it finishes writing it,
+    so reading on first sight yields a truncated result. Polling `st_size` until two reads
+    `settle` apart agree infers the producer is done.
+
+    This is best-effort and only covers producers that extend a file as they write. It
+    cannot help against one that creates the file at its final size and fills it in place,
+    where the size never changes. Producers that can publish atomically -- write to a
+    temporary name, then rename -- should do so instead and leave `settle` at 0.
+
+    Returns:
+        False if the file vanished while settling, True otherwise.
+    """
+    if settle <= 0:
+        return True
+
+    last = -1
+
+    while True:
+        try:
+            size = (await asyncio.to_thread(path.stat)).st_size
+        except OSError:
+            return False
+
+        if size == last:
+            return True
+
+        last = size
+        await asyncio.sleep(settle)
+
+
 class WatchDirectory(SourceOp):
     """DataGraph source that triggers a run for each new file in a directory.
 
@@ -65,8 +98,9 @@ class WatchDirectory(SourceOp):
         recursive: Whether to watch subdirectories as well.
 
     Supplies context:
-        FileInfo: Describes the appeared file, with path and stat metadata populated
-            from disk.
+        FileInfo: Names the appeared file. Only `path` is set: the file may still be
+            being written, so stat metadata is left for whoever reads it (`ReadFile`
+            populates it once the contents are settled).
     """
     op: Literal["watch_directory"] = "watch_directory"
     directory: str
@@ -98,7 +132,7 @@ class WatchDirectory(SourceOp):
 
                 try:
                     await edge.send(
-                        Context(await FileInfo.from_path(path)),
+                        Context(FileInfo(path=path)),
                         b"",
                     )
                 except Exception:
@@ -213,6 +247,9 @@ class ReadFile(DataOp):
         max_chunk_size: Maximum number of bytes read from the file per chunk.
         wait_for_file: Whether to wait for the file to appear before reading.
         wait_for_file_timeout: Seconds to wait for the file when `wait_for_file` is set.
+        settle_seconds: Interval between the size polls that decide a file still being
+            written has finished. Costs one interval of latency per read. Set to 0 when
+            the producer publishes atomically, or when reading files known to be complete.
 
     Expects context:
         FileInfo: Provides path, the location of the file to read.
@@ -225,6 +262,7 @@ class ReadFile(DataOp):
     max_chunk_size: int = 2**16
     wait_for_file: bool = False
     wait_for_file_timeout: float = 5.0
+    settle_seconds: float = 0.2
 
     async def process(self, incoming: list[DataFlow], outgoing: list[DataFlow]):
         assert len(outgoing) == 1
@@ -241,6 +279,7 @@ class ReadFile(DataOp):
             info.path,
             self.max_chunk_size,
             wait_until_exists=self.wait_for_file_timeout if self.wait_for_file else None,
+            settle=self.settle_seconds,
         )
 
         # Populate stat metadata if it has not been determined yet. The file is known to
@@ -266,15 +305,20 @@ async def get_file_reader(
     path: pathlib.Path,
     read_size: int,
     wait_until_exists: float | None = None,
+    settle: float = 0.0,
 ) -> StreamReader:
     """Return a StreamReader that asynchronously feeds file content in the background.
 
     If *wait_until_exists* is set, waits up to that many seconds for the file to appear.
+    If *settle* is set, waits for the contents to stop growing before opening, so a file
+    caught mid-write is not read truncated (see `wait_until_stable`).
     """
     if wait_until_exists is not None:
         async with asyncio.timeout(wait_until_exists):
             # Wait until the file exists before opening.
             await wait_for_file(path)
+
+    await wait_until_stable(path, settle)
 
     ctx = contextlib.AsyncExitStack()
     f = await ctx.enter_async_context(aiofile.async_open(path, "rb"))

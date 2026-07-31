@@ -246,28 +246,73 @@ async def test_read_file_wait_exists():
 
 @pytest.mark.asyncio
 async def test_watch_directory():
+    """A file appearing starts one run naming it.
+
+    Detection is all this source does, so the file needs no contents: it names the file
+    and leaves stat metadata to whoever reads it.
+    """
     with tempfile.TemporaryDirectory() as temp_dir:
         graph = DataGraph()
-        graph.add("source", WatchDirectory(directory=temp_dir, output=["read"]))
-        graph.add("read", ReadFile(output=["sink"]))
+        graph.add("source", WatchDirectory(directory=temp_dir, output=["sink"]))
 
         sink = AppSink()
         graph.add("sink", sink)
         graph.start()
 
-        # Write test file to directory
-        test_data = b"Test data for watch directory"
         test_file = pathlib.Path(temp_dir) / "test_watch.txt"
 
         await asyncio.sleep(0.5)
-
-        async with aiofile.async_open(test_file, "wb") as f:
-            await f.write(test_data)
+        await asyncio.to_thread(test_file.touch)
 
         async with asyncio.timeout(5.0):
-            async for context, data in sink.consume():
-                assert context[FileInfo].path.name == "test_watch.txt"
-                assert data == test_data
+            async for context, _ in sink.consume():
+                info = context[FileInfo]
+                assert info.path.name == "test_watch.txt"
+                assert info.size is None
                 break
 
             await graph.stop()
+
+
+@pytest.mark.asyncio
+async def test_read_file_waits_for_slow_writer():
+    """A file still being written when it is detected is read whole, not truncated.
+
+    The directory watch reports the file at creation, when it is still empty. ReadFile
+    holds it until the writer stops extending it, and only then stats it, so the
+    FileInfo it publishes describes the finished file.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        graph = DataGraph()
+        graph.add("source", WatchDirectory(directory=temp_dir, output=["read"]))
+        graph.add("read", ReadFile(settle_seconds=0.1, output=["sink"]))
+
+        sink = AppSink()
+        graph.add("sink", sink)
+        graph.start()
+
+        chunks = [b"chunk-%02d;" % i for i in range(10)]
+        test_file = pathlib.Path(temp_dir) / "slow_write.txt"
+
+        await asyncio.sleep(0.5)
+
+        async def write_slowly():
+            async with aiofile.async_open(test_file, "wb") as f:
+                for chunk in chunks:
+                    await f.write(chunk)
+                    await f.file.fsync()
+                    await asyncio.sleep(0.05)
+
+        writer = asyncio.create_task(write_slowly())
+
+        try:
+            async with asyncio.timeout(10.0):
+                async for context, data in sink.consume():
+                    assert context[FileInfo].path.name == "slow_write.txt"
+                    assert bytes(data) == b"".join(chunks)
+                    assert context[FileInfo].size == len(b"".join(chunks))
+                    break
+
+                await graph.stop()
+        finally:
+            await writer
