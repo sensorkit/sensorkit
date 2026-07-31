@@ -8,7 +8,6 @@ program discovery, and lifecycle management.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 
 import pytest
 
@@ -67,16 +66,16 @@ async def test_operator_override_drives_operate(kit, service_context):
         scheduler_state=AgentSchedulerState(scheduling_enabled=False),
     )
 
-    # The operator loop runs every 2 seconds. Wait for init to run.
+    driver = operator.drivers["ctrl1"]
+
+    # The operator loop runs every 2 seconds. Wait for init to run, then verify the lifecycle
+    # reached OPERATE.
     async with asyncio.timeout(10.0):
         await state.apply_to_operator(operator, {"ctrl1": config})
         await init_ran.wait()
 
-    # Verify the lifecycle reached OPERATE.
-    driver = operator.drivers["ctrl1"]
-
-    while driver.lifecycle.belief_state != InternalControllerState.OPERATE:
-        await asyncio.sleep(0.05)
+        while driver.lifecycle.belief_state != InternalControllerState.OPERATE:
+            await asyncio.sleep(0.05)
 
     await operator.stop()
     await service_context.shutdown()
@@ -128,6 +127,10 @@ async def test_operator_override_false_shuts_down(kit, service_context):
         await state.apply_to_operator(operator, {"ctrl1": config})
         await init_ran.wait()
 
+    # The operator drives the controller down before any demand is applied, so a ShutdownTask has
+    # already run by now. Clear the event so the wait below observes the override-driven shutdown.
+    shutdown_ran.clear()
+
     # Now set override=False to drive to SHUTDOWN.
     state = AgentState(
         operating_state=AgentOperatingState(
@@ -141,17 +144,17 @@ async def test_operator_override_false_shuts_down(kit, service_context):
         scheduler_state=AgentSchedulerState(scheduling_enabled=False),
     )
 
+    driver = operator.drivers["ctrl1"]
+
     async with asyncio.timeout(15.0):
         await state.apply_to_operator(operator, {"ctrl1": config})
         await shutdown_ran.wait()
 
-    driver = operator.drivers["ctrl1"]
+        while driver.lifecycle.belief_state != InternalControllerState.SHUTDOWN:
+            await asyncio.sleep(0.05)
 
-    while driver.lifecycle.belief_state != InternalControllerState.SHUTDOWN:
-        await asyncio.sleep(0.05)
-
-        await operator.stop()
-        await service_context.shutdown()
+    await operator.stop()
+    await service_context.shutdown()
 
 
 # TODO: Move this to program/discovery tests.
@@ -179,10 +182,7 @@ async def test_program_discovery_finds_registered_program(kit, service_context):
             if "myprog" in programs:
                 break
 
-    discovery._discover_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await discovery._discover_task
-
+    await discovery.stop()
     await service_context.shutdown()
 
 
