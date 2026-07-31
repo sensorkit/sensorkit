@@ -5,7 +5,7 @@ import asyncio
 import collections
 import contextlib
 import itertools
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, override
 
 import uuid_utils.compat as uuid
 from loguru import logger
@@ -49,6 +49,9 @@ class EventMultiplexer:
     def __init__(self):
         self._all_queues: set[asyncio.Queue[Event]] = set()
         self._single_queues: dict[str, set[asyncio.Queue[Event]]] = collections.defaultdict(set)
+
+    async def wait_ready(self):
+        """Wait until events are being received. A plain multiplexer has no source to wait for."""
 
     async def parse_event(self, json: bytes):
         """Deserialise a JSON event payload and enqueue it to all matching subscriber queues."""
@@ -100,6 +103,15 @@ class EventStreamConsumer(EventMultiplexer):
     async def start(self):
         """Start the background event consumer task and wait until the stream is ready."""
         self._task = asyncio.create_task(self._event_consumer_task())
+        await self._startup
+
+    @override
+    async def wait_ready(self):
+        """Wait until the stream subscription is live, raising if it failed to start.
+
+        Blocks indefinitely until `start` is called, so callers must hold a multiplexer that is
+        already starting.
+        """
         await self._startup
 
     async def _event_consumer_task(self):

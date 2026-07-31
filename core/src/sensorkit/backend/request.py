@@ -152,10 +152,18 @@ class ExtendedCall[R: ExtendedResponse, V: BaseModel](Call[R, V]):
         context = contextlib.ExitStack()
         queue = context.enter_context(self._event_mux.event_queue(CallEvent))
 
+        try:
+            await self._event_mux.wait_ready()
+        except (asyncio.CancelledError, Exception) as e:
+            context.close()
+            self._future.set_exception(e)
+            raise
+
         # Execute the initial request-response communication.
         try:
             response = await self._invoke(timeout)
         except (asyncio.CancelledError, Exception) as e:
+            context.close()
             self._future.set_exception(e)
             raise
 
