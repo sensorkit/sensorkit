@@ -145,7 +145,7 @@ class EntityImpl(EntityBase, EntityInterface):
         else:
             await self._stream.publish(
                 model.__class__.__name__,
-                model.model_dump_json()
+                model.model_dump_json().encode()
                 if isinstance(model, BaseModel)
                 else TypeAdapter(model).dump_json(model),
             )
