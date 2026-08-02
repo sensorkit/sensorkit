@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Coroutine
 from typing import Any, Literal
 
 from loguru import logger
@@ -339,18 +340,52 @@ class SensorControl:
 
     @sk.task_handler
     async def sensor_shutdown(self, task: sk.ShutdownTask):
-        """Shut down the sensor."""
-        # TODO: Handle concurrency as in sensor_startup.
-        await self.sensor.deinit_mirror_cover()
+        """Shut down the sensor.
 
-        deinit_mount = self.sensor.deinit_mount()
-        deinit_dome = self.sensor.deinit_dome()
+        Under the always_deinit_dome policy every step is attempted even if an earlier one
+        fails, so the dome comes down regardless; the failures are raised once it is closed.
+        Otherwise the first failure ends the shutdown.
+        """
+        policies = self.config.policies
+        failures: list[Exception] = []
 
-        if self.config.policies.concurrent_dome_and_mount_deinit:
-            await asyncio.gather(deinit_dome, deinit_mount)
+        async def attempt(step: Coroutine[Any, Any, None]):
+            """Run a shutdown step, recording rather than propagating its failure."""
+            try:
+                await step
+            except Exception as exc:
+                logger.exception("Sensor shutdown step failed")
+                failures.append(exc)
+
+        def raise_failures():
+            match failures:
+                case []:
+                    return
+                case [failure]:
+                    raise failure
+                case _:
+                    raise ExceptionGroup("Sensor shutdown failed", failures)
+
+        await attempt(self.sensor.deinit_mirror_cover())
+
+        if not policies.always_deinit_dome:
+            raise_failures()
+
+        if policies.concurrent_dome_and_mount_deinit:
+            # attempt() absorbs failures, so both steps always run to completion.
+            await asyncio.gather(
+                attempt(self.sensor.deinit_dome()),
+                attempt(self.sensor.deinit_mount()),
+            )
         else:
-            await deinit_mount
-            await deinit_dome
+            await attempt(self.sensor.deinit_mount())
+
+            if not policies.always_deinit_dome:
+                raise_failures()
+
+            await attempt(self.sensor.deinit_dome())
+
+        raise_failures()
 
 
 class SensorDevices(BaseModel):
@@ -379,6 +414,9 @@ class SensorPolicies(BaseModel):
 
     concurrent_dome_deinit_close: bool = False
     """Whether the dome can be closed and deinitialized concurrently."""
+
+    always_deinit_dome: bool = False
+    """Whether the dome should be deinitialized even if other parts of deinitialization fail."""
 
     dome_open_close_timeout: float = 120.0
     """Timeout for fully opening or closing the dome."""

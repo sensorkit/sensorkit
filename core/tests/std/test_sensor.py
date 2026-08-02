@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import pytest
 import pytest_asyncio
 
+from sensorkit.api import CallError
 from sensorkit.api.declarative import Service, command_handler, declare_device
 from sensorkit.astro.common import RADecPointing, SitePosition
 from sensorkit.astro.coords import Equatorial, Horizontal
@@ -76,20 +77,30 @@ SENSOR_COMMANDS = (
 )
 """Every command a Sensor issues while bringing its devices up and down."""
 
+DOME_DEINIT = [Stop, CloseEnclosure, Deinit]
+"""What a dome receives from deinit_dome when it runs to completion."""
+
+DOME_DEINIT_CUT_SHORT = [Stop, CloseEnclosure]
+"""What a dome receives from deinit_dome when it refuses to close."""
+
 
 class DeviceLog:
     """Records the commands one device received.
 
     Command types added to `reject` are recorded and then refused, standing in for hardware that
-    does not implement them.
+    does not implement them. Commands are also appended to `journal`, which the devices of one
+    stack share so that ordering across them can be checked.
     """
 
-    def __init__(self):
+    def __init__(self, name: str, journal: list[tuple[str, type]]):
+        self.name = name
         self.commands = []
+        self.journal = journal
         self.reject: set[type] = set()
 
     async def handle(self, cmd):
         self.commands.append(cmd)
+        self.journal.append((self.name, type(cmd)))
 
         if type(cmd) in self.reject:
             raise RuntimeError(f"{type(cmd).__name__} unsupported")
@@ -103,10 +114,10 @@ class DeviceLog:
         return self.types().count(command)
 
 
-def recording_device(name: str) -> tuple[declare_device, DeviceLog]:
+def recording_device(name: str, journal: list[tuple[str, type]]) -> tuple[declare_device, DeviceLog]:
     """Declare a device that answers every sensor command by recording it."""
     device = declare_device(name=name)
-    log = DeviceLog()
+    log = DeviceLog(name, journal)
 
     for command in SENSOR_COMMANDS:
 
@@ -125,32 +136,56 @@ class SensorStack:
 
     DEVICES = ("mount", "camera", "dome", "cover")
 
-    def __init__(self, controller, logs: dict[str, DeviceLog]):
+    def __init__(self, controller, logs: dict[str, DeviceLog], journal: list[tuple[str, type]]):
         self.controller = controller
         self.logs = logs
+        self.journal = journal
 
     def sensor(self, policies: SensorPolicies | None = None, **devices) -> Sensor:
         """Build a Sensor over the named subset of the running devices."""
         return Sensor(self.controller, SensorDevices(**devices), policies or SensorPolicies())
 
+    def control(self, policies: SensorPolicies | None = None, **devices) -> SensorControl:
+        """Build a SensorControl driving the named subset of the running devices.
+
+        SensorControl normally builds its Sensor while attaching to a live controller, which a
+        task handler invoked on its own never gets; this supplies the equivalent one.
+        """
+        policies = policies or SensorPolicies()
+        control = SensorControl(
+            config=SensorConfig(
+                controller_name="ctrl",
+                devices=SensorDevices(**devices),
+                site_position=_site(),
+                policies=policies,
+            )
+        )
+        control.sensor = self.sensor(policies, **devices)
+        return control
+
     def log(self, name: str) -> DeviceLog:
         return self.logs[name]
+
+    def sequence(self) -> list[tuple[str, type]]:
+        """Every command every device received, in the order they arrived."""
+        return list(self.journal)
 
 
 @pytest_asyncio.fixture
 async def sensor_stack():
     svc = Service("test-sensor-devices", "0.1.0")
     logs = {}
+    journal = []
 
     for name in SensorStack.DEVICES:
-        device, log = recording_device(name)
+        device, log = recording_device(name, journal)
         svc.add(device)
         logs[name] = log
 
     svc_task = await run_service(svc)
     controller = await svc.context.register_controller("ctrl")
 
-    yield SensorStack(controller, logs)
+    yield SensorStack(controller, logs, journal)
 
     await svc.context.shutdown()
 
@@ -392,7 +427,7 @@ async def test_sensor_deinit_dome_present(sensor_stack):
     sensor = sensor_stack.sensor(mount="mount", camera="camera", dome="dome")
     await sensor.deinit_dome()
 
-    assert sensor_stack.log("dome").types() == [Stop, CloseEnclosure, Deinit]
+    assert sensor_stack.log("dome").types() == DOME_DEINIT
 
 
 @pytest.mark.asyncio
@@ -418,7 +453,7 @@ async def test_sensor_deinit_dome_closes_despite_failed_stop(sensor_stack):
     sensor = sensor_stack.sensor(mount="mount", camera="camera", dome="dome")
     await sensor.deinit_dome()
 
-    assert sensor_stack.log("dome").types() == [Stop, CloseEnclosure, Deinit]
+    assert sensor_stack.log("dome").types() == DOME_DEINIT
 
 
 @pytest.mark.asyncio
@@ -738,6 +773,221 @@ async def test_sensor_control_shutdown_concurrent_dome():
             await dome_close_called.wait()
     finally:
         await cleanup_service(svc, svc_task, sc)
+
+
+def shutdown_task():
+    return ShutdownTask(task_id=uuid.uuid4(), controller_id="ctrl")
+
+
+def full_sensor(sensor_stack, policies: SensorPolicies) -> SensorControl:
+    """A SensorControl over every device a shutdown touches."""
+    return sensor_stack.control(
+        policies, mount="mount", camera="camera", dome="dome", mirror_cover="cover"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("always_deinit_dome", [False, True])
+@pytest.mark.parametrize("concurrent", [False, True])
+async def test_sensor_shutdown_deinits_every_device(sensor_stack, always_deinit_dome, concurrent):
+    sc = full_sensor(
+        sensor_stack,
+        SensorPolicies(
+            always_deinit_dome=always_deinit_dome,
+            concurrent_dome_and_mount_deinit=concurrent,
+        ),
+    )
+    await sc.sensor_shutdown(shutdown_task())
+
+    assert sensor_stack.log("cover").types() == [CloseMirrorCover]
+    assert sensor_stack.log("mount").types() == [Deinit]
+    assert sensor_stack.log("dome").types() == DOME_DEINIT
+
+
+@pytest.mark.asyncio
+async def test_sensor_shutdown_closes_the_dome_last(sensor_stack):
+    """The mirror cover and mount come down before the dome starts closing over them."""
+    sc = full_sensor(sensor_stack, SensorPolicies())
+    await sc.sensor_shutdown(shutdown_task())
+
+    assert sensor_stack.sequence() == [
+        ("cover", CloseMirrorCover),
+        ("mount", Deinit),
+        ("dome", Stop),
+        ("dome", CloseEnclosure),
+        ("dome", Deinit),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sensor_shutdown_mount_failure_leaves_dome_alone(sensor_stack):
+    sensor_stack.log("mount").reject.add(Deinit)
+
+    sc = full_sensor(sensor_stack, SensorPolicies(always_deinit_dome=False))
+    with pytest.raises(CallError):
+        await sc.sensor_shutdown(shutdown_task())
+
+    assert sensor_stack.log("mount").types() == [Deinit]
+    assert sensor_stack.log("dome").types() == []
+
+
+@pytest.mark.asyncio
+async def test_sensor_shutdown_mount_failure_still_deinits_dome(sensor_stack):
+    """The dome comes down anyway, and the mount failure is still reported."""
+    sensor_stack.log("mount").reject.add(Deinit)
+
+    sc = full_sensor(sensor_stack, SensorPolicies(always_deinit_dome=True))
+    with pytest.raises(CallError):
+        await sc.sensor_shutdown(shutdown_task())
+
+    assert sensor_stack.log("dome").types() == DOME_DEINIT
+
+
+@pytest.mark.asyncio
+async def test_sensor_shutdown_mirror_cover_failure_stops_shutdown(sensor_stack):
+    sensor_stack.log("cover").reject.add(CloseMirrorCover)
+
+    sc = full_sensor(sensor_stack, SensorPolicies(always_deinit_dome=False))
+    with pytest.raises(CallError):
+        await sc.sensor_shutdown(shutdown_task())
+
+    assert sensor_stack.log("mount").types() == []
+    assert sensor_stack.log("dome").types() == []
+
+
+@pytest.mark.asyncio
+async def test_sensor_shutdown_mirror_cover_failure_still_deinits_dome(sensor_stack):
+    """A stuck mirror cover is the earliest step, so it must not strand the dome open."""
+    sensor_stack.log("cover").reject.add(CloseMirrorCover)
+
+    sc = full_sensor(sensor_stack, SensorPolicies(always_deinit_dome=True))
+    with pytest.raises(CallError):
+        await sc.sensor_shutdown(shutdown_task())
+
+    assert sensor_stack.log("mount").types() == [Deinit]
+    assert sensor_stack.log("dome").types() == DOME_DEINIT
+
+
+@pytest.mark.asyncio
+async def test_sensor_shutdown_dome_failure_propagates(sensor_stack):
+    sensor_stack.log("dome").reject.add(CloseEnclosure)
+
+    sc = full_sensor(sensor_stack, SensorPolicies(always_deinit_dome=True))
+    with pytest.raises(CallError):
+        await sc.sensor_shutdown(shutdown_task())
+
+    assert sensor_stack.log("mount").types() == [Deinit]
+    assert sensor_stack.log("dome").types() == DOME_DEINIT_CUT_SHORT
+
+
+@pytest.mark.asyncio
+async def test_sensor_shutdown_groups_failures_from_several_steps(sensor_stack):
+    sensor_stack.log("cover").reject.add(CloseMirrorCover)
+    sensor_stack.log("mount").reject.add(Deinit)
+
+    sc = full_sensor(sensor_stack, SensorPolicies(always_deinit_dome=True))
+    with pytest.raises(ExceptionGroup) as excinfo:
+        await sc.sensor_shutdown(shutdown_task())
+
+    assert len(excinfo.value.exceptions) == 2
+    assert sensor_stack.log("dome").types() == DOME_DEINIT
+
+
+@pytest.mark.asyncio
+async def test_sensor_shutdown_reports_every_failed_step(sensor_stack):
+    sensor_stack.log("cover").reject.add(CloseMirrorCover)
+    sensor_stack.log("mount").reject.add(Deinit)
+    sensor_stack.log("dome").reject.add(CloseEnclosure)
+
+    sc = full_sensor(sensor_stack, SensorPolicies(always_deinit_dome=True))
+    with pytest.raises(ExceptionGroup) as excinfo:
+        await sc.sensor_shutdown(shutdown_task())
+
+    assert len(excinfo.value.exceptions) == 3
+    assert sensor_stack.log("dome").types() == DOME_DEINIT_CUT_SHORT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("always_deinit_dome", [False, True])
+async def test_sensor_shutdown_concurrent_awaits_dome_despite_mount_failure(
+    sensor_stack, always_deinit_dome
+):
+    """The dome deinit must finish before the handler returns, not run on detached from it."""
+    sensor_stack.log("mount").reject.add(Deinit)
+
+    sc = full_sensor(
+        sensor_stack,
+        SensorPolicies(
+            always_deinit_dome=always_deinit_dome,
+            concurrent_dome_and_mount_deinit=True,
+        ),
+    )
+    with pytest.raises(CallError):
+        await sc.sensor_shutdown(shutdown_task())
+
+    assert sensor_stack.log("dome").types() == DOME_DEINIT
+
+
+@pytest.mark.asyncio
+async def test_sensor_shutdown_concurrent_groups_dome_and_mount_failures(sensor_stack):
+    sensor_stack.log("mount").reject.add(Deinit)
+    sensor_stack.log("dome").reject.add(CloseEnclosure)
+
+    sc = full_sensor(
+        sensor_stack,
+        SensorPolicies(always_deinit_dome=True, concurrent_dome_and_mount_deinit=True),
+    )
+    with pytest.raises(ExceptionGroup) as excinfo:
+        await sc.sensor_shutdown(shutdown_task())
+
+    assert len(excinfo.value.exceptions) == 2
+    assert sensor_stack.log("dome").types() == DOME_DEINIT_CUT_SHORT
+
+
+@pytest.mark.asyncio
+async def test_sensor_shutdown_concurrent_mirror_cover_failure_skips_both(sensor_stack):
+    sensor_stack.log("cover").reject.add(CloseMirrorCover)
+
+    sc = full_sensor(
+        sensor_stack,
+        SensorPolicies(always_deinit_dome=False, concurrent_dome_and_mount_deinit=True),
+    )
+    with pytest.raises(CallError):
+        await sc.sensor_shutdown(shutdown_task())
+
+    assert sensor_stack.log("mount").types() == []
+    assert sensor_stack.log("dome").types() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("always_deinit_dome", [False, True])
+@pytest.mark.parametrize("concurrent", [False, True])
+async def test_sensor_shutdown_cancellation_is_not_absorbed(
+    sensor_stack, always_deinit_dome, concurrent
+):
+    """Cancelling a shutdown must not be recorded as a step failure."""
+    sc = full_sensor(
+        sensor_stack,
+        SensorPolicies(
+            always_deinit_dome=always_deinit_dome,
+            concurrent_dome_and_mount_deinit=concurrent,
+        ),
+    )
+
+    reached_mount = asyncio.Event()
+
+    async def hang():
+        reached_mount.set()
+        await asyncio.Event().wait()
+
+    sc.sensor.deinit_mount = hang
+
+    task = asyncio.create_task(sc.sensor_shutdown(shutdown_task()))
+    await reached_mount.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 @pytest.mark.asyncio
