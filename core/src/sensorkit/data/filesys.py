@@ -111,13 +111,11 @@ class WatchDirectory(SourceOp):
         logger.debug(f"starting WatchDirectory source at {self.directory}")
         await asyncio.to_thread(pathlib.Path(self.directory).mkdir, parents=True, exist_ok=True)
 
-        events = await watch_dir(
+        async with watch_dir(
             self.directory,
             recursive=self.recursive,
             kinds=(FileEventKind.CREATED, FileEventKind.MOVED),
-        )
-
-        try:
+        ) as events:
             while True:
                 # Wait for the graph to be ready.
                 edge = yield
@@ -137,8 +135,6 @@ class WatchDirectory(SourceOp):
                     )
                 except Exception:
                     logger.exception("error sending file path to graph")
-        finally:
-            await events.aclose()
 
 
 class WriteFile(DataOp):

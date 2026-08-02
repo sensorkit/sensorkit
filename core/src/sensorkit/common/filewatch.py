@@ -1,29 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Async-friendly filesystem watching over watchdog.
 
-Wraps watchdog's threaded, callback-based API in an asyncio-native, async-generator
-interface, and funnels every watch in the process through one shared Observer.
-
-Sharing a single Observer also sidesteps a macOS FSEvents limitation: two watches on the
-same directory in *separate* Observer instances collide. With one Observer, watchdog keeps
-a single emitter per directory and dispatches it to every handler. To preserve that
-one-emitter-per-directory guarantee, each directory has exactly one physical watch whose
-recursion level is set by its first subscriber. A recursive watch is a superset of a
-non-recursive one, so a non-recursive consumer can always be served from a recursive watch
-by filtering on `event.path.parent == directory`. The reverse cannot be done without
-re-creating the watch -- which would drop events on existing subscribers during the gap --
-so a recursive consumer of a directory already watched non-recursively is rejected.
-
-The shared Observer serves directory watches (`watch_dir`). A single file can be awaited
-with `wait_for_file`, which runs its own short-lived PollingObserver instead of joining the
-shared Observer: polling works on any filesystem (including network mounts, where native
-watchers miss remote writes) and cannot collide with the shared Observer on macOS. (watchdog
-cannot portably watch a file directly, nor one that does not exist yet, so the file's parent
-directory is watched.)
+Wraps watchdog's threaded, callback-based API in an asyncio-native interface. `watch_dir`
+watches a directory for the duration of a block; `wait_for_file` suspends until a single
+file appears. Every directory watch in the process shares one Observer.
 
 Caveats:
 - The watched directory (and, for `wait_for_file`, the file's parent directory) must already
   exist; scheduling a watch on a missing path raises.
+- A directory gets one physical watch, whose recursion is fixed by its first subscriber. A
+  non-recursive consumer can share a recursive watch, but requesting `recursive=True` for a
+  directory already being watched non-recursively raises ValueError.
 - A temp-then-rename write surfaces as `MOVED` (path = destination), not `CREATED`;
   include `MOVED` in `kinds` when watching for "a file became ready".
 - `existing=True` reports already-present entries with kind `EXISTING`, scanned after
@@ -31,17 +18,23 @@ Caveats:
   the scan and a concurrent live event; consumers should be idempotent.
 - Queues are unbounded by default (lossless); pass `max_queue` to bound them, in which
   case the newest event is dropped and logged on overflow.
+- `wait_for_file` polls rather than using a native watcher, so it also sees remote writes
+  on network mounts, at a detection latency of up to `poll_interval`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import enum
+import functools
 import os
 import pathlib
+import sys
 import threading
-from collections.abc import AsyncGenerator, Callable, Collection
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Collection
 from dataclasses import dataclass
+from queue import Queue
 
 from loguru import logger
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -191,8 +184,7 @@ class DirWatch:
     is rejected (re-creating the watch would drop events on existing subscribers).
     """
 
-    def __init__(self, real_dir: str):
-        self.real_dir = real_dir
+    def __init__(self):
         self.lock = threading.Lock()
         self.subscribers: set[Subscriber] = set()
         self.handler = DispatchHandler(self)
@@ -204,23 +196,22 @@ class WatchManager:
     """Process-wide registry funneling every watch through one shared Observer.
 
     Thread-safety: `subscribe`/`unsubscribe` may be called from different event-loop
-    threads (e.g. tests). A single lock guards the observer and the watch registry. We
-    never join watchdog threads while holding the lock, since an observer thread mid
-    dispatch may be waiting on a `DirWatch` lock -- joining under the manager lock could
-    otherwise deadlock.
+    threads (e.g. tests).
     """
 
     def __init__(self):
         self._lock = threading.Lock()
         self._observer: BaseObserver | None = None
         self._watches: dict[str, DirWatch] = {}
+        self._pending: Queue[tuple[str, ObservedWatch]] = Queue()
+        self._reaper: threading.Thread | None = None
 
     def subscribe(self, real_dir: str, subscriber: Subscriber, *, recursive: bool) -> None:
         with self._lock:
             watch = self._watches.get(real_dir)
 
             if watch is None:
-                watch = DirWatch(real_dir)
+                watch = DirWatch()
                 observer = self._ensure_observer_locked()
                 watch.recursive = recursive
                 watch.observed_watch = observer.schedule(
@@ -241,9 +232,10 @@ class WatchManager:
                 watch.subscribers.add(subscriber)
 
     def unsubscribe(self, real_dir: str, subscriber: Subscriber) -> None:
-        observer_to_stop: BaseObserver | None = None
-        watch_to_unschedule: tuple[BaseObserver, ObservedWatch] | None = None
+        """Drop *subscriber*, queueing the physical unschedule if it was the last one.
 
+        Non-blocking, and safe to call from an event loop thread.
+        """
         with self._lock:
             watch = self._watches.get(real_dir)
             if watch is None:
@@ -251,52 +243,170 @@ class WatchManager:
 
             with watch.lock:
                 watch.subscribers.discard(subscriber)
-                empty = not watch.subscribers
+                if watch.subscribers:
+                    return
 
-            if empty:
-                del self._watches[real_dir]
+            del self._watches[real_dir]
 
-                if self._observer is not None and watch.observed_watch is not None:
-                    if self._watches:
-                        # Other watches remain; just drop this one.
-                        watch_to_unschedule = (self._observer, watch.observed_watch)
-                    else:
-                        # Last watch went away; tear the whole observer down.
-                        observer_to_stop = self._observer
-                        self._observer = None
+            if self._observer is None or watch.observed_watch is None:
+                return
 
-        # Perform thread joins outside the lock to avoid deadlocking against an observer
-        # thread that is blocked acquiring a DirWatch lock during dispatch.
-        if watch_to_unschedule is not None:
-            observer, observed_watch = watch_to_unschedule
+            self._pending.put((real_dir, watch.observed_watch))
+            self._ensure_reaper_locked()
+
+    def _reap(self) -> None:
+        """Unschedule watches queued by `unsubscribe`, one at a time. Runs on its own thread."""
+        # This exists to keep the unschedule off the caller's thread: it joins the watch's
+        # emitter with no timeout, and a PollingEmitter only notices the stop between
+        # passes, so the join can wait out a full walk of the tree. It holds the observer
+        # lock throughout, stalling dispatch for every other watch as well.
+        while True:
+            real_dir, observed_watch = self._pending.get()
+
+            try:
+                with self._lock:
+                    self._unschedule_locked(real_dir, observed_watch)
+            except Exception:
+                # The reaper is process-wide: letting it die would leak every later watch.
+                logger.exception(f"filewatch failed to unschedule watch on {real_dir!r}")
+            finally:
+                self._pending.task_done()
+
+    def _unschedule_locked(self, real_dir: str, observed_watch: ObservedWatch) -> None:
+        observer = self._observer
+
+        if observer is None:
+            return
+
+        # Make sure a watch hasn't been re-added. An ObservedWatch compares by path and
+        # recursion and scheduling an equal one reuses the emitter, so unscheduling here
+        # would tear down the new subscriber's watch. One re-added with the opposite
+        # recursion is a distinct emitter and must still be reaped.
+        live = self._watches.get(real_dir)
+
+        if live is not None and live.observed_watch == observed_watch:
+            return
+
+        try:
             observer.unschedule(observed_watch)
-
-        if observer_to_stop is not None:
-            observer_to_stop.stop()
-            observer_to_stop.join()
+        except KeyError:
+            # Already gone, e.g. via `unschedule_all`.
+            pass
 
     def _ensure_observer_locked(self) -> BaseObserver:
         observer = self._observer
+
         if observer is None:
+            # One Observer process-wide: on macOS, two watches on the same directory in
+            # separate Observer instances collide, whereas one Observer keeps a single
+            # emitter per directory and dispatches it to every handler.
             observer = Observer()
             observer.start()
             self._observer = observer
 
         return observer
 
+    def _ensure_reaper_locked(self) -> None:
+        if self._reaper is None:
+            self._reaper = threading.Thread(
+                target=self._reap, name="filewatch-reaper", daemon=True
+            )
+            self._reaper.start()
+
     def _reset(self) -> None:
-        """Tear down all watches and the observer. Intended for tests."""
+        """Drop all watches, leaving the shared Observer running. Intended for tests."""
+        # Let queued teardowns finish first, so they cannot fire against a later test's
+        # watches. Blocking here is fine: `_reset` runs off the event loop.
+        self._pending.join()
+
         with self._lock:
             observer = self._observer
-            self._observer = None
             self._watches.clear()
 
         if observer is not None:
-            observer.stop()
-            observer.join()
+            observer.unschedule_all()
 
+
+def patch_windows_emitter_handle_close() -> None:
+    """Make watchdog's Windows emitter close its directory handle at most once.
+
+    Through watchdog 6.0.0 the Windows emitter closes its directory handle from whichever
+    thread stops it and never clears the attribute, and `on_thread_stop` runs more than
+    once per emitter during ordinary teardown. The handle is therefore closed twice, and
+    between the two closes Windows is free to hand that handle value to something else --
+    so the second close destroys an unrelated object. When the value has been reused for
+    one of CPython's parking-lot semaphores, the interpreter dies with "Fatal Python
+    error: _PySemaphore_Wakeup: parking_lot: ReleaseSemaphore failed". Under pytest the
+    message is swallowed by output capture, leaving only a silent non-zero exit.
+
+    Clearing the attribute before closing makes the second call a no-op. Upstream fixes
+    this by rewriting the emitter around DirectoryChangeReader, which keeps the handle on
+    the thread that owns it; this patch detects that version and does nothing, and the
+    whole function can be dropped once it ships.
+
+    See https://github.com/gorakhargosh/watchdog/issues/1132.
+    """
+    from watchdog.observers import winapi
+    from watchdog.observers.read_directory_changes import WindowsApiEmitter
+
+    if hasattr(winapi, "DirectoryChangeReader"):
+        return
+
+    def on_thread_stop(self: WindowsApiEmitter) -> None:
+        whandle = self._whandle
+        if whandle:
+            self._whandle = None
+            winapi.close_directory_handle(whandle)
+
+    WindowsApiEmitter.on_thread_stop = on_thread_stop
+
+
+if sys.platform == "win32":
+    patch_windows_emitter_handle_close()
 
 manager = WatchManager()
+
+
+def event_matches(
+    event: FileEvent,
+    *,
+    kinds: frozenset[FileEventKind] | None,
+    real_dir: pathlib.Path,
+    recursive: bool,
+) -> bool:
+    """Whether *event* should be reported to a subscriber watching *real_dir*.
+
+    Filters by kind, drops events on the watched directory itself, and -- for a
+    non-recursive consumer -- drops anything below its immediate children, which is what
+    lets such a consumer share a recursive physical watch.
+    """
+    if kinds is not None and event.kind not in kinds:
+        return False
+    if event.path == real_dir:
+        return False
+    return recursive or event.path.parent == real_dir
+
+
+async def event_stream(
+    *,
+    queue: asyncio.Queue[FileEvent],
+    existing_events: list[FileEvent],
+    existing_done: asyncio.Event | None,
+) -> AsyncGenerator[FileEvent, None]:
+    """Yield the buffered initial scan, then live events."""
+    # Deliberately owns no cleanup: an async generator closed or dropped before its first
+    # `__anext__` never runs its body, so unsubscribing here would be skipped exactly when
+    # nothing was consumed. The enclosing `watch_dir` block does it instead.
+    for event in existing_events:
+        yield event
+
+    # The buffered scan is drained; a sequential consumer has processed it all by now.
+    if existing_done is not None:
+        existing_done.set()
+
+    while True:
+        yield await queue.get()
+        queue.task_done()
 
 
 def scan_existing(real_dir: str, recursive: bool) -> list[FileEvent]:
@@ -315,6 +425,7 @@ def scan_existing(real_dir: str, recursive: bool) -> list[FileEvent]:
     ]
 
 
+@contextlib.asynccontextmanager
 async def watch_dir(
     directory: str | os.PathLike[str],
     *,
@@ -323,21 +434,31 @@ async def watch_dir(
     existing: bool = False,
     existing_done: asyncio.Event | None = None,
     max_queue: int = 0,
-) -> AsyncGenerator[FileEvent, None]:
-    """Subscribe to filesystem events under *directory* and return a stream of them.
+) -> AsyncIterator[AsyncGenerator[FileEvent, None]]:
+    """Watch *directory* for the duration of the block, yielding a stream of its events.
+
+    Entering the block subscribes -- the watch is armed and, with `existing=True`, the
+    initial scan is complete by the time the body starts, so a caller may scan the
+    directory itself without racing live writes. Leaving it unsubscribes, however the
+    block exits.
+
+    Use it directly, or compose several watches with `contextlib.AsyncExitStack`:
+
+        async with watch_dir(root, kinds=(FileEventKind.CREATED,)) as events:
+            async for event in events:
+                ...
 
     Args:
         directory: Directory to watch. Must already exist.
         recursive: When `False`, only events whose parent is *directory* itself are
-            reported, with a non-recursive physical watch -- unless the directory is already
-            watched recursively, in which case that watch is shared and filtered. Requesting
-            `recursive=True` for a directory already watched non-recursively raises ValueError.
+            reported. Raises ValueError if `True` and the directory is already watched
+            non-recursively.
         kinds: If given, only report events of these kinds; otherwise report all. To
             include the initial scan when `existing=True`, include `EXISTING`.
-        existing: When `True`, the returned generator first yields an `EXISTING` event for
-            each entry already present (scanned after subscribing, so no live event is missed).
-            A present entry may therefore also be reported by a concurrent live event.
-        existing_done: If given, set once the generator has yielded the last buffered
+        existing: When `True`, the stream first yields an `EXISTING` event for each entry
+            already present (scanned after subscribing, so no live event is missed). A present
+            entry may therefore also be reported by a concurrent live event.
+        existing_done: If given, set once the stream has yielded the last buffered
             `EXISTING` event and is about to await live events. For a consumer that processes
             each event before requesting the next (an `async for` that awaits in its body),
             this fires right after the initial scan has been fully *processed* -- the signal a
@@ -346,61 +467,66 @@ async def watch_dir(
         max_queue: Maximum number of buffered events (0 means unbounded). On overflow the
             newest event is dropped and logged.
 
-    Returns:
-        An async generator yielding matching `FileEvent`s until it is closed.
+    Yields:
+        An async generator of matching `FileEvent`s, live until the block exits.
     """
     real_dir = os.path.realpath(directory)
-    real_dir_path = pathlib.Path(real_dir)
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[FileEvent] = asyncio.Queue(maxsize=max_queue)
-    kind_set = frozenset(kinds) if kinds is not None else None
 
-    def predicate(event: FileEvent) -> bool:
-        if kind_set is not None and event.kind not in kind_set:
-            return False
-        if event.path == real_dir_path:
-            return False
-        if not recursive and event.path.parent != real_dir_path:
-            return False
-        return True
-
+    predicate = functools.partial(
+        event_matches,
+        kinds=frozenset(kinds) if kinds is not None else None,
+        real_dir=pathlib.Path(real_dir),
+        recursive=recursive,
+    )
     subscriber = Subscriber(loop=loop, queue=queue, predicate=predicate, real_dir=real_dir)
-    manager.subscribe(real_dir, subscriber, recursive=recursive)
 
-    # The watch is now live: matching events are delivered to `queue` and cannot be missed.
-    # Scan for pre-existing entries (if requested) before handing back the stream, so that the
-    # initial listing is complete by the time this coroutine returns. Unsubscribe if the scan
-    # fails, since the stream that would otherwise clean up is never handed out.
-    try:
-        existing_events = (
-            [
-                event
-                for event in await asyncio.to_thread(scan_existing, real_dir, recursive)
-                if predicate(event)
-            ]
-            if existing
-            else []
-        )
-    except BaseException:
-        manager.unsubscribe(real_dir, subscriber)
-        raise
+    def subscribe_and_scan() -> list[FileEvent]:
+        # Subscribing blocks off the loop: it opens a directory handle and starts watchdog's
+        # threads, and a recursive inotify watch walks the tree adding one watch per
+        # directory -- slow enough on a deep tree or a stalled network mount to matter.
+        manager.subscribe(real_dir, subscriber, recursive=recursive)
 
-    async def stream() -> AsyncGenerator[FileEvent, None]:
+        # The watch is now live: matching events are delivered to `queue` and cannot be
+        # missed. Only now scan for pre-existing entries, and undo the subscription if that
+        # fails, since the block whose exit would otherwise clean up is never entered.
         try:
-            for event in existing_events:
-                yield event
+            return scan_existing(real_dir, recursive) if existing else []
+        except BaseException:
+            manager.unsubscribe(real_dir, subscriber)
+            raise
 
-            # The buffered scan is drained; a sequential consumer has processed it all by now.
-            if existing_done is not None:
-                existing_done.set()
-
-            while True:
-                yield await queue.get()
-                queue.task_done()
-        finally:
+    def drop_orphaned_subscription(task: asyncio.Task[list[FileEvent]]) -> None:
+        if not task.cancelled() and task.exception() is None:
             manager.unsubscribe(real_dir, subscriber)
 
-    return stream()
+    # Shield the worker rather than abandoning it on cancellation: a thread cannot be
+    # interrupted, so a subscription that lands after we stop waiting would never be taken
+    # back out. The initial listing is complete by the time this coroutine returns.
+    subscribing = asyncio.create_task(asyncio.to_thread(subscribe_and_scan))
+
+    try:
+        existing_events = [e for e in await asyncio.shield(subscribing) if predicate(e)]
+    except BaseException:
+        subscribing.add_done_callback(drop_orphaned_subscription)
+        raise
+
+    stream = event_stream(
+        queue=queue,
+        existing_events=existing_events,
+        existing_done=existing_done,
+    )
+
+    try:
+        yield stream
+    finally:
+        # Synchronous by design: this also runs when the block is left by cancellation or
+        # during interpreter shutdown, where awaiting can raise or never resume and the
+        # watch would leak for the life of the process. `unsubscribe` is non-blocking, so
+        # the emitter join it defers costs the caller nothing here.
+        manager.unsubscribe(real_dir, subscriber)
+        await stream.aclose()
 
 
 class WaitFileHandler(FileSystemEventHandler):

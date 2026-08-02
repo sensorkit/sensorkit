@@ -164,21 +164,17 @@ class ServeLocalFITSHandler(ServeHandler):
             logger.debug(f"waiting for fits server directory {root} to exist...")
             await asyncio.sleep(30.0)
 
-        events = await watch_dir(
+        async with watch_dir(
             root,
             recursive=True,
             existing=True,
             existing_done=self._listing_ready,
             kinds=(FileEventKind.CREATED, FileEventKind.MOVED, FileEventKind.EXISTING),
-        )
-
-        try:
+        ) as events:
             async for event in events:
                 if event.is_directory or event.path.suffix != ".fits":
                     continue
                 await self._found_file(event.path)
-        finally:
-            await events.aclose()
 
     async def _read_whole_frame(self, path: pathlib.Path):
         """Read *path* once all of it is on disk, or None if it never gets there."""

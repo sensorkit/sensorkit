@@ -118,18 +118,16 @@ class SkyTransmissionAnalyzer:
 
         await asyncio.to_thread(watch_path.mkdir, parents=True, exist_ok=True)
 
-        events = await watch_dir(
+        async with watch_dir(
             watch_path,
             recursive=acquisition.watch_recursive,
             kinds=(FileEventKind.CREATED, FileEventKind.MOVED),
-        )
+        ) as events:
+            logger.debug(
+                f"watching {watch_path} for {patterns} "
+                f"(recursive={acquisition.watch_recursive})"
+            )
 
-        logger.debug(
-            f"watching {watch_path} for {patterns} "
-            f"(recursive={acquisition.watch_recursive})"
-        )
-
-        try:
             async for event in events:
                 if event.is_directory:
                     continue
@@ -143,8 +141,6 @@ class SkyTransmissionAnalyzer:
                     await self._process_frame(image_path=str(path))
                 except Exception:
                     logger.exception(f"frame processing error for {path}")
-        finally:
-            await events.aclose()
 
     async def _wait_for_stable_file(
         self,
