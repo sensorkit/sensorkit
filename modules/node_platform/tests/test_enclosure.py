@@ -6,20 +6,20 @@ import asyncio
 import ourskyai_node_platform_api as osapi
 import pytest
 
-from .fakes import (
-    FakeNodePlatformAPI,
-    make_enclosure_status,
-    make_operation_status,
-    make_safety_status,
-)
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.enclosure import (
     NodePlatformEnclosure,
     NodePlatformEnclosureConfig,
     NodePlatformEnclosureState,
 )
-from sensorkit.std import Deinit, Home, Init, Stop
-from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
+from sensorkit.std import CloseEnclosure, Deinit, Home, Init, OpenEnclosure, Stop
+
+from .fakes import (
+    FakeNodePlatformAPI,
+    make_enclosure_status,
+    make_operation_status,
+    make_safety_status,
+)
 
 Shutter = osapi.EnclosureShutterState
 

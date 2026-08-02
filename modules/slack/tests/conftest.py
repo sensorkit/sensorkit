@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import pytest
 
-from .fakes import FakeSlackClient
 from sensorkit.common.condition import BecomesCondition, ChangesCondition
 from sensorkit.slack.models import (
     ChannelConfig,
@@ -14,6 +13,8 @@ from sensorkit.slack.models import (
     SlackConfig,
     StateWatch,
 )
+
+from .fakes import FakeSlackClient
 
 
 @pytest.fixture(autouse=True)

@@ -5,11 +5,11 @@ import asyncio
 
 import pytest
 
-from .fakes import FakePWI4Client
 from sensorkit.pwi4.device import DeviceConnectionError
 from sensorkit.pwi4.rotator import PWI4Rotator, PWI4RotatorConfig
-from sensorkit.std import Stop
-from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
+from sensorkit.std import ChangeRotatorPosition, RotatorPosition, Stop
+
+from .fakes import FakePWI4Client
 
 
 class TestPWI4RotatorConfig:

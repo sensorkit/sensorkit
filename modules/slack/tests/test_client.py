@@ -6,9 +6,10 @@ from __future__ import annotations
 import pytest
 from slack_sdk.errors import SlackApiError
 
-from .fakes import FakeWebClient
 from sensorkit.slack import client as client_mod
 from sensorkit.slack.client import SlackClient
+
+from .fakes import FakeWebClient
 
 
 @pytest.fixture

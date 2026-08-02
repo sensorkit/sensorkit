@@ -5,17 +5,18 @@ from datetime import UTC, datetime
 
 import pytest
 
+from sensorkit.node_platform.weather import (
+    NodePlatformWeather,
+    NodePlatformWeatherConfig,
+    NodePlatformWeatherState,
+)
+
 from .fakes import (
     FakeNodePlatformAPI,
     SystemMetric,
     SystemMetricNames,
     SystemMetrics,
     make_weather_station_status,
-)
-from sensorkit.node_platform.weather import (
-    NodePlatformWeather,
-    NodePlatformWeatherConfig,
-    NodePlatformWeatherState,
 )
 
 

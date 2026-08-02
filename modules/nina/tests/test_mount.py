@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
-from .fakes import FakeNinaClient
 from sensorkit.nina.mount import NinaMountConfig, NinaMountState
 from sensorkit.std import Connect, Disconnect, Home, MoveToPark, Stop
+
+from .fakes import FakeNinaClient
 
 
 @pytest.fixture

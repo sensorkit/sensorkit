@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
-import textwrap
 
 import asyncclick as click
 from loguru import logger

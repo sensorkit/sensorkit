@@ -7,10 +7,11 @@ import contextlib
 import pytest
 
 import sensorkit.senpai.analyzer as analyzer_mod
-from .fakes import FakePipeline
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileInfo
 from sensorkit.senpai.models import SenpaiConfig, SenpaiResult
+
+from .fakes import FakePipeline
 
 
 @pytest.fixture

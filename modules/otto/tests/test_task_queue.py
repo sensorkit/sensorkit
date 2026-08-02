@@ -6,9 +6,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from .data import make_task
 from sensorkit.core.program import ProgramOffering
 from sensorkit.otto.task_queue import TaskQueue
+
+from .data import make_task
 
 
 @pytest.fixture

@@ -3,15 +3,15 @@
 
 import pytest
 
-from .fakes import FakeNodePlatformAPI, make_cover_status
 from sensorkit.node_platform.cover import (
     NodePlatformCover,
     NodePlatformCoverConfig,
     NodePlatformCoverState,
 )
 from sensorkit.node_platform.device import DeviceConnectionError
-from sensorkit.std import Stop
-from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
+from sensorkit.std import CloseMirrorCover, OpenMirrorCover, Stop
+
+from .fakes import FakeNodePlatformAPI, make_cover_status
 
 
 @pytest.fixture

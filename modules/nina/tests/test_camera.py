@@ -2,15 +2,18 @@
 import pytest
 
 import sensorkit.api as sk
-from .fakes import FakeNinaClient
 from sensorkit.nina.camera import NinaCameraConfig, NinaCameraState
-from sensorkit.std import Connect, Disconnect, TemperatureUnit
-from sensorkit.std.instrument import (
+from sensorkit.std import (
     Binning,
     CameraSensorTemperature,
     ConfigureCameraCooler,
     ConfigureCameraSensor,
+    Connect,
+    Disconnect,
+    TemperatureUnit,
 )
+
+from .fakes import FakeNinaClient
 
 
 @pytest.fixture

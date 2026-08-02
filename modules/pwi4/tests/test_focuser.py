@@ -5,11 +5,11 @@ import asyncio
 
 import pytest
 
-from .fakes import FakePWI4Client
 from sensorkit.pwi4.device import DeviceConnectionError
 from sensorkit.pwi4.focuser import PWI4Focuser, PWI4FocuserConfig
-from sensorkit.std import Stop
-from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
+from sensorkit.std import ChangeFocusPosition, FocusPosition, Stop
+
+from .fakes import FakePWI4Client
 
 
 class TestPWI4FocuserConfig:

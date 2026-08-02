@@ -5,9 +5,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from .fakes import tle_request
 from sensorkit.core.program import ProgramOffering
 from sensorkit.udl.task_queue import TaskQueue
+
+from .fakes import tle_request
 
 
 @pytest.fixture

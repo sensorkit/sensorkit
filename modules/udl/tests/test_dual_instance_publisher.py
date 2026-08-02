@@ -24,7 +24,6 @@ import pytest_asyncio
 from unifieddatalibrary import AsyncUnifieddatalibrary, omit
 from unifieddatalibrary.types import CollectRequestFull
 
-from . import fakes
 from sensorkit.astro.common import SitePosition
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileInfo
@@ -38,6 +37,8 @@ from sensorkit.udl.models import (
 from sensorkit.udl.program import UDLProgram
 from sensorkit.udl.publishers import SkyImageryPublisher
 from sensorkit.udl.task_queue import TaskQueue
+
+from . import fakes
 
 UDL_A_BASE_URL = os.getenv("UDL_A_BASE_URL", "http://localhost:30080")
 UDL_B_BASE_URL = os.getenv("UDL_B_BASE_URL", "http://localhost:31080")

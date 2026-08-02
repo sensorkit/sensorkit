@@ -8,8 +8,8 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
+from sensorkit.std import Connect, Connected, Disconnect
 
 
 @sk.declare_keyword

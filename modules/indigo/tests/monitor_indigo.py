@@ -19,9 +19,8 @@ DEVICE_NAME = "weather1"
 
 async def main():
     from sensorkit.api.bootstrap import connect
-    from sensorkit.std import Connected
-    from sensorkit.std.weather import BasicWeather
     from sensorkit.indigo.weather import IndigoWeatherStatus, WeatherConditions
+    from sensorkit.std import BasicWeather, Connected
 
     kit = await connect()
     device = kit.device(DEVICE_NAME)

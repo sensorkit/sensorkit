@@ -2,8 +2,9 @@
 import pytest
 from pydantic import ValidationError
 
-from .fakes import make_result
 from sensorkit.senpai.models import Detection, SenpaiConfig
+
+from .fakes import make_result
 
 
 class TestDetection:

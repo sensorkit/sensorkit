@@ -1,16 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
+from sensorkit.astro.common import ReferenceFrame
+from sensorkit.astro.target import ICRSTarget, StateVectorTarget, TLETarget
+from sensorkit.udl.models import UDLAPIConfig, UDLConfig
+from sensorkit.udl.program import UDLProgram
+
 from .fakes import (
     make_collect_request,
     radec_request,
     state_vector_request,
     tle_request,
 )
-from sensorkit.astro.common import ReferenceFrame
-from sensorkit.astro.target import ICRSTarget, StateVectorTarget, TLETarget
-from sensorkit.udl.models import UDLAPIConfig, UDLConfig
-from sensorkit.udl.program import UDLProgram
 
 
 @pytest.fixture

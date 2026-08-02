@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-from dataclasses import dataclass
 import io
 import pathlib
-import warnings
-
 import time
+import warnings
+from dataclasses import dataclass
 
 from astropy.utils.exceptions import AstropyDeprecationWarning
 
@@ -19,12 +18,13 @@ warnings.filterwarnings(
     module=r"photutils\..*",
 )
 
+import matplotlib
 from allclear.api import SkyTransmissionResult, get_sky_transmission
 from allclear.instrument import InstrumentModel
 from allclear.plotting import plot_frame
 from allclear.utils import load_image
 from loguru import logger
-import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np

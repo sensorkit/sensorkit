@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from typing import Literal, override
 
 from loguru import logger
@@ -11,17 +10,19 @@ from pydantic import BaseModel
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing
 from sensorkit.std import (
+    CloseEnclosure,
     Connect,
     Connected,
     Deinit,
     Disconnect,
     Home,
     Init,
+    MoveEnclosure,
     MoveToPark,
     Opened,
+    OpenEnclosure,
     Stop,
 )
-from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
 from sensorkit.thesky.device import (
     CommandFailedError,
     DomeCommandInProgressError,

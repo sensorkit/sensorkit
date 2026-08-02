@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import os
 
-import sensorkit.api as sk
 from dotenv import dotenv_values
+
+import sensorkit.api as sk
 from sensorkit.slack.client import SlackClient
 from sensorkit.slack.models import SlackConfig
 from sensorkit.slack.notifier import SlackNotifier

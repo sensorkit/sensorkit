@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: F401
 from sensorkit.std.collect import (
     CameraParameterSet,
     StandardCollectTask,

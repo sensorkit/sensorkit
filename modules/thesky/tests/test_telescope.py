@@ -1,11 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
-from sensorkit.std import Connect, Disconnect, FollowTarget, Home, MoveToPark, Slewing, Stop
+from sensorkit.std import Connect, Disconnect, Home, MoveToPark, Slewing, Stop
 from sensorkit.thesky.device import (
     CommandNotSupportedError,
-    MountCommandInProgressError,
-    ProcessAbortedError,
 )
 from sensorkit.thesky.telescope import TheSkyTelescopeConfig, TheSkyTelescopeState
 

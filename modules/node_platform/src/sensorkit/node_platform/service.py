@@ -4,10 +4,10 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Discriminator, Field, model_validator
 
 import sensorkit.api as sk
+from sensorkit.node_platform.cover import NodePlatformCoverConfig
 from sensorkit.node_platform.enclosure import NodePlatformEnclosureConfig
 from sensorkit.node_platform.focuser import NodePlatformFocuserConfig
 from sensorkit.node_platform.m3 import NodePlatformM3Config
-from sensorkit.node_platform.cover import NodePlatformCoverConfig
 from sensorkit.node_platform.mount import NodePlatformMountConfig
 from sensorkit.node_platform.rotator import NodePlatformRotatorConfig
 from sensorkit.node_platform.weather import NodePlatformWeatherConfig

@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
-from .fakes import FakeNinaClient
 from sensorkit.nina.focuser import NinaFocuserConfig, NinaFocuserState
-from sensorkit.std import Connect, Disconnect, Stop
-from sensorkit.std.optics import ChangeFocusPosition
+from sensorkit.std import ChangeFocusPosition, Connect, Disconnect, Stop
+
+from .fakes import FakeNinaClient
 
 
 @pytest.fixture

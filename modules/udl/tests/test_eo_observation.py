@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 
 import pytest
 
-from .fakes import FakeUDLClient, tle_request
 from sensorkit.astro.common import AltAzPointing, SitePosition
 from sensorkit.senpai.models import Detection, SenpaiResult
 from sensorkit.udl.models import (
@@ -24,6 +23,8 @@ from sensorkit.udl.publishers import (
     build_eo_observations,
     convert_wcs_observation,
 )
+
+from .fakes import FakeUDLClient, tle_request
 
 TIMESTAMP = datetime(2026, 3, 21, 7, 18, 47, 82000, tzinfo=UTC)
 

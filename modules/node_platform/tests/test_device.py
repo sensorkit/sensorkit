@@ -3,13 +3,14 @@
 
 import pytest
 
-from .fakes import RecordingSDK
 from sensorkit.node_platform.device import (
     DeviceConnectionError,
     NodePlatformAPI,
     NodePlatformDevice,
     NodePlatformDeviceConfig,
 )
+
+from .fakes import RecordingSDK
 
 
 class TestRequireConnected:

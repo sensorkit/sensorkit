@@ -7,9 +7,8 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
-from sensorkit.std.weather import BasicWeather, StandardWeather
+from sensorkit.std import BasicWeather, Connect, Connected, Disconnect, StandardWeather
 
 
 @sk.declare_device(type=StandardWeather)

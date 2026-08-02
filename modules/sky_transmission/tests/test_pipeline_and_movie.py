@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from sensorkit.sky_transmission.pipeline import AllClearPipeline, FrameResult, MovieBuilder
 from sensorkit.sky_transmission.models import AllClearConfig
+from sensorkit.sky_transmission.pipeline import AllClearPipeline, FrameResult, MovieBuilder
 
 SAMPLE_IMAGE = "/opt/sk/data/sky_transmission/input/2026-03-12-0620_2-CapObj_0312.fits"
 INSTRUMENT_MODEL = "/opt/sk/data/sky_transmission/input/instrument_model.json"

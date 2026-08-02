@@ -3,15 +3,15 @@
 
 import pytest
 
-from .fakes import FakeNodePlatformAPI, make_rotator_status
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.rotator import (
     NodePlatformRotator,
     NodePlatformRotatorConfig,
     NodePlatformRotatorState,
 )
-from sensorkit.std import Stop
-from sensorkit.std.instrument import ChangeRotatorPosition
+from sensorkit.std import ChangeRotatorPosition, Stop
+
+from .fakes import FakeNodePlatformAPI, make_rotator_status
 
 
 @pytest.fixture

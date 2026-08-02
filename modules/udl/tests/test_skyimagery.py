@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 
 import pytest
 
-from .fakes import FakeUDLClient, tle_request
 from sensorkit.astro.common import SitePosition
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileInfo
@@ -21,6 +20,8 @@ from sensorkit.udl.models import (
 )
 from sensorkit.udl.program import UDLProgram, _PublishProgress
 from sensorkit.udl.publishers import SkyImageryPublisher
+
+from .fakes import FakeUDLClient, tle_request
 
 SITE = SitePosition(
     latitude_degrees=41.9168354,

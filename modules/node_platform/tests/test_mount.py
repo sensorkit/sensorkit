@@ -5,11 +5,6 @@ from dataclasses import replace
 
 import pytest
 
-from .fakes import (
-    FakeNodePlatformAPI,
-    MountStatus,
-    make_mount_status,
-)
 from sensorkit.astro.coords import Horizontal
 from sensorkit.astro.target import AltAzTarget
 from sensorkit.node_platform.device import DeviceConnectionError
@@ -19,6 +14,12 @@ from sensorkit.node_platform.mount import (
     NodePlatformMountState,
 )
 from sensorkit.std import Deinit, FollowTarget, Home, Init, MoveToPark, Stop
+
+from .fakes import (
+    FakeNodePlatformAPI,
+    MountStatus,
+    make_mount_status,
+)
 
 
 def install_mount(api: FakeNodePlatformAPI) -> MountStatus:

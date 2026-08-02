@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
-from .fakes import FakeNinaClient
 from sensorkit.nina.rotator import NinaRotatorConfig, NinaRotatorState
-from sensorkit.std import Connect, Disconnect, Stop
-from sensorkit.std.instrument import ChangeRotatorPosition
+from sensorkit.std import ChangeRotatorPosition, Connect, Disconnect, Stop
+
+from .fakes import FakeNinaClient
 
 
 @pytest.fixture

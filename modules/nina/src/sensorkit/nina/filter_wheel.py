@@ -7,9 +7,8 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
-from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
-from sensorkit.std.optics import Filter, Filters, SetFilter
+from sensorkit.std import Connect, Connected, Disconnect, Filter, Filters, SetFilter
 
 
 @sk.declare_device

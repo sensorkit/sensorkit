@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from .data import ISS_TLE, make_config, make_task
 from sensorkit.astro.common import ReferenceFrame, SitePosition
 from sensorkit.astro.coords import Equatorial
 from sensorkit.astro.target import ICRSTarget
@@ -19,6 +18,8 @@ from sensorkit.otto.program import OttoProgram, OttoState
 from sensorkit.otto.stars import StarCache
 from sensorkit.otto.task_queue import TaskQueue
 from sensorkit.otto.utils import ObjectListManager, to_jd
+
+from .data import ISS_TLE, make_config, make_task
 
 
 def _resolved_execution():

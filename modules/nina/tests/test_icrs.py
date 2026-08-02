@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
-from .fakes import FakeNinaClient
 from sensorkit.astro.coords import Equatorial
 from sensorkit.astro.target import ICRSTarget
 from sensorkit.nina.mount import NinaMountConfig, NinaMountState
 from sensorkit.std import FollowTarget
+
+from .fakes import FakeNinaClient
 
 
 @pytest.fixture

@@ -9,8 +9,9 @@ import contextlib
 import pytest
 import pytest_asyncio
 
-from .fakes import FakePWI4Client
 from sensorkit.pwi4.mount import PWI4Mount, PWI4MountConfig, PWI4MountState
+
+from .fakes import FakePWI4Client
 
 
 @pytest.fixture(autouse=True)

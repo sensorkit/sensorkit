@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 
-from sensorkit.std import Connect, Disconnect
-from sensorkit.std.optics import ChangeFocusPosition
+from sensorkit.std import ChangeFocusPosition, Connect, Disconnect
 from sensorkit.thesky.focuser import TheSkyFocuserConfig
 
 
@@ -40,7 +39,7 @@ async def test_focuser_disconnect(focuser):
 async def test_focuser_move_out(focuser):
     await focuser.focuser_connect(Connect())
     # Move out by sending the command, then verify via execute
-    await focuser.execute(f"ccdsoftCamera.focMoveOut(1000);")
+    await focuser.execute("ccdsoftCamera.focMoveOut(1000);")
     resp = await focuser.execute("ccdsoftCamera.focPosition;")
     assert float(resp) == 6000.0
 
@@ -48,7 +47,7 @@ async def test_focuser_move_out(focuser):
 @pytest.mark.asyncio
 async def test_focuser_move_in(focuser):
     await focuser.focuser_connect(Connect())
-    await focuser.execute(f"ccdsoftCamera.focMoveIn(-1000);")
+    await focuser.execute("ccdsoftCamera.focMoveIn(-1000);")
     resp = await focuser.execute("ccdsoftCamera.focPosition;")
     assert float(resp) == 4000.0
 
