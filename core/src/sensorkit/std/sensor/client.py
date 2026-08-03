@@ -24,20 +24,38 @@ import contextlib
 from collections.abc import Mapping
 
 import sensorkit.api as sk
+from sensorkit.astro.target import Target
 from sensorkit.core.client import SensorKit
 from sensorkit.core.device import DeviceClient
 from sensorkit.std.collect import StandardCollectTask
+from sensorkit.std.mount import FollowTarget
 from sensorkit.std.sensor.config import SensorConfig
 from sensorkit.std.sensor.derive import capability_index, derive_plan, timeouts
 from sensorkit.std.sensor.dispatch import DeviceContexts, Dispatcher, compile_supported
+from sensorkit.std.sensor.translate import translate
+from sensorkit.std.traits import Stop
 from sensorkit.workflow import (
     CapabilityIndex,
+    Collect,
+    CollectRunner,
     DeviceRef,
     LifecycleError,
     LifecycleRunner,
+    RequestResolver,
     RunReport,
     SensorPlan,
 )
+
+
+def pointed_at(collect: Collect) -> DeviceRef | None:
+    """The device a resolved collect commanded its target on.
+
+    Read off the resolution rather than routed a second time, so the device that
+    is halted is the one that was pointed, however the request addressed it.
+    """
+    return next((ref for step in collect.steps
+                 for ref, value in step.settings.items()
+                 if isinstance(value, FollowTarget)), None)
 
 
 class Sensor:
@@ -59,8 +77,19 @@ class Sensor:
         self.plan = plan
         self.devices = devices
         self.capabilities = capabilities
-        self.lifecycle = LifecycleRunner(
-            Dispatcher(plan, devices, capabilities, timeouts(config.policies)))
+        self.resolver = RequestResolver(plan.topology, plan.devices, capabilities,
+                                        plan.aliases)
+        self.lifecycle = LifecycleRunner(self.dispatcher())
+
+    def dispatcher(self, **header) -> Dispatcher:
+        """The op hook, plus whatever a collect gives its frames' headers.
+
+        A lifecycle run supplies none of that and a collect supplies all of it,
+        which is why a dispatcher is built per run rather than held: it carries no
+        run state of its own, so the only thing to vary is what it is told.
+        """
+        return Dispatcher(self.plan, self.devices, self.capabilities,
+                          timeouts(self.config.policies), **header)
 
     async def init(self) -> RunReport:
         """Bring the sensor up, undoing the attempt if it fails part way."""
@@ -133,8 +162,75 @@ class Sensor:
             task: The collect to perform.
             contexts: Per-device context, sampled once per frame.
             base: Context common to every frame, such as the task's own keywords.
+
+        Returns:
+            What every setting and every frame did.
+
+        Raises:
+            ValueError: The task does not resolve against this sensor — no
+                instrument satisfies it, or a command it implies reaches no device.
+            LifecycleError: A required setting or frame failed.
         """
-        raise NotImplementedError
+        translation = translate(task, self.resolver)
+        collect = self.resolver.to_collect(translation.steps, name="collect")
+        runner = CollectRunner(self.dispatcher(
+            contexts=contexts, base=base, frame_keywords=translation.keywords))
+
+        await self.acquire(collect, translation.acquire)
+
+        try:
+            report = await runner.run(self.plan.topology, self.plan.devices,
+                                      collect)
+        finally:
+            await self.halt_pointing(collect)
+
+        if report.failures and not report.aborted:
+            # The causes, not the cascade: a failed setting skips exactly the
+            # frames it invalidated, and listing those buries the one line that
+            # says why.
+            causes = "; ".join(f"{node.label.strip()} ({error})"
+                               for node, error in report.causes[:3])
+            raise LifecycleError(
+                f"collect: {causes or 'required frames did not run'}", report)
+
+        return report
+
+    async def acquire(self, collect: Collect, target: Target | None) -> None:
+        """Reach the target a collect's first step cannot reach for itself.
+
+        Only a collect whose opening frames are sidereal has one: holding sidereal
+        holds whatever the mount already has, so a collect that begins that way
+        would otherwise hold wherever the last task left it. Unshielded and
+        unguarded — a collect that never acquired its target has nothing worth
+        taking frames of.
+        """
+        ref = pointed_at(collect)
+
+        if target is None or ref is None or ref not in self.devices:
+            return
+
+        await self.devices[ref].command(FollowTarget(target=target))
+
+    async def halt_pointing(self, collect: Collect) -> None:
+        """Stop whatever a collect was pointing, now that its frames are over.
+
+        Tracking outlives the last frame, and the collect layer has no expression
+        for teardown — a step is a configuration epoch, not a way to say "and then
+        stop" — so the halt is composed here, where a reader sees it beside the run
+        that needed it.
+
+        Best effort, and shielded, because it matters most exactly when a collect
+        is being torn down: a halt that fails must not displace the failure or the
+        cancellation already on its way out, and the report is what says what
+        happened.
+        """
+        ref = pointed_at(collect)
+
+        if ref is None or ref not in self.devices:
+            return
+
+        with contextlib.suppress(BaseException):
+            await asyncio.shield(self.devices[ref].command(Stop()))
 
 
 async def connect_sensor(

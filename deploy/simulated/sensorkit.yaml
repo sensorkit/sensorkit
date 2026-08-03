@@ -73,6 +73,7 @@ data_flow:
 
 sensors:
   - id: SimulatedSensor
+    implementation: 2
 
     devices:
       mount: SimulatedMount

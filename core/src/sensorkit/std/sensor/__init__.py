@@ -10,7 +10,7 @@ that chooses between them.
 `__all__` is the public API.
 """
 
-from sensorkit.std.sensor.client import Sensor, connect_sensor
+from sensorkit.std.sensor.client import Sensor, connect_sensor, pointed_at
 from sensorkit.std.sensor.compat import Capabilities, add_compat_context
 from sensorkit.std.sensor.config import (
     Implementation,
@@ -38,6 +38,17 @@ from sensorkit.std.sensor.dispatch import (
 )
 from sensorkit.std.sensor.impl import StandardSensor, sensor_control_service
 from sensorkit.std.sensor.legacy import LegacyDevices, LegacySensor
+from sensorkit.std.sensor.translate import (
+    SCIENCE,
+    SIDEREAL,
+    Translation,
+    camera_settings,
+    frame_targets,
+    instrument,
+    runs,
+    target_id,
+    translate,
+)
 
 __all__ = [
     # config: the sensors: section
@@ -48,8 +59,11 @@ __all__ = [
     # dispatch: workflow ops as device commands
     "DeviceContexts", "Dispatcher", "FrameKeywords", "Handler", "Listener",
     "OpOutcome", "compile_supported", "unresolved", "unsupported",
+    # translate: a standard collect task as a request
+    "SCIENCE", "SIDEREAL", "Translation", "camera_settings", "frame_targets",
+    "instrument", "runs", "target_id", "translate",
     # client: the sensor, with no controller
-    "Sensor", "connect_sensor",
+    "Sensor", "connect_sensor", "pointed_at",
     # impl: the sensor as a service
     "StandardSensor", "sensor_control_service",
     # legacy: retired one release after the workflow implementation ships
