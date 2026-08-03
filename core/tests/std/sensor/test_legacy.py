@@ -1,4 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
+"""The legacy sensor implementation, and the oracle the workflow one is compared to.
+
+Asserts against LegacyDevices' per-device methods, which the workflow implementation
+has no counterpart for. Replaced at the handler level, where both have the same
+surface, and deleted with legacy.py.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -34,15 +40,14 @@ from sensorkit.std import (
     Init,
     OpenEnclosure,
     OpenMirrorCover,
-    Sensor,
     SensorConfig,
-    SensorControl,
     SensorDevices,
     SensorPolicies,
     SetFilter,
     StandardCollectTask,
     Stop,
 )
+from sensorkit.std.sensor.legacy import LegacyDevices, LegacySensor
 
 
 async def run_service(svc: Service):
@@ -52,7 +57,7 @@ async def run_service(svc: Service):
     return svc_task
 
 
-async def cleanup_service(svc: Service, svc_task: asyncio.Task, sc: SensorControl):
+async def cleanup_service(svc: Service, svc_task: asyncio.Task, sc: LegacySensor):
     if hasattr(sc, "_start_pointing_monitor") and sc._start_pointing_monitor:
         sc._start_pointing_monitor.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -75,7 +80,7 @@ SENSOR_COMMANDS = (
     OpenMirrorCover,
     CloseMirrorCover,
 )
-"""Every command a Sensor issues while bringing its devices up and down."""
+"""Every command a sensor issues while bringing its devices up and down."""
 
 DOME_DEINIT = [Stop, CloseEnclosure, Deinit]
 """What a dome receives from deinit_dome when it runs to completion."""
@@ -132,7 +137,7 @@ def recording_device(name: str, journal: list[tuple[str, type]]) -> tuple[declar
 
 
 class SensorStack:
-    """A running service whose devices record every command a Sensor sends them."""
+    """A running service whose devices record every command a sensor sends them."""
 
     DEVICES = ("mount", "camera", "dome", "cover")
 
@@ -141,18 +146,18 @@ class SensorStack:
         self.logs = logs
         self.journal = journal
 
-    def sensor(self, policies: SensorPolicies | None = None, **devices) -> Sensor:
-        """Build a Sensor over the named subset of the running devices."""
-        return Sensor(self.controller, SensorDevices(**devices), policies or SensorPolicies())
+    def sensor(self, policies: SensorPolicies | None = None, **devices) -> LegacyDevices:
+        """Build a device set over the named subset of the running devices."""
+        return LegacyDevices(self.controller, SensorDevices(**devices), policies or SensorPolicies())
 
-    def control(self, policies: SensorPolicies | None = None, **devices) -> SensorControl:
-        """Build a SensorControl driving the named subset of the running devices.
+    def control(self, policies: SensorPolicies | None = None, **devices) -> LegacySensor:
+        """Build a LegacySensor driving the named subset of the running devices.
 
-        SensorControl normally builds its Sensor while attaching to a live controller, which a
+        LegacySensor normally builds its device set while attaching to a live controller, which a
         task handler invoked on its own never gets; this supplies the equivalent one.
         """
         policies = policies or SensorPolicies()
-        control = SensorControl(
+        control = LegacySensor(
             config=SensorConfig(
                 controller_name="ctrl",
                 devices=SensorDevices(**devices),
@@ -193,7 +198,7 @@ async def sensor_stack():
         await svc_task
 
 
-def _bypass_pointing_monitor(sc: SensorControl):
+def _bypass_pointing_monitor(sc: LegacySensor):
     """Cancel the pointing monitor and seed mount_pointing so collect doesn't block."""
     if hasattr(sc, "_start_pointing_monitor") and sc._start_pointing_monitor:
         sc._start_pointing_monitor.cancel()
@@ -351,7 +356,7 @@ def test_capabilities():
 async def test_sensor_required_devices_only(service_context):
     impl = await service_context.register_controller("ctrl")
     devices = SensorDevices(mount="mount", camera="camera")
-    sensor = Sensor(impl, devices, SensorPolicies())
+    sensor = LegacyDevices(impl, devices, SensorPolicies())
     clients = {str(dev.client.entity): dev.client for dev in impl.all_devices()}
 
     assert sensor.mount is clients["mount"]
@@ -370,7 +375,7 @@ async def test_sensor_all_devices(service_context):
         mount="m", camera="c", focuser="f", rotator="r",
         filter_wheel="fw", mirror_cover="mc", dome="d",
     )
-    Sensor(impl, devices, SensorPolicies())
+    LegacyDevices(impl, devices, SensorPolicies())
     assert len(impl.all_devices()) == 7
 
 
@@ -596,7 +601,7 @@ async def test_sensor_control_init():
         devices=SensorDevices(mount="mock-mount", camera="mock-camera"),
         site_position=_site(),
     )
-    sc = SensorControl(config=config)
+    sc = LegacySensor(config=config)
     svc = Service("test-init", "0.1.0")
     svc.add(mount)
     svc.add(camera)
@@ -635,7 +640,7 @@ async def test_sensor_control_standby():
         devices=SensorDevices(mount="mock-mount", camera="mock-camera"),
         site_position=_site(),
     )
-    sc = SensorControl(config=config)
+    sc = LegacySensor(config=config)
     svc = Service("test-standby", "0.1.0")
     svc.add(mount)
     svc.add(camera)
@@ -678,7 +683,7 @@ async def test_sensor_control_shutdown():
         devices=SensorDevices(mount="mock-mount", camera="mock-camera"),
         site_position=_site(),
     )
-    sc = SensorControl(config=config)
+    sc = LegacySensor(config=config)
     svc = Service("test-shutdown", "0.1.0")
     svc.add(mount)
     svc.add(camera)
@@ -749,7 +754,7 @@ async def test_sensor_control_shutdown_concurrent_dome():
         site_position=_site(),
         policies=SensorPolicies(concurrent_dome_and_mount_deinit=True),
     )
-    sc = SensorControl(config=config)
+    sc = LegacySensor(config=config)
     svc = Service("test-shutdown-concurrent", "0.1.0")
     svc.add(mount)
     svc.add(camera)
@@ -779,8 +784,8 @@ def shutdown_task():
     return ShutdownTask(task_id=uuid.uuid4(), controller_id="ctrl")
 
 
-def full_sensor(sensor_stack, policies: SensorPolicies) -> SensorControl:
-    """A SensorControl over every device a shutdown touches."""
+def full_sensor(sensor_stack, policies: SensorPolicies) -> LegacySensor:
+    """A LegacySensor over every device a shutdown touches."""
     return sensor_stack.control(
         policies, mount="mount", camera="camera", dome="dome", mirror_cover="cover"
     )
@@ -1023,7 +1028,7 @@ async def test_sensor_control_recover():
         devices=SensorDevices(mount="mock-mount", camera="mock-camera"),
         site_position=_site(),
     )
-    sc = SensorControl(config=config)
+    sc = LegacySensor(config=config)
     svc = Service("test-recover", "0.1.0")
     svc.add(mount)
     svc.add(camera)
@@ -1074,7 +1079,7 @@ async def test_sensor_control_collect_icrs():
         devices=SensorDevices(mount="mock-mount", camera="mock-camera"),
         site_position=_site(),
     )
-    sc = SensorControl(config=config)
+    sc = LegacySensor(config=config)
     svc = Service("test-collect", "0.1.0")
     svc.add(mount)
     svc.add(camera)
@@ -1160,7 +1165,7 @@ async def test_sensor_control_collect_with_filter_and_binning():
         ),
         site_position=_site(),
     )
-    sc = SensorControl(config=config)
+    sc = LegacySensor(config=config)
     svc = Service("test-collect-opts", "0.1.0")
     svc.add(mount)
     svc.add(camera)
@@ -1234,7 +1239,7 @@ async def test_sensor_control_collect_multiple_frames():
         devices=SensorDevices(mount="mock-mount", camera="mock-camera"),
         site_position=_site(),
     )
-    sc = SensorControl(config=config)
+    sc = LegacySensor(config=config)
     svc = Service("test-collect-frames", "0.1.0")
     svc.add(mount)
     svc.add(camera)

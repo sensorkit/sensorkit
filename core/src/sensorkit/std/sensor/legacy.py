@@ -1,26 +1,38 @@
 # SPDX-License-Identifier: Apache-2.0
+"""Hand-written sensor orchestration: the implementation sites run today.
+
+Selected by `implementation: 1`. Retained beside the workflow implementation for
+one release, as the rollback and as the live oracle its differential tests run
+against, then deleted whole.
+
+Nothing here is shared with the workflow implementation, deliberately: the two
+are compared by the commands their devices receive, so a helper reached from both
+would weaken exactly the assertion that matters.
+"""
+
 from __future__ import annotations
 
 import asyncio
 import contextlib
 from collections.abc import Coroutine
-from typing import Any, Literal
+from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
-from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
+from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame
 from sensorkit.astro.target import CatalogTarget, FrameTarget, ICRSTarget, TLETarget
 from sensorkit.std.collect import Collect, StandardCollectTask
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.std.instrument import Binning, CameraCapture, ConfigureCameraSensor
 from sensorkit.std.mount import AxisRates, FollowTarget
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover, SetFilter
+from sensorkit.std.sensor.compat import Capabilities, add_compat_context
+from sensorkit.std.sensor.config import SensorConfig, SensorDevices, SensorPolicies
 from sensorkit.std.traits import Connect, Deinit, Init, Stop
 
 
-class Sensor:
+class LegacyDevices:
     """High-level client to a set of devices comprising a logical sensor."""
 
     def __init__(self, impl: sk.ControllerImpl, devices: SensorDevices, policies: SensorPolicies):
@@ -167,7 +179,7 @@ class Sensor:
 
 
 @sk.declare_controller
-class SensorControl:
+class LegacySensor:
     """A Controller that controls a mount and camera."""
 
     def __init__(self, config: SensorConfig):
@@ -186,7 +198,7 @@ class SensorControl:
             )
         )
 
-        self.sensor = Sensor(
+        self.sensor = LegacyDevices(
             controller,
             self.config.devices,
             self.config.policies,
@@ -293,7 +305,7 @@ class SensorControl:
 
             logger.info(f"Acquiring frame #{frame_num+1} of {task.camera_params.frame_count}")
             context = await sk.controller().update_context(collect)
-            _add_compat_context(context)
+            add_compat_context(context)
 
             await self.sensor.camera.command(
                 CameraCapture(
@@ -386,164 +398,3 @@ class SensorControl:
             await attempt(self.sensor.deinit_dome())
 
         raise_failures()
-
-
-class SensorDevices(BaseModel):
-    """Device entity references for sensor control."""
-
-    mount: str | None = None
-    camera: str | None = None
-    focuser: str | None = None
-    rotator: str | None = None
-    filter_wheel: str | None = None
-    mirror_cover: str | None = None
-    dome: str | None = None
-
-
-class SensorPolicies(BaseModel):
-    """Policies for sensor control."""
-
-    concurrent_dome_and_mount_init: bool = False
-    """Whether the dome and mount can be initialized concurrently."""
-
-    concurrent_dome_and_mount_deinit: bool = False
-    """Whether the dome and mount can be deinitialized concurrently."""
-
-    concurrent_dome_init_open: bool = False
-    """Whether the dome can be initialized and opened concurrently."""
-
-    concurrent_dome_deinit_close: bool = False
-    """Whether the dome can be closed and deinitialized concurrently."""
-
-    always_deinit_dome: bool = False
-    """Whether the dome should be deinitialized even if other parts of deinitialization fail."""
-
-    dome_open_close_timeout: float = 120.0
-    """Timeout for fully opening or closing the dome."""
-
-    dome_init_timeout: float = 300.0
-    """Timeout for initializing the dome, including homing if required."""
-
-    dome_deinit_timeout: float = 300.0
-    """Timeout for deinitializing the dome, including parking if required."""
-
-    concurrent_mount_and_mirror_cover_init: bool = False
-    """Whether the mount and mirror cover can be initialized concurrently."""
-
-    mirror_cover_open_close_timeout: float = 60.0
-    """Timeout for fully opening or closing the mirror cover."""
-
-    mount_init_timeout: float = 30.0
-    """Timeout for powering the mount and enabling axis control."""
-
-    mount_home_timeout: float = 300.0
-    """Timeout for homing the mount."""
-
-    minimum_target_altitude_degrees: float | None = None
-    """Minimum altitude for a target to be tracked during collection."""
-
-    sun_separation_degrees: float | None = None
-    """Distance a target must be away from the sun during collection."""
-
-    moon_separation_degrees: float | None = None
-    """Distance a target must be away from the moon during collection"""
-
-
-class SensorConfig(BaseModel):
-    """Configuration for standard sensor control."""
-
-    controller_name: str
-    devices: SensorDevices
-    site_position: SitePosition
-    policies: SensorPolicies = Field(default_factory=SensorPolicies)
-
-
-sk.declare_config_section(
-    "sensors",
-    list[SensorConfig],
-    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
-    model_mapper=iter,
-    service_path=__name__,
-)
-
-
-# TODO: Phase out when UI code is updated to use ControllerInfo and SensorConfig for this info.
-class Capabilities(BaseModel):
-    """Deprecated controller capability descriptor for the sensor service."""
-
-    type: Literal["controller"] = "controller"
-    tasks: list[str]
-    devices: SensorDevices
-
-
-@sk.service_entrypoint(version=sk.VERSION)
-async def sensor_control_service(service: sk.Service):
-    await service.register()
-
-    try:
-        # Read configuration.
-        config = await service.context.kv_get_model(SensorConfig)
-    except sk.KVError as e:
-        logger.error(f"Service {service.name} could not get SensorConfig ({e})")
-        return
-
-    sc = SensorControl(config=config)
-    service.include(
-        sc,
-        name=config.controller_name,
-    )
-
-    await service.run()
-
-
-def _add_compat_context(context: sk.Context):
-    # FIXME: Temporary to avoid breaking existing deployed config.
-    compat = dict(
-        ra="RADecPointing.right_ascension_hours * 15",
-        ra_hms="RADecPointing.ra_hms",
-        ra_rate="AxisRates.right_ascension.velocity * 3600",
-        dec="RADecPointing.declination_degrees",
-        dec_dms="RADecPointing.dec_dms",
-        dec_rate="AxisRates.declination.velocity * 3600",
-        alt="AltAzPointing.altitude_degrees",
-        alt_rate="AxisRates.altitude.velocity * 3600",
-        az="AltAzPointing.azimuth_degrees",
-        az_rate="AxisRates.azimuth.velocity * 3600",
-        track_mode="Collect.track_mode",
-        target_id="Collect.target_id",
-        target_name="Collect.target.tle.line0 if Collect.target.target_type == 'tle' else target_id",
-        tle_line0="Collect.target.tle.line0 if Collect.target.target_type == 'tle' else None",
-        tle_line1="Collect.target.tle.line1 if Collect.target.target_type == 'tle' else None",
-        tle_line2="Collect.target.tle.line2 if Collect.target.target_type == 'tle' else None",
-        frame_num="Collect.frame_number",
-        frame_count="Collect.params.frame_count",
-        integration_time_seconds="Collect.params.integration_time_seconds",
-        binning_x="Collect.params.binning_x",
-        binning_y="Collect.params.binning_y",
-        filter_name="Collect.params.filter_name",
-        elevation="SitePosition.altitude_km",
-        latitude="SitePosition.latitude_degrees",
-        longitude="SitePosition.longitude_degrees",
-        task_id="TaskInfo.task_id",
-    )
-
-    for key, expr in compat.items():
-        with contextlib.suppress(Exception):
-            context.set_value(key, context.eval(expr))
-
-    # Fold legacy flat file_name/file_path keys into FileNameTemplate / FileInfo keywords.
-    # A file_name is an input naming template; a file_path is an explicit output location.
-    import pathlib
-
-    from sensorkit.data.filesys import FileInfo, FileNameTemplate
-
-    file_name = context.pop("file_name", None)
-    file_path = context.pop("file_path", None)
-
-    if file_name is not None:
-        logger.warning("The 'file_name' context key is deprecated. Use FileNameTemplate instead.")
-        context.set(FileNameTemplate(template=file_name))
-
-    if file_path is not None:
-        logger.warning("The 'file_path' context key is deprecated. Use FileInfo instead.")
-        context.set(FileInfo(path=pathlib.Path(file_path)))

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-"""System tests for SensorControl (std controller) with mock device services.
+"""System tests for LegacySensor (std controller) with mock device services.
 
-Tests the actual SensorControl class with mock mount/camera/dome/mirror_cover
+Tests the actual LegacySensor class with mock mount/camera/dome/mirror_cover
 devices. All entities run on a single declarative Service with the fake backend.
 """
 
@@ -19,7 +19,8 @@ from sensorkit.core.task import InitTask, ShutdownTask
 from sensorkit.std import Deinit, Init, Stop
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
-from sensorkit.std.sensor import SensorConfig, SensorControl, SensorDevices
+from sensorkit.std.sensor import SensorConfig, SensorDevices
+from sensorkit.std.sensor.legacy import LegacySensor
 
 
 async def run_service(svc: Service):
@@ -30,7 +31,7 @@ async def run_service(svc: Service):
 
 @pytest.mark.asyncio
 async def test_std_init_and_shutdown():
-    """SensorControl init calls mount Init; shutdown calls mount Deinit."""
+    """LegacySensor init calls mount Init; shutdown calls mount Deinit."""
     mount_init_called = asyncio.Event()
     mount_deinit_called = asyncio.Event()
 
@@ -54,7 +55,7 @@ async def test_std_init_and_shutdown():
         devices=SensorDevices(mount="mock-mount", camera="mock-camera"),
         site_position=SitePosition(latitude_degrees=0.0, longitude_degrees=0.0, altitude_km=0.0),
     )
-    sc = SensorControl(config=config)
+    sc = LegacySensor(config=config)
 
     svc = Service("test-std", "0.1.0")
     svc.add(mount)
@@ -156,7 +157,7 @@ async def test_std_init_with_optional_devices():
         ),
         site_position=SitePosition(latitude_degrees=0.0, longitude_degrees=0.0, altitude_km=0.0),
     )
-    sc = SensorControl(config=config)
+    sc = LegacySensor(config=config)
 
     svc = Service("test-std-full", "0.1.0")
     svc.add(mount)

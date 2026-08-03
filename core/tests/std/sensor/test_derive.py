@@ -21,7 +21,9 @@ import yaml
 
 from sensorkit.astro.common import SitePosition
 from sensorkit.core.entity import DeviceDetails
-from sensorkit.std.derive import (
+from sensorkit.std.instrument import CameraCapture, ConfigureCameraCooler
+from sensorkit.std.sensor.config import SensorConfig, SensorDevices, SensorPolicies
+from sensorkit.std.sensor.derive import (
     OTA,
     PRIMARY,
     capability_index,
@@ -29,8 +31,6 @@ from sensorkit.std.derive import (
     derive_structure,
     derive_tables,
 )
-from sensorkit.std.instrument import CameraCapture, ConfigureCameraCooler
-from sensorkit.std.sensor import SensorConfig, SensorDevices, SensorPolicies
 from sensorkit.std.traits import Connect, Disconnect
 from sensorkit.workflow import (
     DeviceIndex,

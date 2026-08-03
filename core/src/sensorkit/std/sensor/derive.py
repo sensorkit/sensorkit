@@ -30,7 +30,6 @@ lands.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
 
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.entity import DeviceDetails
@@ -44,6 +43,7 @@ from sensorkit.std.optics import (
     StandardFocuser,
     StandardMirrorCover,
 )
+from sensorkit.std.sensor.config import SensorConfig, SensorDevices, SensorPolicies
 from sensorkit.std.traits import Connect, Deinit, Init, Stop
 from sensorkit.workflow import (
     Assembly,
@@ -62,9 +62,6 @@ from sensorkit.workflow import (
     SensorPlan,
     Trait,
 )
-
-if TYPE_CHECKING:
-    from sensorkit.std.sensor import SensorConfig, SensorDevices, SensorPolicies
 
 OTA = "ota"
 """Path segment of the optical assembly: everything the camera looks through."""

@@ -74,11 +74,13 @@ from sensorkit.std.safety import (
 )
 from sensorkit.std.sensor import (
     Capabilities,
+    Implementation,
     Sensor,
     SensorConfig,
-    SensorControl,
     SensorDevices,
     SensorPolicies,
+    StandardSensor,
+    connect_sensor,
     sensor_control_service,
 )
 from sensorkit.std.traits import (

@@ -1,4 +1,4 @@
- every device ===
+=== every device ===
 name: MySensor
 attachments:
 - ref: tcs-1
