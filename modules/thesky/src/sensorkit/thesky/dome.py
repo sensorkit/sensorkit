@@ -82,6 +82,9 @@ class TheSkyDome(TheSkyDevice):
 
     @sk.command_handler
     async def dome_init(self, cmd: Init):
+        await self.require_connected()
+        await self.dome_unpark()
+
         # Home, as needed
         if not self.state.has_been_homed:
             await self.dome_home(Home())
