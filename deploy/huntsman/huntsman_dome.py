@@ -293,6 +293,11 @@ class _MuscaShutter:
         self._bt_dropped_at: float | None = None
         self._reader_task: asyncio.Task | None = None
         self._heartbeat_task: asyncio.Task | None = None
+        # Serializes open()/close() so their _keep_open writes and shutter commands
+        # cannot interleave across await points. close() clears _keep_open *before*
+        # taking this lock, so a pending close never leaves the heartbeat alive
+        # behind an in-flight open.
+        self._op_lock = asyncio.Lock()
 
     # ── public state ──
 
@@ -354,46 +359,51 @@ class _MuscaShutter:
     # ── shutter operations ──
 
     async def open(self):
-        if not self.transport.connected:
-            raise RuntimeError("Musca Bluetooth not connected — cannot open shutter")
+        async with self._op_lock:
+            if not self.transport.connected:
+                raise RuntimeError("Musca Bluetooth not connected — cannot open shutter")
 
-        if self.shutter == "Open":
-            self._keep_open = True
-            return
+            if self.shutter == "Open":
+                self._keep_open = True
+                return
 
-        voltage = self.battery_voltage or 0
-        if voltage < self.config.min_battery_voltage:
-            raise RuntimeError(
-                f"Battery too low ({voltage:.1f}V < {self.config.min_battery_voltage:.1f}V)"
-            )
+            voltage = self.battery_voltage or 0
+            if voltage < self.config.min_battery_voltage:
+                raise RuntimeError(
+                    f"Battery too low ({voltage:.1f}V < {self.config.min_battery_voltage:.1f}V)"
+                )
 
-        logger.info("Opening Musca shutter")
-        await self.transport.send(OPEN_CMD)
-        self._keep_open = True
-
-        # Resend if shutter hasn't started moving after 5 seconds
-        await asyncio.sleep(5.0)
-        if self.shutter not in ("Open", "Opening"):
-            logger.warning("Shutter didn't respond to first open command, resending")
+            logger.info("Opening Musca shutter")
             await self.transport.send(OPEN_CMD)
+            self._keep_open = True
 
-        await self._wait_for_shutter("Open")
-        logger.info("Musca shutter opened")
+            # Resend if shutter hasn't started moving after 5 seconds
+            await asyncio.sleep(5.0)
+            if self.shutter not in ("Open", "Opening"):
+                logger.warning("Shutter didn't respond to first open command, resending")
+                await self.transport.send(OPEN_CMD)
+
+            await self._wait_for_shutter("Open")
+            logger.info("Musca shutter opened")
 
     async def close(self):
+        # Clear the heartbeat flag before contending for the lock: if an open() is
+        # still in flight, its watchdog heartbeat must stop now so the Musca auto-closes
+        # as a fallback even while our explicit close waits behind the open.
         self._keep_open = False
 
-        if self.shutter == "Closed":
-            return
+        async with self._op_lock:
+            if self.shutter == "Closed":
+                return
 
-        if not self.transport.connected:
-            logger.warning("BT disconnected — Musca watchdog should auto-close")
-            return
+            if not self.transport.connected:
+                logger.warning("BT disconnected — Musca watchdog should auto-close")
+                return
 
-        logger.info("Closing Musca shutter")
-        await self.transport.send(CLOSE_CMD)
-        await self._wait_for_shutter("Closed")
-        logger.info("Musca shutter closed")
+            logger.info("Closing Musca shutter")
+            await self.transport.send(CLOSE_CMD)
+            await self._wait_for_shutter("Closed")
+            logger.info("Musca shutter closed")
 
     # ── helpers ──
 
