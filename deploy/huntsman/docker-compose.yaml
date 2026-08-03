@@ -252,7 +252,6 @@ services:
     volumes:
       - *config-file
       - *data-dir
-      - "/opt/sk/instrument_model_Huntsman.json:/opt/sk/instrument_model_Huntsman.json:ro"
     restart: unless-stopped
     depends_on:
       config:

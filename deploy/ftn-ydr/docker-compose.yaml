@@ -205,7 +205,6 @@ services:
     volumes:
       - *config-file
       - *data-dir
-      - "C:/sk/instrument_model_ftn-ydr.json:/opt/sk/instrument_model_ftn-ydr.json:ro"
     restart: unless-stopped
     depends_on:
       config:
