@@ -12,20 +12,30 @@ module-private helper.
 
 from sensorkit.workflow.abort import AbortSignal
 from sensorkit.workflow.capability import (
-    Bindings,
+    DEFAULT_COMMAND_ID,
+    NO_CAPABILITIES,
+    Aliases,
     ByCapability,
     ByRef,
-    DimensionBinding,
-    ExposureReq,
-    ExternalTask,
+    CapabilityIndex,
+    CommandId,
+    CommandIdHook,
+    CommandRequest,
+    DeviceCapabilities,
+    ExposureRequest,
     InstrumentEntry,
+    KeywordMatch,
+    Placement,
+    RequestReport,
     RequestResolver,
+    RequestStep,
+    Scope,
     Selector,
-    TargetCommand,
-    TargetSpec,
-    TaskStep,
     build_manifest,
-    resolve_target_ref,
+    capabilities_of,
+    matches,
+    merge_keywords,
+    portability,
     select,
 )
 from sensorkit.workflow.collect import (
@@ -82,12 +92,12 @@ from sensorkit.workflow.structure import (
     DeviceNode,
     DeviceRef,
     InstrumentAssembly,
-    InstrumentCapabilities,
     InstrumentPath,
     InstrumentRole,
     Part,
     SelectorAssembly,
     SensorModel,
+    StaticKeywords,
     Trait,
 )
 from sensorkit.workflow.views import DeviceIndex, InstrumentView, Topology
@@ -100,9 +110,8 @@ __all__ = [
     "NodeResult", "OnFailure", "RunReport", "format_graph", "topo_order",
     # structure
     "Assembly", "Attachment", "BaseAssembly", "ClaimKind", "DeviceNode",
-    "DeviceRef", "InstrumentAssembly", "InstrumentCapabilities",
-    "InstrumentPath", "InstrumentRole", "Part", "SelectorAssembly",
-    "SensorModel", "Trait",
+    "DeviceRef", "InstrumentAssembly", "InstrumentPath", "InstrumentRole",
+    "Part", "SelectorAssembly", "SensorModel", "StaticKeywords", "Trait",
     # views: derived from the structure
     "DeviceIndex", "InstrumentView", "Topology",
     # ops: the shared dispatch boundary
@@ -117,10 +126,12 @@ __all__ = [
     "Setting", "Step", "SyncPoint", "compile_collect", "validate_collect",
     "validate_step",
     # capability
-    "Bindings", "ByCapability", "ByRef", "DimensionBinding", "ExposureReq",
-    "ExternalTask", "InstrumentEntry", "RequestResolver", "Selector",
-    "TargetCommand", "TargetSpec", "TaskStep", "build_manifest",
-    "resolve_target_ref", "select",
+    "Aliases", "ByCapability", "ByRef", "CapabilityIndex", "CommandId",
+    "CommandIdHook", "CommandRequest", "DEFAULT_COMMAND_ID",
+    "DeviceCapabilities", "ExposureRequest", "InstrumentEntry", "KeywordMatch",
+    "NO_CAPABILITIES", "Placement", "RequestReport", "RequestResolver",
+    "RequestStep", "Scope", "Selector", "build_manifest", "capabilities_of",
+    "matches", "merge_keywords", "portability", "select",
     # deployment
     "SensorPlan",
 ]

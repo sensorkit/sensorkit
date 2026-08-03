@@ -84,6 +84,15 @@ def is_keyword(key: str) -> bool:
     return bool(_keyword_registry.get_namespaces(key))
 
 
+def get_keyword_type(key: str, ns: str | None = None) -> type | None:
+    """Return the type declared under keyword `key` in namespace `ns`, or `None` if none is.
+
+    The reverse of `get_keyword_info`, for callers holding a key rather than a type: a
+    predicate validated against the model a key names, or a schema rendered from it.
+    """
+    return _keyword_registry.get_type(key, ns) if is_keyword(key) else None
+
+
 def dump_keyword_json(obj: object):
     """Serialize a keyword object to JSON bytes using the shared keyword type adapter."""
     return _keyword_adapter.dump_json(obj)

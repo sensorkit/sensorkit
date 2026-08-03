@@ -40,6 +40,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.workflow.structure import (
     ClaimKind,
     DeviceNode,
@@ -153,9 +154,11 @@ class Topology:
 
 
 class DeviceIndex:
-    """The flat walk of claims, indexed the four ways its consumers ask for it: by
-    trait, by structural kind, by ref, and by the root-to-leaf chain ending at an
-    instrument.
+    """The flat walk of claims, indexed the ways its consumers ask for it: by trait,
+    by structural kind, by ref, and by the root-to-leaf chain ending at an
+    instrument — the last of those trait-indexed (`claims_on_chain`) or across both
+    namespaces (`chain`), since routing a command and stamping a header ask about
+    devices rather than about capabilities.
 
     One walk, done once, and every device-major question is answered from it — so a
     compiler names the axis it reads instead of building an index of its own.
@@ -177,12 +180,17 @@ class DeviceIndex:
         by_kind: dict[ClaimKind, list[DeviceNode]] = {}
         traits: dict[DeviceRef, set[Trait]] = {}
         first: dict[DeviceRef, DeviceNode] = {}
+        static: dict[DeviceRef, KeywordDict] = {}
 
         for n in self.nodes:
             by_kind.setdefault(n.kind, []).append(n)
             if n.trait is not None:
                 by_trait.setdefault(n.trait, []).append(n)
                 traits.setdefault(n.ref, set()).add(n.trait)
+            if n.keywords:
+                # A ref claimed twice may be described at either claim; both are
+                # about the one device, so they merge in walk order.
+                static.setdefault(n.ref, KeywordDict()).update(n.keywords)
             first.setdefault(n.ref, n)          # root-first walk order
 
         self.by_trait: Mapping[Trait, tuple[DeviceNode, ...]] = {
@@ -190,10 +198,12 @@ class DeviceIndex:
         self.by_kind: Mapping[ClaimKind, tuple[DeviceNode, ...]] = {
             k: tuple(ns) for k, ns in by_kind.items()}
         self._traits = {r: tuple(sorted(ts)) for r, ts in traits.items()}
+        self._static = static
         # Insertion-ordered, and that order is the walk's: a per-device op like
         # connect visits the sensor root-first.
         self.refs: Mapping[DeviceRef, DeviceNode] = first
         self._chains: dict[InstrumentPath, Mapping[Trait, tuple[DeviceRef, ...]]] = {}
+        self._depths: dict[InstrumentPath, Mapping[DeviceRef, int]] = {}
 
     def claiming(self, trait: Trait) -> tuple[DeviceNode, ...]:
         """Every claim of this trait, anywhere in the structure."""
@@ -242,6 +252,41 @@ class DeviceIndex:
             self._chains[path] = cached
 
         return cached
+
+    def chain(self, path: InstrumentPath) -> Mapping[DeviceRef, int]:
+        """Every device on the root-to-leaf chain ending at `path`, in walk order,
+        against the depth of its deepest claim on that chain.
+
+        The counterpart of `claims_on_chain` across both namespaces: an instrument
+        and a selector are devices like any other, so the instrument itself is here
+        and the trait-indexed answer cannot say so.
+
+        The two things a chain is read for, in one walk. *Order* is root-first, and
+        so is the order anything merged along a chain merges in — a device's
+        keywords, a camera's frame metadata. *Depth* is what "the deepest claim
+        wins" reads: a private wheel outranks the selector wheel above it, and a
+        ref claimed at two positions is addressed at the lower one, because
+        commanding a device moves the device rather than the capability that named
+        it.
+        """
+        cached = self._depths.get(path)
+
+        if cached is None:
+            depths: dict[DeviceRef, int] = {}
+            for n in self.nodes:
+                if on_chain(n.path, path):
+                    depths[n.ref] = max(depths.get(n.ref, 0), len(n.path))
+            cached = self._depths[path] = depths
+
+        return cached
+
+    def keywords_of(self, ref: DeviceRef) -> KeywordDict:
+        """What the structure says about this device, merged over its claims.
+
+        Static config, and so empty for most refs: it is what a site knows and a
+        driver does not publish.
+        """
+        return self._static.get(ref) or KeywordDict()
 
     def root_claims(self) -> Mapping[Trait, tuple[DeviceRef, ...]]:
         """Sensor-wide devices: the claims at the root of the tree."""

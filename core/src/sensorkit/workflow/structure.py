@@ -25,6 +25,12 @@ from it (see `views.py` for that).
   are inherently per-device rather than per-capability (connect, disconnect) match
   distinct refs once via `lifecycle.Entry(match="all")`.
 
+* **What a device *is* is described in keywords, and mostly not here.** A device
+  publishes its own description at runtime; `keywords` on a claim is what a site
+  knows and the driver does not report, validated against the same registry and
+  read as that device's defaults. There is no second attribute vocabulary to
+  reconcile — see `capability.py` for what reads them.
+
 * **Parts have names; attachments have refs.** A part is a position in the
   structure — an `Assembly` nests to whatever depth a deployment organizes by
   (aperture, bench, cryostat), and nothing is read into the grouping beyond the
@@ -43,7 +49,7 @@ as an external abort.
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Annotated, Literal
 
@@ -54,6 +60,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from sensorkit.common.keyword import KeywordDict, is_keyword, validate_keyword
 
 type DeviceRef = str
 """Opaque device identifier, resolved at runtime against a device registry. The
@@ -111,12 +119,33 @@ class InstrumentRole(str, Enum):
         return self in (InstrumentRole.SCIENCE, InstrumentRole.CALIBRATION)
 
 
+def _known_keywords(v: object) -> object:
+    """Config-supplied keywords go through the registry exactly as published ones do.
+
+    `KeywordDict` leaves an unrecognized key as a plain mapping, which would make a typo a
+    value nobody ever reads; here it is a load error.
+    """
+    if isinstance(v, Mapping):
+        for key, value in v.items():
+            if not is_keyword(key):
+                raise ValueError(f"'{key}' is not a declared keyword")
+            validate_keyword(key, value)
+
+    return v
+
+
+type StaticKeywords = Annotated[KeywordDict, BeforeValidator(_known_keywords)]
+"""What a site knows about a device that the device does not publish. Read as that
+device's defaults, under anything it reports live."""
+
+
 class Attachment(BaseModel, extra="forbid"):
     """One capability claim: device `ref` serves as `trait` at the node this
     attachment hangs on."""
 
     ref: DeviceRef
     trait: Trait
+    keywords: StaticKeywords = Field(default_factory=KeywordDict)
 
     @field_validator("trait")
     @classmethod
@@ -139,27 +168,6 @@ def _coerce_attachments(v: object) -> object:
 
 type Attachments = Annotated[
     list[Attachment], BeforeValidator(_coerce_attachments)]
-
-
-class InstrumentCapabilities(BaseModel, extra="forbid"):
-    """Deployment-declared, standardized description of what an instrument *is* —
-    the vocabulary a task source reasons about without knowing this particular
-    observatory.
-
-    Consumed only by `capability.build_manifest` and `ByCapability` selection; the
-    structural model never interprets it, exactly as it never interprets trait
-    labels.
-
-    `modality` is the kind of data (imager / spectrograph / polarimeter — open).
-    `attributes` is an open schema (`fov_deg`, `R`, `detector`, `pixel_scale`, ...)
-    matched by `ByCapability` requirements. Some attributes are declared here;
-    others the manifest derives from the binding tables (e.g. passbands, which
-    *are* the filter wheel's encoded value vocabulary), so they are never authored
-    twice.
-    """
-
-    modality: str = "imager"
-    attributes: Mapping[str, object] = Field(default_factory=dict)
 
 
 class BaseAssembly(BaseModel, extra="forbid"):
@@ -231,8 +239,9 @@ class InstrumentAssembly(BaseAssembly):
 
     instrument: DeviceRef
     role: InstrumentRole = InstrumentRole.SCIENCE
-    capabilities: InstrumentCapabilities = Field(
-        default_factory=InstrumentCapabilities)
+    # The instrument device's own static keywords: this node *is* that device's
+    # position, so a site describing the detector describes it here.
+    keywords: StaticKeywords = Field(default_factory=KeywordDict)
 
 
 # Discrimination is structural, not tagged. `extra="forbid"` closes every branch,
@@ -295,7 +304,7 @@ class SensorModel(BaseModel, extra="forbid"):
         it is an instrument or a selector.
         """
         for a in self.attachments:
-            yield DeviceNode(a.ref, a.trait, ())
+            yield DeviceNode(a.ref, a.trait, (), keywords=a.keywords)
         for part in self.parts:
             yield from _iter_part(part, ())
 
@@ -314,6 +323,9 @@ class DeviceNode:
     path: InstrumentPath
     kind: ClaimKind = "attachment"
     instrument_role: InstrumentRole | None = None   # only for instrument nodes
+    # Out of the comparison: two claims that agree on ref, trait and position are the
+    # same claim, and a `KeywordDict` is unhashable besides.
+    keywords: KeywordDict = field(default_factory=KeywordDict, compare=False)
 
     def __str__(self) -> str:
         what = self.trait or self.kind
@@ -331,12 +343,12 @@ def _iter_part(node: Part, path: InstrumentPath) -> Iterator[DeviceNode]:
     match node:
         case InstrumentAssembly():
             yield DeviceNode(node.instrument, None, path, "instrument",
-                             node.role)
+                             node.role, node.keywords)
         case SelectorAssembly():
             yield DeviceNode(node.selector, None, path, "selector")
 
     for a in node.attachments:
-        yield DeviceNode(a.ref, a.trait, path)
+        yield DeviceNode(a.ref, a.trait, path, keywords=a.keywords)
 
     if isinstance(node, Assembly):
         for part in node.parts:

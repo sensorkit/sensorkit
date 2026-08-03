@@ -1,9 +1,9 @@
 on_failure: stop
 [step 0]
     sel-1 := 'port-a'
-    tcs-1 := sidereal:M51
-    fw-a := 'pos:r'
-    fw-wide := 'pos:g'
+    tcs-1 := FollowTarget(target='M51')
+    fw-a := SetFilter(filter='r')
+    fw-wide := SetFilter(filter='g')
 [step 0]
     expose cam-sci 20s science [1/2]
     expose cam-wide 45s science
@@ -11,12 +11,12 @@ on_failure: stop
     expose cam-sci 20s science [2/2]
     expose cam-wide 45s science
 [step 1]
-    fw-a := 'pos:i'
+    fw-a := SetFilter(filter='i')
 [step 1]
     expose cam-sci 20s science [1/2]
 [step 1]
     expose cam-sci 20s science [2/2]
 [step 2]
-    tcs-1 := sidereal:M101
+    tcs-1 := FollowTarget(target='M101')
 [step 2]
     expose cam-sci 30s science

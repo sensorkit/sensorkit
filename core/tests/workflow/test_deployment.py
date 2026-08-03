@@ -66,11 +66,10 @@ tables:
 """)
 
 
-def test_bindings_are_cross_checked_against_the_structure():
-    with pytest.raises(ValidationError, match="not a declared dimension"):
+def test_aliases_are_cross_checked_against_the_structure():
+    with pytest.raises(ValidationError, match="aliases name unknown device"):
         SensorPlan.from_yaml(MINIMAL + """
-bindings:
-  passband_dimension: filter
+aliases: {science: cam-2}
 """)
 
 
