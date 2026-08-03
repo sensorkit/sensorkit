@@ -1,0 +1,48 @@
+on_failure: stop
+[connect]
+    connect            tcs-1 (device @ <root>)
+    connect            dome-1 (device @ <root>)
+    connect            chiller-a (device @ <root>)
+    connect            chiller-b (device @ <root>)
+    connect            cover-1 (device @ main-ota)
+    connect            sel-1 (device @ main-ota/sel)
+    connect            fw-shared (device @ main-ota/sel)
+    connect            cam-sci (device @ main-ota/sel/port-a)
+    connect            fw-a (device @ main-ota/sel/port-a)
+    connect            rot-a (device @ main-ota/sel/port-a)
+    connect            spec-1 (device @ main-ota/sel/port-b)
+    connect            cam-guide (device @ guide-scope/guider)
+    connect            foc-2 (device @ piggyback)
+    connect            cam-wide (device @ piggyback/wide)
+    connect            fw-wide (device @ piggyback/wide)
+[cooling-plant]
+    start              chiller-a (device @ <root>)
+[cooling-plant]
+    start              chiller-b (device @ <root>)
+[start-slow]
+    start_cooling      cam-sci (instrument @ main-ota/sel/port-a)
+    start_cooling      spec-1 (instrument @ main-ota/sel/port-b)
+    start_cooling      cam-guide (instrument @ guide-scope/guider)
+    start_cooling      cam-wide (instrument @ piggyback/wide)
+    unpark             tcs-1 (mount @ <root>)
+[open-enclosure + await-ready]
+    home_shutters      dome-1 (dome @ <root>)
+    await_cooldown     cam-sci (instrument @ main-ota/sel/port-a)
+    await_cooldown     spec-1 (instrument @ main-ota/sel/port-b)
+    await_cooldown     cam-guide (instrument @ guide-scope/guider)
+    await_cooldown     cam-wide (instrument @ piggyback/wide)
+[open-enclosure]
+    open               dome-1 (dome @ <root>)  (override ok: daytime test with the dome shut)
+[open-covers]
+    open               cover-1 (mirror_cover @ main-ota)
+[home]
+    home               tcs-1 (focuser @ main-ota)
+    home               foc-2 (focuser @ piggyback)
+    home               rot-a (rotator @ main-ota/sel/port-a)
+    home               sel-1 (selector @ main-ota/sel)
+    home               fw-shared (filter_wheel @ main-ota/sel)  (skip, optional)
+    home               fw-a (filter_wheel @ main-ota/sel/port-a)  (skip, optional)
+    home               fw-wide (filter_wheel @ piggyback/wide)  (skip, optional)
+[configure]
+    select_default     sel-1 (selector @ main-ota/sel)
+    set_default_filter fw-a (device @ main-ota/sel/port-a)  (optional)

@@ -1,0 +1,22 @@
+on_failure: stop
+[step 0]
+    sel-1 := 'port-a'
+    tcs-1 := sidereal:M51
+    fw-a := 'pos:r'
+    fw-wide := 'pos:g'
+[step 0]
+    expose cam-sci 20s science [1/2]
+    expose cam-wide 45s science
+[step 0 + step 1]
+    expose cam-sci 20s science [2/2]
+    expose cam-wide 45s science
+[step 1]
+    fw-a := 'pos:i'
+[step 1]
+    expose cam-sci 20s science [1/2]
+[step 1]
+    expose cam-sci 20s science [2/2]
+[step 2]
+    tcs-1 := sidereal:M101
+[step 2]
+    expose cam-sci 30s science

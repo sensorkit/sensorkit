@@ -1,0 +1,42 @@
+on_failure: skip
+[quiesce]
+    abort              cam-sci (instrument @ main-ota/sel/port-a)
+    abort              spec-1 (instrument @ main-ota/sel/port-b)
+    abort              cam-guide (instrument @ guide-scope/guider)
+    abort              cam-wide (instrument @ piggyback/wide)
+    stop_tracking      tcs-1 (mount @ <root>)  (stop)
+[start-warmup]
+    start_warmup       cam-sci (instrument @ main-ota/sel/port-a)
+    start_warmup       spec-1 (instrument @ main-ota/sel/port-b)
+    start_warmup       cam-guide (instrument @ guide-scope/guider)
+    start_warmup       cam-wide (instrument @ piggyback/wide)
+[close-covers + await-safe]
+    close              cover-1 (mirror_cover @ main-ota)
+    await_warmup       cam-sci (instrument @ main-ota/sel/port-a)
+    await_warmup       spec-1 (instrument @ main-ota/sel/port-b)
+    await_warmup       cam-guide (instrument @ guide-scope/guider)
+    await_warmup       cam-wide (instrument @ piggyback/wide)
+[park + stop-cooling-plant]
+    park               tcs-1 (mount @ <root>)
+    stop               chiller-b (device @ <root>)  (continue)
+[close-enclosure + stop-cooling-plant]
+    stop               dome-1 (dome @ <root>)  (continue, optional)
+    stop               chiller-a (device @ <root>)
+[close-enclosure]
+    close              dome-1 (dome @ <root>)
+[disconnect]
+    disconnect         tcs-1 (device @ <root>)
+    disconnect         dome-1 (device @ <root>)
+    disconnect         chiller-a (device @ <root>)
+    disconnect         chiller-b (device @ <root>)
+    disconnect         cover-1 (device @ main-ota)
+    disconnect         sel-1 (device @ main-ota/sel)
+    disconnect         fw-shared (device @ main-ota/sel)
+    disconnect         cam-sci (device @ main-ota/sel/port-a)
+    disconnect         fw-a (device @ main-ota/sel/port-a)
+    disconnect         rot-a (device @ main-ota/sel/port-a)
+    disconnect         spec-1 (device @ main-ota/sel/port-b)
+    disconnect         cam-guide (device @ guide-scope/guider)
+    disconnect         foc-2 (device @ piggyback)
+    disconnect         cam-wide (device @ piggyback/wide)
+    disconnect         fw-wide (device @ piggyback/wide)

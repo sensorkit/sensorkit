@@ -1,0 +1,18 @@
+on_failure: stop
+[step 0]
+    sel-1 := 'port-a'
+    tcs-1 := 'rate:42931'
+    fw-shared := 'clear'
+    fw-a := 'clear'
+[step 0]
+    expose cam-sci 5s science [1/4]
+[step 0]
+    expose cam-sci 5s science [2/4]
+[step 0]
+    expose cam-sci 5s science [3/4]
+[step 0]
+    expose cam-sci 5s science [4/4]
+[step 1]
+    tcs-1 := 'sidereal:42931-field'
+[step 1]
+    expose cam-sci 5s science

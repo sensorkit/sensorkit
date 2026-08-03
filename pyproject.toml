@@ -218,7 +218,7 @@ layers = [
     "sensorkit.astro",
     "sensorkit.api",
     "sensorkit.core : sensorkit.data",
-    "sensorkit.backend",
+    "sensorkit.backend : sensorkit.workflow",
     "sensorkit.common",
 ]
 

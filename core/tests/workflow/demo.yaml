@@ -1,0 +1,180 @@
+# Demo observatory — the reference SensorPlan the workflow tests read.
+#
+# Everything observatory-shaped lives in this document: the structure,
+# the trait vocabulary (mount, dome, chiller, focuser, rotator,
+# mirror_cover, filter_wheel — all opaque to sensorkit.workflow), and
+# the workflow tables. No trait label means anything to the code: what
+# an instrument and a selector are is structural, said by a field on
+# the node rather than by a reserved word.
+#
+# Shape features exercised on purpose:
+# * Multi-trait device: tcs-1 is the mount at the root AND the focuser
+#   of the main OTA. It connects once (match: all matches refs), but
+#   tables address each capability separately.
+# * Structural matching: instruments and selectors are addressed by
+#   kind (match: instrument / selector), not by a reserved trait label,
+#   so the trait vocabulary here is entirely this deployment's.
+# * Device-device dependency: chiller-b starts only after chiller-a
+#   (require), and they stop in reverse order in deinit.
+# * Serial ops per device: the dome homes its shutters, then opens.
+# * Same-device joins: each camera's await_cooldown requires only its
+#   own start_cooling, so the phase link is replaced by a per-device
+#   one and the cooldown doesn't serialize against dome/cover work.
+# * Degradation: filter-wheel homing is optional; fw-a's configure step
+#   requires fw-a's own home, so a stuck wheel skips exactly its own
+#   configuration. Both are marked optional — a skipped required step
+#   fails the run just as a failed one does.
+# * The on_failure ladder, all three rungs: the table setting (`stop`
+#   for init, `skip` for deinit), `continue` where a step must not hold
+#   up what follows it (the dome's halt, chiller-b), and `stop` on one
+#   deinit step that is worth abandoning the teardown for.
+
+sensor:
+  name: demo-sensor
+  attachments:
+    tcs-1: mount
+    dome-1: dome
+    chiller-a: chiller
+    chiller-b: chiller
+  parts:
+    - name: main-ota
+      attachments:
+        tcs-1: focuser
+        cover-1: mirror_cover
+      parts:
+        - name: sel
+          selector: sel-1
+          attachments:
+            fw-shared: filter_wheel
+          parts:
+            - name: port-a
+              instrument: cam-sci
+              attachments:
+                fw-a: filter_wheel
+                rot-a: rotator
+            - name: port-b
+              instrument: spec-1
+    - name: guide-scope
+      parts:
+        - name: guider
+          instrument: cam-guide
+          role: guide
+    - name: piggyback
+      attachments:
+        foc-2: focuser
+      parts:
+        - name: wide
+          instrument: cam-wide
+          attachments:
+            fw-wide: filter_wheel
+
+tables:
+  init:
+    on_failure: stop
+    phases:
+      - name: connect
+        entries:
+          - match: all
+            ops: connect
+      - name: cooling-plant
+        entries:
+          - id: chill-a
+            device: chiller-a
+            ops: start
+          - device: chiller-b
+            ops: start
+            require: [chill-a]
+      - name: start-slow
+        entries:
+          - id: cool
+            match: instrument
+            ops: start_cooling
+          - trait: mount
+            ops: unpark
+      - name: open-enclosure
+        entries:
+          - trait: dome
+            ops: [home_shutters, open]
+      - name: open-covers
+        entries:
+          - trait: mirror_cover
+            ops: open
+      - name: home
+        entries:
+          - {trait: focuser, ops: home}
+          - {trait: rotator, ops: home}
+          - {match: selector, ops: home}
+          # A stuck wheel degrades rather than ending the bring-up, so
+          # it needs `skip` against this table's `stop` setting: keep
+          # dispatching, but still skip what requires it.
+          - id: fw-home
+            trait: filter_wheel
+            ops: {op: home, optional: true, on_failure: skip}
+      - name: configure
+        entries:
+          - {match: selector, ops: select_default}
+          # Device-specific override: only fw-a gets a default filter,
+          # and only if fw-a's own homing succeeded. The clause names an
+          # entry in `home`, so it replaces the wait on that whole phase
+          # rather than adding to it. Optional because a skipped
+          # required step is a failed run.
+          - device: fw-a
+            ops: {op: set_default_filter, optional: true}
+            require: [{name: fw-home, join: same-device}]
+      - name: await-ready
+        after: [start-slow]
+        entries:
+          - match: instrument
+            ops: await_cooldown
+            require: [{name: cool, join: same-device}]
+
+  deinit:
+    on_failure: skip
+    phases:
+      - name: quiesce
+        entries:
+          - {match: instrument, ops: abort}
+          # The one failure worth abandoning a teardown for: closing a
+          # shutter onto a telescope that is still moving is worse than
+          # leaving the dome open for a human to deal with.
+          - trait: mount
+            ops: {op: stop_tracking, on_failure: stop}
+      - name: start-warmup
+        entries:
+          - {id: warm, match: instrument, ops: start_warmup}
+      - name: close-covers
+        entries:
+          - {trait: mirror_cover, ops: close}
+      - name: park
+        entries:
+          - {trait: mount, ops: park}
+      - name: close-enclosure
+        entries:
+          # Halt leftover motion before closing, but never at the cost
+          # of the close: `continue` keeps the halt's failure off the
+          # close, `optional` keeps it out of the report. Neither flag
+          # alone does it — without `continue` the close is skipped,
+          # and a skipped close fails the run whether or not anyone
+          # marked the halt optional.
+          - trait: dome
+            ops:
+              - {op: stop, optional: true, on_failure: continue}
+              - close
+      - name: await-safe
+        after: [start-warmup]
+        entries:
+          - match: instrument
+            ops: await_warmup
+            require: [{name: warm, join: same-device}]
+      - name: stop-cooling-plant
+        after: [await-safe]
+        entries:
+          # chiller-a must still stop if chiller-b will not — but a
+          # chiller that will not stop is a failed teardown all the
+          # same, which is why this is `continue` and not `optional`.
+          - {id: stop-b, device: chiller-b, ops: {op: stop, on_failure: continue}}
+          - {device: chiller-a, ops: stop, require: [stop-b]}
+      - name: disconnect
+        after: [close-enclosure, stop-cooling-plant]
+        entries:
+          - {match: all, ops: disconnect}
