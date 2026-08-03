@@ -30,6 +30,7 @@ from sensorkit.std.sensor.derive import (
     derive_plan,
     derive_structure,
     derive_tables,
+    timeouts,
 )
 from sensorkit.std.traits import Connect, Disconnect
 from sensorkit.workflow import (
@@ -245,6 +246,26 @@ def test_stop_addresses_only_what_moves():
 
     assert {n.payload.ref for n in graph.nodes} == {"tcs-1", "dome-1", "cover-1"}
     assert all(n.optional for n in graph.nodes)
+
+
+# ---- timeouts -----------------------------------------------------------
+
+def test_every_deadline_comes_from_a_policy():
+    deadlines = timeouts(SensorPolicies(dome_open_close_timeout=11.0,
+                                        mirror_cover_open_close_timeout=22.0))
+
+    assert deadlines[("enclosure", "OpenEnclosure")] == 11.0
+    assert deadlines[("mirror_cover", "CloseMirrorCover")] == 22.0
+
+
+def test_a_deadline_is_keyed_on_the_capability_it_addresses():
+    """The same op on two traits takes two deadlines, which is why a timeout is
+    not table content."""
+    deadlines = timeouts(SensorPolicies(dome_init_timeout=300.0,
+                                        mount_init_timeout=30.0))
+
+    assert deadlines[("enclosure", "Init")] == 300.0
+    assert deadlines[("mount", "Init")] == 30.0
 
 
 # ---- the plan -----------------------------------------------------------

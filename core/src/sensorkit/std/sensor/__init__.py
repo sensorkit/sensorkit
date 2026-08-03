@@ -10,7 +10,7 @@ that chooses between them.
 `__all__` is the public API.
 """
 
-from sensorkit.std.sensor.client import DeviceContexts, Sensor, connect_sensor
+from sensorkit.std.sensor.client import Sensor, connect_sensor
 from sensorkit.std.sensor.compat import Capabilities, add_compat_context
 from sensorkit.std.sensor.config import (
     Implementation,
@@ -23,6 +23,18 @@ from sensorkit.std.sensor.derive import (
     derive_plan,
     derive_structure,
     derive_tables,
+    timeouts,
+)
+from sensorkit.std.sensor.dispatch import (
+    DeviceContexts,
+    Dispatcher,
+    FrameKeywords,
+    Handler,
+    Listener,
+    OpOutcome,
+    compile_supported,
+    unresolved,
+    unsupported,
 )
 from sensorkit.std.sensor.impl import StandardSensor, sensor_control_service
 from sensorkit.std.sensor.legacy import LegacyDevices, LegacySensor
@@ -32,8 +44,12 @@ __all__ = [
     "Implementation", "SensorConfig", "SensorDevices", "SensorPolicies",
     # derive: the section as a workflow plan
     "capability_index", "derive_plan", "derive_structure", "derive_tables",
+    "timeouts",
+    # dispatch: workflow ops as device commands
+    "DeviceContexts", "Dispatcher", "FrameKeywords", "Handler", "Listener",
+    "OpOutcome", "compile_supported", "unresolved", "unsupported",
     # client: the sensor, with no controller
-    "DeviceContexts", "Sensor", "connect_sensor",
+    "Sensor", "connect_sensor",
     # impl: the sensor as a service
     "StandardSensor", "sensor_control_service",
     # legacy: retired one release after the workflow implementation ships

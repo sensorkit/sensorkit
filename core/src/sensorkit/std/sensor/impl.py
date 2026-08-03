@@ -136,9 +136,6 @@ async def sensor_control_service(service: sk.Service):
             control = LegacySensor(config=config)
         case Implementation.WORKFLOW:
             control = StandardSensor(config=config)
-        case other:
-            logger.error(f"Service {service.name} has no sensor implementation {other}")
-            return
 
     service.include(
         control,

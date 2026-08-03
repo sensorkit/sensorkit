@@ -19,7 +19,7 @@ passes nothing and gets frames with only the task's own context on them.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 
 import sensorkit.api as sk
 from sensorkit.core.client import SensorKit
@@ -27,17 +27,8 @@ from sensorkit.core.device import DeviceClient
 from sensorkit.std.collect import StandardCollectTask
 from sensorkit.std.sensor.config import SensorConfig
 from sensorkit.std.sensor.derive import capability_index, derive_plan
+from sensorkit.std.sensor.dispatch import DeviceContexts
 from sensorkit.workflow import CapabilityIndex, DeviceRef, RunReport, SensorPlan
-
-type DeviceContexts = Callable[[], Mapping[DeviceRef, sk.Context]]
-"""What each device has to say about itself, as of now.
-
-Sampled once per frame rather than passed once per collect, because a header
-records the state a frame was taken in and pointing moves between frames. The
-merge into a single context is the sensor's, not the caller's: it follows each
-instrument's own optical path, root first, so that a frame's header carries the
-devices that actually shaped it and nothing else.
-"""
 
 
 class Sensor:

@@ -18,8 +18,10 @@ written-down meaning — this module.
   decide phase `after` sets and whether an entry's ops split into concurrent
   entries, which is the whole of what they say.
 
-Timeouts are absent on purpose: a timeout is a property of hardware rather than of
-a workflow, and reaches a run as dispatcher middleware keyed on `(trait, op)`.
+* **Timeouts** (`timeouts`). Keyed on `(trait, op)` for the dispatcher's own
+  resolution ladder rather than written into a table, because a timeout is a
+  property of hardware rather than of a workflow: it belongs to *this dome*, not to
+  the table that happens to open it.
 
 One device set is reachable from this section and one only — `SensorDevices.camera`
 is a single field, so a derived sensor has exactly one instrument. The library's
@@ -44,7 +46,8 @@ from sensorkit.std.optics import (
     StandardMirrorCover,
 )
 from sensorkit.std.sensor.config import SensorConfig, SensorDevices, SensorPolicies
-from sensorkit.std.traits import Connect, Deinit, Init, Stop
+from sensorkit.std.sensor.dispatch import HandlerKey
+from sensorkit.std.traits import Connect, Deinit, Home, Init, Stop
 from sensorkit.workflow import (
     Assembly,
     Attachment,
@@ -120,6 +123,27 @@ def derive_plan(config: SensorConfig) -> SensorPlan:
         sensor=derive_structure(config.controller_name, config.devices),
         tables=derive_tables(config.policies),
     )
+
+
+def timeouts(policies: SensorPolicies) -> dict[HandlerKey, float]:
+    """The deadlines a `SensorPolicies` states, keyed for the dispatch ladder.
+
+    Only the operations a site has ever written a number for. Everything else runs
+    to completion, which is what the absence of a policy says.
+    """
+    enclosure, cover, mount = (StandardEnclosure.name, StandardMirrorCover.name,
+                               StandardMount.name)
+
+    return {
+        (enclosure, Init.model_tag()): policies.dome_init_timeout,
+        (enclosure, Deinit.model_tag()): policies.dome_deinit_timeout,
+        (enclosure, OpenEnclosure.model_tag()): policies.dome_open_close_timeout,
+        (enclosure, CloseEnclosure.model_tag()): policies.dome_open_close_timeout,
+        (cover, OpenMirrorCover.model_tag()): policies.mirror_cover_open_close_timeout,
+        (cover, CloseMirrorCover.model_tag()): policies.mirror_cover_open_close_timeout,
+        (mount, Init.model_tag()): policies.mount_init_timeout,
+        (mount, Home.model_tag()): policies.mount_home_timeout,
+    }
 
 
 def capability_index(details: Mapping[DeviceRef, DeviceDetails]) -> CapabilityIndex:
