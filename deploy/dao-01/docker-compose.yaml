@@ -2,8 +2,10 @@
 # SensorKit — DAO-01 Docker stack
 #
 # One agent + controller driving the DAO-01 sensor: an Alpaca service
-# (GMX600 weather + Cosmos-8k camera on the host) and a Node Platform / Edge
-# service (Weather + Enclosure + Mount + Focuser + Rotator).
+# (GMX600 weather on the host), a Node Platform / Edge service (Weather +
+# Enclosure + Mount + Focuser + Rotator), and the native Cosmos-8k camera
+# service (dao_camera.py) running bare-metal on the Windows host — the file is
+# mounted into every container below only so the config parser can import it.
 # Programs: Burr, Otto, UDL. Plus SENPAI analyzer.
 #
 #   Build + start:  docker compose -f docker-compose.yaml up -d --build
@@ -18,6 +20,9 @@ x-common-environment: &common-env
 #  SENSORKIT_DEBUG: 1
 
 x-config-file: &config-file "./dao-01.yaml:/sensorkit.yaml:ro"
+# dao-01.yaml's sensorkit.imports references /opt/sk/dao_camera.py, so the file
+# must be importable in every container that parses the config.
+x-camera-file: &camera-file "./dao_camera.py:/opt/sk/dao_camera.py:ro"
 x-env-file:    &env-file    "C:/sk/.env:/opt/sk/.env:ro"
 x-data-dir:    &data-dir    "C:/sk/data:/opt/sk/data"
 
@@ -50,6 +55,7 @@ services:
       <<: *common-env
     volumes:
       - *config-file
+      - *camera-file
     depends_on:
       nats:
         condition: service_healthy
@@ -63,6 +69,7 @@ services:
       <<: *common-env
     volumes:
       - *config-file
+      - *camera-file
     restart: unless-stopped
     depends_on:
       config:
@@ -79,6 +86,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - *config-file
+      - *camera-file
       - *data-dir
     restart: unless-stopped
     depends_on:
@@ -94,6 +102,7 @@ services:
       <<: *common-env
     volumes:
       - *config-file
+      - *camera-file
       - *env-file
     restart: unless-stopped
     depends_on:
@@ -109,6 +118,7 @@ services:
       <<: *common-env
     volumes:
       - *config-file
+      - *camera-file
       - *data-dir
     restart: unless-stopped
     depends_on:
@@ -124,6 +134,7 @@ services:
       <<: *common-env
     volumes:
       - *config-file
+      - *camera-file
       - *env-file
     restart: unless-stopped
     depends_on:
@@ -139,6 +150,7 @@ services:
       <<: *common-env
     volumes:
       - *config-file
+      - *camera-file
       - *env-file
     restart: unless-stopped
     depends_on:
@@ -164,6 +176,7 @@ services:
       <<: *common-env
     volumes:
       - *config-file
+      - *camera-file
       - *data-dir
       - "C:/sk/senpai_DAO-01.yaml:/opt/sk/senpai_DAO-01.yaml:ro"
       - "C:/sk/catalogs:/opt/sk/catalogs:ro"
@@ -181,6 +194,7 @@ services:
       <<: *common-env
     volumes:
       - *config-file
+      - *camera-file
     restart: unless-stopped
     depends_on:
       config:
@@ -202,8 +216,8 @@ services:
       - "8200:8200"
     volumes:
       - *config-file
+      - *camera-file
       - *data-dir
-      - "C:/sk/instrument_model_DAO-01.json:/opt/sk/instrument_model_DAO-01.json:ro"
     restart: unless-stopped
     depends_on:
       config:
@@ -218,6 +232,7 @@ services:
       <<: *common-env
     volumes:
       - *config-file
+      - *camera-file
       - *env-file
     restart: unless-stopped
     depends_on:
@@ -235,6 +250,7 @@ services:
       - "8000:8000"
     volumes:
       - *config-file
+      - *camera-file
       - *data-dir
     restart: unless-stopped
     depends_on:

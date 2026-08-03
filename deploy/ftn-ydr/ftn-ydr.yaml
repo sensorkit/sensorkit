@@ -471,14 +471,14 @@ sky_transmission:
       - FTN-YDR
     acquisition:
       mode: watch_directory
-      watch_path: C:/sk/data/sky_transmission
+      watch_path: C:/sk/data/sky_transmission/raw
       watch_pattern: "*.fits"
       watch_recursive: true
     allclear:
-      instrument_model_path: C:/sk/instrument_model_ftn-ydr.json
+      instrument_model_path: C:/sk/data/sky_transmission/instrument_model_ftn-ydr.json
       clear_threshold: 0.7
     output:
-      directory: C:/sk/data/processed/sky_transmission
+      directory: C:/sk/data/sky_transmission/processed
     server:
       host: 0.0.0.0
       port: 8200

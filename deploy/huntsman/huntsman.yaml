@@ -375,7 +375,7 @@ indigo:
       devices:
         AAGCloudWatcher:
           device_type: weather
-          indigo_device: "AAG AAGCloudWatcher"
+          indigo_device: "AAG CloudWatcher"
           timeout: 60
 
 thesky:
@@ -533,14 +533,14 @@ sky_transmission:
       - Huntsman
     acquisition:
       mode: watch_directory
-      watch_path: /opt/sk/data/sky_transmission
+      watch_path: /opt/sk/data/sky_transmission/raw
       watch_pattern: "*.fits"
       watch_recursive: true
     allclear:
-      instrument_model_path: /opt/sk/instrument_model_Huntsman.json
+      instrument_model_path: /opt/sk/data/sky_transmission/instrument_model_Huntsman.json
       clear_threshold: 0.7
     output:
-      directory: /opt/sk/data/processed/sky_transmission
+      directory: /opt/sk/data/sky_transmission/processed
     server:
       host: 0.0.0.0
       port: 8200

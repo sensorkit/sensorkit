@@ -2,6 +2,10 @@ version: 1
 
 sensorkit:
   imports:
+    # Native Cosmos-8k camera module (loose file; docker-compose mounts it into
+    # every container at this path — the service itself runs bare-metal on the
+    # camera host).
+    - /opt/sk/dao_camera.py
     - sensorkit.alpaca.service
     - sensorkit.node_platform.service
     - sensorkit.std.sensor
@@ -326,6 +330,17 @@ udl:
     poll_frequency: 10
     end_time_deadband_s: 120
 
+# Cosmos-8k camera — native PICam module (dao_camera.py), one camera per
+# process. Runs bare-metal on the Windows host next to the PICam runtime:
+#     $env:NATS_URL = "nats://localhost:4222"
+#     sensorkit service run Cosmos-8k C:\path\to\deploy\dao-01\dao_camera.py
+dao_camera:
+  - id: Cosmos-8k
+    serial_number: "X120003324"
+    temperature: -25
+    readout_mode: 0     # 16bit-High-Rolling_Shutter (CMS)
+    binning: 1
+
 alpaca:
   - id: alpaca_service
     endpoints:
@@ -338,16 +353,6 @@ alpaca:
           device_number: 0
           status_frequency: 5
           timeout: 60
-    - host: host.docker.internal
-      port: 5900
-      protocol: http
-      devices:
-        Cosmos-8k:
-          device_type: camera
-          device_number: 0
-          temperature: -25
-          status_frequency: 1
-          timeout: 300
 
 node_platform:
   - id: node_platform_service
@@ -436,14 +441,14 @@ sky_transmission:
       - DAO-01
     acquisition:
       mode: watch_directory
-      watch_path: C:/sk/data/sky_transmission
+      watch_path: C:/sk/data/sky_transmission/raw
       watch_pattern: "*.fits"
       watch_recursive: true
     allclear:
-      instrument_model_path: C:/sk/instrument_model_DAO-01.json
+      instrument_model_path: C:/sk/data/sky_transmission/instrument_model_DAO-01.json
       clear_threshold: 0.7
     output:
-      directory: C:/sk/data/processed/sky_transmission
+      directory: C:/sk/data/sky_transmission/processed
     server:
       host: 0.0.0.0
       port: 8200

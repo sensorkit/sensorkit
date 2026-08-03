@@ -190,7 +190,6 @@ services:
     volumes:
       - *config-file
       - *data-dir
-      - "/opt/sk/instrument_model_TakoTruck.json:/opt/sk/instrument_model_TakoTruck.json:ro"
     restart: unless-stopped
     depends_on:
       config:
