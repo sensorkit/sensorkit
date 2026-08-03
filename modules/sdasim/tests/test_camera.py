@@ -24,6 +24,7 @@ from sensorkit.std import (
     ConfigureCameraCooler,
     ConfigureCameraSensor,
     ExposureInfo,
+    FocusPosition,
     FrameType,
     MountAxis,
     TemperatureUnit,
@@ -53,6 +54,11 @@ def fake_mount_sub(
     return SimpleNamespace(cache=cache)
 
 
+def fake_focuser_sub(position: float):
+    """A stand-in for a started focuser ContextSubscription."""
+    return SimpleNamespace(cache={FocusPosition: FocusPosition(position=position)})
+
+
 def make_camera(**overrides) -> SdasimCamera:
     """Build a camera with its runtime state wired up but the engine mocked."""
     config = SdasimCameraConfig(sdasim_config="scene.yaml", **overrides)
@@ -72,11 +78,14 @@ def make_camera(**overrides) -> SdasimCamera:
     camera._engine = engine
     camera._mount_sub = fake_mount_sub(6.0, 20.0)  # -> point_ra 90 deg, sidereal
     camera._rotator_sub = None
+    camera._focuser_sub = None
     camera._bin_x = camera._bin_y = 1
     camera._temperature = config.temperature
     camera._num_targets = None
     camera._mount_ra_rate = 0.0
     camera._mount_dec_rate = 0.0
+    camera._focus_position = None
+    camera._defocus_um = None
     camera._capture_lock = asyncio.Lock()
     camera._capture_task = None
     camera.device_connected = True
@@ -149,6 +158,25 @@ class TestCapture:
         args = camera._engine.render_frame.call_args.args
         assert args[3] == pytest.approx(0.5)
         assert args[4] == pytest.approx(-0.25)
+
+    @pytest.mark.asyncio
+    async def test_capture_converts_focus_steps_to_defocus_um(self, device_impl):
+        camera = make_camera(
+            focuser_entity="Focuser", microns_per_step=2.0, best_focus_position=25000.0
+        )
+        camera._focuser_sub = fake_focuser_sub(25500.0)
+        await camera.camera_capture(CameraCapture(integration_time=0.0, context=Context()))
+        args = camera._engine.render_frame.call_args.args
+        assert args[7] == pytest.approx(1000.0)  # (25500 - 25000) * 2.0 um/step
+        assert camera._focus_position == 25500.0
+        assert camera._defocus_um == pytest.approx(1000.0)
+
+    @pytest.mark.asyncio
+    async def test_capture_without_focuser_passes_none(self, device_impl):
+        camera = make_camera()
+        await camera.camera_capture(CameraCapture(integration_time=0.0, context=Context()))
+        assert camera._engine.render_frame.call_args.args[7] is None
+        assert camera._defocus_um is None
 
     @pytest.mark.asyncio
     async def test_capture_no_datagraph_is_safe(self, device_impl):

@@ -40,6 +40,7 @@ class SdasimEngine:
         self._base_config = None
         self._scene = None
         self._scene_exposure: float | None = None
+        self._warned_no_optics = False
 
     def initialize(self) -> None:
         """Load the sdasim scene config (the Scene itself is built lazily).
@@ -71,6 +72,16 @@ class SdasimEngine:
         return bool(self._base_config and getattr(self._base_config.catalog, "enabled", False))
 
     @property
+    def optics_enabled(self) -> bool:
+        """Whether the scene config enables sdasim's geometric defocus model.
+
+        getattr-guarded so the bridge also runs against sdasim versions that
+        predate the optics model (no `optics` field in SceneConfig).
+        """
+        optics = getattr(self._base_config, "optics", None) if self._base_config else None
+        return bool(optics is not None and getattr(optics, "enabled", False))
+
+    @property
     def default_point(self) -> tuple[float, float]:
         """Scene-configured star-field center (RA, Dec in deg) -- used as a
         fallback pointing when no live mount telemetry is available."""
@@ -99,6 +110,7 @@ class SdasimEngine:
         mount_dec_rate: float = 0.0,
         obs_time: str | None = None,
         bin_factor: int = 1,
+        defocus_um: float | None = None,
     ) -> tuple[np.ndarray, dict]:
         """Render one frame at the given pointing, mount rate, and time.
 
@@ -121,6 +133,10 @@ class SdasimEngine:
             mount_dec_rate: Inertial Dec rate of the pointing (deg/s).
             obs_time: ISO-8601 UTC observation time (defaults to the scene's).
             bin_factor: Symmetric NxN binning factor.
+            defocus_um: Commanded focal shift from best focus (microns), from
+                the focuser telemetry. Forwarded to sdasim's optics model when
+                the scene enables it; ignored (with a one-time warning) when
+                the scene has no optics model to consume it.
 
         Returns:
             `(image, metadata)` -- a 2D `np.uint16` array and sdasim's render
@@ -144,6 +160,16 @@ class SdasimEngine:
         )
         if obs_time is not None:
             overrides["obs_time"] = obs_time
+        if defocus_um is not None:
+            if self.optics_enabled:
+                overrides["defocus_um"] = defocus_um
+            elif not self._warned_no_optics:
+                self._warned_no_optics = True
+                logger.warning(
+                    "focuser telemetry provides defocus but the sdasim scene config "
+                    "has no enabled `optics:` section (or sdasim predates it) -- "
+                    "rendering stays in focus"
+                )
 
         result, meta = self._scene.render(0, **overrides)
         image = result.detach().cpu()

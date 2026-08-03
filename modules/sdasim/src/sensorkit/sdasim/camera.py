@@ -28,6 +28,7 @@ from sensorkit.std import (
     ConfigureCameraSensor,
     Connected,
     ExposureInfo,
+    FocusPosition,
     FrameType,
     RotatorPosition,
     Stop,
@@ -60,6 +61,9 @@ class SdasimCameraStatus(BaseModel):
     catalog_enabled: bool = False
     mount_connected: bool = False
     rotator_connected: bool = False
+    focuser_connected: bool = False
+    focus_position: float | None = None  # focuser steps consumed for the last frame
+    defocus_um: float | None = None  # focal shift fed to sdasim's optics model
 
 
 @sk.declare_device
@@ -120,12 +124,15 @@ class SdasimCamera:
         )
         self._mount_sub: ContextSubscription | None = None
         self._rotator_sub: ContextSubscription | None = None
+        self._focuser_sub: ContextSubscription | None = None
         self._bin_x = self.state.bin_x or self.config.binning
         self._bin_y = self.state.bin_y or self.config.binning
         self._temperature = self.config.temperature
         self._num_targets: int | None = None
         self._mount_ra_rate = 0.0
         self._mount_dec_rate = 0.0
+        self._focus_position: float | None = None
+        self._defocus_um: float | None = None
         self._capture_lock = asyncio.Lock()
         self._capture_task: asyncio.Task | None = None
 
@@ -218,11 +225,18 @@ class SdasimCamera:
             self._rotator_sub = sub
             logger.debug(f"sdasim: subscribed to rotator '{self.config.rotator_entity}'")
 
+        if self.config.focuser_entity:
+            sub = ContextSubscription(kit.entity(self.config.focuser_entity))
+            sub.add(FocusPosition)
+            await sub.start()
+            self._focuser_sub = sub
+            logger.debug(f"sdasim: subscribed to focuser '{self.config.focuser_entity}'")
+
     async def _stop_subscriptions(self):
-        for sub in (self._mount_sub, self._rotator_sub):
+        for sub in (self._mount_sub, self._rotator_sub, self._focuser_sub):
             if sub is not None:
                 await sub.stop()
-        self._mount_sub = self._rotator_sub = None
+        self._mount_sub = self._rotator_sub = self._focuser_sub = None
 
     @property
     def _mount_connected(self) -> bool:
@@ -233,6 +247,13 @@ class SdasimCamera:
         return (
             self._rotator_sub is not None
             and self._rotator_sub.cache.get(RotatorPosition) is not None
+        )
+
+    @property
+    def _focuser_connected(self) -> bool:
+        return (
+            self._focuser_sub is not None
+            and self._focuser_sub.cache.get(FocusPosition) is not None
         )
 
     @staticmethod
@@ -266,6 +287,19 @@ class SdasimCamera:
             point_ra, point_dec = self._engine.default_point
             self._mount_ra_rate = self._mount_dec_rate = 0.0
 
+        # Live focuser position (if configured) -> commanded defocus in microns
+        # for sdasim's optics model. Same passive-telemetry pattern as the mount:
+        # whatever device implements the focuser (OmniSim, TheSky, real hardware)
+        # publishes FocusPosition; the camera just reads the latest value.
+        self._focus_position = None
+        self._defocus_um = None
+        focus = self._focuser_sub.cache.get(FocusPosition) if self._focuser_sub else None
+        if focus is not None:
+            self._focus_position = focus.position
+            self._defocus_um = (
+                focus.position - self.config.best_focus_position
+            ) * self.config.microns_per_step
+
         exposure_start = datetime.now(UTC)
         obs_time = exposure_start.isoformat()
 
@@ -288,6 +322,7 @@ class SdasimCamera:
                 self._mount_dec_rate,
                 obs_time,
                 bin_factor,
+                self._defocus_um,
             )
             remaining = exposure_seconds - (loop.time() - t0)
             if remaining > 0:
@@ -373,6 +408,9 @@ class SdasimCamera:
                             catalog_enabled=self._engine.catalog_enabled,
                             mount_connected=self._mount_connected,
                             rotator_connected=self._rotator_connected,
+                            focuser_connected=self._focuser_connected,
+                            focus_position=self._focus_position,
+                            defocus_um=self._defocus_um,
                         )
                     )
             except Exception as e:
@@ -387,6 +425,9 @@ class SdasimCameraConfig(BaseModel):
     sdasim_config: str  # path to the sdasim scene YAML (required)
     mount_entity: str | None = None
     rotator_entity: str | None = None
+    focuser_entity: str | None = None  # entity publishing FocusPosition (steps)
+    microns_per_step: float = 1.0  # focuser mechanism scale: steps -> microns of focal shift
+    best_focus_position: float = 0.0  # focuser position (steps) at best focus
     device: str = "cpu"  # torch device for sdasim ("cpu", "cuda", "mps", "auto")
     temperature: float = -10.0  # simulated cooler setpoint (°C)
     binning: int = 1  # default symmetric binning factor
