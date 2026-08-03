@@ -163,26 +163,26 @@ class TheSkyTelescope(TheSkyDevice):
             var Out;
             var sk6DocProp_Latitude = 0;
             var sk6DocProp_Longitude = 1;
-            var sk6DocProp_TimeZone = 2;
             var sk6DocProp_Elevation = 3;
             sky6StarChart.DocumentProperty(sk6DocProp_Latitude);
             dLat = sky6StarChart.DocPropOut
             sky6StarChart.DocumentProperty(sk6DocProp_Longitude);
             dLon = sky6StarChart.DocPropOut
-            sky6StarChart.DocumentProperty(sk6DocProp_TimeZone);
-            dTz = sky6StarChart.DocPropOut
             sky6StarChart.DocumentProperty(sk6DocProp_Elevation);
             dEle = sky6StarChart.DocPropOut
             Out = [
                 dLat,
                 dLon,
-                dTz,
                 dEle
             ];
             """
         )
-        self._site_lat, self._site_lon, time_zone, self._site_elev = [float(x) for x in resp.split(",")]
-        self._site_lon = -self._site_lon if time_zone < 0 else self._site_lon
+        self._site_lat, self._site_lon, self._site_elev = [float(x) for x in resp.split(",")]
+
+        # TheSky reports longitude positive-WEST; Geodetic and EarthLocation are
+        # positive-EAST, so the sign always flips. Verified empirically against
+        # TheSky's own ComputeLocalSiderealTime.
+        self._site_lon = -self._site_lon
         self._geodetic = Geodetic(
             lon=self._site_lon,
             lat=self._site_lat,
