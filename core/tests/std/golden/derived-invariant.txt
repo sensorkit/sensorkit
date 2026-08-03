@@ -1,0 +1,56 @@
+=== recover ===
+phases:
+- name: reconnect
+  entries:
+  - ops:
+    - op: Connect
+      optional: true
+    match: all
+- name: halt
+  entries:
+  - ops:
+    - op: Stop
+      optional: true
+    match: all
+on_failure: continue
+--- graph ---
+on_failure: continue
+[reconnect]
+    Connect            tcs-1 (device @ <root>)  (optional)
+    Connect            dome-1 (device @ <root>)  (optional)
+    Connect            foc-1 (device @ ota)  (optional)
+    Connect            rot-1 (device @ ota)  (optional)
+    Connect            cover-1 (device @ ota)  (optional)
+    Connect            cam-1 (device @ ota/primary)  (optional)
+    Connect            fw-1 (device @ ota/primary)  (optional)
+[halt]
+    Stop               tcs-1 (device @ <root>)  (optional)
+    Stop               dome-1 (device @ <root>)  (optional)
+    Stop               foc-1 (device @ ota)  (optional)
+    Stop               rot-1 (device @ ota)  (optional)
+    Stop               cover-1 (device @ ota)  (optional)
+    Stop               cam-1 (device @ ota/primary)  (optional)
+    Stop               fw-1 (device @ ota/primary)  (optional)
+=== stop ===
+phases:
+- name: halt
+  entries:
+  - ops:
+    - op: Stop
+      optional: true
+    trait: mount
+  - ops:
+    - op: Stop
+      optional: true
+    trait: enclosure
+  - ops:
+    - op: Stop
+      optional: true
+    trait: mirror_cover
+on_failure: continue
+--- graph ---
+on_failure: continue
+[halt]
+    Stop               tcs-1 (mount @ <root>)  (optional)
+    Stop               dome-1 (enclosure @ <root>)  (optional)
+    Stop               cover-1 (mirror_cover @ ota)  (optional)

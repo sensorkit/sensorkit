@@ -1,0 +1,312 @@
+=== concurrent_dome_deinit_close=F  concurrent_dome_and_mount_deinit=F  always_deinit_dome=F ===
+phases:
+- name: optics
+  entries:
+  - ops:
+    - op: CloseMirrorCover
+    trait: mirror_cover
+- name: mount
+  entries:
+  - ops:
+    - op: Deinit
+    trait: mount
+- name: halt
+  entries:
+  - ops:
+    - op: Stop
+      optional: true
+      on_failure: continue
+    trait: enclosure
+- name: enclosure
+  entries:
+  - ops:
+    - op: CloseEnclosure
+    - op: Deinit
+    trait: enclosure
+on_failure: stop
+--- graph ---
+on_failure: stop
+[optics]
+    CloseMirrorCover   cover-1 (mirror_cover @ ota)
+[mount]
+    Deinit             tcs-1 (mount @ <root>)
+[halt]
+    Stop               dome-1 (enclosure @ <root>)  (continue, optional)
+[enclosure]
+    CloseEnclosure     dome-1 (enclosure @ <root>)
+[enclosure]
+    Deinit             dome-1 (enclosure @ <root>)
+=== concurrent_dome_deinit_close=F  concurrent_dome_and_mount_deinit=F  always_deinit_dome=T ===
+phases:
+- name: optics
+  entries:
+  - ops:
+    - op: CloseMirrorCover
+    trait: mirror_cover
+- name: mount
+  entries:
+  - ops:
+    - op: Deinit
+    trait: mount
+- name: halt
+  entries:
+  - ops:
+    - op: Stop
+      optional: true
+      on_failure: continue
+    trait: enclosure
+- name: enclosure
+  entries:
+  - ops:
+    - op: CloseEnclosure
+    - op: Deinit
+    trait: enclosure
+on_failure: skip
+--- graph ---
+on_failure: skip
+[optics]
+    CloseMirrorCover   cover-1 (mirror_cover @ ota)
+[mount]
+    Deinit             tcs-1 (mount @ <root>)
+[halt]
+    Stop               dome-1 (enclosure @ <root>)  (continue, optional)
+[enclosure]
+    CloseEnclosure     dome-1 (enclosure @ <root>)
+[enclosure]
+    Deinit             dome-1 (enclosure @ <root>)
+=== concurrent_dome_deinit_close=F  concurrent_dome_and_mount_deinit=T  always_deinit_dome=F ===
+phases:
+- name: optics
+  entries:
+  - ops:
+    - op: CloseMirrorCover
+    trait: mirror_cover
+- name: mount
+  entries:
+  - ops:
+    - op: Deinit
+    trait: mount
+- name: halt
+  entries:
+  - ops:
+    - op: Stop
+      optional: true
+      on_failure: continue
+    trait: enclosure
+  after:
+  - optics
+- name: enclosure
+  entries:
+  - ops:
+    - op: CloseEnclosure
+    - op: Deinit
+    trait: enclosure
+on_failure: stop
+--- graph ---
+on_failure: stop
+[optics]
+    CloseMirrorCover   cover-1 (mirror_cover @ ota)
+[mount + halt]
+    Deinit             tcs-1 (mount @ <root>)
+    Stop               dome-1 (enclosure @ <root>)  (continue, optional)
+[enclosure]
+    CloseEnclosure     dome-1 (enclosure @ <root>)
+[enclosure]
+    Deinit             dome-1 (enclosure @ <root>)
+=== concurrent_dome_deinit_close=F  concurrent_dome_and_mount_deinit=T  always_deinit_dome=T ===
+phases:
+- name: optics
+  entries:
+  - ops:
+    - op: CloseMirrorCover
+    trait: mirror_cover
+- name: mount
+  entries:
+  - ops:
+    - op: Deinit
+    trait: mount
+- name: halt
+  entries:
+  - ops:
+    - op: Stop
+      optional: true
+      on_failure: continue
+    trait: enclosure
+  after:
+  - optics
+- name: enclosure
+  entries:
+  - ops:
+    - op: CloseEnclosure
+    - op: Deinit
+    trait: enclosure
+on_failure: skip
+--- graph ---
+on_failure: skip
+[optics]
+    CloseMirrorCover   cover-1 (mirror_cover @ ota)
+[mount + halt]
+    Deinit             tcs-1 (mount @ <root>)
+    Stop               dome-1 (enclosure @ <root>)  (continue, optional)
+[enclosure]
+    CloseEnclosure     dome-1 (enclosure @ <root>)
+[enclosure]
+    Deinit             dome-1 (enclosure @ <root>)
+=== concurrent_dome_deinit_close=T  concurrent_dome_and_mount_deinit=F  always_deinit_dome=F ===
+phases:
+- name: optics
+  entries:
+  - ops:
+    - op: CloseMirrorCover
+    trait: mirror_cover
+- name: mount
+  entries:
+  - ops:
+    - op: Deinit
+    trait: mount
+- name: halt
+  entries:
+  - ops:
+    - op: Stop
+      optional: true
+      on_failure: continue
+    trait: enclosure
+- name: enclosure
+  entries:
+  - ops:
+    - op: CloseEnclosure
+    trait: enclosure
+  - ops:
+    - op: Deinit
+    trait: enclosure
+on_failure: stop
+--- graph ---
+on_failure: stop
+[optics]
+    CloseMirrorCover   cover-1 (mirror_cover @ ota)
+[mount]
+    Deinit             tcs-1 (mount @ <root>)
+[halt]
+    Stop               dome-1 (enclosure @ <root>)  (continue, optional)
+[enclosure]
+    CloseEnclosure     dome-1 (enclosure @ <root>)
+    Deinit             dome-1 (enclosure @ <root>)
+=== concurrent_dome_deinit_close=T  concurrent_dome_and_mount_deinit=F  always_deinit_dome=T ===
+phases:
+- name: optics
+  entries:
+  - ops:
+    - op: CloseMirrorCover
+    trait: mirror_cover
+- name: mount
+  entries:
+  - ops:
+    - op: Deinit
+    trait: mount
+- name: halt
+  entries:
+  - ops:
+    - op: Stop
+      optional: true
+      on_failure: continue
+    trait: enclosure
+- name: enclosure
+  entries:
+  - ops:
+    - op: CloseEnclosure
+    trait: enclosure
+  - ops:
+    - op: Deinit
+    trait: enclosure
+on_failure: skip
+--- graph ---
+on_failure: skip
+[optics]
+    CloseMirrorCover   cover-1 (mirror_cover @ ota)
+[mount]
+    Deinit             tcs-1 (mount @ <root>)
+[halt]
+    Stop               dome-1 (enclosure @ <root>)  (continue, optional)
+[enclosure]
+    CloseEnclosure     dome-1 (enclosure @ <root>)
+    Deinit             dome-1 (enclosure @ <root>)
+=== concurrent_dome_deinit_close=T  concurrent_dome_and_mount_deinit=T  always_deinit_dome=F ===
+phases:
+- name: optics
+  entries:
+  - ops:
+    - op: CloseMirrorCover
+    trait: mirror_cover
+- name: mount
+  entries:
+  - ops:
+    - op: Deinit
+    trait: mount
+- name: halt
+  entries:
+  - ops:
+    - op: Stop
+      optional: true
+      on_failure: continue
+    trait: enclosure
+  after:
+  - optics
+- name: enclosure
+  entries:
+  - ops:
+    - op: CloseEnclosure
+    trait: enclosure
+  - ops:
+    - op: Deinit
+    trait: enclosure
+on_failure: stop
+--- graph ---
+on_failure: stop
+[optics]
+    CloseMirrorCover   cover-1 (mirror_cover @ ota)
+[mount + halt]
+    Deinit             tcs-1 (mount @ <root>)
+    Stop               dome-1 (enclosure @ <root>)  (continue, optional)
+[enclosure]
+    CloseEnclosure     dome-1 (enclosure @ <root>)
+    Deinit             dome-1 (enclosure @ <root>)
+=== concurrent_dome_deinit_close=T  concurrent_dome_and_mount_deinit=T  always_deinit_dome=T ===
+phases:
+- name: optics
+  entries:
+  - ops:
+    - op: CloseMirrorCover
+    trait: mirror_cover
+- name: mount
+  entries:
+  - ops:
+    - op: Deinit
+    trait: mount
+- name: halt
+  entries:
+  - ops:
+    - op: Stop
+      optional: true
+      on_failure: continue
+    trait: enclosure
+  after:
+  - optics
+- name: enclosure
+  entries:
+  - ops:
+    - op: CloseEnclosure
+    trait: enclosure
+  - ops:
+    - op: Deinit
+    trait: enclosure
+on_failure: skip
+--- graph ---
+on_failure: skip
+[optics]
+    CloseMirrorCover   cover-1 (mirror_cover @ ota)
+[mount + halt]
+    Deinit             tcs-1 (mount @ <root>)
+    Stop               dome-1 (enclosure @ <root>)  (continue, optional)
+[enclosure]
+    CloseEnclosure     dome-1 (enclosure @ <root>)
+    Deinit             dome-1 (enclosure @ <root>)

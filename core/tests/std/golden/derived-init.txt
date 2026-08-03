@@ -1,0 +1,258 @@
+=== concurrent_dome_init_open=F  concurrent_dome_and_mount_init=F  concurrent_mount_and_mirror_cover_init=F ===
+phases:
+- name: enclosure
+  entries:
+  - ops:
+    - op: Init
+    - op: OpenEnclosure
+    trait: enclosure
+- name: mount
+  entries:
+  - ops:
+    - op: Init
+    trait: mount
+  after:
+  - enclosure
+- name: optics
+  entries:
+  - ops:
+    - op: OpenMirrorCover
+    trait: mirror_cover
+  after:
+  - enclosure
+  - mount
+on_failure: stop
+--- graph ---
+on_failure: stop
+[enclosure]
+    Init               dome-1 (enclosure @ <root>)
+[enclosure]
+    OpenEnclosure      dome-1 (enclosure @ <root>)
+[mount]
+    Init               tcs-1 (mount @ <root>)
+[optics]
+    OpenMirrorCover    cover-1 (mirror_cover @ ota)
+=== concurrent_dome_init_open=F  concurrent_dome_and_mount_init=F  concurrent_mount_and_mirror_cover_init=T ===
+phases:
+- name: enclosure
+  entries:
+  - ops:
+    - op: Init
+    - op: OpenEnclosure
+    trait: enclosure
+- name: mount
+  entries:
+  - ops:
+    - op: Init
+    trait: mount
+  after:
+  - enclosure
+- name: optics
+  entries:
+  - ops:
+    - op: OpenMirrorCover
+    trait: mirror_cover
+  after:
+  - enclosure
+on_failure: stop
+--- graph ---
+on_failure: stop
+[enclosure]
+    Init               dome-1 (enclosure @ <root>)
+[enclosure]
+    OpenEnclosure      dome-1 (enclosure @ <root>)
+[mount + optics]
+    Init               tcs-1 (mount @ <root>)
+    OpenMirrorCover    cover-1 (mirror_cover @ ota)
+=== concurrent_dome_init_open=F  concurrent_dome_and_mount_init=T  concurrent_mount_and_mirror_cover_init=F ===
+phases:
+- name: enclosure
+  entries:
+  - ops:
+    - op: Init
+    - op: OpenEnclosure
+    trait: enclosure
+- name: mount
+  entries:
+  - ops:
+    - op: Init
+    trait: mount
+  after: []
+- name: optics
+  entries:
+  - ops:
+    - op: OpenMirrorCover
+    trait: mirror_cover
+  after:
+  - enclosure
+  - mount
+on_failure: stop
+--- graph ---
+on_failure: stop
+[enclosure + mount]
+    Init               dome-1 (enclosure @ <root>)
+    Init               tcs-1 (mount @ <root>)
+[enclosure]
+    OpenEnclosure      dome-1 (enclosure @ <root>)
+[optics]
+    OpenMirrorCover    cover-1 (mirror_cover @ ota)
+=== concurrent_dome_init_open=F  concurrent_dome_and_mount_init=T  concurrent_mount_and_mirror_cover_init=T ===
+phases:
+- name: enclosure
+  entries:
+  - ops:
+    - op: Init
+    - op: OpenEnclosure
+    trait: enclosure
+- name: mount
+  entries:
+  - ops:
+    - op: Init
+    trait: mount
+  after: []
+- name: optics
+  entries:
+  - ops:
+    - op: OpenMirrorCover
+    trait: mirror_cover
+  after: []
+on_failure: stop
+--- graph ---
+on_failure: stop
+[enclosure + mount + optics]
+    Init               dome-1 (enclosure @ <root>)
+    Init               tcs-1 (mount @ <root>)
+    OpenMirrorCover    cover-1 (mirror_cover @ ota)
+[enclosure]
+    OpenEnclosure      dome-1 (enclosure @ <root>)
+=== concurrent_dome_init_open=T  concurrent_dome_and_mount_init=F  concurrent_mount_and_mirror_cover_init=F ===
+phases:
+- name: enclosure
+  entries:
+  - ops:
+    - op: Init
+    trait: enclosure
+  - ops:
+    - op: OpenEnclosure
+    trait: enclosure
+- name: mount
+  entries:
+  - ops:
+    - op: Init
+    trait: mount
+  after:
+  - enclosure
+- name: optics
+  entries:
+  - ops:
+    - op: OpenMirrorCover
+    trait: mirror_cover
+  after:
+  - enclosure
+  - mount
+on_failure: stop
+--- graph ---
+on_failure: stop
+[enclosure]
+    Init               dome-1 (enclosure @ <root>)
+    OpenEnclosure      dome-1 (enclosure @ <root>)
+[mount]
+    Init               tcs-1 (mount @ <root>)
+[optics]
+    OpenMirrorCover    cover-1 (mirror_cover @ ota)
+=== concurrent_dome_init_open=T  concurrent_dome_and_mount_init=F  concurrent_mount_and_mirror_cover_init=T ===
+phases:
+- name: enclosure
+  entries:
+  - ops:
+    - op: Init
+    trait: enclosure
+  - ops:
+    - op: OpenEnclosure
+    trait: enclosure
+- name: mount
+  entries:
+  - ops:
+    - op: Init
+    trait: mount
+  after:
+  - enclosure
+- name: optics
+  entries:
+  - ops:
+    - op: OpenMirrorCover
+    trait: mirror_cover
+  after:
+  - enclosure
+on_failure: stop
+--- graph ---
+on_failure: stop
+[enclosure]
+    Init               dome-1 (enclosure @ <root>)
+    OpenEnclosure      dome-1 (enclosure @ <root>)
+[mount + optics]
+    Init               tcs-1 (mount @ <root>)
+    OpenMirrorCover    cover-1 (mirror_cover @ ota)
+=== concurrent_dome_init_open=T  concurrent_dome_and_mount_init=T  concurrent_mount_and_mirror_cover_init=F ===
+phases:
+- name: enclosure
+  entries:
+  - ops:
+    - op: Init
+    trait: enclosure
+  - ops:
+    - op: OpenEnclosure
+    trait: enclosure
+- name: mount
+  entries:
+  - ops:
+    - op: Init
+    trait: mount
+  after: []
+- name: optics
+  entries:
+  - ops:
+    - op: OpenMirrorCover
+    trait: mirror_cover
+  after:
+  - enclosure
+  - mount
+on_failure: stop
+--- graph ---
+on_failure: stop
+[enclosure + mount]
+    Init               dome-1 (enclosure @ <root>)
+    OpenEnclosure      dome-1 (enclosure @ <root>)
+    Init               tcs-1 (mount @ <root>)
+[optics]
+    OpenMirrorCover    cover-1 (mirror_cover @ ota)
+=== concurrent_dome_init_open=T  concurrent_dome_and_mount_init=T  concurrent_mount_and_mirror_cover_init=T ===
+phases:
+- name: enclosure
+  entries:
+  - ops:
+    - op: Init
+    trait: enclosure
+  - ops:
+    - op: OpenEnclosure
+    trait: enclosure
+- name: mount
+  entries:
+  - ops:
+    - op: Init
+    trait: mount
+  after: []
+- name: optics
+  entries:
+  - ops:
+    - op: OpenMirrorCover
+    trait: mirror_cover
+  after: []
+on_failure: stop
+--- graph ---
+on_failure: stop
+[enclosure + mount + optics]
+    Init               dome-1 (enclosure @ <root>)
+    OpenEnclosure      dome-1 (enclosure @ <root>)
+    Init               tcs-1 (mount @ <root>)
+    OpenMirrorCover    cover-1 (mirror_cover @ ota)
