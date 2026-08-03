@@ -4,33 +4,31 @@ phases:
   entries:
   - ops:
     - op: Connect
-      optional: true
     match: all
 - name: halt
   entries:
   - ops:
     - op: Stop
-      optional: true
     match: all
 on_failure: continue
 --- graph ---
 on_failure: continue
 [reconnect]
-    Connect            tcs-1 (device @ <root>)  (optional)
-    Connect            dome-1 (device @ <root>)  (optional)
-    Connect            foc-1 (device @ ota)  (optional)
-    Connect            rot-1 (device @ ota)  (optional)
-    Connect            cover-1 (device @ ota)  (optional)
-    Connect            cam-1 (device @ ota/primary)  (optional)
-    Connect            fw-1 (device @ ota/primary)  (optional)
+    Connect            tcs-1 (device @ <root>)
+    Connect            dome-1 (device @ <root>)
+    Connect            foc-1 (device @ ota)
+    Connect            rot-1 (device @ ota)
+    Connect            cover-1 (device @ ota)
+    Connect            cam-1 (device @ ota/primary)
+    Connect            fw-1 (device @ ota/primary)
 [halt]
-    Stop               tcs-1 (device @ <root>)  (optional)
-    Stop               dome-1 (device @ <root>)  (optional)
-    Stop               foc-1 (device @ ota)  (optional)
-    Stop               rot-1 (device @ ota)  (optional)
-    Stop               cover-1 (device @ ota)  (optional)
-    Stop               cam-1 (device @ ota/primary)  (optional)
-    Stop               fw-1 (device @ ota/primary)  (optional)
+    Stop               tcs-1 (device @ <root>)
+    Stop               dome-1 (device @ <root>)
+    Stop               foc-1 (device @ ota)
+    Stop               rot-1 (device @ ota)
+    Stop               cover-1 (device @ ota)
+    Stop               cam-1 (device @ ota/primary)
+    Stop               fw-1 (device @ ota/primary)
 === stop ===
 phases:
 - name: halt

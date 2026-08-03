@@ -19,6 +19,8 @@ passes nothing and gets frames with only the task's own context on them.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from collections.abc import Mapping
 
 import sensorkit.api as sk
@@ -26,9 +28,16 @@ from sensorkit.core.client import SensorKit
 from sensorkit.core.device import DeviceClient
 from sensorkit.std.collect import StandardCollectTask
 from sensorkit.std.sensor.config import SensorConfig
-from sensorkit.std.sensor.derive import capability_index, derive_plan
-from sensorkit.std.sensor.dispatch import DeviceContexts
-from sensorkit.workflow import CapabilityIndex, DeviceRef, RunReport, SensorPlan
+from sensorkit.std.sensor.derive import capability_index, derive_plan, timeouts
+from sensorkit.std.sensor.dispatch import DeviceContexts, Dispatcher, compile_supported
+from sensorkit.workflow import (
+    CapabilityIndex,
+    DeviceRef,
+    LifecycleError,
+    LifecycleRunner,
+    RunReport,
+    SensorPlan,
+)
 
 
 class Sensor:
@@ -50,26 +59,66 @@ class Sensor:
         self.plan = plan
         self.devices = devices
         self.capabilities = capabilities
+        self.lifecycle = LifecycleRunner(
+            Dispatcher(plan, devices, capabilities, timeouts(config.policies)))
 
     async def init(self) -> RunReport:
         """Bring the sensor up, undoing the attempt if it fails part way."""
-        raise NotImplementedError
+        return await self.bring_up("init")
 
     async def standby(self) -> RunReport:
         """Bring the sensor to standby."""
-        raise NotImplementedError
+        return await self.bring_up("standby")
 
     async def shutdown(self) -> RunReport:
         """Take the sensor down."""
-        raise NotImplementedError
+        return await self.run("shutdown")
 
     async def recover(self) -> RunReport:
         """Reconnect to every device and halt whatever is moving."""
-        raise NotImplementedError
+        return await self.run("recover")
 
     async def stop(self) -> RunReport:
         """Halt everything that moves under its own power."""
-        raise NotImplementedError
+        return await self.run("stop")
+
+    async def run(self, table: str) -> RunReport:
+        """Compile one of the plan's tables against its devices, and run it.
+
+        Args:
+            table: Which of the plan's tables to run.
+
+        Returns:
+            What every step did, degraded outcomes included.
+
+        Raises:
+            LifecycleError: A required step failed or never ran.
+        """
+        graph = compile_supported(self.plan.devices, self.plan.tables[table],
+                                  self.capabilities)
+
+        return await self.lifecycle.execute(graph, name=table)
+
+    async def bring_up(self, table: str) -> RunReport:
+        """Run a table that leaves the sensor operating, halting it if it does not.
+
+        Nothing is reversed automatically, and a table that undoes another is just
+        a table run deliberately — so the composition is here, where a reader sees
+        both halves at once, rather than folded into a graph.
+
+        A cancelled bring-up halts too. What the dispatcher stops is the op that
+        was in flight, and an operator aborting a bring-up wants everything the
+        table already started brought to rest.
+        """
+        try:
+            return await self.run(table)
+        except (LifecycleError, asyncio.CancelledError):
+            # Shielded because the halt matters most exactly when the run is being
+            # torn down: unshielded, it would be cancelled before it left.
+            with contextlib.suppress(BaseException):
+                await asyncio.shield(self.run("stop"))
+
+            raise
 
     async def collect(
         self,

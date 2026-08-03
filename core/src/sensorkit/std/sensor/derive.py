@@ -279,14 +279,19 @@ def _shutdown_table(policies: SensorPolicies) -> PhaseTable:
 def _recover_table() -> PhaseTable:
     # Two phases rather than one entry with two ops: one entry serializes per
     # device, which would let one device's Stop precede another's Connect.
+    #
+    # The ops are not optional. What a device has no command for is answered for
+    # at compile time, so `optional` here would additionally tolerate a device
+    # that has the command and refuses it — which is the one thing a recovery
+    # exists to report.
     return PhaseTable(
         name="recover",
         on_failure="continue",
         phases=(
             Phase(name="reconnect", entries=(
-                Entry(match="all", ops=_optional(Connect)),)),
+                Entry(match="all", ops=_ops(Connect)),)),
             Phase(name="halt", entries=(
-                Entry(match="all", ops=_optional(Stop)),)),
+                Entry(match="all", ops=_ops(Stop)),)),
         ),
     )
 
