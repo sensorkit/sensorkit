@@ -59,6 +59,12 @@ _SENSOR_TYPES = {
 class AlpacaCameraStatus(BaseModel):
     """ICameraV4 properties."""
 
+    # Identity (which physical rig / server produced the frame)
+    device_name: str | None = None
+    device_description: str | None = None
+    server_address: str | None = None
+    serial_number: str | None = None
+
     # State
     camera_state: str = "Idle"
     is_pulse_guiding: bool = False
@@ -171,6 +177,16 @@ class AlpacaCamera(AlpacaDevice):
         self._camera_y_size: int = 0
 
         c = self.camera
+
+        # Read device identity (static per connection). Serial is read via the standard
+        # Alpaca property if the driver exposes it, else falls back to the configured value;
+        # ZWO drivers currently expose no serial over Alpaca, so this is usually the config.
+        self._device_name = await self.get(c, "Name", None)
+        self._device_description = await self.get(c, "Description", None)
+        self._server_address = self.address
+        self._serial_number = await self.get(c, "SerialNumber", None) or (
+            self.config.serial_number or None
+        )
 
         # Read capabilities
         self._can_abort_exposure = await self.get(c, "CanAbortExposure", False)
@@ -396,6 +412,18 @@ class AlpacaCamera(AlpacaDevice):
             )
         )
 
+        # Device identity for FITS provenance. Set directly on the capture context because
+        # the controller only snapshots keyword types it explicitly subscribes to, and the
+        # camera is not among them — so publishing status alone would not reach the header.
+        context.set(
+            AlpacaCameraStatus(
+                device_name=self._device_name,
+                device_description=self._device_description,
+                server_address=self._server_address,
+                serial_number=self._serial_number,
+            )
+        )
+
         # GPS/timing metadata defaults (None = keyword omitted from FITS header)
         context.set_value("time_src", None)
         context.set_value("date_end", None)
@@ -508,6 +536,17 @@ class AlpacaCamera(AlpacaDevice):
                         "max_bin_y": self._max_bin_y,
                         "cooler_on": await self.get(c, "CoolerOn", False),
                     }
+
+                    # Identity
+                    for attr, key in (
+                        ("_device_name", "device_name"),
+                        ("_device_description", "device_description"),
+                        ("_server_address", "server_address"),
+                        ("_serial_number", "serial_number"),
+                    ):
+                        val = getattr(self, attr, None)
+                        if val is not None:
+                            properties[key] = val
 
                     # Sensor
                     for attr, key in (
@@ -644,6 +683,8 @@ class AlpacaCameraConfig(AlpacaDeviceConfig[AlpacaCamera]):
     temperature: float = -10.0
     status_frequency: float = 1.0
     timeout: float = 60.0
+    # Fallback serial number, used when the driver exposes none over Alpaca (e.g. ZWO).
+    serial_number: str = ""
 
     @override
     def create_device(self):
