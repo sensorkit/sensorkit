@@ -16,19 +16,19 @@ on_failure: continue
 [reconnect]
     Connect            tcs-1 (device @ <root>)
     Connect            dome-1 (device @ <root>)
-    Connect            foc-1 (device @ ota)
     Connect            rot-1 (device @ ota)
     Connect            cover-1 (device @ ota)
-    Connect            cam-1 (device @ ota/primary)
-    Connect            fw-1 (device @ ota/primary)
+    Connect            cam-1 (device @ ota/camera-1)
+    Connect            foc-1 (device @ ota/camera-1)
+    Connect            fw-1 (device @ ota/camera-1)
 [halt]
     Stop               tcs-1 (device @ <root>)
     Stop               dome-1 (device @ <root>)
-    Stop               foc-1 (device @ ota)
     Stop               rot-1 (device @ ota)
     Stop               cover-1 (device @ ota)
-    Stop               cam-1 (device @ ota/primary)
-    Stop               fw-1 (device @ ota/primary)
+    Stop               cam-1 (device @ ota/camera-1)
+    Stop               foc-1 (device @ ota/camera-1)
+    Stop               fw-1 (device @ ota/camera-1)
 === stop ===
 phases:
 - name: halt

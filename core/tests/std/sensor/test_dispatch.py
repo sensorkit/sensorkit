@@ -37,8 +37,8 @@ from sensorkit.std.optics import (
 )
 from sensorkit.std.sensor.config import SensorDevices, SensorPolicies
 from sensorkit.std.sensor.derive import (
+    CAMERA,
     OTA,
-    PRIMARY,
     capability_index,
     derive_structure,
     timeouts,
@@ -73,8 +73,8 @@ from sensorkit.workflow import (
     compile_table,
 )
 
-PRIMARY_PATH = (OTA, PRIMARY)
-"""Where the one instrument of a derived structure sits."""
+PRIMARY_PATH = (OTA, f"{CAMERA}-1")
+"""Where the first instrument of a derived structure sits."""
 
 DEVICE_COMMANDS: dict[str, tuple[type[DeviceCommand], ...]] = {
     "tcs-1": (Init, Deinit, Stop, Home, MoveToPark, SetParkPosition, FollowTarget,

@@ -127,6 +127,20 @@ StandardCollectTask(
 
 `sidereal_frames` is a small but practical SDA feature: within one rate-tracked satellite collect, chosen frame numbers switch the mount to sidereal tracking — giving you fixed-star frames for astrometric calibration in the same sequence.
 
+`camera_params` also takes a **list** of parameter sets, one per exposure:
+
+```python
+StandardCollectTask(
+    target=...,
+    camera_params=[
+        CameraParameterSet(integration_time_seconds=5.0, frame_count=3, filter_name="r"),
+        CameraParameterSet(integration_time_seconds=30.0, frame_count=1, filter_name="g"),
+    ],
+)
+```
+
+Whether those exposures happen at once is the sensor's answer, not the task's: each is matched to an instrument that can take it, so a sensor with one camera takes them in turn and a sensor with several takes that many concurrently — with the barriers between them derived from the optics, so a filter wheel two instruments share still serializes exactly the frames it would invalidate. Two exposures that cannot share one configuration epoch (one wheel, two filters) are refused rather than silently reordered, since which of them goes first is a science question. A list and `sidereal_frames` together is an error: the frame numbers would have no exposure to index into.
+
 You can also define your own task types (subclass `sk.Task`) and handle them in a custom controller — the scheduling machinery is the same.
 
 ## Targets

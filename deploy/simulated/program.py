@@ -20,10 +20,18 @@ class SimProgram:
     async def task_factory(self):
         return StandardCollectTask(
             target=AltAzTarget(coords=Horizontal(random.randint(0, 30), 85)),
-            camera_params=CameraParameterSet(
-                integration_time_seconds=5.0,
-                frame_count=3,
-            ),
+            camera_params=[
+                CameraParameterSet(
+                    integration_time_seconds=5.0,
+                    frame_count=3,
+                    filter_name="Red",
+                ),
+                CameraParameterSet(
+                    integration_time_seconds=5.0,
+                    frame_count=3,
+                    filter_name="Green",
+                ),
+            ],
             end_time=datetime.now(UTC) + timedelta(minutes=2),
         )
 

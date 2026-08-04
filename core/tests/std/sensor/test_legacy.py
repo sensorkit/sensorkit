@@ -287,8 +287,8 @@ def test_dec_to_dms_negative_with_fraction():
 def test_sensor_devices_required_only():
     d = SensorDevices(mount="m1", camera="c1")
     assert d.mount == "m1"
-    assert d.camera == "c1"
-    assert d.focuser is None
+    assert d.camera == ["c1"]
+    assert d.focuser == []
     assert d.dome is None
 
 
@@ -298,7 +298,14 @@ def test_sensor_devices_all_optional():
         filter_wheel="fw", mirror_cover="mc", dome="d",
     )
     assert d.dome == "d"
-    assert d.filter_wheel == "fw"
+    assert d.filter_wheel == ["fw"]
+
+
+def test_sensor_devices_accepts_multiple_cameras():
+    d = SensorDevices(mount="m", camera=["c1", "", "c2"])
+
+    assert d.camera == ["c1", "", "c2"]
+    assert d.refs() == ["m", "c1", "c2"]
 
 
 def test_sensor_policies_defaults():
@@ -377,6 +384,26 @@ async def test_sensor_all_devices(service_context):
     )
     LegacyDevices(impl, devices, SensorPolicies())
     assert len(impl.all_devices()) == 7
+
+
+@pytest.mark.asyncio
+async def test_sensor_refuses_a_second_camera(service_context):
+    """A sensor with two cameras is the workflow implementation's to drive."""
+    impl = await service_context.register_controller("ctrl")
+    devices = SensorDevices(mount="m", camera=["c1", "c2"])
+
+    with pytest.raises(ValueError, match="one camera"):
+        LegacyDevices(impl, devices, SensorPolicies())
+
+
+@pytest.mark.asyncio
+async def test_sensor_takes_a_camera_configured_as_a_list(service_context):
+    impl = await service_context.register_controller("ctrl")
+    devices = SensorDevices(mount="m", camera=["c1"], filter_wheel=[""])
+    sensor = LegacyDevices(impl, devices, SensorPolicies())
+
+    assert str(sensor.camera.entity) == "c1"
+    assert sensor.filter_wheel is None
 
 
 @pytest.mark.asyncio

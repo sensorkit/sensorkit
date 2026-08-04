@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal, Optional, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 import sensorkit.api as sk
 from sensorkit.astro.common import ReferenceFrame
@@ -95,15 +95,23 @@ class StandardCollectTask(sk.CollectTask):
       - AxisRates
       - SitePosition
 
+    Several exposures may be asked for at once, as a list. Whether they are taken
+    together or in turn is not the task's to say: each is matched to an instrument
+    that can take it, and a sensor with more than one takes them concurrently while
+    a sensor with one takes them in sequence.
+
     Attributes:
         task_type: Always "standard_collect" for this task type
         target: The astronomical target to observe (e.g., TLE, catalog object, ephemeris,
             ICRS coordinates, alt-az position, etc.)
         camera_params: Camera configuration including integration time, frame count,
-            binning, gain, frame type, and filter selection
+            binning, gain, frame type, and filter selection. A list asks for one
+            exposure per element
         end_time: *Advisory* deadline for task completion. Deprecated and slated for removal
-        sidereal_frames: List of frame numbers that should use sidereal tracking mode.
-            Defaults to empty list
+        sidereal_frames: Frame numbers that should use sidereal tracking mode, counted
+            within each exposure. Every instrument exposing at once switches together,
+            since the tracking mode is the mount's rather than a camera's. Defaults to
+            empty list
         target_id: Optional name or identifier of the object being observed. If not supplied,
             the handler may infer an identifier (e.g., NORAD ID for TLE targets, catalog name
             for catalog targets) on a per-target basis
@@ -111,7 +119,22 @@ class StandardCollectTask(sk.CollectTask):
 
     task_type: Literal["standard_collect"] = "standard_collect"
     target: Target
-    camera_params: CameraParameterSet
+    camera_params: CameraParameterSet | list[CameraParameterSet]
     end_time: datetime | None = None
     sidereal_frames: list[int] = Field(default_factory=list)
     target_id: str | None = None
+
+    @property
+    def exposures(self) -> tuple[CameraParameterSet, ...]:
+        """Every exposure asked for, however the task wrote them."""
+        if isinstance(self.camera_params, CameraParameterSet):
+            return (self.camera_params,)
+
+        return tuple(self.camera_params)
+
+    @model_validator(mode="after")
+    def _check_exposures(self) -> Self:
+        if not self.exposures:
+            raise ValueError("camera_params: a collect takes at least one exposure")
+
+        return self

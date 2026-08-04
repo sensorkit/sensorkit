@@ -52,8 +52,6 @@ automation:
       tasking:
         - program: SimulatedProgram
           priority: 5
-        - program: Burr
-          priority: 7
 
   contexts:
     standard_collect:
@@ -77,11 +75,17 @@ sensors:
 
     devices:
       mount: SimulatedMount
-      camera: SimulatedCamera
+      camera:
+        - SimulatedCamera
+        - SimulatedCamera2
       dome: SimulatedDome
-      filter_wheel: SimulatedFilterWheel
+      filter_wheel:
+        - SimulatedFilterWheel
+        - SimulatedFilterWheel2
       rotator: SimulatedRotator
-      focuser: SimulatedFocuser
+      focuser:
+        - SimulatedFocuser
+        - SimulatedFocuser2
 
     site_position:
       latitude_degrees: 36.063067
@@ -126,6 +130,22 @@ otto:
 alpaca:
   - id: Alpaca
     endpoints:
+      - host: localhost
+        port: 30001
+        protocol: http
+        devices:
+          SimulatedCamera2:
+            device_type: camera
+            device_number: 0
+            status_frequency: 1.0
+          SimulatedFilterWheel2:
+            device_type: filter_wheel
+            device_number: 0
+            status_frequency: 1.0
+          SimulatedFocuser2:
+            device_type: focuser
+            device_number: 0
+            status_frequency: 1.0
       - host: localhost
         port: 30000
         protocol: http

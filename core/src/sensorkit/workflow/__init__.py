@@ -33,6 +33,7 @@ from sensorkit.workflow.capability import (
     Selector,
     build_manifest,
     capabilities_of,
+    coalesce,
     matches,
     merge_keywords,
     portability,
@@ -131,7 +132,7 @@ __all__ = [
     "DeviceCapabilities", "ExposureRequest", "InstrumentEntry", "KeywordMatch",
     "NO_CAPABILITIES", "Placement", "RequestReport", "RequestResolver",
     "RequestStep", "Scope", "Selector", "build_manifest", "capabilities_of",
-    "matches", "merge_keywords", "portability", "select",
+    "coalesce", "matches", "merge_keywords", "portability", "select",
     # deployment
     "SensorPlan",
 ]

@@ -9,10 +9,23 @@ and the legacy implementation alike. One direction of import, and no cycle.
 from __future__ import annotations
 
 from enum import IntEnum
+from typing import Annotated, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field, model_validator
 
 from sensorkit.astro.common import SitePosition
+
+
+def _as_list(v: object) -> object:
+    """Accept a single device where a list is declared: `camera: cam-1`."""
+    if v is None:
+        return []
+
+    return v if isinstance(v, list) else [v]
+
+
+type DeviceRefs = Annotated[list[str], BeforeValidator(_as_list)]
+"""Device references for a field that may name one device per camera."""
 
 
 class Implementation(IntEnum):
@@ -26,23 +39,53 @@ class Implementation(IntEnum):
 
 
 class SensorDevices(BaseModel):
-    """Device entity references for sensor control."""
+    """Device entity references for sensor control.
+
+    A sensor may carry several cameras, and what each one looks through is its own:
+    `camera`, `focuser` and `filter_wheel` are lists paired by position, so the
+    second focuser belongs to the second camera. Leave an entry empty to say that
+    camera has none. Everything else is shared by the whole sensor.
+
+    Each of the paired fields also accepts a single device in place of a list, which
+    is what a one-camera site writes.
+    """
 
     mount: str | None = None
-    camera: str | None = None
-    focuser: str | None = None
+    camera: DeviceRefs = Field(default_factory=list)
+    focuser: DeviceRefs = Field(default_factory=list)
     rotator: str | None = None
-    filter_wheel: str | None = None
+    filter_wheel: DeviceRefs = Field(default_factory=list)
     mirror_cover: str | None = None
     dome: str | None = None
+
+    @model_validator(mode="after")
+    def _paired_with_cameras(self) -> Self:
+        # With no camera configured these devices pair with nothing, and stay
+        # addressable per-device on their own.
+        if not self.camera:
+            return self
+
+        for name in ("focuser", "filter_wheel"):
+            refs: list[str] = getattr(self, name)
+
+            if refs and len(refs) != len(self.camera):
+                raise ValueError(
+                    f"{name} must name one device per camera, empty for a camera "
+                    f"without one: {len(refs)} given for {len(self.camera)} cameras")
+
+        return self
 
     def refs(self) -> list[str]:
         """Every configured device reference, in field order and without duplicates."""
         seen: dict[str, None] = {}
 
         for name in type(self).model_fields:
-            if ref := getattr(self, name):
-                seen.setdefault(ref)
+            value = getattr(self, name)
+            refs = value if isinstance(value, list) else [value]
+
+            for ref in refs:
+                if ref:
+                    seen.setdefault(ref)
 
         return list(seen)
 

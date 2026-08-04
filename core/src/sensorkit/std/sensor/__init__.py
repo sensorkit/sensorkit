@@ -41,11 +41,21 @@ from sensorkit.std.sensor.legacy import LegacyDevices, LegacySensor
 from sensorkit.std.sensor.translate import (
     SCIENCE,
     SIDEREAL,
+    Assignment,
     Translation,
     camera_settings,
+    candidates,
+    commanded,
+    commanded_target,
+    descriptor,
+    duration,
+    exposure_request,
+    fits,
     frame_targets,
-    instrument,
-    runs,
+    pack,
+    requests,
+    resolve_wave,
+    schedule,
     target_id,
     translate,
 )
@@ -60,8 +70,10 @@ __all__ = [
     "DeviceContexts", "Dispatcher", "FrameKeywords", "Handler", "Listener",
     "OpOutcome", "compile_supported", "unresolved", "unsupported",
     # translate: a standard collect task as a request
-    "SCIENCE", "SIDEREAL", "Translation", "camera_settings", "frame_targets",
-    "instrument", "runs", "target_id", "translate",
+    "SCIENCE", "SIDEREAL", "Assignment", "Translation", "camera_settings",
+    "candidates", "commanded", "commanded_target", "descriptor", "duration",
+    "exposure_request", "fits", "frame_targets", "pack", "requests",
+    "resolve_wave", "schedule", "target_id", "translate",
     # client: the sensor, with no controller
     "Sensor", "connect_sensor", "pointed_at",
     # impl: the sensor as a service

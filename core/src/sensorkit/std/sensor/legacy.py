@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Sequence
 from typing import Any
 
 from loguru import logger
@@ -32,6 +32,23 @@ from sensorkit.std.sensor.config import SensorConfig, SensorDevices, SensorPolic
 from sensorkit.std.traits import Connect, Deinit, Init, Stop
 
 
+def one_of(refs: Sequence[str], what: str) -> str | None:
+    """The single device this implementation addresses, out of what config paired
+    per camera.
+
+    Several is a configuration error rather than a silent choice of one: a sensor
+    with more than one camera is what the workflow implementation is for, and
+    quietly leaving hardware unattached is worse than refusing to start.
+    """
+    named = [ref for ref in refs if ref]
+
+    if len(named) > 1:
+        raise ValueError(f"legacy sensor control drives one {what}, "
+                         f"and {len(named)} are configured: {named}")
+
+    return named[0] if named else None
+
+
 class LegacyDevices:
     """High-level client to a set of devices comprising a logical sensor."""
 
@@ -41,11 +58,15 @@ class LegacyDevices:
             devices.mount,
             subscribe=[AltAzPointing, RADecPointing, AxisRates],
         ) if devices.mount else None
-        self.camera = impl.use_device(devices.camera) if devices.camera else None
-        self.focuser = impl.use_device(devices.focuser) if devices.focuser else None
+        camera = one_of(devices.camera, "camera")
+        focuser = one_of(devices.focuser, "focuser")
+        filter_wheel = one_of(devices.filter_wheel, "filter wheel")
+
+        self.camera = impl.use_device(camera) if camera else None
+        self.focuser = impl.use_device(focuser) if focuser else None
         self.rotator = impl.use_device(devices.rotator) if devices.rotator else None
         self.mirror_cover = impl.use_device(devices.mirror_cover) if devices.mirror_cover else None
-        self.filter_wheel = impl.use_device(devices.filter_wheel) if devices.filter_wheel else None
+        self.filter_wheel = impl.use_device(filter_wheel) if filter_wheel else None
         self.dome = impl.use_device(devices.dome) if devices.dome else None
 
     async def init_dome(self):
@@ -241,24 +262,31 @@ class LegacySensor:
         if not self.sensor.mount or not self.sensor.camera:
             raise RuntimeError("Standard collect requires a mount and a camera")
 
+        if len(task.exposures) > 1:
+            raise RuntimeError(
+                "Multiple exposures require the workflow implementation"
+            )
+
+        params = task.exposures[0]
+
         # Perform the device commands to do the collect!
         logger.info("Moving to target")
         await self.sensor.mount.command(FollowTarget(target=task.target))
 
         logger.info("Reached target")
 
-        if task.camera_params.filter_name is not None and self.sensor.filter_wheel is not None:
+        if params.filter_name is not None and self.sensor.filter_wheel is not None:
             await self.sensor.filter_wheel.command(
-                SetFilter(filter=task.camera_params.filter_name)
+                SetFilter(filter=params.filter_name)
             )
 
         # Configure camera capture parameters.
-        if None not in (task.camera_params.binning_x, task.camera_params.binning_y):
+        if None not in (params.binning_x, params.binning_y):
             await self.sensor.camera.command(
                 ConfigureCameraSensor(
                     binning=Binning(
-                        x=task.camera_params.binning_x,
-                        y=task.camera_params.binning_y,
+                        x=params.binning_x,
+                        y=params.binning_y,
                     ),
                 )
             )
@@ -266,7 +294,7 @@ class LegacySensor:
         # Set base context for all frames.
         collect = Collect(
             target=task.target,
-            params=task.camera_params,
+            params=params,
             target_id=(
                 task.target_id
                 if task.target_id
@@ -286,30 +314,30 @@ class LegacySensor:
         currently_sidereal = target_is_sidereal
 
         # Capture the requested frames.
-        for frame_num in range(0, task.camera_params.frame_count):
+        for frame_num in range(0, params.frame_count):
             collect.frame_number = frame_num
             want_sidereal = target_is_sidereal or frame_num in task.sidereal_frames
 
             if want_sidereal and not currently_sidereal:
                 # Hold the current RA/Dec under sidereal tracking.
-                logger.info(f"Frame #{frame_num+1} of {task.camera_params.frame_count}: switching to sidereal track")
+                logger.info(f"Frame #{frame_num+1} of {params.frame_count}: switching to sidereal track")
                 collect.target = FrameTarget(frame=ReferenceFrame.ICRF)
                 await self.sensor.mount.command(FollowTarget(target=collect.target))
                 currently_sidereal = True
             elif not want_sidereal and currently_sidereal:
                 # Resume following the original target.
-                logger.info(f"Frame #{frame_num+1} of {task.camera_params.frame_count}: resuming target track")
+                logger.info(f"Frame #{frame_num+1} of {params.frame_count}: resuming target track")
                 collect.target = task.target
                 await self.sensor.mount.command(FollowTarget(target=collect.target))
                 currently_sidereal = False
 
-            logger.info(f"Acquiring frame #{frame_num+1} of {task.camera_params.frame_count}")
+            logger.info(f"Acquiring frame #{frame_num+1} of {params.frame_count}")
             context = await sk.controller().update_context(collect)
             add_compat_context(context)
 
             await self.sensor.camera.command(
                 CameraCapture(
-                    integration_time=task.camera_params.integration_time_seconds,
+                    integration_time=params.integration_time_seconds,
                     context=context,
                 )
             )

@@ -7,10 +7,10 @@ already written, so nothing is asked of a deployment and the flags keep a single
 written-down meaning — this module.
 
 * **Structure** (`derive_structure`). One canonical shape: sensor-wide devices at
-  the root, the optical train on an `ota` assembly, the camera as the one
-  instrument beneath it. Trait labels are the archetype names `std` declares, so an
-  entry selects on exactly what a device reports through `DeviceDetails.archetype`
-  and no translation table exists anywhere.
+  the root, the shared optical train on an `ota` assembly, and one instrument
+  beneath it per configured camera. Trait labels are the archetype names `std`
+  declares, so an entry selects on exactly what a device reports through
+  `DeviceDetails.archetype` and no translation table exists anywhere.
 
 * **Tables** (`derive_tables`). Five: `init`, `standby` (its synonym), `shutdown`,
   `recover`, and `stop` — the last being what a failed bring-up runs to undo
@@ -23,15 +23,14 @@ written-down meaning — this module.
   property of hardware rather than of a workflow: it belongs to *this dome*, not to
   the table that happens to open it.
 
-One device set is reachable from this section and one only — `SensorDevices.camera`
-is a single field, so a derived sensor has exactly one instrument. The library's
-multi-instrument paths are unreachable from config until an authored structure
-lands.
+What a derived structure cannot say is what a selector would: every instrument in it
+is reachable at once, since the section pairs devices with cameras and never routes
+a beam between them. Mutually exclusive ports wait on an authored structure.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.entity import DeviceDetails
@@ -69,8 +68,10 @@ from sensorkit.workflow import (
 OTA = "ota"
 """Path segment of the optical assembly: everything the camera looks through."""
 
-PRIMARY = "primary"
-"""Path segment of the one instrument a derived structure can carry."""
+CAMERA = "camera"
+"""Path segment stem of an instrument position, numbered from one in configuration
+order: `camera-1`, `camera-2`. Config names devices and not positions, so the
+numbering is the only name a derived instrument can have."""
 
 HALTABLE: tuple[Trait, ...] = (
     StandardMount.name, StandardEnclosure.name, StandardMirrorCover.name)
@@ -81,10 +82,10 @@ def derive_structure(name: str, devices: SensorDevices) -> SensorModel:
     """Build the structural tree a `SensorDevices` describes.
 
     The mount and the enclosure are claimed at the root, so they lie on every
-    chain and their settings are shared; the filter wheel is claimed at the leaf,
-    so it is the instrument's own. That split is what decides whether a command
-    compiles into a step or into a frame block, and it falls out of the placement
-    rather than being asserted anywhere.
+    chain and their settings are shared; a camera's own focuser and filter wheel
+    are claimed at its leaf, so their settings are that instrument's. That split is
+    what decides whether a command compiles into a step or into a frame block, and
+    it falls out of the placement rather than being asserted anywhere.
 
     An absent device contributes no claim, and a `SensorDevices` with no camera
     yields no instrument — which is `sensor_collect`'s own guard, said
@@ -175,29 +176,53 @@ def _attachments(*claims: tuple[DeviceRef | None, Trait]) -> list[Attachment]:
 def _optics(devices: SensorDevices) -> list[Part]:
     """The `ota` assembly, or nothing at all when no device would hang on it."""
     attachments = _attachments(
-        (devices.focuser, StandardFocuser.name),
         (devices.rotator, StandardRotator.name),
         (devices.mirror_cover, StandardMirrorCover.name),
     )
-    parts: list[Part] = []
+    parts = _instruments(devices)
 
-    if devices.camera:
-        parts.append(InstrumentAssembly(
-            name=PRIMARY,
-            instrument=devices.camera,
-            attachments=_attachments(
-                (devices.filter_wheel, StandardFilterChanger.name)),
-        ))
-    else:
-        # No instrument to own the wheel, and dropping it would put it out of reach
-        # of the per-device ops that address every configured device.
+    if not parts:
+        # No instrument to own the paired devices, and dropping them would put them
+        # out of reach of the per-device ops that address every configured device.
         attachments += _attachments(
-            (devices.filter_wheel, StandardFilterChanger.name))
+            *((ref, StandardFocuser.name) for ref in devices.focuser),
+            *((ref, StandardFilterChanger.name) for ref in devices.filter_wheel),
+        )
 
     if not attachments and not parts:
         return []
 
     return [Assembly(name=OTA, attachments=attachments, parts=parts)]
+
+
+def _instruments(devices: SensorDevices) -> list[Part]:
+    """One instrument per configured camera, holding the optics that camera alone
+    looks through.
+
+    Positions are numbered over the configured list rather than over the cameras
+    found in it, so a camera keeps its position when a site leaves a hole in the
+    list to skip one.
+    """
+    return [
+        InstrumentAssembly(
+            name=f"{CAMERA}-{index + 1}",
+            instrument=camera,
+            attachments=_attachments(
+                (_paired(devices.focuser, index), StandardFocuser.name),
+                (_paired(devices.filter_wheel, index), StandardFilterChanger.name),
+            ),
+        )
+        for index, camera in enumerate(devices.camera) if camera
+    ]
+
+
+def _paired(refs: Sequence[str], index: int) -> DeviceRef | None:
+    """The device configured for the camera at `index`, if any.
+
+    A configured list holds one entry per camera, so a short read is a field the
+    site left out entirely.
+    """
+    return refs[index] if index < len(refs) else None
 
 
 def _ops(*commands: type[DeviceCommand]) -> list[str]:

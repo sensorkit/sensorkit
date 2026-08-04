@@ -8,18 +8,48 @@ attachments:
 parts:
 - name: ota
   attachments:
-  - ref: foc-1
-    trait: focuser
   - ref: rot-1
     trait: rotator
   - ref: cover-1
     trait: mirror_cover
   parts:
-  - name: primary
+  - name: camera-1
     attachments:
+    - ref: foc-1
+      trait: focuser
     - ref: fw-1
       trait: filter_changer
     instrument: cam-1
+
+=== two cameras ===
+name: MySensor
+attachments:
+- ref: tcs-1
+  trait: mount
+- ref: dome-1
+  trait: enclosure
+parts:
+- name: ota
+  attachments:
+  - ref: rot-1
+    trait: rotator
+  - ref: cover-1
+    trait: mirror_cover
+  parts:
+  - name: camera-1
+    attachments:
+    - ref: foc-1
+      trait: focuser
+    - ref: fw-1
+      trait: filter_changer
+    instrument: cam-1
+  - name: camera-2
+    attachments:
+    - ref: foc-2
+      trait: focuser
+    - ref: fw-2
+      trait: filter_changer
+    instrument: cam-2
 
 === no enclosure ===
 name: MySensor
@@ -29,15 +59,15 @@ attachments:
 parts:
 - name: ota
   attachments:
-  - ref: foc-1
-    trait: focuser
   - ref: rot-1
     trait: rotator
   - ref: cover-1
     trait: mirror_cover
   parts:
-  - name: primary
+  - name: camera-1
     attachments:
+    - ref: foc-1
+      trait: focuser
     - ref: fw-1
       trait: filter_changer
     instrument: cam-1
@@ -52,12 +82,12 @@ attachments:
 parts:
 - name: ota
   attachments:
-  - ref: foc-1
-    trait: focuser
   - ref: rot-1
     trait: rotator
   - ref: cover-1
     trait: mirror_cover
+  - ref: foc-1
+    trait: focuser
   - ref: fw-1
     trait: filter_changer
 

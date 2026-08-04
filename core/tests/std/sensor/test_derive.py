@@ -18,14 +18,15 @@ import itertools
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from sensorkit.astro.common import SitePosition
 from sensorkit.core.entity import DeviceDetails
 from sensorkit.std.instrument import CameraCapture, ConfigureCameraCooler
 from sensorkit.std.sensor.config import SensorConfig, SensorDevices, SensorPolicies
 from sensorkit.std.sensor.derive import (
+    CAMERA,
     OTA,
-    PRIMARY,
     capability_index,
     derive_plan,
     derive_structure,
@@ -44,6 +45,11 @@ from sensorkit.workflow import (
 
 FULL = SensorDevices(mount="tcs-1", camera="cam-1", focuser="foc-1", rotator="rot-1",
                      filter_wheel="fw-1", mirror_cover="cover-1", dome="dome-1")
+
+TWO_CAMERAS = SensorDevices(
+    mount="tcs-1", camera=["cam-1", "cam-2"], focuser=["foc-1", "foc-2"],
+    rotator="rot-1", filter_wheel=["fw-1", "fw-2"], mirror_cover="cover-1",
+    dome="dome-1")
 
 INIT_FLAGS = ("concurrent_dome_init_open",
               "concurrent_dome_and_mount_init",
@@ -94,8 +100,9 @@ def sweep(name: str, flags: tuple[str, ...]) -> str:
 def test_structure_golden(assert_golden):
     cases = {
         "every device": FULL,
+        "two cameras": TWO_CAMERAS,
         "no enclosure": FULL.model_copy(update={"dome": None}),
-        "no camera": FULL.model_copy(update={"camera": None}),
+        "no camera": FULL.model_copy(update={"camera": []}),
         "mount only": SensorDevices(mount="tcs-1"),
     }
     rendered = "\n".join(
@@ -131,15 +138,40 @@ def test_invariant_tables_golden(assert_golden):
 def test_placement_decides_shared_versus_private():
     """What a command reaches is decided by where its device is claimed.
 
-    The wheel is claimed at the leaf, so a filter is the instrument's own; the
-    mount and enclosure are claimed at the root, so a target is the step's. The
-    optical train sits above the instrument, so it is shared too — with nothing,
-    on a one-instrument sensor, which is the same fact.
+    The wheel and focuser are claimed at the leaf, so a filter and a focus position
+    are the instrument's own; the mount and enclosure are claimed at the root, so a
+    target is the step's. What is left of the optical train sits above the
+    instrument, and is shared — with nothing, on a one-instrument sensor, which is
+    the same fact.
     """
-    view = Topology(derive_structure("MySensor", FULL)).instruments[(OTA, PRIMARY)]
+    topology = Topology(derive_structure("MySensor", TWO_CAMERAS))
+    view = topology.instruments[(OTA, f"{CAMERA}-1")]
 
-    assert view.private == {"cam-1", "fw-1"}
-    assert set(view.shared) == {"tcs-1", "dome-1", "foc-1", "rot-1", "cover-1"}
+    assert view.private == {"cam-1", "fw-1", "foc-1"}
+    assert set(view.shared) == {"tcs-1", "dome-1", "rot-1", "cover-1"}
+
+
+def test_each_camera_gets_the_optics_paired_with_it():
+    topology = Topology(derive_structure("MySensor", TWO_CAMERAS))
+
+    assert [v.path for v in topology.instruments.values()] == [
+        (OTA, f"{CAMERA}-1"), (OTA, f"{CAMERA}-2")]
+    assert topology.instruments[(OTA, f"{CAMERA}-2")].private == {
+        "cam-2", "fw-2", "foc-2"}
+
+
+def test_a_camera_without_paired_optics_keeps_its_position():
+    """An empty entry pairs nothing with that camera, and moves no other camera."""
+    devices = SensorDevices(camera=["cam-1", "cam-2"], filter_wheel=["", "fw-2"])
+    topology = Topology(derive_structure("MySensor", devices))
+
+    assert topology.instruments[(OTA, f"{CAMERA}-1")].private == {"cam-1"}
+    assert topology.instruments[(OTA, f"{CAMERA}-2")].private == {"cam-2", "fw-2"}
+
+
+def test_paired_optics_must_name_one_device_per_camera():
+    with pytest.raises(ValidationError):
+        SensorDevices(camera=["cam-1", "cam-2"], focuser="foc-1")
 
 
 def test_absent_devices_contribute_no_claims():
@@ -151,7 +183,7 @@ def test_absent_devices_contribute_no_claims():
 def test_no_camera_yields_no_instrument():
     """sensor_collect's own guard, said structurally."""
     assert not Topology(derive_structure("MySensor", FULL.model_copy(
-        update={"camera": None}))).instruments
+        update={"camera": []}))).instruments
 
 
 def test_filter_wheel_outlives_a_missing_camera():

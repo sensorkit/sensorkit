@@ -71,6 +71,13 @@ have to. It addresses instruments by what they *are* and commands by what they
   whether a setting is shared or private, and (one layer down) the per-device
   barriers the ordering implies.
 
+    `coalesce` is an authoring aid within that, not an exception to it. A source
+    holding a frame-major account of a collect — this frame under sidereal, these
+    under the target — still states what every frame is taken under, and gets back
+    the steps it was already entitled to write by hand. It decides nothing, which
+    is why it is a free function over the request vocabulary rather than anything
+    the resolver knows about.
+
 * **A resolved collect compiles.** `resolve_step` validates each step as it
   produces it, so `to_collect` cannot hand back something that only fails at
   `compile_collect`. It has to: selection matches on capability, which does not
@@ -85,7 +92,8 @@ have to. It addresses instruments by what they *are* and commands by what they
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from itertools import groupby
 from operator import attrgetter
 from types import MappingProxyType
 from typing import Annotated, Literal, Self
@@ -292,6 +300,63 @@ class RequestStep:
     exposures: tuple[ExposureRequest, ...]
     settings: tuple[CommandRequest, ...] = ()
     align: Literal["start", "midpoint"] = "start"
+
+
+def coalesce(settings: Sequence[Sequence[CommandRequest]],
+             exposures: Sequence[ExposureRequest],
+             *, align: Literal["start", "midpoint"] = "start",
+             ) -> tuple[RequestStep, ...]:
+    """Author steps from a frame-by-frame account of what they are taken under.
+
+    An authoring aid rather than a derivation, and the distinction is the whole of
+    why it is a free function: the caller still says what every frame is taken
+    under, and this only says where the boundaries between those fall. A task source
+    that knows its own chronology writes `RequestStep`s and never calls this.
+
+    `settings` holds one frame's sensor-scope commands per entry, covering the
+    longest exposure. Contiguous frames whose commands compare equal are one step,
+    and each exposure contributes the frames of its own that fall inside the run. An
+    exposure shorter than the run has taken all of it by then and does not appear in
+    the steps after, so a wave whose members expose at different lengths needs no
+    agreement between them beyond what they are pointed at.
+
+    Sensor scope is the whole of what this cuts. A per-instrument sequence divides
+    one chain's frames without dividing anybody else's, and a step is not the shape
+    of that.
+
+    Args:
+        settings: What each frame is taken under, frame-major.
+        exposures: The instruments taking them, and how many frames each takes.
+        align: Carried onto every step produced.
+
+    Returns:
+        The steps, in the order the frames are taken.
+
+    Raises:
+        ValueError: The settings do not cover the longest exposure exactly.
+    """
+    frames = tuple(tuple(commands) for commands in settings)
+    longest = max((e.frame_count for e in exposures), default=0)
+
+    if len(frames) != longest:
+        raise ValueError(
+            f"settings cover {len(frames)} frame(s), but the longest exposure "
+            f"takes {longest}; a frame with nothing to say about what it is "
+            f"taken under is one no step can hold")
+
+    steps: list[RequestStep] = []
+    first = 0
+
+    for shared, group in groupby(frames):
+        count = sum(1 for _ in group)
+        steps.append(RequestStep(
+            exposures=tuple(
+                replace(e, frame_count=min(first + count, e.frame_count) - first)
+                for e in exposures if first < e.frame_count),
+            settings=shared, align=align))
+        first += count
+
+    return tuple(steps)
 
 
 @dataclass(frozen=True)

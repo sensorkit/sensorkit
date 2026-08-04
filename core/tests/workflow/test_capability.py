@@ -35,6 +35,7 @@ from sensorkit.workflow import (
     SensorModel,
     SensorPlan,
     Topology,
+    coalesce,
     compile_collect,
     format_graph,
     portability,
@@ -598,6 +599,70 @@ def test_align_reaches_the_resolved_step(resolver):
 def test_on_failure_reaches_the_collect(resolver):
     assert resolver.to_collect(
         [step(wide(1))], on_failure="continue").on_failure == "continue"
+
+
+# ---- chronology coalesced from a frame-major account ---------------------
+
+def under(*targets: str) -> list[tuple[CommandRequest, ...]]:
+    """What each frame is taken under, one entry per frame."""
+    return [(follow(t),) for t in targets]
+
+
+def test_frames_under_one_setting_are_one_step():
+    """Nothing to cut on is no cut: a frame-major account of a collect that
+    never changes says the same thing a single authored step does."""
+    assert coalesce(under("M51", "M51", "M51"), (wide(30, "r", 3),)) == (
+        step(wide(30, "r", 3)),)
+
+
+def test_a_change_of_setting_opens_a_step():
+    """And where it does change, the boundary lands there and the frames
+    divide across it — which is exactly what the author would have written."""
+    assert coalesce(under("M51", "M101", "M101"), (wide(30, "r", 3),)) == (
+        step(wide(30, "r", 1)),
+        step(wide(30, "r", 2), target="M101"))
+
+
+def test_every_exposure_in_a_step_is_under_the_same_setting():
+    """The cut is the wave's rather than any one exposure's, since the settings
+    are sensor-scope and a step commands them once for everybody."""
+    steps = coalesce(under("M51", "M101"), (wide(30, "r", 2), sci(10, "g", 2)))
+
+    assert steps == (step(wide(30, "r", 1), sci(10, "g", 1)),
+                     step(wide(30, "r", 1), sci(10, "g", 1), target="M101"))
+
+
+def test_a_shorter_exposure_stops_appearing():
+    """An exposure with fewer frames than the run has taken all of them by the
+    boundary, so it is absent rather than present with nothing to do."""
+    steps = coalesce(under("M51", "M51", "M101"),
+                     (wide(30, "r", 3), sci(10, "g", 2)))
+
+    assert steps == (step(wide(30, "r", 2), sci(10, "g", 2)),
+                     step(wide(30, "r", 1), target="M101"))
+
+
+def test_settings_must_cover_the_longest_exposure():
+    with pytest.raises(ValueError, match="longest exposure takes 3"):
+        coalesce(under("M51", "M51"), (wide(30, "r", 3),))
+
+
+def test_align_is_carried_onto_every_step():
+    steps = coalesce(under("M51", "M101"), (wide(30, "r", 2),),
+                     align="midpoint")
+
+    assert [s.align for s in steps] == ["midpoint", "midpoint"]
+
+
+def test_coalesced_steps_resolve_like_authored_ones(resolver):
+    """The point of it being an authoring aid: what comes back is an ordinary
+    request, and the resolver has no way to tell it was not written by hand."""
+    steps = coalesce(under("M51", "M101"), (wide(30, "r", 2),))
+    collect = resolver.to_collect(steps, name="coalesced")
+
+    assert [s.settings["tcs-1"] for s in collect.steps] == [
+        FollowTarget("M51"), FollowTarget("M101")]
+    assert [s.plans[WIDE].n_frames for s in collect.steps] == [1, 1]
 
 
 # ---- a resolved collect compiles ----------------------------------------

@@ -46,6 +46,15 @@ services:
     command: "dotnet ascom.alpaca.simulators.dll"
     restart: unless-stopped
 
+  ascom-sim2:
+    build: ascom
+    image: ascom-sim
+    pull_policy: never
+    ports:
+      - "30001:32323"
+    command: "dotnet ascom.alpaca.simulators.dll"
+    restart: unless-stopped
+
   reload-config:
     build:
       context: ../..

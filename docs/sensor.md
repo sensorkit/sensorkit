@@ -25,6 +25,17 @@ sensors:
       focuser: MyFocuser        # optional
       rotator: MyRotator        # optional
       mirror_cover: MyCover     # optional
+```
+
+`camera`, `filter_wheel` and `focuser` also take a list, which is how a sensor with more than one camera is declared. The three are paired by position — the second focuser belongs to the second camera — so a list you give must name one device per camera. Leave an entry empty for a camera that has none:
+
+```yaml
+    devices:
+      mount: MyMount
+      camera: [MyCamera, MyGuideCamera]
+      filter_wheel: [MyWheel, ""]     # the guide camera has no wheel
+      focuser: [MyFocuser, MyGuideFocuser]
+      rotator: MyRotator              # shared by both cameras
 
     site_position:
       latitude_degrees: 34.0522   # positive north
@@ -44,7 +55,7 @@ sensors:
       moon_separation_degrees: 5.0
 ```
 
-Each value under `devices` is the entity name of a device declared in a [device service](devices.md). The `site_position` drives sunrise/sunset calculation, target altitude checks, orbit propagation, and FITS metadata.
+Each value under `devices` is the entity name of a device declared in a [device service](devices.md). More than one camera needs the new implementation (`implementation: 2`); the current-release one drives a single camera and refuses to start with several configured. The `site_position` drives sunrise/sunset calculation, target altitude checks, orbit propagation, and FITS metadata.
 
 ### Policies
 
