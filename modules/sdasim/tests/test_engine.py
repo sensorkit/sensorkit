@@ -3,10 +3,27 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pytest
 
 from sensorkit.sdasim.engine import SdasimEngine
+
+
+def optics_supported() -> bool:
+    """Whether the installed sdasim carries the geometric defocus model."""
+    try:
+        import sdasim
+    except ImportError:
+        return False
+
+    return any(f.name == "optics" for f in dataclasses.fields(sdasim.SceneConfig))
+
+
+requires_optics = pytest.mark.skipif(
+    not optics_supported(), reason="installed sdasim has no optics model"
+)
 
 # Minimal self-contained sdasim SceneConfig (bins star field, catalog OFF, so no
 # external data or Space-Track creds needed) used by the real-render tests.
@@ -127,18 +144,21 @@ class TestRealRender:
 class TestDefocus:
     """Focuser telemetry -> sdasim optics model pass-through."""
 
-    def test_optics_enabled_property(self, scene_yaml, optics_scene_yaml):
+    def test_optics_disabled_for_plain_scene(self, scene_yaml):
         pytest.importorskip("sdasim")
         plain = SdasimEngine(scene_yaml, device="cpu")
         assert not plain.optics_enabled  # also safe before initialize()
         plain.initialize()
         assert not plain.optics_enabled
+
+    @requires_optics
+    def test_optics_enabled_for_optics_scene(self, optics_scene_yaml):
         optics = SdasimEngine(optics_scene_yaml, device="cpu")
         optics.initialize()
         assert optics.optics_enabled
 
+    @requires_optics
     def test_defocus_flows_into_render(self, optics_scene_yaml):
-        pytest.importorskip("sdasim")
         engine = SdasimEngine(optics_scene_yaml, device="cpu")
         engine.initialize()
         sharp, meta_sharp = engine.render_frame(0.5, 10.0, 20.0, defocus_um=0.0)
