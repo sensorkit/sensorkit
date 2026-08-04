@@ -16,11 +16,11 @@ import pytest
 from sensorkit.api.declarative import Service, command_handler, declare_device
 from sensorkit.astro.common import SitePosition
 from sensorkit.core.task import InitTask, ShutdownTask
+from sensorkit.sensor import SensorConfig, SensorDevices
+from sensorkit.sensor.legacy import LegacySensor
 from sensorkit.std import Deinit, Init, Stop
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
-from sensorkit.std.sensor import SensorConfig, SensorDevices
-from sensorkit.std.sensor.legacy import LegacySensor
 
 
 async def run_service(svc: Service):

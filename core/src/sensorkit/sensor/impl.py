@@ -15,12 +15,12 @@ from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing, RADecPointing
+from sensorkit.sensor.client import connect_sensor
+from sensorkit.sensor.compat import Capabilities
+from sensorkit.sensor.config import Implementation, SensorConfig
+from sensorkit.sensor.legacy import LegacySensor
 from sensorkit.std.collect import StandardCollectTask
 from sensorkit.std.mount import AxisRates
-from sensorkit.std.sensor.client import connect_sensor
-from sensorkit.std.sensor.compat import Capabilities
-from sensorkit.std.sensor.config import Implementation, SensorConfig
-from sensorkit.std.sensor.legacy import LegacySensor
 from sensorkit.workflow import DeviceRef
 
 MOUNT_KEYWORDS = [AltAzPointing, RADecPointing, AxisRates]

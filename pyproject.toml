@@ -213,6 +213,7 @@ layers = [
     """,
     "sensorkit.cli",
     "sensorkit.webapi",
+    "sensorkit.sensor",
     "sensorkit.std",
     "sensorkit.auto",
     "sensorkit.astro",

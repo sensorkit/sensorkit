@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Shared fixtures for the std tests."""
+"""Shared fixtures for the sensor tests."""
 from __future__ import annotations
 
 import os

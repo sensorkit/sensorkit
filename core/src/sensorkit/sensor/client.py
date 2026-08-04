@@ -25,15 +25,11 @@ from collections.abc import Mapping
 
 import sensorkit.api as sk
 from sensorkit.astro.target import Target
-from sensorkit.core.client import SensorKit
-from sensorkit.core.device import DeviceClient
-from sensorkit.std.collect import StandardCollectTask
-from sensorkit.std.mount import FollowTarget
-from sensorkit.std.sensor.config import SensorConfig
-from sensorkit.std.sensor.derive import capability_index, derive_plan, timeouts
-from sensorkit.std.sensor.dispatch import DeviceContexts, Dispatcher, compile_supported
-from sensorkit.std.sensor.translate import translate
-from sensorkit.std.traits import Stop
+from sensorkit.sensor.config import SensorConfig
+from sensorkit.sensor.derive import capability_index, derive_plan, timeouts
+from sensorkit.sensor.dispatch import DeviceContexts, Dispatcher, compile_supported
+from sensorkit.sensor.translate import translate
+from sensorkit.std import FollowTarget, StandardCollectTask, Stop
 from sensorkit.workflow import (
     CapabilityIndex,
     Collect,
@@ -70,7 +66,7 @@ class Sensor:
         self,
         config: SensorConfig,
         plan: SensorPlan,
-        devices: Mapping[DeviceRef, DeviceClient],
+        devices: Mapping[DeviceRef, sk.DeviceClient],
         capabilities: CapabilityIndex,
     ):
         self.config = config
@@ -235,7 +231,7 @@ class Sensor:
 
 async def connect_sensor(
     config: SensorConfig,
-    sensorkit: SensorKit | None = None,
+    sensorkit: sk.SensorKit | None = None,
 ) -> Sensor:
     """Build a `Sensor` for a configuration, resolving its devices.
 

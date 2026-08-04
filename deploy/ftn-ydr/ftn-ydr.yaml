@@ -4,7 +4,7 @@ sensorkit:
   imports:
     - sensorkit.pwi4.service
     - sensorkit.thesky.service
-    - sensorkit.std.sensor
+    - sensorkit.sensor
     - sensorkit.burr.program
     - sensorkit.otto.program
     - sensorkit.udl.service

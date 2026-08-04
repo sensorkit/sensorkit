@@ -17,7 +17,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.std.sensor.config import SensorDevices
+from sensorkit.sensor.config import SensorDevices
 
 
 # TODO: Phase out when UI code is updated to use ControllerInfo and SensorConfig for this info.

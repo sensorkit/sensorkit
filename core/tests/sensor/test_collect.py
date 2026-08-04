@@ -34,6 +34,12 @@ from sensorkit.astro.target import CatalogTarget, ICRSTarget, TLETarget
 from sensorkit.common.keyword import get_keyword_info
 from sensorkit.core.device import Abort, DeviceCommand
 from sensorkit.core.task import TaskInfo
+from sensorkit.sensor.client import Sensor, connect_sensor
+from sensorkit.sensor.config import Implementation, SensorConfig, SensorDevices
+from sensorkit.sensor.derive import capability_index, derive_structure
+from sensorkit.sensor.impl import StandardSensor
+from sensorkit.sensor.legacy import LegacyDevices, LegacySensor
+from sensorkit.sensor.translate import SIDEREAL, frame_targets, translate
 from sensorkit.std.collect import CameraParameterSet, Collect, StandardCollectTask
 from sensorkit.std.instrument import (
     Binning,
@@ -43,12 +49,6 @@ from sensorkit.std.instrument import (
 )
 from sensorkit.std.mount import FollowTarget, StandardMount
 from sensorkit.std.optics import SetFilter, StandardFilterChanger
-from sensorkit.std.sensor.client import Sensor, connect_sensor
-from sensorkit.std.sensor.config import Implementation, SensorConfig, SensorDevices
-from sensorkit.std.sensor.derive import capability_index, derive_structure
-from sensorkit.std.sensor.impl import StandardSensor
-from sensorkit.std.sensor.legacy import LegacyDevices, LegacySensor
-from sensorkit.std.sensor.translate import SIDEREAL, frame_targets, translate
 from sensorkit.std.traits import Stop
 from sensorkit.workflow import (
     OP_APPLY,

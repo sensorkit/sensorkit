@@ -4,7 +4,7 @@ sensorkit:
   imports:
     - sensorkit.alpaca.service
     - sensorkit.sdasim.service
-    - sensorkit.std.sensor
+    - sensorkit.sensor
     - sensorkit.otto.program
     - sensorkit.auto.agent
     - sensorkit.senpai.service

@@ -1,6 +1,6 @@
 # Sensor controller
 
-The sensor controller (`sensorkit.std.sensor`) turns a collection of devices into one logical instrument. It owns a mount and camera — plus, optionally, a dome, focuser, rotator, filter wheel, and mirror cover — and knows how to bring them up, point them, collect frames, and shut them down in the right order.
+The sensor controller (`sensorkit.sensor`) turns a collection of devices into one logical instrument. It owns a mount and camera — plus, optionally, a dome, focuser, rotator, filter wheel, and mirror cover — and knows how to bring them up, point them, collect frames, and shut them down in the right order.
 
 You rarely command devices individually during operations; you send *tasks* to the controller, and it sequences the hardware.
 

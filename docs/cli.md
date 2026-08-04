@@ -63,7 +63,7 @@ If a config file is available, `NAME` alone is enough — the module is looked u
 
 ```bash
 sensorkit service run MySensor                              # from config
-sensorkit service run MySensor sensorkit.std.sensor         # explicit
+sensorkit service run MySensor sensorkit.sensor         # explicit
 sensorkit service run MyProgram programs/my_program.py -r   # a .py file works too
 ```
 

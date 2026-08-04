@@ -22,13 +22,13 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame
 from sensorkit.astro.target import CatalogTarget, FrameTarget, ICRSTarget, TLETarget
+from sensorkit.sensor.compat import Capabilities, add_compat_context
+from sensorkit.sensor.config import SensorConfig, SensorDevices, SensorPolicies
 from sensorkit.std.collect import Collect, StandardCollectTask
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.std.instrument import Binning, CameraCapture, ConfigureCameraSensor
 from sensorkit.std.mount import AxisRates, FollowTarget
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover, SetFilter
-from sensorkit.std.sensor.compat import Capabilities, add_compat_context
-from sensorkit.std.sensor.config import SensorConfig, SensorDevices, SensorPolicies
 from sensorkit.std.traits import Connect, Deinit, Init, Stop
 
 

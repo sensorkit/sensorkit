@@ -53,8 +53,8 @@ from loguru import logger
 
 import sensorkit.api as sk
 from sensorkit.core.device import Abort, DeviceClient, DeviceCommand
+from sensorkit.sensor.compat import add_compat_context
 from sensorkit.std.instrument import AcquireData, CameraCapture
-from sensorkit.std.sensor.compat import add_compat_context
 from sensorkit.std.traits import Stop
 from sensorkit.workflow import (
     OP_APPLY,

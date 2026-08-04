@@ -12,6 +12,7 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing
 from sensorkit.common.filewatch import FileEventKind, watch_dir
+from sensorkit.sensor import Capabilities
 from sensorkit.sky_transmission.models import (
     FrameState,
     SkyTransmission,
@@ -20,7 +21,7 @@ from sensorkit.sky_transmission.models import (
 )
 from sensorkit.sky_transmission.pipeline import AllClearPipeline, MovieBuilder
 from sensorkit.sky_transmission.server import start_image_server
-from sensorkit.std import CameraCapture, Capabilities
+from sensorkit.std import CameraCapture
 
 
 @sk.declare_entity

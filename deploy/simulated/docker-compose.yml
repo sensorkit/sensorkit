@@ -109,7 +109,7 @@ services:
   sensor:
     image: sensorkit
     pull_policy: never
-    command: service run SimulatedSensor sensorkit.std.sensor
+    command: service run SimulatedSensor sensorkit.sensor
     environment:
       <<: *common-env
     restart: unless-stopped

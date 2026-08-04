@@ -27,10 +27,11 @@ from sensorkit.core.task import (
     ShutdownTask,
     StandbyTask,
 )
+from sensorkit.sensor import Capabilities, SensorConfig, SensorDevices, SensorPolicies
+from sensorkit.sensor.legacy import LegacyDevices, LegacySensor
 from sensorkit.std import (
     CameraCapture,
     CameraParameterSet,
-    Capabilities,
     CloseEnclosure,
     CloseMirrorCover,
     ConfigureCameraSensor,
@@ -40,14 +41,10 @@ from sensorkit.std import (
     Init,
     OpenEnclosure,
     OpenMirrorCover,
-    SensorConfig,
-    SensorDevices,
-    SensorPolicies,
     SetFilter,
     StandardCollectTask,
     Stop,
 )
-from sensorkit.std.sensor.legacy import LegacyDevices, LegacySensor
 
 
 async def run_service(svc: Service):

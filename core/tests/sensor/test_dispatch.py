@@ -20,6 +20,15 @@ from sensorkit.api.declarative import command_handler, declare_device
 from sensorkit.astro.common import RADecPointing, ReferenceFrame
 from sensorkit.astro.target import FrameTarget
 from sensorkit.core.device import Abort, DeviceCommand
+from sensorkit.sensor.config import SensorDevices, SensorPolicies
+from sensorkit.sensor.derive import (
+    CAMERA,
+    OTA,
+    capability_index,
+    derive_structure,
+    timeouts,
+)
+from sensorkit.sensor.dispatch import Dispatcher, compile_supported, unresolved
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.std.instrument import (
     AcquireData,
@@ -35,15 +44,6 @@ from sensorkit.std.optics import (
     OpenMirrorCover,
     SetFilter,
 )
-from sensorkit.std.sensor.config import SensorDevices, SensorPolicies
-from sensorkit.std.sensor.derive import (
-    CAMERA,
-    OTA,
-    capability_index,
-    derive_structure,
-    timeouts,
-)
-from sensorkit.std.sensor.dispatch import Dispatcher, compile_supported, unresolved
 from sensorkit.std.traits import (
     Connect,
     Deinit,

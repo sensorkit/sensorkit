@@ -34,6 +34,8 @@ from collections.abc import Mapping, Sequence
 
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.entity import DeviceDetails
+from sensorkit.sensor.config import SensorConfig, SensorDevices, SensorPolicies
+from sensorkit.sensor.dispatch import HandlerKey
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure, StandardEnclosure
 from sensorkit.std.instrument import StandardRotator
 from sensorkit.std.mount import StandardMount
@@ -44,8 +46,6 @@ from sensorkit.std.optics import (
     StandardFocuser,
     StandardMirrorCover,
 )
-from sensorkit.std.sensor.config import SensorConfig, SensorDevices, SensorPolicies
-from sensorkit.std.sensor.dispatch import HandlerKey
 from sensorkit.std.traits import Connect, Deinit, Home, Init, Stop
 from sensorkit.workflow import (
     Assembly,

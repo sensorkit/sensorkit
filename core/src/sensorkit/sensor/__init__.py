@@ -7,25 +7,30 @@ implementation, split so that the orchestration is usable without a controller
 and the controller is a thin face over it. `impl` holds the service entrypoint
 that chooses between them.
 
+The structural model, the lifecycle and collect compilers, and the graph runner
+live in `sensorkit.workflow`, which knows nothing about devices or the backend.
+This package supplies the observatory vocabulary and binds workflow ops to real
+device commands.
+
 `__all__` is the public API.
 """
 
-from sensorkit.std.sensor.client import Sensor, connect_sensor, pointed_at
-from sensorkit.std.sensor.compat import Capabilities, add_compat_context
-from sensorkit.std.sensor.config import (
+from sensorkit.sensor.client import Sensor, connect_sensor, pointed_at
+from sensorkit.sensor.compat import Capabilities, add_compat_context
+from sensorkit.sensor.config import (
     Implementation,
     SensorConfig,
     SensorDevices,
     SensorPolicies,
 )
-from sensorkit.std.sensor.derive import (
+from sensorkit.sensor.derive import (
     capability_index,
     derive_plan,
     derive_structure,
     derive_tables,
     timeouts,
 )
-from sensorkit.std.sensor.dispatch import (
+from sensorkit.sensor.dispatch import (
     DeviceContexts,
     Dispatcher,
     FrameKeywords,
@@ -36,9 +41,9 @@ from sensorkit.std.sensor.dispatch import (
     unresolved,
     unsupported,
 )
-from sensorkit.std.sensor.impl import StandardSensor, sensor_control_service
-from sensorkit.std.sensor.legacy import LegacyDevices, LegacySensor
-from sensorkit.std.sensor.translate import (
+from sensorkit.sensor.impl import StandardSensor, sensor_control_service
+from sensorkit.sensor.legacy import LegacyDevices, LegacySensor
+from sensorkit.sensor.translate import (
     SCIENCE,
     SIDEREAL,
     Assignment,

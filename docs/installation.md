@@ -118,7 +118,7 @@ sensorkit service run agent
 If no config file is available to the process, supply the Python module explicitly:
 
 ```bash
-sensorkit service run my-sensor sensorkit.std.sensor
+sensorkit service run my-sensor sensorkit.sensor
 sensorkit service run agent sensorkit.auto.agent -r
 ```
 

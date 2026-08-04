@@ -37,15 +37,15 @@ from sensorkit.api.declarative import command_handler, declare_device
 from sensorkit.astro.common import SitePosition
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.task import InitTask, RecoverTask, ShutdownTask, StandbyTask
-from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
-from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
-from sensorkit.std.sensor.client import Sensor, connect_sensor
-from sensorkit.std.sensor.config import (
+from sensorkit.sensor.client import Sensor, connect_sensor
+from sensorkit.sensor.config import (
     SensorConfig,
     SensorDevices,
     SensorPolicies,
 )
-from sensorkit.std.sensor.legacy import LegacyDevices, LegacySensor
+from sensorkit.sensor.legacy import LegacyDevices, LegacySensor
+from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
+from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 from sensorkit.std.traits import Connect, Deinit, Init, Stop
 from sensorkit.workflow import LifecycleError
 

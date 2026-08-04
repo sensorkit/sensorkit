@@ -22,9 +22,8 @@ from pydantic import ValidationError
 
 from sensorkit.astro.common import SitePosition
 from sensorkit.core.entity import DeviceDetails
-from sensorkit.std.instrument import CameraCapture, ConfigureCameraCooler
-from sensorkit.std.sensor.config import SensorConfig, SensorDevices, SensorPolicies
-from sensorkit.std.sensor.derive import (
+from sensorkit.sensor.config import SensorConfig, SensorDevices, SensorPolicies
+from sensorkit.sensor.derive import (
     CAMERA,
     OTA,
     capability_index,
@@ -33,6 +32,7 @@ from sensorkit.std.sensor.derive import (
     derive_tables,
     timeouts,
 )
+from sensorkit.std.instrument import CameraCapture, ConfigureCameraCooler
 from sensorkit.std.traits import Connect, Disconnect
 from sensorkit.workflow import (
     DeviceIndex,
