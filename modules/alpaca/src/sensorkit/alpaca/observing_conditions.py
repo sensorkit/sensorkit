@@ -164,10 +164,10 @@ class AlpacaObservingConditions(AlpacaDevice):
                     if time_since_last_update:
                         properties["time_since_last_update"] = time_since_last_update
 
-                    weather_str = ", ".join(
-                        f"{k}={v}" for k, v in weather.model_dump(exclude_none=True).items()
-                    )
-                    properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+                    # weather_str = ", ".join(
+                    #     f"{k}={v}" for k, v in weather.model_dump(exclude_none=True).items()
+                    # )
+                    # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
                     # logger.debug(
                     #     f"Alpaca observing conditions status: connected={connected}, "
                     #     f"{weather_str}, {properties_str}"

@@ -163,7 +163,7 @@ class AlpacaFocuser(AlpacaDevice):
                     if temperature is not None:
                         properties["temperature"] = temperature
 
-                    properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+                    # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
                     # logger.debug(
                     #     f"Alpaca focuser status: connected={connected}, position={position}, "
                     #     f"is_moving={is_moving}, {properties_str}"

@@ -95,7 +95,7 @@ class NinaSwitch(NinaDevice):
                     if switches:
                         await device.publish(NinaSwitchStatus(switches=switches))
 
-                    switches_str = "; ".join(f"{s.name}={s.value}" for s in switches)
+                    # switches_str = "; ".join(f"{s.name}={s.value}" for s in switches)
                     # logger.debug(f"NINA switch status: connected={connected}, {switches_str}")
             except Exception as e:
                 logger.exception(f"Error in switch status publish: {e}")

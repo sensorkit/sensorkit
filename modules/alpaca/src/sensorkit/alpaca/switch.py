@@ -135,7 +135,7 @@ class AlpacaSwitch(AlpacaDevice):
                         if state is not None:
                             switches.append(state)
 
-                    switches_str = "; ".join(f"{s.name}={s.value}" for s in switches)
+                    # switches_str = "; ".join(f"{s.name}={s.value}" for s in switches)
                     # logger.debug(f"Alpaca switch status: connected={connected}, {switches_str}")
 
                     if switches:

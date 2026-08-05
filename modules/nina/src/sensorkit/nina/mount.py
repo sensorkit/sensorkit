@@ -457,7 +457,7 @@ class NinaMount(NinaDevice):
 
                 await device.publish(NinaMountStatus(**fields))
 
-                fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+                # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
                 # logger.debug(f"NINA mount status: connected={connected}, {fields_str}")
             except Exception as e:
                 logger.exception(f"Error in slow mount status publish: {e}")

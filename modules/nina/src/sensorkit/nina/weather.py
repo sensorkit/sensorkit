@@ -80,9 +80,9 @@ class NinaWeather(NinaDevice):
 
                     await device.publish(weather)
 
-                    weather_str = ", ".join(
-                        f"{k}={v}" for k, v in weather.model_dump(exclude_none=True).items()
-                    )
+                    # weather_str = ", ".join(
+                    #     f"{k}={v}" for k, v in weather.model_dump(exclude_none=True).items()
+                    # )
                     # logger.debug(f"NINA weather status: connected={connected}, {weather_str}")
             except Exception as e:
                 logger.exception(f"Error in weather status publish: {e}")

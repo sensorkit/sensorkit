@@ -426,7 +426,7 @@ class NinaCamera(NinaDevice):
                         if val is not None:
                             fields[field_name] = val
 
-                    fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+                    # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
                     # logger.debug(f"NINA camera status: {fields_str}")
 
                     await device.publish(NinaCameraStatus(**fields))

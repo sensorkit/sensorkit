@@ -130,7 +130,7 @@ class NinaFocuser(NinaDevice):
 
                     await device.publish(NinaFocuserStatus(**fields))
 
-                    fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+                    # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
                     # logger.debug(
                     #     f"NINA focuser status: connected={connected}, {fields_str}"
                     # )

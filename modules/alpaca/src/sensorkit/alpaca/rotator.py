@@ -146,7 +146,7 @@ class AlpacaRotator(AlpacaDevice):
                     if self._step_size is not None:
                         properties["step_size"] = self._step_size
 
-                    properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+                    # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
                     # logger.debug(
                     #     f"Alpaca rotator status: connected={connected}, position={position}, "
                     #     f"target_position={target_position}, is_moving={is_moving}, "

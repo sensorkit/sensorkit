@@ -339,11 +339,10 @@ class TheSkyDome(TheSkyDevice):
             try:
                 # 0=unknown, 1=open, 2=closed
                 connected, slit_num, alt, az, is_tracking = [float(x) for x in resp.split(",")]
-                slit_str = {0: "unknown", 1: "open", 2: "closed"}.get(int(slit_num), "unknown")
-
                 connected = bool(connected)
                 self.device_connected = connected
 
+                # slit_str = {0: "unknown", 1: "open", 2: "closed"}.get(int(slit_num), "unknown")
                 # logger.debug(
                 #     f"TheSky dome status: connected={connected}, slit={slit_str}, alt={alt}, az={az}"
                 # )

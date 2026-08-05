@@ -223,7 +223,7 @@ class NinaDome(NinaDevice):
 
                     await device.publish(NinaDomeStatus(**fields))
 
-                    fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+                    # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
                     # logger.debug(f"NINA dome status: connected={connected}, {fields_str}")
             except Exception as e:
                 logger.exception(f"Error in dome status publish: {e}")

@@ -7,8 +7,6 @@ from typing import Literal, override
 import astropy.units as u
 from astropy.coordinates import ICRS, AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
-
-# Prevent IERS-A (Earth orientation parameters) download, which can take long enough to cause a lease expiry
 from astropy.utils import iers
 from loguru import logger
 from pydantic import BaseModel
@@ -48,11 +46,9 @@ from sensorkit.std import (
     Tracking,
 )
 
+# Prevent IERS-A (Earth orientation parameters) download
 iers.conf.auto_download = False
-# Suppress the warning that results from the above decision
-from astropy.utils.iers import conf
-
-conf.auto_max_age = None
+iers.conf.auto_max_age = None
 
 
 @sk.declare_keyword
@@ -845,7 +841,7 @@ class AlpacaTelescope(AlpacaDevice):
 
                 await device.publish(AlpacaTelescopeStatus(**properties))
 
-                properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+                # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
                 # logger.debug(
                 #     f"Alpaca telescope status: connected={connected}, {properties_str}"
                 # )

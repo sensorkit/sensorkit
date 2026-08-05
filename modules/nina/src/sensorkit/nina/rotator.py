@@ -130,7 +130,7 @@ class NinaRotator(NinaDevice):
 
                     await device.publish(NinaRotatorStatus(**fields))
 
-                    fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+                    # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
                     # logger.debug(f"NINA rotator status: connected={connected}, {fields_str}")
             except Exception as e:
                 logger.exception(f"Error in rotator status publish: {e}")

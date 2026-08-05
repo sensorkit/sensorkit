@@ -144,13 +144,11 @@ class TheSkyOTA(TheSkyDevice):
 
             try:
                 connected, cover_num = [float(x) for x in resp.split(",")]
-                cover_str = {0: "unknown", 1: "open", 2: "closed"}.get(int(cover_num), "unknown")
-
                 connected = bool(connected)
                 self.device_connected = connected
-
                 is_open = int(cover_num) in (0, 1)
 
+                # cover_str = {0: "unknown", 1: "open", 2: "closed"}.get(int(cover_num), "unknown")
                 # logger.debug(f"TheSky OTA status: connected={connected}, cover={cover_str}")
 
                 device = sk.device()
