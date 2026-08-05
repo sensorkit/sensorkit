@@ -101,7 +101,7 @@ async def test_registry_with_external_discriminator():
 
 
 @pytest.mark.parametrize("mode", ["control", "str", "context"])
-def test_registry_performance(  # noqa: C901
+def test_registry_performance(
     mode: Literal["control", "str", "context"],
     num_models: int = 1000,
     num_trials: int = 10000,

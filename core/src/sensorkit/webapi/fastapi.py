@@ -128,7 +128,7 @@ class WebAPI:
         # Resolve the configured agent entity reference.
         self.config.agent.resolve(kit)
 
-    def _create_fastapi_app(self):  # noqa: C901
+    def _create_fastapi_app(self):
         app = FastAPI(title="SensorKit Web API")
 
         app.add_middleware(

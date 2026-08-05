@@ -162,7 +162,7 @@ class SenpaiAnalyzer:
         for task in self._tasks:
             task.cancel()
 
-    async def _process_frames(self):  # noqa: C901
+    async def _process_frames(self):
         """Consume FITS files from the DataGraph, run the pipeline, publish results.
 
         With `process_sequence` on, frames carrying a collect identity (task_id

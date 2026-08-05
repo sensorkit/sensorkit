@@ -124,6 +124,7 @@ udl = [
 
 [dependency-groups]
 dev = [
+    "complexipy>=6.2.0",
     "coverage>=7.8.0",
     "httpx>=0.28.0",
     "import-linter>=2.1",
@@ -151,7 +152,7 @@ line-length = 99
 indent-width = 4
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "B", "I", "C901"]
+select = ["E", "F", "W", "B", "I"]
 ignore = ["E501", "E203", "B027", "B019"]
 unfixable = ["B"]
 
@@ -163,6 +164,10 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
+
+[tool.complexipy]
+paths = ["core", "modules"]
+max-complexity-allowed = 15
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"

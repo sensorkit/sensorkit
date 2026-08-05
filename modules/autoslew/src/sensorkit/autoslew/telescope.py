@@ -317,7 +317,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
 
     # ---- follow / tracking ------------------------------------------------ #
     @sk.command_handler
-    async def telescope_follow_target(self, cmd: FollowTarget):  # noqa: C901
+    async def telescope_follow_target(self, cmd: FollowTarget):
         await self.require_connected()
 
         target = await cmd.target.adapt(

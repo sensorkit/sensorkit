@@ -150,7 +150,7 @@ class SenpaiPipeline:
 
         return results
 
-    def _extract(  # noqa: C901
+    def _extract(
         self,
         inp: FrameInput,
         image: ProcessedFitsImage,

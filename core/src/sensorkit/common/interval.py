@@ -165,7 +165,7 @@ def stamp_interval_trees(
             target.addi(enveloped.begin, enveloped.end, merge_func(enveloped.data, iv[2]))
 
 
-def print_interval_tree(  # noqa: C901
+def print_interval_tree(
     tree: IntervalTree,
     *,
     width: int = 80,
