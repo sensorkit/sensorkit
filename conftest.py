@@ -126,7 +126,12 @@ async def kit(backend):
 @pytest_asyncio.fixture
 async def service_context(kit):
     """Return a registered service context on top of the `kit` fixture."""
-    yield await kit.register_service("testservice", "0.1.0")
+    context = await kit.register_service("testservice", "0.1.0")
+
+    yield context
+
+    with contextlib.suppress(Exception):
+        await context.shutdown()
 
 
 @pytest_asyncio.fixture
@@ -155,14 +160,8 @@ async def registered_impl[T: EntityImpl](service_context, impl_type: type[T], na
         impl_type.for_service_context(service_context, name)
     )
 
-    try:
-        with impl.enter_context():
-            yield impl
-    finally:
-        # Detaching stops the entity's lease renewal and background tasks. Left running, they
-        # accumulate across a session and progressively slow every later test.
-        with contextlib.suppress(Exception):
-            await service_context.shutdown()
+    with impl.enter_context():
+        yield impl
 
 
 @pytest_asyncio.fixture

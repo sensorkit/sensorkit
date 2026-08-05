@@ -66,19 +66,20 @@ async def test_operator_override_drives_operate(kit, service_context):
         scheduler_state=AgentSchedulerState(scheduling_enabled=False),
     )
 
-    driver = operator.drivers["ctrl1"]
+    try:
+        driver = operator.drivers["ctrl1"]
 
-    # The operator loop runs every 2 seconds. Wait for init to run, then verify the lifecycle
-    # reached OPERATE.
-    async with asyncio.timeout(10.0):
-        await state.apply_to_operator(operator, {"ctrl1": config})
-        await init_ran.wait()
+        # The operator loop runs every 2 seconds. Wait for init to run, then verify the lifecycle
+        # reached OPERATE.
+        async with asyncio.timeout(10.0):
+            await state.apply_to_operator(operator, {"ctrl1": config})
+            await init_ran.wait()
 
-        while driver.lifecycle.belief_state != InternalControllerState.OPERATE:
-            await asyncio.sleep(0.05)
-
-    await operator.stop()
-    await service_context.shutdown()
+            while driver.lifecycle.belief_state != InternalControllerState.OPERATE:
+                await asyncio.sleep(0.05)
+    finally:
+        async with asyncio.timeout(10.0):
+            await operator.stop()
 
 
 @pytest.mark.asyncio
@@ -123,38 +124,39 @@ async def test_operator_override_false_shuts_down(kit, service_context):
         scheduler_state=AgentSchedulerState(scheduling_enabled=False),
     )
 
-    async with asyncio.timeout(10.0):
-        await state.apply_to_operator(operator, {"ctrl1": config})
-        await init_ran.wait()
+    try:
+        async with asyncio.timeout(10.0):
+            await state.apply_to_operator(operator, {"ctrl1": config})
+            await init_ran.wait()
 
-    # The operator drives the controller down before any demand is applied, so a ShutdownTask has
-    # already run by now. Clear the event so the wait below observes the override-driven shutdown.
-    shutdown_ran.clear()
+        # The operator drives the controller down before any demand is applied, so a ShutdownTask has
+        # already run by now. Clear the event so the wait below observes the override-driven shutdown.
+        shutdown_ran.clear()
 
-    # Now set override=False to drive to SHUTDOWN.
-    state = AgentState(
-        operating_state=AgentOperatingState(
-            global_control_enabled=True,
-            controllers={"ctrl1": AgentControllerInfo(
-                control_enabled=True,
-                elected_state=None,
-                demand_override=False,
-            )},
-        ),
-        scheduler_state=AgentSchedulerState(scheduling_enabled=False),
-    )
+        # Now set override=False to drive to SHUTDOWN.
+        state = AgentState(
+            operating_state=AgentOperatingState(
+                global_control_enabled=True,
+                controllers={"ctrl1": AgentControllerInfo(
+                    control_enabled=True,
+                    elected_state=None,
+                    demand_override=False,
+                )},
+            ),
+            scheduler_state=AgentSchedulerState(scheduling_enabled=False),
+        )
 
-    driver = operator.drivers["ctrl1"]
+        driver = operator.drivers["ctrl1"]
 
-    async with asyncio.timeout(15.0):
-        await state.apply_to_operator(operator, {"ctrl1": config})
-        await shutdown_ran.wait()
+        async with asyncio.timeout(15.0):
+            await state.apply_to_operator(operator, {"ctrl1": config})
+            await shutdown_ran.wait()
 
-        while driver.lifecycle.belief_state != InternalControllerState.SHUTDOWN:
-            await asyncio.sleep(0.05)
-
-    await operator.stop()
-    await service_context.shutdown()
+            while driver.lifecycle.belief_state != InternalControllerState.SHUTDOWN:
+                await asyncio.sleep(0.05)
+    finally:
+        async with asyncio.timeout(10.0):
+            await operator.stop()
 
 
 # TODO: Move this to program/discovery tests.
@@ -183,7 +185,6 @@ async def test_program_discovery_finds_registered_program(kit, service_context):
                 break
 
     await discovery.stop()
-    await service_context.shutdown()
 
 
 @pytest.mark.asyncio
@@ -224,22 +225,24 @@ async def test_late_discovered_program_gets_enabled(kit, service_context):
         # Start the operator — only early_prog is discoverable at this point.
         await operator.start(client=kit, task_group=asyncio)
 
-        # Verify early_prog is enabled.
-        while True:
-            ps = await kit.program("early_prog").kv_get_model(ProgramState)
-            if ps.enable_state.enabled:
-                break
-            await asyncio.sleep(0.1)
+    try:
+        async with asyncio.timeout(5.0):
+            # Verify early_prog is enabled.
+            while True:
+                ps = await kit.program("early_prog").kv_get_model(ProgramState)
+                if ps.enable_state.enabled:
+                    break
+                await asyncio.sleep(0.1)
 
-        # Now register the late program (simulates a service starting slowly).
-        await service_context.register_program("late_prog")
+            # Now register the late program (simulates a service starting slowly).
+            await service_context.register_program("late_prog")
 
-        # The operator should discover it and enable it via handle_program().
-        while True:
-            ps = await kit.program("late_prog").kv_get_model(ProgramState)
-            if ps.enable_state.enabled:
-                break
-            await asyncio.sleep(0.1)
-
-        await operator.stop()
-        await service_context.shutdown()
+            # The operator should discover it and enable it via handle_program().
+            while True:
+                ps = await kit.program("late_prog").kv_get_model(ProgramState)
+                if ps.enable_state.enabled:
+                    break
+                await asyncio.sleep(0.1)
+    finally:
+        async with asyncio.timeout(10.0):
+            await operator.stop()
