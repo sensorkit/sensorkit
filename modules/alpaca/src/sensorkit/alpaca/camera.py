@@ -364,7 +364,7 @@ class AlpacaCamera(AlpacaDevice):
         # ImageArrayRaw returns a flat array; dimensions come from ImageArrayInfo.
         # Alpaca dimension convention: Dimension1 = columns (X), Dimension2 = rows (Y).
         context = cmd.context
-        meta = self.camera.ImageArrayInfo
+        meta = await self.get(self.camera, "ImageArrayInfo")
         bin_x = await self.get(self.camera, "BinX", 1)
         bin_y = await self.get(self.camera, "BinY", 1)
         last_exposure_start_time = await self.get(self.camera, "LastExposureStartTime", None)
