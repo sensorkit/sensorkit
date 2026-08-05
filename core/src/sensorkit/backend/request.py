@@ -154,13 +154,8 @@ class ExtendedCall[R: ExtendedResponse, V: BaseModel](Call[R, V]):
 
         try:
             await self._event_mux.wait_ready()
-        except (asyncio.CancelledError, Exception) as e:
-            context.close()
-            self._future.set_exception(e)
-            raise
 
-        # Execute the initial request-response communication.
-        try:
+            # Execute the initial request-response communication.
             response = await self._invoke(timeout)
         except (asyncio.CancelledError, Exception) as e:
             context.close()
@@ -199,9 +194,9 @@ class ExtendedCall[R: ExtendedResponse, V: BaseModel](Call[R, V]):
             # leaks and warnings.
             if t.cancelled():
                 self._future.cancel()
-            elif e := t.exception():
+            elif err := t.exception():
                 if not self._future.done():
-                    self._future.set_exception(t.exception())
+                    self._future.set_exception(err)
             elif not self._future.done():
                 self._future.set_result(t.result())
 

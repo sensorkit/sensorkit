@@ -118,7 +118,7 @@ async def test_preview_caches_by_checksum(tmp_path):
 
 @pytest.mark.asyncio
 async def test_preview_invalid_fits_raises():
-    with pytest.raises(Exception):
+    with pytest.raises(OSError):
         await PreviewJPEG.from_fits(b"definitely not a FITS file")
 
 

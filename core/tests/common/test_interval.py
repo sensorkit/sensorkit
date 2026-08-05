@@ -273,9 +273,11 @@ def test_combine_performance():
     num_trees = 20
     num_intervals = 1000
     interval_length = timedelta(seconds=50)
-    random_sec = lambda: random.randint(0, 6)
     now = datetime.now()
     trees = []
+
+    def random_sec():
+        return random.randint(0, 6)
 
     for _ in range(num_trees):
         intervals = []
