@@ -182,7 +182,10 @@ class RequestResponseContext(BaseContext):
         async def _request_wrapper(payload: bytes):
             try:
                 res = await callback(payload)
-            except (asyncio.CancelledError, Exception) as e:
+            except asyncio.CancelledError:
+                logger.debug(f"dropping request {self.entity}.{name} due to cancellation")
+                raise
+            except Exception as e:
                 logger.opt(exception=e).debug(f"error in {self.entity}.{name} request callback")
                 res = RemoteRequestError.from_exception(e).encode()
 
