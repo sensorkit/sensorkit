@@ -126,11 +126,6 @@ def build_sk_tasks(
             FileNameTemplate(template=_FILE_NAME_TEMPLATE),
         )
 
-        # The controller mints the task id; `context` and `expiry_time` are recorded on the
-        # minted execution. `end_time` is kept as a domain field for downstream scheduling.
-        def _emit(task: StandardCollectTask) -> sk.TaskSubmission:
-            return task.submit(context=exposure_context, expiry_time=end_time)
-
         # Resolve rates for THIS exposure (non-TLE rate case only).
         # RatesFromStreakDistribution samples a fresh rate per call,
         # which is what we want for streak-training distribution.
@@ -141,14 +136,12 @@ def build_sk_tasks(
             else:
                 concrete_rates = request.rates.to_concrete_rates(exp_seconds)
 
-        # Target for RATE-mode frames, built lazily — for all-OFF /
-        # all-SIDEREAL requests (e.g. twilight flats) concrete_rates is
-        # None and to_sk_ratetarget would crash, so we only construct
-        # it on the branches that actually consume it.
+        # Target for RATE-mode frames. Called only from the branches that
+        # have RATE frames.
         # - TLE target → follow the TLE (PWI4 follow_tle)
         # - otherwise → RateTarget built from request's concrete rates
         # (to_sk_ratetarget converts AltAz/Lunar to ICRS using site+now)
-        def _rate_target():
+        def _rate_target(rates: Rates):
             if is_tle_target:
                 return sidereal_target  # already SKTLETarget via to_sk_target
             frame = (
@@ -158,7 +151,7 @@ def build_sk_tasks(
             )
             return _to_sk_ratetarget(
                 request.target,
-                concrete_rates,
+                rates,
                 site=config.site,
                 frame=frame,
             )
@@ -167,6 +160,7 @@ def build_sk_tasks(
             integration_time_seconds=exp_seconds,
             frame_count=frame_count,
         )
+        tasks: list[StandardCollectTask] = []
 
         # SIDEREAL and OFF both route through the non-rate target path:
         # the PWI4 generic controller points to ICRSTarget / AltAzTarget
@@ -174,7 +168,7 @@ def build_sk_tasks(
         # other sources use SIDEREAL; from our perspective they're the
         # same "no custom rate" case for SK task emission.
         if all(m != TrackingMode.RATE for m in modes):
-            yield _emit(
+            tasks.append(
                 StandardCollectTask(
                     target=sidereal_target,
                     camera_params=cam,
@@ -182,17 +176,17 @@ def build_sk_tasks(
                 )
             )
         elif all(m == TrackingMode.RATE for m in modes):
-            yield _emit(
+            tasks.append(
                 StandardCollectTask(
-                    target=_rate_target(),
+                    target=_rate_target(concrete_rates),
                     camera_params=cam,
                     end_time=end_time,
                 )
             )
         elif _is_rates_then_nonrate(modes):
-            yield _emit(
+            tasks.append(
                 StandardCollectTask(
-                    target=_rate_target(),
+                    target=_rate_target(concrete_rates),
                     camera_params=cam,
                     end_time=end_time,
                     sidereal_frames=[i for i, m in enumerate(modes) if m != TrackingMode.RATE],
@@ -200,7 +194,7 @@ def build_sk_tasks(
             )
         elif _is_nonrate_then_rates(modes):
             first_rate = modes.index(TrackingMode.RATE)
-            yield _emit(
+            tasks.append(
                 StandardCollectTask(
                     target=sidereal_target,
                     camera_params=CameraParameterSet(
@@ -210,9 +204,9 @@ def build_sk_tasks(
                     end_time=end_time,
                 )
             )
-            yield _emit(
+            tasks.append(
                 StandardCollectTask(
-                    target=_rate_target(),
+                    target=_rate_target(concrete_rates),
                     camera_params=CameraParameterSet(
                         integration_time_seconds=exp_seconds,
                         frame_count=frame_count - first_rate,
@@ -226,6 +220,9 @@ def build_sk_tasks(
                 f"{[m.value for m in modes]} — only uniform or "
                 f"rates-then-non-rate / non-rate-then-rates are implemented"
             )
+
+        for task in tasks:
+            yield task.submit(context=exposure_context, expiry_time=end_time)
 
 
 def _to_sk_target(burr_target: obs.Target) -> Target:
