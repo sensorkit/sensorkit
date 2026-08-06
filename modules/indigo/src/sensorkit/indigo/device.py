@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal
 
 from loguru import logger
@@ -312,14 +311,15 @@ class IndigoClient:
                         logger.exception(f"INDIGO device callback error: {e}")
 
 
-@dataclass
 class IndigoDevice:
     """Base class for SensorKit devices backed by an INDIGO server."""
 
-    config: IndigoDeviceConfig
-    device_connected: bool | None = field(default=None, init=False)
     device_name: ClassVar[str] = "Device"
-    _client: IndigoClient | None = field(default=None, init=False, repr=False)
+
+    def __init__(self, config: IndigoDeviceConfig):
+        self.config = config
+        self.device_connected: bool | None = None
+        self._client: IndigoClient | None = None
 
     @property
     def client(self) -> IndigoClient:

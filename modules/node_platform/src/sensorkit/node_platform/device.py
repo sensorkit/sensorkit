@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal
 
 import ourskyai_node_platform_api as osapi
@@ -12,16 +11,16 @@ from dotenv import dotenv_values
 from pydantic import BaseModel
 
 
-@dataclass
 class NodePlatformDevice:
     """Generic Node Platform device."""
 
-    config: NodePlatformDeviceConfig
-    _api: NodePlatformAPI | None = field(default=None, init=False)
-
-    device_connected: bool | None = field(default=None, init=False)
     device_name: ClassVar[str] = "Device"
-    _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
+
+    def __init__(self, config: NodePlatformDeviceConfig):
+        self.config = config
+        self.device_connected: bool | None = None
+        self._api: NodePlatformAPI | None = None
+        self._status_task: asyncio.Task | None = None
 
     @property
     def api(self) -> NodePlatformAPI:

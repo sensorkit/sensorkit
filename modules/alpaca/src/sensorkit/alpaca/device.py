@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal
 
 from loguru import logger
@@ -20,17 +19,18 @@ class AlpacaDeviceState(BaseModel):
     device_type: Literal[None] = None
 
 
-@dataclass
 class AlpacaDevice:
     """Generic Alpaca device."""
 
-    config: AlpacaDeviceConfig
-    device_connected: bool | None = field(default=None, init=False)
-    state: AlpacaDeviceState = field(init=False)
     device_name: ClassVar[str] = "Device"
     state_model: ClassVar[type[AlpacaDeviceState]] = AlpacaDeviceState
-    _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
-    _reconnect: Callable[[], Coroutine] | None = field(default=None, init=False, repr=False)
+
+    def __init__(self, config: AlpacaDeviceConfig):
+        self.config = config
+        self.device_connected: bool | None = None
+        self.state: AlpacaDeviceState = self.state_model()
+        self._status_task: asyncio.Task | None = None
+        self._reconnect: Callable[[], Coroutine] | None = None
 
     @property
     def address(self) -> str:

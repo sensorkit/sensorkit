@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass, field
 from typing import ClassVar, Literal
 
 from loguru import logger
@@ -89,16 +88,16 @@ def parse_thesky_response(response: bytes):
     raise TheSkyError(message="Could not parse response", code=-1)
 
 
-@dataclass
 class TheSkyDevice:
     """Generic TheSky device."""
 
-    config: TheSkyDeviceConfig
-
-    device_connected: bool | None = field(default=None, init=False)
     device_name: ClassVar[str] = "Device"
-    _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
-    _reconnect: Callable[[], Coroutine] | None = field(default=None, init=False, repr=False)
+
+    def __init__(self, config: TheSkyDeviceConfig):
+        self.config = config
+        self.device_connected: bool | None = None
+        self._status_task: asyncio.Task | None = None
+        self._reconnect: Callable[[], Coroutine] | None = None
 
     async def require_connected(self):
         """Verify the device is connected, attempting to reconnect if not."""
