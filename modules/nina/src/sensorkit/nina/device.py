@@ -7,7 +7,6 @@ import hashlib
 import hmac
 import os
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal
 
 import httpx
@@ -16,16 +15,17 @@ from loguru import logger
 from pydantic import BaseModel
 
 
-@dataclass
 class NinaDevice:
     """Generic NINA device."""
 
-    config: NinaDeviceConfig
-    device_connected: bool | None = field(default=None, init=False)
     device_name: ClassVar[str] = "Device"
-    _client: NinaClient | None = field(default=None, init=False, repr=False)
-    _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
-    _reconnect: Callable[[], Coroutine] | None = field(default=None, init=False, repr=False)
+
+    def __init__(self, config: NinaDeviceConfig):
+        self.config = config
+        self.device_connected: bool | None = None
+        self._client: NinaClient | None = None
+        self._status_task: asyncio.Task | None = None
+        self._reconnect: Callable[[], Coroutine] | None = None
 
     @property
     def client(self) -> NinaClient:

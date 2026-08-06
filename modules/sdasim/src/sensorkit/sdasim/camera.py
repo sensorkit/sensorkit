@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import ClassVar
 
@@ -67,7 +66,6 @@ class SdasimCameraStatus(BaseModel):
 
 
 @sk.declare_device
-@dataclass
 class SdasimCamera:
     """Simulated camera backed by the sdasim renderer.
 
@@ -77,10 +75,12 @@ class SdasimCamera:
     to -- the "hardware" is the in-process sdasim renderer.
     """
 
-    config: SdasimCameraConfig
     device_name: ClassVar[str] = "Camera"
-    device_connected: bool | None = field(default=None, init=False)
-    _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
+
+    def __init__(self, config: SdasimCameraConfig):
+        self.config = config
+        self.device_connected: bool | None = None
+        self._status_task: asyncio.Task | None = None
 
     # --- lifecycle scaffolding --------------------------------------------
 

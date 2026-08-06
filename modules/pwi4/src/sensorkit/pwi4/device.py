@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal
 
 import httpx
@@ -33,16 +32,17 @@ def _to_int(v: Any, default: int = 0) -> int:
         return default
 
 
-@dataclass
 class PWI4Device:
     """Generic PWI4 device."""
 
-    config: PWI4DeviceConfig
-    client: PWI4Client
-    device_connected: bool | None = field(default=None, init=False)
     device_name: ClassVar[str] = "Device"
-    _status_task: asyncio.Task | None = field(default=None, init=False, repr=False)
-    _reconnect: Callable[[], Coroutine] | None = field(default=None, init=False, repr=False)
+
+    def __init__(self, config: PWI4DeviceConfig, client: PWI4Client):
+        self.config = config
+        self.client = client
+        self.device_connected: bool | None = None
+        self._status_task: asyncio.Task | None = None
+        self._reconnect: Callable[[], Coroutine] | None = None
 
     async def require_connected(self):
         """Verify the device is connected, attempting to reconnect if not."""
