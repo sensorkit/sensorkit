@@ -64,6 +64,41 @@ AMBIGUOUS = """\
 *******************************************************************************
 """
 
+AMBIGUOUS_SMALL_BODY = """\
+*******************************************************************************
+JPL/DASTCOM            Small-body Index Search Results     2026-Aug-05 19:18:18
+
+ Comet AND asteroid index search:
+
+   NAME = Smith;
+
+ Matching small-bodies:
+
+    Record #  Epoch-yr  Primary Desig  >MATCH NAME<
+    --------  --------  -------------  -------------------------
+        3351            1980 RN1        Smith
+    90004549    2021    C/2019 K7       Smith
+
+ (2 matches. To SELECT, enter record # (integer), followed by semi-colon.)
+*******************************************************************************
+"""
+
+# One object, but its banner spells the label "Revised :" and its prose leads
+# lines with numbers - the two things that together used to turn a resolvable
+# name into a list of nonsense candidates.
+SPACECRAFT = """\
+*******************************************************************************
+ Revised : May 05, 2020           NEAR Spacecraft  / (Sun)                  -93
+ Web-site: Feb 10, 2013     http://near.jhuapl.edu/sci-eng.html
+
+ SPACECRAFT
+  Power          :  400 watts @ 2.2 au (max. distance from Sun)
+                   1800 watts @ 1 au
+  Propulsion     : 450 Newton main thruster
+                   1450 m/s total delta-V (209 kg hydrazine 109 kg NTO oxidizer)
+*******************************************************************************
+"""
+
 NO_MATCH = """\
 *******************************************************************************
 JPL/DASTCOM            Small-body Index Search Results     2026-Jul-21 11:26:33
@@ -131,6 +166,12 @@ class TestResolve:
             assert await resolve("Ceres") == ("Ceres", "1 Ceres")
 
     @pytest.mark.asyncio
+    async def test_resolves_a_spacecraft_banner(self):
+        """The banner label carries a stray space in some spacecraft records."""
+        with patch("sensorkit.otto.horizons._horizons_get", AsyncMock(return_value=SPACECRAFT)):
+            assert await resolve("Shoemaker") == ("Shoemaker", "NEAR Spacecraft")
+
+    @pytest.mark.asyncio
     async def test_passes_the_name_through_verbatim(self):
         """Horizons does its own major-then-small-body search; we never rewrite the query."""
         get = AsyncMock(return_value=SMALL_BODY)
@@ -162,15 +203,25 @@ class TestResolve:
 class TestCandidates:
     """What an unresolvable name offers the operator to fix their config with."""
 
-    def test_ambiguous_response_lists_candidate_ids(self):
-        """The operator needs the ID# to disambiguate, so each row must carry it."""
-        # Column rules and banner separators are not candidates
-        assert candidates(AMBIGUOUS) == ["5 (Jupiter Barycenter)", "599 (Jupiter)"]
+    def test_ambiguous_response_lists_major_body_ids(self):
+        """Column rules, the banner, and the footer are not candidates."""
+        assert candidates(AMBIGUOUS) == ["5", "599"]
+
+    def test_small_body_listing_lists_selectable_record_numbers(self):
+        """A bare record number would resolve as a major-body ID instead."""
+        assert candidates(AMBIGUOUS_SMALL_BODY) == ["3351;", "90004549;"]
+
+    def test_limit_caps_the_listing(self):
+        assert candidates(AMBIGUOUS, limit=1) == ["5"]
 
     def test_no_match_response_has_nothing_to_offer(self):
         """A typo has no candidates, which is how resolve reports it as unknown
         rather than ambiguous."""
         assert candidates(NO_MATCH) == []
+
+    def test_object_data_offers_nothing(self):
+        """Numbers leading a line of object data are measurements, not identifiers."""
+        assert candidates(SPACECRAFT) == []
 
 
 class TestParseEphemeris:

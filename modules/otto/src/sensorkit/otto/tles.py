@@ -107,10 +107,7 @@ async def fetch(
             objects_set = set(objects)
 
             i = 0
-            while i < len(lines):
-                if i + 1 >= len(lines):
-                    break
-
+            while i + 1 < len(lines):
                 line1 = lines[i].strip()
                 line2 = lines[i + 1].strip()
 
@@ -133,13 +130,13 @@ async def fetch(
                         "line2": line2
                     }
 
-                    # Optional: early exit if we've found all requested satellites
-                    # (only valid without orbit regimes, which need a full catalog scan)
-                    if not orbits_set and len(tles) == len(objects_set):
-                        logger.debug(f"Found all {len(objects_set)} requested satellites, stopping parse")
-                        break
-
                 i += 2
+
+                # Optional: early exit if we've found all requested satellites
+                # (only valid without orbit regimes, which need a full catalog scan)
+                if not orbits_set and len(tles) == len(objects_set):
+                    logger.debug(f"Found all {len(objects_set)} requested satellites, stopping parse")
+                    break
 
             # Warn if any requested satellites were not found
             missing = objects_set - set(tles.keys())

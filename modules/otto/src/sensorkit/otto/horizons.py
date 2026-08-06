@@ -128,12 +128,13 @@ _NAME_SMALL_RE = re.compile(
     r"^JPL/HORIZONS\s+(.+?)\s+\d{4}-[A-Za-z]{3}-\d{2}\s+\d{2}:\d{2}:\d{2}", re.MULTILINE
 )
 # The major-body banner is "Revised: <date>  <name>  [<id>]", with the date in
-# no fixed format ("April 12, 2021" and "2019-Jan-02" both occur) and the id
-# sometimes absent — so anchor on the column gaps rather than the date shape.
-_NAME_MAJOR_RE = re.compile(
-    r"^\s*Revised:\s*\S.*?\s{2,}(\S.*?)(?:\s{2,}|\s*$)", re.MULTILINE
-)
-_MAJOR_ROW_RE = re.compile(r"^\s*(-?\d+)\s+(.+?)\s*$")
+# no fixed format ("April 12, 2021" and "2019-Jan-02" both occur), the id
+# sometimes absent, and the label sometimes spelled "Revised :" (spacecraft -93)
+# — so anchor on the column gaps rather than the date shape.
+_NAME_MAJOR_RE = re.compile(r"^\s*Revised\s*:\s*\S.*?\s{2,}(\S.*?)(?:\s{2,}|\s*$)", re.MULTILINE)
+# A listing row leads with its identifier, negative for spacecraft; every other
+# line in a listing starts with something other than an integer.
+_CANDIDATE_ROW_RE = re.compile(r"^\s*(-?\d+)\s+\S")
 
 
 def _extract_name(text: str) -> str | None:
@@ -153,41 +154,29 @@ def _is_single_resolve(text: str) -> bool:
     )
 
 
-def candidates(text: str) -> list[str]:
-    """Pull operator-facing candidate labels out of an ambiguous-match response.
+def candidates(text: str, limit: int = 20) -> list[str]:
+    """Names an ambiguous match can be narrowed to, ready to paste into config.
 
-    Major-body tables list an ID# per row, which is what the operator should put
-    in the config; small-body listings are returned as-is for reference. A
-    response that matched nothing has no candidates to offer, so it yields an
-    empty list — that is how `resolve` tells "ambiguous" from "unknown".
+    Each listed name resolves on its own: an ID# for a major body, a record
+    number for a small body. A response carrying no listing yields an empty
+    list, which is how `resolve` tells "ambiguous" from "unknown".
+
+    Args:
+        text: A Horizons response.
+        limit: Maximum number of names to return.
     """
-    if "No matches found" in text:
-        return []
-
     out: list[str] = []
-    started = False
+    suffix: str | None = None
     for line in text.splitlines():
-        if re.match(r"\s*ID#", line) or "Matching small-bodies" in line:
-            started = True
-            continue
-        if not started:
-            continue
-        stripped = line.strip()
-        if not stripped:
-            if out:
-                break  # blank line after the rows ends the table
-            continue
-        if set(stripped) <= {"-", "*", " "}:
-            continue  # column rule or banner separator
-        if stripped.startswith("Number of matches"):
-            break
-        if match := _MAJOR_ROW_RE.match(line):
-            ident, rest = match.group(1), match.group(2)
-            label = re.split(r"\s{2,}", rest.strip())[0].strip()
-            out.append(f"{ident} ({label})")
-        else:
-            out.append(stripped)
-    return out[:20]
+        # Record numbers overlap major-body IDs (501 is both Io and asteroid
+        # Urhixidur), and only select the small-body record with a trailing ";".
+        if "Multiple major-bodies" in line:
+            suffix = ""
+        elif "Matching small-bodies" in line:
+            suffix = ";"
+        elif suffix is not None and (row := _CANDIDATE_ROW_RE.match(line)):
+            out.append(row.group(1) + suffix)
+    return out[:limit]
 
 
 async def resolve(name: str, timeout: float = 30.0) -> tuple[str, str] | None:
