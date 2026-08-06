@@ -123,11 +123,28 @@ udl = [
 ]
 
 [dependency-groups]
-dev = [
+# Read sources without importing them, so CI can run them against the source
+# tree alone.
+lint = [
+    "ruff~=0.9",
+]
+
+complexity = [
     "complexipy>=6.2.0",
+]
+
+# Resolves the root package through the import system, so it needs sensorkit
+# installed, though none of its dependencies.
+imports = [
+    "import-linter>=2.1",
+]
+
+dev = [
+    {include-group = "lint"},
+    {include-group = "complexity"},
+    {include-group = "imports"},
     "coverage>=7.8.0",
     "httpx>=0.28.0",
-    "import-linter>=2.1",
     "pygtrie>=2.5.0",
     "pytest-asyncio>=0.25.2",
     "pytest-cov>=6.1.1",
@@ -135,7 +152,6 @@ dev = [
     "pytest-mock>=3.14.0",
     "pytest-timeout>=2.4.0",
     "pytest>=8.3.4",
-    "ruff~=0.9",
     "sensorkit[thesky-simulator]",
     "testcontainers[nats]>=4.9.0",
     "zensical>=0.0.1",

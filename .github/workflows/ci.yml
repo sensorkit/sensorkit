@@ -1,0 +1,164 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install ruff
+        run: uv sync --locked --only-group lint
+
+      - name: Lint sources
+        run: uv run --no-sync ruff check
+
+  imports:
+    name: Import layering
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install import-linter
+        run: |
+          uv sync --locked --only-group imports
+
+          # grimp locates the root package through the import system, so sensorkit
+          # has to be importable.
+          uv pip install --no-deps -e .
+
+      - name: Check import layering
+        run: uv run --no-sync lint-imports
+
+  complexity:
+    name: Complexity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install complexipy
+        run: uv sync --locked --only-group complexity
+
+      - name: Check code complexity
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case "$EVENT_NAME" in
+            pull_request) base=$(git merge-base "origin/$BASE_REF" HEAD || true) ;;
+            push)         base="$BEFORE" ;;
+            *)            base="" ;;
+          esac
+
+          # The pre-push tip is absent after a force push, and is the null SHA
+          # on a branch's first push.
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base=$(git rev-parse --verify --quiet HEAD^ || true)
+          fi
+
+          if [ -z "$base" ]; then
+            echo "No comparable base commit; skipping."
+            exit 0
+          fi
+
+          uv run --no-sync complexipy --no-ignore --diff "$base"
+
+  test:
+    name: Test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      # Device drivers log non-ASCII (degree signs); keep Windows off cp1252.
+      PYTHONUTF8: "1"
+      COV: ${{ matrix.os == 'ubuntu-latest' && '--cov --cov-report=xml' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install
+        # The systemd extra is an sdist needing headers the runner lacks, and
+        # journal logging degrades gracefully without it.
+        run: uv sync --locked --all-extras --no-extra systemd --dev
+
+      - name: Cache JPL ephemeris
+        uses: actions/cache@v6
+        with:
+          path: de421.bsp
+          key: de421-bsp-${{ runner.os }}
+
+      - name: Fetch JPL ephemeris
+        run: uv run --no-sync python -c "from skyfield.api import load; load('de421.bsp')"
+
+      - name: Run tests
+        shell: bash
+        run: uv run --no-sync pytest -q --timeout=300 $COV 2>&1 | tee test.log
+
+      - name: Summarize tests
+        if: ${{ !cancelled() && hashFiles('test.log') != '' }}
+        shell: bash
+        run: |
+          {
+            echo "### Tests"
+            echo
+            echo '```'
+            tail -1 test.log
+
+            # The data file pytest-cov leaves behind yields the total on its
+            # own, so the per-file table stays out of the log.
+            if [ -n "$COV" ]; then
+              echo "coverage: $(uv run --no-sync coverage report --format=total 2>/dev/null || echo n/a)%"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage
+        if: ${{ !cancelled() && matrix.os == 'ubuntu-latest' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore

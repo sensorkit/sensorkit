@@ -3059,6 +3059,9 @@ udl = [
 ]
 
 [package.dev-dependencies]
+complexity = [
+    { name = "complexipy" },
+]
 dev = [
     { name = "complexipy" },
     { name = "coverage" },
@@ -3075,6 +3078,12 @@ dev = [
     { name = "sensorkit", extra = ["thesky-simulator"] },
     { name = "testcontainers", extra = ["nats"] },
     { name = "zensical" },
+]
+imports = [
+    { name = "import-linter" },
+]
+lint = [
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -3130,6 +3139,7 @@ requires-dist = [
 provides-extras = ["alpaca", "autoslew", "burr", "filesys", "indigo", "nina", "node-platform", "otto", "pwi4", "sdasim", "senpai", "sky-transmission", "slack", "systemd", "thesky", "thesky-simulator", "udl", "webapi"]
 
 [package.metadata.requires-dev]
+complexity = [{ name = "complexipy", specifier = ">=6.2.0" }]
 dev = [
     { name = "complexipy", specifier = ">=6.2.0" },
     { name = "coverage", specifier = ">=7.8.0" },
@@ -3147,6 +3157,8 @@ dev = [
     { name = "testcontainers", extras = ["nats"], specifier = ">=4.9.0" },
     { name = "zensical", specifier = ">=0.0.1" },
 ]
+imports = [{ name = "import-linter", specifier = ">=2.1" }]
+lint = [{ name = "ruff", specifier = "~=0.9" }]
 
 [[package]]
 name = "setuptools"
