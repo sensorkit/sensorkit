@@ -7,6 +7,7 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
 from sensorkit.thesky.device import (
@@ -39,7 +40,9 @@ class TheSkyFocuser(TheSkyDevice):
 
         # Initialize the focuser
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
         # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
@@ -49,7 +52,7 @@ class TheSkyFocuser(TheSkyDevice):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.focuser_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -129,45 +132,30 @@ class TheSkyFocuser(TheSkyDevice):
         logger.debug(f"changed focuser position to {cmd.position}")
 
     async def status_publish(self):
-        while True:
-            try:
-                resp = await self.execute(
-                    """
-                    var Out;
-                    Out = [
-                        ccdsoftCamera.focIsConnected,
-                        ccdsoftCamera.focPosition
-                    ];
-                    """
-                )
-            except Exception as e:
-                logger.exception(f"Error in status_publish execute: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
+        resp = await self.execute(
+            """
+            var Out;
+            Out = [
+                ccdsoftCamera.focIsConnected,
+                ccdsoftCamera.focPosition
+            ];
+            """
+        )
 
-            try:
-                connected, position = [float(x) for x in resp.split(",")]
+        connected, position = [float(x) for x in resp.split(",")]
 
-                connected = bool(connected)
-                self.device_connected = connected
+        connected = bool(connected)
+        self.device_connected = connected
 
-                self.focuser_position = float(position)
+        self.focuser_position = float(position)
 
-                # logger.debug(
-                #     f"TheSky focuser status: connected={connected}, position={self.focuser_position}"
-                # )
+        # logger.debug(
+        #     f"TheSky focuser status: connected={connected}, position={self.focuser_position}"
+        # )
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
-                await device.publish(FocusPosition(position=self.focuser_position))
-
-            except Exception as e:
-                logger.warning(f"Failed to update TheSky focuser status ({e})")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            # FIXME: Account for query time
-            await asyncio.sleep(self.config.status_frequency)
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
+        await device.publish(FocusPosition(position=self.focuser_position))
 
 
 class TheSkyFocuserConfig(TheSkyDeviceConfig[TheSkyFocuser]):

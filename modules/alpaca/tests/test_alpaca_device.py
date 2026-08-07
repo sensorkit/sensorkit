@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the Alpaca base device class."""
 
-import asyncio
-
 import pytest
 
 from sensorkit.alpaca.device import (
@@ -115,21 +113,3 @@ class TestAlpacaDevice:
         sdk_device = FakeAlpacaSDKDevice()
         await device.put(sdk_device, "BinX", 2)
         assert sdk_device.BinX == 2
-
-    @pytest.mark.asyncio
-    async def test_start_stop_status_loop(self):
-        config = AlpacaDeviceConfig(host="localhost")
-        device = AlpacaDevice(config)
-
-        called = asyncio.Event()
-
-        async def dummy_loop():
-            called.set()
-            await asyncio.sleep(100)
-
-        device.start_status_loop(dummy_loop())
-        await asyncio.wait_for(called.wait(), timeout=1.0)
-        assert device._status_task is not None
-
-        await device.stop_status_loop()
-        assert device._status_task is None

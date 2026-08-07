@@ -4,9 +4,11 @@
 from dataclasses import replace
 
 import pytest
+import pytest_asyncio
 
 from sensorkit.astro.coords import Horizontal
 from sensorkit.astro.target import AltAzTarget
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.node_platform.device import DeviceConnectionError
 from sensorkit.node_platform.mount import (
     NodePlatformMount,
@@ -73,8 +75,8 @@ def api():
     return api
 
 
-@pytest.fixture
-def mount(api):
+@pytest_asyncio.fixture
+async def mount(api):
     config = NodePlatformMountConfig(
         device_type="mount",
         host="localhost",
@@ -87,14 +89,14 @@ def mount(api):
     m.device_connected = True
     m.mount_slewing = False
     m.mount_tracking = False
-    m._fast_status_task = None
     m._geodetic = None
+    m.status_loop = AsyncLoop(m.status_publish, interval=config.status_frequency_slow)
+    m.fast_loop = AsyncLoop(m.status_publish_fast, interval=config.status_frequency_fast)
 
     yield m
 
-    # Following a target starts a status loop that publishes pointing several times a second.
-    # Left running, it accumulates across the session and slows every later test.
-    m._stop_fast_status()
+    await m.status_loop.stop()
+    await m.fast_loop.stop()
 
 
 class TestMountConfig:
@@ -200,26 +202,3 @@ class TestMountFollowTarget:
 
         calls = api.find_calls("v1_mount_follow_tle")
         assert len(calls) == 1
-
-
-class TestMountFastStatus:
-    @pytest.mark.asyncio
-    async def test_start_fast_status(self, mount):
-        assert mount._fast_status_task is None
-        mount._start_fast_status()
-        assert mount._fast_status_task is not None
-        mount._stop_fast_status()
-
-    @pytest.mark.asyncio
-    async def test_stop_fast_status(self, mount):
-        mount._start_fast_status()
-        mount._stop_fast_status()
-        assert mount._fast_status_task is None
-
-    @pytest.mark.asyncio
-    async def test_fast_active_property(self, mount):
-        assert mount._fast_status_active is False
-        mount._start_fast_status()
-        assert mount._fast_status_active is True
-        mount._stop_fast_status()
-        assert mount._fast_status_active is False

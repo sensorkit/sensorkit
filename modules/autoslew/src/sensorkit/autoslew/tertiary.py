@@ -22,6 +22,7 @@ from pydantic import BaseModel
 import sensorkit.api as sk
 from sensorkit.alpaca.device import AlpacaDeviceConfig, AlpacaDeviceState
 from sensorkit.autoslew.device import AutoslewDevice, _num
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect, Stop
 
 
@@ -51,12 +52,14 @@ class AutoslewTertiary(AutoslewDevice):
         self._port: int | None = None
 
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self._publish_status, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.tertiary_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -91,15 +94,6 @@ class AutoslewTertiary(AutoslewDevice):
             with contextlib.suppress(Exception):
                 self._port = int(_num(await self.action("getcurrentnasmythport")))
             await device.publish(AutoslewTertiaryStatus(port=self._port))
-
-    async def status_publish(self):
-        while True:
-            try:
-                await self._publish_status()
-            except Exception as e:
-                logger.exception(f"Error in tertiary status publish: {e}")
-
-            await asyncio.sleep(self.config.status_frequency)
 
 
 class AutoslewTertiaryConfig(AlpacaDeviceConfig[AutoslewTertiary]):

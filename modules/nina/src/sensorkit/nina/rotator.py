@@ -8,6 +8,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std import Connect, Connected, Disconnect, Stop
 from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
@@ -44,7 +45,9 @@ class NinaRotator(NinaDevice):
 
         # Initialize rotator
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
         # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
@@ -54,7 +57,7 @@ class NinaRotator(NinaDevice):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.rotator_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -102,42 +105,34 @@ class NinaRotator(NinaDevice):
         logger.debug(f"changed rotator to position {self.rotator_position:.1f}°")
 
     async def status_publish(self):
-        while True:
-            try:
-                info = await self.info("rotator")
-                connected = info.get("Connected", False)
-                self.device_connected = connected
+        info = await self.info("rotator")
+        connected = info.get("Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected:
-                    mechanical_position = info.get("MechanicalPosition")
-                    position = info.get("Position")
+        if connected:
+            mechanical_position = info.get("MechanicalPosition")
+            position = info.get("Position")
 
-                    if mechanical_position is not None:
-                        self.rotator_position = float(mechanical_position)
-                        await device.publish(RotatorPosition(position=self.rotator_position))
+            if mechanical_position is not None:
+                self.rotator_position = float(mechanical_position)
+                await device.publish(RotatorPosition(position=self.rotator_position))
 
-                    fields: dict = {"is_moving": info.get("IsMoving", False)}
-                    if mechanical_position is not None:
-                        fields["mechanical_position"] = float(mechanical_position)
-                    if position is not None:
-                        fields["position"] = float(position)
-                    step_size = info.get("StepSize")
-                    if step_size is not None:
-                        fields["step_size"] = step_size
+            fields: dict = {"is_moving": info.get("IsMoving", False)}
+            if mechanical_position is not None:
+                fields["mechanical_position"] = float(mechanical_position)
+            if position is not None:
+                fields["position"] = float(position)
+            step_size = info.get("StepSize")
+            if step_size is not None:
+                fields["step_size"] = step_size
 
-                    await device.publish(NinaRotatorStatus(**fields))
+            await device.publish(NinaRotatorStatus(**fields))
 
-                    # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
-                    # logger.debug(f"NINA rotator status: connected={connected}, {fields_str}")
-            except Exception as e:
-                logger.exception(f"Error in rotator status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+            # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+            # logger.debug(f"NINA rotator status: connected={connected}, {fields_str}")
 
 
 class NinaRotatorConfig(NinaDeviceConfig[NinaRotator]):

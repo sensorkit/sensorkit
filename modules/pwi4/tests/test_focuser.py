@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Test PWI4 focuser device."""
 
-import asyncio
-
 import pytest
 
 from sensorkit.pwi4.device import DeviceConnectionError
@@ -97,11 +95,8 @@ class TestPWI4Focuser:
         focuser = PWI4Focuser(config=config, client=client)
         published = await recorder()
 
-        task = asyncio.create_task(focuser.status_publish())
+        await focuser.status_publish()
 
-        try:
-            assert (await published.wait_for(FocusPosition)).position == 15000.0
-            assert focuser.device_connected is True
-            assert published.keys() >= {"Connected", "Enabled", "FocusPosition"}
-        finally:
-            task.cancel()
+        assert (await published.wait_for(FocusPosition)).position == 15000.0
+        assert focuser.device_connected is True
+        assert published.keys() >= {"Connected", "Enabled", "FocusPosition"}

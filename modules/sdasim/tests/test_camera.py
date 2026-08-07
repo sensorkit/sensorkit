@@ -247,22 +247,6 @@ class TestLifecycle:
         with pytest.raises(DeviceConnectionError):
             await camera.require_connected()
 
-    @pytest.mark.asyncio
-    async def test_status_loop_start_and_stop(self):
-        camera = self._camera()
-        ran = asyncio.Event()
-
-        async def loop():
-            ran.set()
-            await asyncio.sleep(3600)
-
-        camera.start_status_loop(loop())
-        await asyncio.wait_for(ran.wait(), timeout=1.0)
-        assert camera._status_task is not None
-
-        await camera.stop_status_loop()
-        assert camera._status_task is None
-
 
 class TestArchetype:
     def test_camera_capture_handler_exists(self):

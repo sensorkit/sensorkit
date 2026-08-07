@@ -27,6 +27,7 @@ from sensorkit.astro.target import (
     RateTarget,
     TLETarget,
 )
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
@@ -92,9 +93,7 @@ def altaz_rates_to_radec_rates(
 
     # Current AltAz coordinate
     coord_altaz = SkyCoord(
-        alt=alt_deg * u.deg,
-        az=az_deg * u.deg,
-        frame=AltAz(obstime=time, location=location)
+        alt=alt_deg * u.deg, az=az_deg * u.deg, frame=AltAz(obstime=time, location=location)
     )
 
     # Convert to RA/Dec
@@ -110,7 +109,7 @@ def altaz_rates_to_radec_rates(
     new_coord_altaz = SkyCoord(
         alt=new_alt * u.deg,
         az=new_az * u.deg,
-        frame=AltAz(obstime=time + dt * u.s, location=location)
+        frame=AltAz(obstime=time + dt * u.s, location=location),
     )
 
     # Transform to RA/Dec
@@ -144,7 +143,6 @@ class NodePlatformMount(NodePlatformDevice):
 
         self.mount_slewing: bool | None = None
         self.mount_tracking: bool | None = None
-        self._fast_status_task: asyncio.Task | None = None
         self._sidereal = False
 
         # Cache for site info (location + time)
@@ -152,8 +150,14 @@ class NodePlatformMount(NodePlatformDevice):
         self._geodetic: Geodetic | None = None
         self._location: EarthLocation | None = None
 
-        # Start slow status publishing
-        self.start_status_loop(self.status_publish_slow())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency_slow, log=True
+        )
+        self.fast_loop = AsyncLoop(
+            self.status_publish_fast, interval=self.config.status_frequency_fast, log=True
+        )
+
+        self.status_loop.start()
 
         # Wait for initial status
         async with asyncio.timeout(self.config.timeout):
@@ -197,7 +201,8 @@ class NodePlatformMount(NodePlatformDevice):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency_slow)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
+        await self.fast_loop.stop()
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 
@@ -223,7 +228,7 @@ class NodePlatformMount(NodePlatformDevice):
 
     @sk.command_handler
     async def mount_deinit(self, cmd: Deinit):
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         await self.mount_stop(Stop())
         await self.mount_park(MoveToPark())
         await self.mount_disable(Disable())
@@ -266,7 +271,7 @@ class NodePlatformMount(NodePlatformDevice):
         logger.debug("stopped mount")
         self._sidereal = False
 
-        self._stop_fast_status()
+        await self.fast_loop.stop()
 
     @sk.command_handler
     async def mount_home(self, cmd: Home):
@@ -328,7 +333,7 @@ class NodePlatformMount(NodePlatformDevice):
 
                 await self._wait_for_mount(tracking=True)
                 self._sidereal = True
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following RA/Dec target")
 
@@ -342,7 +347,7 @@ class NodePlatformMount(NodePlatformDevice):
                 await self.api.call("v1_go_to_mount_coordinates", req)
 
                 await self._wait_for_mount(tracking=False)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following Alt/Az target")
 
@@ -356,7 +361,7 @@ class NodePlatformMount(NodePlatformDevice):
                 await self.api.call("v1_mount_follow_tle", req)
 
                 await self._wait_for_mount(tracking=True)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following TLE target")
 
@@ -381,7 +386,7 @@ class NodePlatformMount(NodePlatformDevice):
                 await self.api.call("v1_start_mount_track_path", req)
 
                 await self._wait_for_mount(tracking=True)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following Rate target")
 
@@ -414,7 +419,7 @@ class NodePlatformMount(NodePlatformDevice):
                 await self.api.call("v1_start_mount_track_path", req)
 
                 await self._wait_for_mount(tracking=True)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following Ephemeris target")
 
@@ -422,7 +427,7 @@ class NodePlatformMount(NodePlatformDevice):
                 match cmd.target.frame:
                     case ReferenceFrame.ALTAZ:
                         logger.debug("disabling tracking")
-                        self._stop_fast_status()
+                        await self.fast_loop.stop()
                         await self.api.call("v1_disable_mount_tracking")
                         await self._wait_for_mount(tracking=False, await_onset=False)
                         logger.debug("disabled tracking")
@@ -431,7 +436,7 @@ class NodePlatformMount(NodePlatformDevice):
                         await self.api.call("v1_enable_mount_tracking")
                         await self._wait_for_mount(tracking=True, await_onset=False)
                         self._sidereal = True
-                        self._start_fast_status()
+                        self.fast_loop.start()
                         logger.debug("enabled sidereal tracking")
 
                     case _:
@@ -492,21 +497,6 @@ class NodePlatformMount(NodePlatformDevice):
                 if status.is_slewing == slewing and status.is_tracking == tracking:
                     break
                 await asyncio.sleep(0.1)
-
-    def _start_fast_status(self):
-        if self._fast_status_task is None or self._fast_status_task.done():
-            logger.debug("starting fast mount status loop")
-            self._fast_status_task = asyncio.create_task(self.status_publish_fast())
-
-    def _stop_fast_status(self):
-        if self._fast_status_task is not None and not self._fast_status_task.done():
-            logger.debug("stopping fast mount status loop")
-            self._fast_status_task.cancel()
-            self._fast_status_task = None
-
-    @property
-    def _fast_status_active(self) -> bool:
-        return self._fast_status_task is not None and not self._fast_status_task.done()
 
     async def _publish_mount_status(self, status: osapi.V2MountStatus):
         self.mount_slewing = status.is_slewing
@@ -602,70 +592,29 @@ class NodePlatformMount(NodePlatformDevice):
         if props:
             await sk.device().publish(OTStatus(**props))
 
-    async def status_publish_slow(self):
-        while True:
-            # Mount
-            try:
-                # Always get mount status for connection/slewing/tracking state
-                status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
-                self.device_connected = status.connected
-                self.mount_slewing = status.is_slewing
-                self.mount_tracking = status.is_tracking
+    async def status_publish(self):
+        # Mount
+        status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
+        self.device_connected = status.connected
+        self.mount_slewing = status.is_slewing
+        self.mount_tracking = status.is_tracking
 
-                await sk.device().publish(Connected(is_connected=status.connected))
-                await sk.device().publish(Slewing(is_slewing=self.mount_slewing))
-                await sk.device().publish(Tracking(is_tracking=self.mount_tracking))
+        await sk.device().publish(Connected(is_connected=status.connected))
+        await sk.device().publish(Slewing(is_slewing=self.mount_slewing))
+        await sk.device().publish(Tracking(is_tracking=self.mount_tracking))
 
-                # Only publish pointing/rates if the fast loop isn't handling it
-                if not self._fast_status_active:
-                    await self._publish_mount_status(status)
-            except Exception as e:
-                logger.exception(f"Error in slow status_publish: {e}")
-                await asyncio.sleep(self.config.status_frequency_slow)
-                continue
+        # Only publish pointing/rates if the fast loop isn't handling it
+        if not self.fast_loop.active:
+            await self._publish_mount_status(status)
 
-            # Optical tube
-            try:
-                ot: osapi.V1OpticalTubeStatus = await self.api.call("v1_get_optical_tube_status")
-                temps = await self._get_ot_temperatures()
-                await self._publish_ot_status(ot, temps)
-            except Exception as e:
-                logger.warning(f"Failed to update OT status ({e})")
-                await asyncio.sleep(self.config.status_frequency_slow)
-                continue
-
-            # ot_parts = []
-            # if ot.fans:
-            #     for fan in ot.fans.statuses:
-            #         role = fan.role.value if hasattr(fan.role, "value") else str(fan.role)
-            #         ot_parts.append(f"fan_{role}={'on' if fan.is_on else 'off'}")
-            # if ot.heaters:
-            #     for heater in ot.heaters.statuses:
-            #         role = heater.role.value if hasattr(heater.role, "value") else str(heater.role)
-            #         ot_parts.append(f"heater_{role}={heater.power}%")
-            # for sensor in temps or []:
-            #     ot_parts.append(f"temp_{sensor['role']}={sensor['temperatureCelsius']}°C")
-            # ot_str = ", ".join(ot_parts)
-            # logger.debug(
-            #     f"NodePlatform mount status: connected={self.device_connected}, "
-            #     f"slewing={self.mount_slewing}, tracking={self.mount_tracking}, "
-            #     f"{ot_str}"
-            # )
-
-            await asyncio.sleep(self.config.status_frequency_slow)
+        # Optical tube
+        ot: osapi.V1OpticalTubeStatus = await self.api.call("v1_get_optical_tube_status")
+        temps = await self._get_ot_temperatures()
+        await self._publish_ot_status(ot, temps)
 
     async def status_publish_fast(self):
-        while True:
-            # Mount
-            try:
-                status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
-                await self._publish_mount_status(status)
-            except Exception as e:
-                logger.warning(f"Error in fast status_publish ({e})")
-                await asyncio.sleep(self.config.status_frequency_fast)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency_fast)
+        status: osapi.V2MountStatus = await self.api.call("v2_get_mount_status")
+        await self._publish_mount_status(status)
 
     def _rate_track_samples(
         self,

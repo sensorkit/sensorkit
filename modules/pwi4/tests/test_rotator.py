@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Test PWI4 rotator device."""
 
-import asyncio
-
 import pytest
 
 from sensorkit.pwi4.device import DeviceConnectionError
@@ -96,11 +94,8 @@ class TestPWI4Rotator:
         rotator = PWI4Rotator(config=config, client=client)
         published = await recorder()
 
-        task = asyncio.create_task(rotator.status_publish())
+        await rotator.status_publish()
 
-        try:
-            assert (await published.wait_for(RotatorPosition)).position == 90.0
-            assert rotator.device_connected is True
-            assert published.keys() >= {"Connected", "Enabled", "RotatorPosition"}
-        finally:
-            task.cancel()
+        assert (await published.wait_for(RotatorPosition)).position == 90.0
+        assert rotator.device_connected is True
+        assert published.keys() >= {"Connected", "Enabled", "RotatorPosition"}

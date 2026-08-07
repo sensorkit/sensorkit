@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import uuid
 from datetime import UTC, datetime
 from typing import ClassVar
@@ -13,6 +12,7 @@ from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.astro.common import RADecPointing
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.data.context import ContextSubscription
 from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ArrayInfo, ImageInfo
@@ -80,7 +80,6 @@ class SdasimCamera:
     def __init__(self, config: SdasimCameraConfig):
         self.config = config
         self.device_connected: bool | None = None
-        self._status_task: asyncio.Task | None = None
 
     # --- lifecycle scaffolding --------------------------------------------
 
@@ -88,20 +87,6 @@ class SdasimCamera:
         """Raise if the simulated camera is not connected."""
         if not self.device_connected:
             raise DeviceConnectionError(f"{self.device_name} not connected")
-
-    def start_status_loop(self, coro):
-        """Start a background status-publishing task, cancelling any existing one."""
-        if self._status_task is not None and not self._status_task.done():
-            self._status_task.cancel()
-        self._status_task = asyncio.create_task(coro)
-
-    async def stop_status_loop(self):
-        """Cancel the background status-publishing task."""
-        if self._status_task is not None:
-            self._status_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._status_task
-            self._status_task = None
 
     # --- entity lifecycle -------------------------------------------------
 
@@ -137,12 +122,14 @@ class SdasimCamera:
         self._capture_task: asyncio.Task | None = None
 
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self._stop_subscriptions()
         self.device_connected = False
         await sk.device().publish(Connected(is_connected=False))
@@ -370,53 +357,45 @@ class SdasimCamera:
             logger.warning("No DataGraph defined; discarding data")
 
     async def status_publish(self):
-        while True:
-            try:
-                device = sk.device()
-                await device.publish(Connected(is_connected=bool(self.device_connected)))
+        device = sk.device()
+        await device.publish(Connected(is_connected=bool(self.device_connected)))
 
-                if self.device_connected:
-                    await device.publish(Binning(x=self._bin_x, y=self._bin_y))
+        if self.device_connected:
+            await device.publish(Binning(x=self._bin_x, y=self._bin_y))
 
-                    if self._engine.initialized:
-                        await device.publish(
-                            CameraSensorSize(
-                                x=self._engine.sensor_width, y=self._engine.sensor_height
-                            )
-                        )
+            if self._engine.initialized:
+                await device.publish(
+                    CameraSensorSize(x=self._engine.sensor_width, y=self._engine.sensor_height)
+                )
 
-                    await device.publish(
-                        CameraSensorTemperature(
-                            temperature=self._temperature, units=TemperatureUnit.CELSIUS
-                        )
-                    )
+            await device.publish(
+                CameraSensorTemperature(
+                    temperature=self._temperature, units=TemperatureUnit.CELSIUS
+                )
+            )
 
-                    await device.publish(
-                        SdasimCameraStatus(
-                            connected=True,
-                            camera_state="exposing"
-                            if (self._capture_task is not None and not self._capture_task.done())
-                            else "idle",
-                            sensor_width=self._engine.sensor_width or None,
-                            sensor_height=self._engine.sensor_height or None,
-                            bin_x=self._bin_x,
-                            bin_y=self._bin_y,
-                            temperature=self._temperature,
-                            mount_ra_rate=self._mount_ra_rate,
-                            mount_dec_rate=self._mount_dec_rate,
-                            num_targets=self._num_targets,
-                            catalog_enabled=self._engine.catalog_enabled,
-                            mount_connected=self._mount_connected,
-                            rotator_connected=self._rotator_connected,
-                            focuser_connected=self._focuser_connected,
-                            focus_position=self._focus_position,
-                            defocus_um=self._defocus_um,
-                        )
-                    )
-            except Exception as e:
-                logger.exception(f"Error in sdasim camera status publish: {e}")
-
-            await asyncio.sleep(self.config.status_frequency)
+            await device.publish(
+                SdasimCameraStatus(
+                    connected=True,
+                    camera_state="exposing"
+                    if (self._capture_task is not None and not self._capture_task.done())
+                    else "idle",
+                    sensor_width=self._engine.sensor_width or None,
+                    sensor_height=self._engine.sensor_height or None,
+                    bin_x=self._bin_x,
+                    bin_y=self._bin_y,
+                    temperature=self._temperature,
+                    mount_ra_rate=self._mount_ra_rate,
+                    mount_dec_rate=self._mount_dec_rate,
+                    num_targets=self._num_targets,
+                    catalog_enabled=self._engine.catalog_enabled,
+                    mount_connected=self._mount_connected,
+                    rotator_connected=self._rotator_connected,
+                    focuser_connected=self._focuser_connected,
+                    focus_position=self._focus_position,
+                    defocus_um=self._defocus_um,
+                )
+            )
 
 
 class SdasimCameraConfig(BaseModel):

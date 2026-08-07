@@ -3,6 +3,7 @@
 
 import astropy.units as u
 import pytest
+import pytest_asyncio
 from astropy.coordinates import EarthLocation
 
 from sensorkit.alpaca.telescope import (
@@ -11,11 +12,12 @@ from sensorkit.alpaca.telescope import (
 )
 from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 from sensorkit.astro.coords import Geodetic
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import FollowTarget
 
 
-@pytest.fixture
-def telescope():
+@pytest_asyncio.fixture
+async def telescope():
     config = AlpacaTelescopeConfig(host="localhost", timeout=5.0, status_frequency=0.1)
     t = config.create_device()
     t.state = AlpacaTelescopeState()
@@ -77,7 +79,6 @@ def telescope():
     t._can_move_axis = [False, False, False]
     t._tracking = False
     t._slewing = False
-    t._fast_status_task = None
     t._site_lat = -31.0
     t._site_lon = 149.0
     t._site_elev = 1100.0
@@ -90,7 +91,13 @@ def telescope():
     t._does_refraction = None
     t._location = EarthLocation(lat=-31.0 * u.deg, lon=149.0 * u.deg, height=1100.0 * u.m)
     t._geodetic = Geodetic(lon=149.0, lat=-31.0, elev=1100.0)
-    return t
+    t.status_loop = AsyncLoop(t.status_publish, interval=config.status_frequency)
+    t.fast_loop = AsyncLoop(t._publish_telescope_status, interval=config.status_frequency_fast)
+
+    yield t
+
+    await t.status_loop.stop()
+    await t.fast_loop.stop()
 
 
 @pytest.mark.asyncio

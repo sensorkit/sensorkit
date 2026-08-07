@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import hmac
 import os
@@ -24,7 +23,6 @@ class NinaDevice:
         self.config = config
         self.device_connected: bool | None = None
         self._client: NinaClient | None = None
-        self._status_task: asyncio.Task | None = None
         self._reconnect: Callable[[], Coroutine] | None = None
 
     @property
@@ -82,24 +80,6 @@ class NinaDevice:
 
     async def info(self, equipment_type: str) -> dict:
         return await self.client.get(f"/equipment/{equipment_type}/info")
-
-    def start_status_loop(self, coro):
-        """Start a background status publishing task, cancelling any existing one."""
-
-        if self._status_task is not None and not self._status_task.done():
-            self._status_task.cancel()
-        self._status_task = asyncio.create_task(coro)
-
-    async def stop_status_loop(self):
-        """Cancel the background status publishing task."""
-
-        if self._status_task is not None:
-            self._status_task.cancel()
-
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._status_task
-
-            self._status_task = None
 
 
 class NinaClient:

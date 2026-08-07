@@ -22,6 +22,7 @@ from sensorkit.alpaca.telescope import (
     radec_rates_to_altaz_rates,
 )
 from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import AxisRates
 
 _SIDEREAL_RATE_DEG_S = 15.04107 / 3600.0
@@ -52,10 +53,12 @@ def telescope():
     t._can_set_right_ascension_rate = True
     t._can_set_declination_rate = True
     t._tracking = True
-    t._fast_status_task = None
     t._location = EarthLocation(
         lat=_SITE_LAT * u.deg, lon=_SITE_LON * u.deg, height=_SITE_ELEV * u.m
     )
+    t.status_loop = AsyncLoop(t.status_publish, interval=config.status_frequency)
+    t.fast_loop = AsyncLoop(t._publish_telescope_status, interval=config.status_frequency_fast)
+
     return t
 
 

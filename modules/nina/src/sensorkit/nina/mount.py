@@ -18,6 +18,7 @@ from sensorkit.astro.target import (
     ICRSTarget,
     TLETarget,
 )
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.nina.device import (
     NinaDevice,
     NinaDeviceConfig,
@@ -73,14 +74,21 @@ class NinaMount(NinaDevice):
 
         self._tracking: bool | None = None
         self._slewing: bool | None = None
-        self._fast_status_task: asyncio.Task | None = None
         self._geodetic: Geodetic | None = None
         self._location: EarthLocation | None = None
+
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency_slow, log=True
+        )
+        self.fast_loop = AsyncLoop(
+            self._publish_mount_status, interval=self.config.status_frequency_fast, log=True
+        )
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency_slow)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
+        await self.fast_loop.stop()
         await self.mount_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -89,7 +97,7 @@ class NinaMount(NinaDevice):
         # Connect to the hardware
         self._reconnect = lambda: self.mount_connect(Connect())
         await self.mount_connect(Connect())
-        self.start_status_loop(self.status_publish_slow())
+        self.status_loop.start()
 
         # Wait for initial status
         async with asyncio.timeout(self.config.timeout):
@@ -139,7 +147,7 @@ class NinaMount(NinaDevice):
                 logger.warning("Unable to connect mount for Deinit park; skipping")
                 return
 
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         await self.mount_stop(Stop())
         await self.mount_park(MoveToPark())
 
@@ -163,7 +171,7 @@ class NinaMount(NinaDevice):
 
         await self._wait_for_mount()
 
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         logger.debug("stopped mount")
 
     @sk.command_handler
@@ -260,7 +268,7 @@ class NinaMount(NinaDevice):
                 )
 
                 await self._wait_for_mount(tracking=True)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following RADec target")
 
@@ -278,7 +286,7 @@ class NinaMount(NinaDevice):
                 )
 
                 await self._wait_for_mount(tracking=False)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following AltAz target")
 
@@ -316,7 +324,7 @@ class NinaMount(NinaDevice):
                     )
 
                     await self._wait_for_mount(tracking=True)
-                    self._start_fast_status()
+                    self.fast_loop.start()
 
                     logger.debug("following TLE target")
                 else:
@@ -324,7 +332,7 @@ class NinaMount(NinaDevice):
 
             case FrameTarget():
                 if target.frame == ReferenceFrame.ALTAZ:
-                    self._stop_fast_status()
+                    await self.fast_loop.stop()
                     logger.debug("disabling tracking")
                     await self.client.get("/equipment/mount/tracking", enabled=False)
                     await self._wait_for_mount()
@@ -333,7 +341,7 @@ class NinaMount(NinaDevice):
                     logger.debug("enabling sidereal tracking")
                     await self.client.get("/equipment/mount/tracking", enabled=True)
                     await self._wait_for_mount(tracking=True)
-                    self._start_fast_status()
+                    self.fast_loop.start()
                     logger.debug("enabled sidereal tracking")
 
             case _:
@@ -364,21 +372,6 @@ class NinaMount(NinaDevice):
                 ):
                     break
                 await asyncio.sleep(0.1)
-
-    def _start_fast_status(self):
-        if self._fast_status_task is None or self._fast_status_task.done():
-            logger.debug("starting fast mount status loop")
-            self._fast_status_task = asyncio.create_task(self.status_publish_fast())
-
-    def _stop_fast_status(self):
-        if self._fast_status_task is not None and not self._fast_status_task.done():
-            logger.debug("stopping fast mount status loop")
-            self._fast_status_task.cancel()
-            self._fast_status_task = None
-
-    @property
-    def _fast_status_active(self) -> bool:
-        return self._fast_status_task is not None and not self._fast_status_task.done()
 
     async def _publish_mount_status(self):
         info = await self.info("mount")
@@ -416,66 +409,46 @@ class NinaMount(NinaDevice):
             )
         )
 
-    async def status_publish_slow(self):
-        while True:
-            try:
-                info = await self.info("mount")
-                connected = info.get("Connected", False)
-                self.device_connected = connected
+    async def status_publish(self):
+        info = await self.info("mount")
+        connected = info.get("Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if not connected:
-                    await asyncio.sleep(self.config.status_frequency_slow)
-                    continue
+        if not connected:
+            return
 
-                self._slewing = info.get("Slewing", False)
-                self._tracking = info.get("Tracking", False)
+        self._slewing = info.get("Slewing", False)
+        self._tracking = info.get("Tracking", False)
 
-                await device.publish(Slewing(is_slewing=self._slewing))
-                await device.publish(Tracking(is_tracking=self._tracking))
+        await device.publish(Slewing(is_slewing=self._slewing))
+        await device.publish(Tracking(is_tracking=self._tracking))
 
-                # Only publish pointing/rates if fast loop isn't handling it
-                if not self._fast_status_active:
-                    await self._publish_mount_status()
+        # Only publish pointing/rates if fast loop isn't handling it
+        if not self.fast_loop.active:
+            await self._publish_mount_status()
 
-                fields: dict = {
-                    "tracking": self._tracking or False,
-                    "slewing": self._slewing or False,
-                    "at_home": info.get("AtHome", False),
-                    "at_park": info.get("AtPark", False),
-                }
+        fields: dict = {
+            "tracking": self._tracking or False,
+            "slewing": self._slewing or False,
+            "at_home": info.get("AtHome", False),
+            "at_park": info.get("AtPark", False),
+        }
 
-                side_of_pier = info.get("SideOfPier")
-                if side_of_pier is not None:
-                    fields["side_of_pier"] = str(side_of_pier)
+        side_of_pier = info.get("SideOfPier")
+        if side_of_pier is not None:
+            fields["side_of_pier"] = str(side_of_pier)
 
-                sidereal_time = info.get("SiderealTime")
-                if sidereal_time is not None:
-                    fields["sidereal_time"] = sidereal_time
+        sidereal_time = info.get("SiderealTime")
+        if sidereal_time is not None:
+            fields["sidereal_time"] = sidereal_time
 
-                await device.publish(NinaMountStatus(**fields))
+        await device.publish(NinaMountStatus(**fields))
 
-                # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
-                # logger.debug(f"NINA mount status: connected={connected}, {fields_str}")
-            except Exception as e:
-                logger.exception(f"Error in slow mount status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency_slow)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency_slow)
-
-    async def status_publish_fast(self):
-        while True:
-            try:
-                await self._publish_mount_status()
-            except Exception as e:
-                logger.warning(f"Error in fast mount status publish ({e})")
-                await asyncio.sleep(self.config.status_frequency_fast)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency_fast)
+        # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+        # logger.debug(f"NINA mount status: connected={connected}, {fields_str}")
 
 
 class NinaMountConfig(NinaDeviceConfig[NinaMount]):

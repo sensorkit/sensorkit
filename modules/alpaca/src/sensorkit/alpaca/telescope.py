@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal, override
+from typing import Any, Literal, override
 
 import astropy.units as u
 from astropy.coordinates import ICRS, AltAz, EarthLocation, SkyCoord
 from astropy.time import Time
 from astropy.utils import iers
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 import sensorkit.api as sk
 from alpaca.telescope import Telescope
@@ -28,6 +28,7 @@ from sensorkit.astro.target import (
     RateTarget,
     TLETarget,
 )
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import (
     AxisRate,
     AxisRates,
@@ -173,9 +174,15 @@ class AlpacaTelescope(AlpacaDevice):
 
         self._tracking: bool | None = None
         self._slewing: bool | None = None
-        self._fast_status_task: asyncio.Task | None = None
         self._geodetic: Geodetic | None = None
         self._location: EarthLocation | None = None
+
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        )
+        self.fast_loop = AsyncLoop(
+            self._publish_telescope_status, interval=self.config.status_frequency_fast, log=True
+        )
 
         # Initialize capabilities
         self._can_slew = self._can_slew_async = False
@@ -189,8 +196,9 @@ class AlpacaTelescope(AlpacaDevice):
 
     @sk.on_detach
     async def entity_deinit(self):
-        await asyncio.sleep(self.config.status_frequency_slow)
-        await self.stop_status_loop()
+        await asyncio.sleep(self.config.status_frequency)
+        await self.status_loop.stop()
+        await self.fast_loop.stop()
         await self.telescope_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -278,7 +286,7 @@ class AlpacaTelescope(AlpacaDevice):
         # Read available tracking rates
         self._tracking_rates = await self.get(t, "TrackingRates", [])
 
-        self.start_status_loop(self.status_publish_slow())
+        self.status_loop.start()
 
         # Home, as needed
         if not self.state.has_been_homed:
@@ -295,7 +303,7 @@ class AlpacaTelescope(AlpacaDevice):
                 logger.warning("Unable to connect telescope for Deinit park; skipping")
                 return
 
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         await self.telescope_stop(Stop())
 
         if self._can_set_tracking:
@@ -326,7 +334,7 @@ class AlpacaTelescope(AlpacaDevice):
 
         await self._wait_for_telescope(await_onset=False)
 
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         logger.debug("stopped telescope")
 
     @sk.command_handler
@@ -339,7 +347,7 @@ class AlpacaTelescope(AlpacaDevice):
         logger.debug("homing telescope")
 
         await self.call(self.telescope, "FindHome")
-        await asyncio.sleep(self.config.status_frequency_slow)
+        await asyncio.sleep(self.config.status_frequency)
 
         async with asyncio.timeout(self.config.timeout):
             while True:
@@ -474,7 +482,7 @@ class AlpacaTelescope(AlpacaDevice):
                     await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
 
                 await self._wait_for_telescope(tracking=True)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following RADec target")
 
@@ -490,7 +498,7 @@ class AlpacaTelescope(AlpacaDevice):
                     await asyncio.to_thread(self.telescope.SlewToAltAz, az_deg, alt_deg)
 
                 await self._wait_for_telescope()
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following AltAz target")
 
@@ -542,7 +550,7 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.put(self.telescope, "RightAscensionRate", ra_rate)
                 if self._can_set_declination_rate:
                     await self.put(self.telescope, "DeclinationRate", dec_rate)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following TLE target")
 
@@ -574,7 +582,7 @@ class AlpacaTelescope(AlpacaDevice):
                 if self._can_set_declination_rate:
                     dec_rate = target.rates.dec * 3600.0
                     await self.put(self.telescope, "DeclinationRate", dec_rate)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following Rate target")
 
@@ -618,7 +626,7 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.put(self.telescope, "RightAscensionRate", ra_rate)
                 if self._can_set_declination_rate:
                     await self.put(self.telescope, "DeclinationRate", dec_rate)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following Ephemeris target")
 
@@ -630,7 +638,7 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.put(self.telescope, "DeclinationRate", 0.0)
 
                 if target.frame == ReferenceFrame.ALTAZ:
-                    self._stop_fast_status()
+                    await self.fast_loop.stop()
                     if self._can_set_tracking:
                         logger.debug("disabling tracking")
                         await self.put(self.telescope, "Tracking", False)
@@ -641,7 +649,7 @@ class AlpacaTelescope(AlpacaDevice):
                         logger.debug("enabling sidereal tracking")
                         await self.put(self.telescope, "Tracking", True)
                         self._tracking = True
-                        self._start_fast_status()
+                        self.fast_loop.start()
                         logger.debug("enabled sidereal tracking")
 
             case _:
@@ -697,21 +705,6 @@ class AlpacaTelescope(AlpacaDevice):
                 if is_slewing == slewing and is_tracking == tracking:
                     break
                 await asyncio.sleep(0.1)
-
-    def _start_fast_status(self):
-        if self._fast_status_task is None or self._fast_status_task.done():
-            logger.debug("starting fast telescope status loop")
-            self._fast_status_task = asyncio.create_task(self.status_publish_fast())
-
-    def _stop_fast_status(self):
-        if self._fast_status_task is not None and not self._fast_status_task.done():
-            logger.debug("stopping fast telescope status loop")
-            self._fast_status_task.cancel()
-            self._fast_status_task = None
-
-    @property
-    def _fast_status_active(self) -> bool:
-        return self._fast_status_task is not None and not self._fast_status_task.done()
 
     async def _publish_telescope_status(self):
         t = self.telescope
@@ -777,98 +770,91 @@ class AlpacaTelescope(AlpacaDevice):
                 )
             )
 
-    async def status_publish_slow(self):
-        while True:
-            try:
-                t = self.telescope
+    async def status_publish(self):
+        t = self.telescope
 
-                connected = await self.get(t, "Connected", False)
-                self.device_connected = connected
+        connected = await self.get(t, "Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if not connected:
-                    await asyncio.sleep(self.config.status_frequency_slow)
-                    continue
+        if not connected:
+            return
 
-                self._slewing = await self.get(t, "Slewing", False)
-                self._tracking = await self.get(t, "Tracking", False)
+        self._slewing = await self.get(t, "Slewing", False)
+        self._tracking = await self.get(t, "Tracking", False)
 
-                await device.publish(Slewing(is_slewing=self._slewing))
-                await device.publish(Tracking(is_tracking=self._tracking))
+        await device.publish(Slewing(is_slewing=self._slewing))
+        await device.publish(Tracking(is_tracking=self._tracking))
 
-                # Only publish pointing/rates if fast loop isn't handling it
-                if not self._fast_status_active:
-                    await self._publish_telescope_status()
+        # Only publish pointing/rates if the fast loop isn't handling it
+        if not self.fast_loop.active:
+            await self._publish_telescope_status()
 
-                tracking_rate = await self.get(t, "TrackingRate", None)
+        tracking_rate = await self.get(t, "TrackingRate", None)
 
-                # Pier side
-                side_of_pier = await self.get(t, "SideOfPier", -1)
-                side_of_pier = _PIER_SIDES.get(side_of_pier, "Unknown")
+        # Pier side
+        side_of_pier = await self.get(t, "SideOfPier", -1)
+        side_of_pier = _PIER_SIDES.get(side_of_pier, "Unknown")
 
-                # Sidereal time
-                sidereal_time = await self.get(t, "SiderealTime", None)
+        # Sidereal time
+        sidereal_time = await self.get(t, "SiderealTime", None)
 
-                # Full ITelescopeV4 status — only include supported properties
-                properties: dict = {
-                    "tracking": self._tracking or False,
-                    "slewing": self._slewing or False,
-                    "at_home": await self.get(t, "AtHome", False),
-                    "at_park": await self.get(t, "AtPark", False),
-                }
+        # Full ITelescopeV4 status — only include supported properties
+        properties: dict = {
+            "tracking": self._tracking or False,
+            "slewing": self._slewing or False,
+            "at_home": await self.get(t, "AtHome", False),
+            "at_park": await self.get(t, "AtPark", False),
+        }
 
-                if tracking_rate is not None:
-                    properties["tracking_rate"] = tracking_rate
-                if side_of_pier != "Unknown":
-                    properties["side_of_pier"] = side_of_pier
-                if sidereal_time is not None:
-                    properties["sidereal_time"] = sidereal_time
+        if tracking_rate is not None:
+            properties["tracking_rate"] = tracking_rate
+        if side_of_pier != "Unknown":
+            properties["side_of_pier"] = side_of_pier
+        if sidereal_time is not None:
+            properties["sidereal_time"] = sidereal_time
 
-                # Static optics (only include if available)
-                for attr, key in (
-                    ("_aperture_diameter", "aperture_diameter"),
-                    ("_aperture_area", "aperture_area"),
-                    ("_focal_length", "focal_length"),
-                    ("_equatorial_system", "equatorial_system"),
-                    ("_alignment_mode", "alignment_mode"),
-                    ("_does_refraction", "does_refraction"),
-                ):
-                    val = getattr(self, attr, None)
-                    if val is not None:
-                        properties[key] = val
+        # Static optics (only include if available)
+        for attr, key in (
+            ("_aperture_diameter", "aperture_diameter"),
+            ("_aperture_area", "aperture_area"),
+            ("_focal_length", "focal_length"),
+            ("_equatorial_system", "equatorial_system"),
+            ("_alignment_mode", "alignment_mode"),
+            ("_does_refraction", "does_refraction"),
+        ):
+            val = getattr(self, attr, None)
+            if val is not None:
+                properties[key] = val
 
-                await device.publish(AlpacaTelescopeStatus(**properties))
+        await device.publish(AlpacaTelescopeStatus(**properties))
 
-                # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
-                # logger.debug(
-                #     f"Alpaca telescope status: connected={connected}, {properties_str}"
-                # )
-            except Exception as e:
-                logger.exception(f"Error in slow telescope status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency_slow)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency_slow)
-
-    async def status_publish_fast(self):
-        while True:
-            try:
-                await self._publish_telescope_status()
-            except Exception as e:
-                logger.warning(f"Error in fast telescope status publish ({e})")
-                await asyncio.sleep(self.config.status_frequency_fast)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency_fast)
+        # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+        # logger.debug(
+        #     f"Alpaca telescope status: connected={connected}, {properties_str}"
+        # )
 
 
 class AlpacaTelescopeConfig(AlpacaDeviceConfig[AlpacaTelescope]):
     device_type: Literal["telescope"] = "telescope"
-    status_frequency_slow: float = 1.0
     status_frequency_fast: float = 0.1
     timeout: float = 300.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _compat(cls, data: Any) -> Any:
+        """Accept `status_frequency_slow` as `status_frequency`."""
+
+        if isinstance(data, dict) and "status_frequency_slow" in data:
+            if "status_frequency" in data:
+                raise ValueError("status_frequency_slow is an alias for status_frequency")
+
+            data = data.copy()
+            data["status_frequency"] = data.pop("status_frequency_slow")
+
+        return data
 
     @override
     def create_device(self):

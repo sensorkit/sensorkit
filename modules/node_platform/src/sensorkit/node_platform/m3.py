@@ -8,6 +8,7 @@ import ourskyai_node_platform_api as osapi
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
@@ -37,7 +38,9 @@ class NodePlatformM3(NodePlatformDevice):
 
         self.m3_port: int | None = None
 
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
         # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
@@ -47,7 +50,7 @@ class NodePlatformM3(NodePlatformDevice):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 
@@ -75,33 +78,14 @@ class NodePlatformM3(NodePlatformDevice):
     #     logger.debug(f"changed m3 to port {cmd.port}")
 
     async def status_publish(self):
-        while True:
-            try:
-                status: osapi.V1OpticalTubeM3Status = await self.api.call(
-                    "v1_get_optical_tube_m3_status"
-                )
-            except Exception as e:
-                logger.exception(f"Error in status_publish get: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
+        status: osapi.V1OpticalTubeM3Status = await self.api.call("v1_get_optical_tube_m3_status")
+        self.device_connected = status.connected
+        self.m3_port = status.port
 
-            try:
-                self.device_connected = status.connected
-                self.m3_port = status.port
+        logger.debug(f"NodePlatform M3 status: connected={status.connected}, port={status.port}")
 
-                logger.debug(
-                    f"NodePlatform M3 status: connected={status.connected}, port={status.port}"
-                )
-
-                device = sk.device()
-                await device.publish(Connected(is_connected=status.connected))
-
-            except Exception as e:
-                logger.warning(f"Failed to update Node Platform M3 status ({e})")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+        device = sk.device()
+        await device.publish(Connected(is_connected=status.connected))
 
 
 class NodePlatformM3Config(NodePlatformDeviceConfig[NodePlatformM3]):

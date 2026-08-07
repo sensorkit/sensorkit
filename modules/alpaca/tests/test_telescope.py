@@ -8,13 +8,14 @@ from sensorkit.alpaca.telescope import (
     AlpacaTelescopeState,
 )
 from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Disconnect, Home, MoveToPark, Stop
 
 
 @pytest.fixture
 def telescope():
     config = AlpacaTelescopeConfig(
-        host="localhost", timeout=5.0, status_frequency=0.1, status_frequency_slow=0.05
+        host="localhost", timeout=5.0, status_frequency=0.05, status_frequency_fast=0.1
     )
     t = config.create_device()
     t.state = AlpacaTelescopeState()
@@ -74,7 +75,6 @@ def telescope():
     t._can_move_axis = [False, False, False]
     t._tracking = False
     t._slewing = False
-    t._fast_status_task = None
     t._site_lat = -31.0
     t._site_lon = 149.0
     t._site_elev = 1100.0
@@ -90,6 +90,9 @@ def telescope():
     from astropy.coordinates import EarthLocation
 
     t._location = EarthLocation(lat=-31.0 * u.deg, lon=149.0 * u.deg, height=1100.0 * u.m)
+    t.status_loop = AsyncLoop(t.status_publish, interval=config.status_frequency)
+    t.fast_loop = AsyncLoop(t._publish_telescope_status, interval=config.status_frequency_fast)
+
     return t
 
 

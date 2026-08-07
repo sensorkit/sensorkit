@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the NINA base device class."""
 
-import asyncio
-
 import pytest
 
 from sensorkit.nina.device import (
@@ -81,24 +79,6 @@ class TestNinaDevice:
         assert client.base_url == "http://myhost:2000/v2/api"
         # Same client returned on second access
         assert device.client is client
-
-    @pytest.mark.asyncio
-    async def test_start_stop_status_loop(self):
-        config = NinaDeviceConfig(host="localhost")
-        device = NinaDevice(config)
-
-        called = asyncio.Event()
-
-        async def dummy_loop():
-            called.set()
-            await asyncio.sleep(100)
-
-        device.start_status_loop(dummy_loop())
-        await asyncio.wait_for(called.wait(), timeout=1.0)
-        assert device._status_task is not None
-
-        await device.stop_status_loop()
-        assert device._status_task is None
 
 
 class TestNinaClient:

@@ -1,14 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
+import pytest_asyncio
 
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, FollowTarget
 from sensorkit.thesky.telescope import TheSkyTelescopeConfig, TheSkyTelescopeState
 
 
-@pytest.fixture
-def telescope(simulator):
+@pytest_asyncio.fixture
+async def telescope(simulator):
     host, port = simulator
     config = TheSkyTelescopeConfig(
         device_type="telescope",
@@ -20,7 +22,13 @@ def telescope(simulator):
     )
     m = config.create_device()
     m.state = TheSkyTelescopeState()
-    return m
+    m.status_loop = AsyncLoop(m.status_publish, interval=config.status_frequency_slow)
+    m.fast_loop = AsyncLoop(m._publish_telescope_status, interval=config.status_frequency_fast)
+
+    yield m
+
+    await m.status_loop.stop()
+    await m.fast_loop.stop()
 
 
 # ISS TLE for testing
@@ -72,6 +80,7 @@ async def test_write_tle(telescope):
 
     # The path uses the satellite designator from TLE line1 as filename
     import tempfile
+
     designator = ISS_TLE.line1.split()[1]
     write_path = pathlib.Path(tempfile.gettempdir()) / f"tle_{designator}.txt"
     content = write_path.read_text()

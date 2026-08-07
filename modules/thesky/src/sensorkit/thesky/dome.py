@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import (
     CloseEnclosure,
     Connect,
@@ -66,12 +67,14 @@ class TheSkyDome(TheSkyDevice):
 
         # Initialize the dome
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.dome_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -313,53 +316,34 @@ class TheSkyDome(TheSkyDevice):
         logger.debug(f"moved dome to azimuth={target_az:.1f}°, elevation={target_el}°")
 
     async def status_publish(self):
-        while True:
-            try:
-                resp = await self.execute(
-                    """
-                    var Out;
-                    sky6Dome.GetAzEl();
-                    Out = [
-                        sky6Dome.IsConnected,
-                        sky6Dome.slitState(),
-                        sky6Dome.dEl,
-                        sky6Dome.dAz,
-                        sky6Dome.IsGotoComplete
-                    ];
-                    """
-                )
-            except ProcessAbortedError:
-                # TheSky returns 212 transiently after an `abort`; dome is fine
-                pass
-            except Exception as e:
-                logger.exception(f"Error in status_publish execute: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
+        try:
+            resp = await self.execute(
+                """
+                var Out;
+                sky6Dome.GetAzEl();
+                Out = [
+                    sky6Dome.IsConnected,
+                    sky6Dome.slitState(),
+                    sky6Dome.dEl,
+                    sky6Dome.dAz,
+                    sky6Dome.IsGotoComplete
+                ];
+                """
+            )
+        except ProcessAbortedError:
+            # TheSky returns 212 transiently after an `abort`; dome is fine
+            return
 
-            try:
-                # 0=unknown, 1=open, 2=closed
-                connected, slit_num, alt, az, is_tracking = [float(x) for x in resp.split(",")]
-                connected = bool(connected)
-                self.device_connected = connected
+        # 0=unknown, 1=open, 2=closed
+        connected, slit_num, alt, az, is_tracking = [float(x) for x in resp.split(",")]
+        connected = bool(connected)
+        self.device_connected = connected
 
-                # slit_str = {0: "unknown", 1: "open", 2: "closed"}.get(int(slit_num), "unknown")
-                # logger.debug(
-                #     f"TheSky dome status: connected={connected}, slit={slit_str}, alt={alt}, az={az}"
-                # )
-
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
-                await device.publish(Opened(is_open=int(slit_num) in (0, 1)))
-                await device.publish(AltAzPointing(altitude_degrees=alt, azimuth_degrees=az))
-                await device.publish(IsTracking(is_tracking=bool(is_tracking)))
-
-            except Exception as e:
-                logger.warning(f"Failed to update TheSky dome status ({e})")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            # FIXME: Account for query time
-            await asyncio.sleep(self.config.status_frequency)
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
+        await device.publish(Opened(is_open=int(slit_num) in (0, 1)))
+        await device.publish(AltAzPointing(altitude_degrees=alt, azimuth_degrees=az))
+        await device.publish(IsTracking(is_tracking=bool(is_tracking)))
 
 
 class TheSkyDomeConfig(TheSkyDeviceConfig[TheSkyDome]):

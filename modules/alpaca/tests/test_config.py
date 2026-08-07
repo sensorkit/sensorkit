@@ -109,7 +109,7 @@ class TestDeviceConfigs:
     def test_telescope_config(self):
         config = AlpacaTelescopeConfig(host="localhost")
         assert config.device_type == "telescope"
-        assert config.status_frequency_slow == 1.0
+        assert config.status_frequency == 1.0
         assert config.status_frequency_fast == 0.1
         assert config.timeout == 300.0
 

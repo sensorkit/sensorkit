@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
@@ -78,7 +79,9 @@ class NodePlatformEnclosure(NodePlatformDevice):
             self.state = NodePlatformEnclosureState()
 
         # Initialize the enclosure
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
         async with asyncio.timeout(self.config.timeout):
             while self.device_connected is None:
                 await asyncio.sleep(self.config.status_frequency)
@@ -87,7 +90,7 @@ class NodePlatformEnclosure(NodePlatformDevice):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 
@@ -247,118 +250,93 @@ class NodePlatformEnclosure(NodePlatformDevice):
                 await asyncio.sleep(1)
 
     async def status_publish(self):
-        while True:
-            try:
-                enclosure_status: osapi.V2EnclosureStatus = await self.api.call(
-                    "v2_get_enclosure_status"
-                )
-            except Exception as e:
-                logger.exception(f"Error in status_publish get: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
+        enclosure_status: osapi.V2EnclosureStatus = await self.api.call("v2_get_enclosure_status")
+        # Extract primary shutter status (first in list)
+        shutter = None
+        if enclosure_status.shutters and enclosure_status.shutters.statuses:
+            shutter = enclosure_status.shutters.statuses[0]
 
-            try:
-                # Extract primary shutter status (first in list)
-                shutter = None
-                if enclosure_status.shutters and enclosure_status.shutters.statuses:
-                    shutter = enclosure_status.shutters.statuses[0]
+        connected = shutter.connected if shutter else False
+        shutter_state = shutter.state if shutter else EnclosureShutterState.UNKNOWN
+        position = shutter.position_percent if shutter else None
 
-                connected = shutter.connected if shutter else False
-                shutter_state = shutter.state if shutter else EnclosureShutterState.UNKNOWN
-                position = shutter.position_percent if shutter else None
+        self.device_connected = connected
+        self.shutter_state = shutter_state
 
-                self.device_connected = connected
-                self.shutter_state = shutter_state
+        device = sk.device()
+        await device.kv_put_model(self.state)
 
-                device = sk.device()
-                await device.kv_put_model(self.state)
+        is_open = shutter_state in (
+            EnclosureShutterState.OPENED,
+            EnclosureShutterState.MOVING_OPEN,
+        )
 
-                is_open = shutter_state in (
-                    EnclosureShutterState.OPENED,
-                    EnclosureShutterState.MOVING_OPEN,
-                )
+        await device.publish(Connected(is_connected=connected))
+        await device.publish(Opened(is_open=is_open))
 
-                await device.publish(Connected(is_connected=connected))
-                await device.publish(Opened(is_open=is_open))
+        # Publish enclosure pointing from rotator azimuth and window position
+        rotator = enclosure_status.rotator
+        window = enclosure_status.window
+        rot_az = rotator.azimuth_degrees if rotator else None
+        win_alt = window.position_degrees if window else None
+        if rot_az is not None and win_alt is not None:
+            await device.publish(AltAzPointing(azimuth_degrees=rot_az, altitude_degrees=win_alt))
 
-                # Publish enclosure pointing from rotator azimuth and window position
-                rotator = enclosure_status.rotator
-                window = enclosure_status.window
-                rot_az = rotator.azimuth_degrees if rotator else None
-                win_alt = window.position_degrees if window else None
-                if rot_az is not None and win_alt is not None:
-                    await device.publish(AltAzPointing(azimuth_degrees=rot_az, altitude_degrees=win_alt))
+        # Build enclosure subsystem status
+        properties: dict = {
+            "shutter_state": shutter_state.value
+            if hasattr(shutter_state, "value")
+            else str(shutter_state),
+        }
+        if position is not None:
+            properties["shutter_position_percent"] = position
 
-                # Build enclosure subsystem status
-                properties: dict = {
-                    "shutter_state": shutter_state.value
-                    if hasattr(shutter_state, "value")
-                    else str(shutter_state),
+        rotator = enclosure_status.rotator
+        if rotator is not None:
+            properties["rotator_connected"] = rotator.connected
+            properties["rotator_azimuth_degrees"] = rotator.azimuth_degrees
+            properties["rotator_synced_with_mount"] = rotator.is_synced_with_mount
+
+        window = enclosure_status.window
+        if window is not None:
+            properties["window_connected"] = window.connected
+            properties["window_position_degrees"] = window.position_degrees
+            properties["window_synced_with_mount"] = window.is_synced_with_mount or False
+
+        fans = enclosure_status.fans
+        if fans is not None and fans.statuses:
+            properties["fans"] = [
+                {
+                    "role": fan.role.value if hasattr(fan.role, "value") else str(fan.role),
+                    "is_on": fan.is_on,
+                    "connected": fan.connected,
                 }
-                if position is not None:
-                    properties["shutter_position_percent"] = position
+                for fan in fans.statuses
+            ]
 
-                rotator = enclosure_status.rotator
-                if rotator is not None:
-                    properties["rotator_connected"] = rotator.connected
-                    properties["rotator_azimuth_degrees"] = rotator.azimuth_degrees
-                    properties["rotator_synced_with_mount"] = rotator.is_synced_with_mount
+        hvac = enclosure_status.hvac
+        if hvac is not None:
+            properties["hvac_connected"] = hvac.connected
+            if hvac.details is not None:
+                d = hvac.details
+                properties["hvac_on"] = d.is_on
+                properties["hvac_mode"] = d.mode.value if hasattr(d.mode, "value") else str(d.mode)
+                properties["hvac_fan_speed"] = (
+                    d.fan_speed.value if hasattr(d.fan_speed, "value") else str(d.fan_speed)
+                )
+                properties["hvac_target_temperature_celsius"] = d.target_temperature_celsius
+                properties["hvac_temperature_celsius"] = d.temperature_celsius
+                if d.error is not None:
+                    properties["hvac_error"] = (
+                        d.error.value if hasattr(d.error, "value") else str(d.error)
+                    )
 
-                window = enclosure_status.window
-                if window is not None:
-                    properties["window_connected"] = window.connected
-                    properties["window_position_degrees"] = window.position_degrees
-                    properties["window_synced_with_mount"] = window.is_synced_with_mount or False
+        await device.publish(EnclosureStatus(**properties))
 
-                fans = enclosure_status.fans
-                if fans is not None and fans.statuses:
-                    properties["fans"] = [
-                        {
-                            "role": fan.role.value
-                            if hasattr(fan.role, "value")
-                            else str(fan.role),
-                            "is_on": fan.is_on,
-                            "connected": fan.connected,
-                        }
-                        for fan in fans.statuses
-                    ]
-
-                hvac = enclosure_status.hvac
-                if hvac is not None:
-                    properties["hvac_connected"] = hvac.connected
-                    if hvac.details is not None:
-                        d = hvac.details
-                        properties["hvac_on"] = d.is_on
-                        properties["hvac_mode"] = (
-                            d.mode.value if hasattr(d.mode, "value") else str(d.mode)
-                        )
-                        properties["hvac_fan_speed"] = (
-                            d.fan_speed.value
-                            if hasattr(d.fan_speed, "value")
-                            else str(d.fan_speed)
-                        )
-                        properties["hvac_target_temperature_celsius"] = (
-                            d.target_temperature_celsius
-                        )
-                        properties["hvac_temperature_celsius"] = d.temperature_celsius
-                        if d.error is not None:
-                            properties["hvac_error"] = (
-                                d.error.value if hasattr(d.error, "value") else str(d.error)
-                            )
-
-                await device.publish(EnclosureStatus(**properties))
-
-                # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
-                # logger.debug(
-                #     f"NodePlatform enclosure status: connected={connected}, {properties_str}"
-                # )
-
-            except Exception as e:
-                logger.warning(f"Failed to update Node Platform enclosure status ({e})")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+        # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+        # logger.debug(
+        #     f"NodePlatform enclosure status: connected={connected}, {properties_str}"
+        # )
 
 
 class NodePlatformEnclosureConfig(NodePlatformDeviceConfig[NodePlatformEnclosure]):

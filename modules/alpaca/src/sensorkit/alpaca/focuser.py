@@ -14,6 +14,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect, Stop, Temperature, TemperatureUnit
 from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
 
@@ -53,7 +54,9 @@ class AlpacaFocuser(AlpacaDevice):
 
         # Initialize the focuser
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
         # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
@@ -63,7 +66,7 @@ class AlpacaFocuser(AlpacaDevice):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.focuser_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -128,59 +131,51 @@ class AlpacaFocuser(AlpacaDevice):
         logger.debug(f"changed focus to position {self.focuser_position}")
 
     async def status_publish(self):
-        while True:
-            try:
-                f = self.focuser
-                connected = await self.get(f, "Connected", False)
-                self.device_connected = connected
+        f = self.focuser
+        connected = await self.get(f, "Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected:
-                    position = await self.get(f, "Position", None)
-                    if position is not None:
-                        self.focuser_position = float(position)
-                        await device.publish(FocusPosition(position=self.focuser_position))
+        if connected:
+            position = await self.get(f, "Position", None)
+            if position is not None:
+                self.focuser_position = float(position)
+                await device.publish(FocusPosition(position=self.focuser_position))
 
-                    is_moving = await self.get(f, "IsMoving", False)
-                    temp_comp = await self.get(f, "TempComp", False)
-                    temperature = await self.get(f, "Temperature", None)
+            is_moving = await self.get(f, "IsMoving", False)
+            temp_comp = await self.get(f, "TempComp", False)
+            temperature = await self.get(f, "Temperature", None)
 
-                    properties: dict = {
-                        "position": self.focuser_position,
-                        "is_moving": is_moving,
-                        "absolute": self._absolute,
-                        "max_step": self._max_step,
-                        "max_increment": self._max_increment,
-                        "temp_comp": temp_comp,
-                    }
+            properties: dict = {
+                "position": self.focuser_position,
+                "is_moving": is_moving,
+                "absolute": self._absolute,
+                "max_step": self._max_step,
+                "max_increment": self._max_increment,
+                "temp_comp": temp_comp,
+            }
 
-                    if self._step_size is not None:
-                        properties["step_size"] = self._step_size
-                    if self._temp_comp_available:
-                        properties["temp_comp_available"] = True
-                    if temperature is not None:
-                        properties["temperature"] = temperature
+            if self._step_size is not None:
+                properties["step_size"] = self._step_size
+            if self._temp_comp_available:
+                properties["temp_comp_available"] = True
+            if temperature is not None:
+                properties["temperature"] = temperature
 
-                    # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
-                    # logger.debug(
-                    #     f"Alpaca focuser status: connected={connected}, position={position}, "
-                    #     f"is_moving={is_moving}, {properties_str}"
-                    # )
+            # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+            # logger.debug(
+            #     f"Alpaca focuser status: connected={connected}, position={position}, "
+            #     f"is_moving={is_moving}, {properties_str}"
+            # )
 
-                    await device.publish(AlpacaFocuserStatus(**properties))
+            await device.publish(AlpacaFocuserStatus(**properties))
 
-                    if temperature is not None:
-                        await device.publish(
-                            Temperature(temperature=temperature, units=TemperatureUnit.CELSIUS)
-                        )
-            except Exception as e:
-                logger.exception(f"Error in focuser status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+            if temperature is not None:
+                await device.publish(
+                    Temperature(temperature=temperature, units=TemperatureUnit.CELSIUS)
+                )
 
 
 class AlpacaFocuserConfig(AlpacaDeviceConfig[AlpacaFocuser]):

@@ -7,6 +7,7 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.optics import Filter, Filters, SetFilter
 from sensorkit.thesky.device import (
@@ -44,7 +45,9 @@ class TheSkyFilterWheel(TheSkyDevice):
 
         # Initialize the filter wheel
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
         # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
@@ -54,7 +57,7 @@ class TheSkyFilterWheel(TheSkyDevice):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.filter_wheel_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -141,47 +144,32 @@ class TheSkyFilterWheel(TheSkyDevice):
         logger.debug(f"set filter wheel position to {cmd.filter}")
 
     async def status_publish(self):
-        while True:
-            try:
-                resp = await self.execute(
-                    """
-                    var Out;
-                    Out = [
-                        ccdsoftCamera.filterWheelIsConnected(),
-                        ccdsoftCamera.FilterIndexZeroBased
-                    ];
-                    """
-                )
-            except Exception as e:
-                logger.exception(f"Error in status_publish execute: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
+        resp = await self.execute(
+            """
+            var Out;
+            Out = [
+                ccdsoftCamera.filterWheelIsConnected(),
+                ccdsoftCamera.FilterIndexZeroBased
+            ];
+            """
+        )
 
-            try:
-                connected, position = [float(x) for x in resp.split(",")]
+        connected, position = [float(x) for x in resp.split(",")]
 
-                connected = bool(connected)
-                self.device_connected = connected
+        connected = bool(connected)
+        self.device_connected = connected
 
-                self.filter_wheel_position = int(position)
+        self.filter_wheel_position = int(position)
 
-                # logger.debug(
-                #     f"TheSky filter wheel status: connected={connected}, name={self.filter_wheel_name}, position={self.filter_wheel_position}"
-                # )
+        # logger.debug(
+        #     f"TheSky filter wheel status: connected={connected}, name={self.filter_wheel_name}, position={self.filter_wheel_position}"
+        # )
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
-                await device.publish(
-                    Filter(name=self.filter_wheel_name, position=self.filter_wheel_position)
-                )
-
-            except Exception as e:
-                logger.warning(f"Failed to update TheSky filter wheel status ({e})")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            # FIXME: Account for query time
-            await asyncio.sleep(self.config.status_frequency)
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
+        await device.publish(
+            Filter(name=self.filter_wheel_name, position=self.filter_wheel_position)
+        )
 
     @property
     def filter_wheel_name(self):

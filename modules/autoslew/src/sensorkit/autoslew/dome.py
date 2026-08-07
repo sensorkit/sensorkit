@@ -21,6 +21,7 @@ from pydantic import BaseModel
 import sensorkit.api as sk
 from sensorkit.alpaca.device import AlpacaDeviceConfig, AlpacaDeviceState
 from sensorkit.autoslew.device import AutoslewDevice
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect, Opened
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 
@@ -51,12 +52,14 @@ class AutoslewDome(AutoslewDevice):
         self._is_open: bool | None = None
 
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.dome_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -93,23 +96,17 @@ class AutoslewDome(AutoslewDevice):
         await sk.device().publish(Opened(is_open=False))
 
     async def status_publish(self):
-        while True:
-            try:
-                connected = await self.get(self.telescope, "Connected", False)
-                self.device_connected = connected
+        connected = await self.get(self.telescope, "Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected:
-                    in_position = await self.command_bool("IsDomeInScopePosition")
-                    await device.publish(AutoslewDomeStatus(in_scope_position=in_position))
-                    if self._is_open is not None:
-                        await device.publish(Opened(is_open=self._is_open))
-            except Exception as e:
-                logger.exception(f"Error in dome status publish: {e}")
-
-            await asyncio.sleep(self.config.status_frequency)
+        if connected:
+            in_position = await self.command_bool("IsDomeInScopePosition")
+            await device.publish(AutoslewDomeStatus(in_scope_position=in_position))
+            if self._is_open is not None:
+                await device.publish(Opened(is_open=self._is_open))
 
 
 class AutoslewDomeConfig(AlpacaDeviceConfig[AutoslewDome]):
