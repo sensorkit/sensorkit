@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Async utilities: scoped futures, value latches, and observer queues."""
+"""Async utilities: scoped futures, periodic loops, value latches, and observer queues."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import weakref
-from collections.abc import AsyncGenerator, Awaitable
-from typing import AsyncContextManager, ClassVar, overload
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from typing import AsyncContextManager, ClassVar, Self, overload
 
 
 def scoped_waiter[T](aw: Awaitable[T]) -> AsyncContextManager[asyncio.Future[T]]:
@@ -166,3 +166,78 @@ class AsyncObserver[T]:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         self._lock.release()
+
+
+class AsyncLoop:
+    """Runs a function repeatedly on a fixed interval.
+
+    The interval is a plain attribute, so assigning to it retunes a running loop from
+    its next sleep onward.
+    """
+
+    def __init__(
+        self,
+        func: Callable[[], Awaitable[None] | None],
+        *,
+        interval: float,
+        log: bool = False,
+        label: str | None = None,
+    ):
+        """Initialize the loop without starting it.
+
+        Args:
+            func: Called once per iteration. Takes no arguments.
+            interval: Seconds to sleep between iterations.
+            log: Whether to log exceptions raised by `func`.
+            label: Optional label for logging.
+        """
+        self.func = func
+        self.interval = interval
+        self._log = log
+        self._label = label or getattr(func, "__qualname__", str(func))
+        self._task: asyncio.Task | None = None
+
+    @property
+    def active(self) -> bool:
+        """Report whether the loop is currently running."""
+        return self._task is not None and not self._task.done()
+
+    def start(self) -> Self:
+        """Start the loop, returning self.
+
+        Does nothing if the loop is already running, so callers that cannot easily
+        tell may start it unconditionally.
+        """
+        if not self.active:
+            self._task = asyncio.create_task(self._run())
+
+        return self
+
+    async def stop(self):
+        """Cancel the loop and wait for it to unwind.
+
+        Safe to call on a loop that was never started, and on one already stopped.
+        """
+        if self._task is None:
+            return
+
+        task = self._task
+        task.cancel()
+        self._task = None
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def _run(self):
+        while True:
+            try:
+                if coro := self.func():
+                    await coro
+            except Exception as e:
+                if self._log:
+                    from loguru import logger
+
+                    msg = f": {e}" if str(e) else ""
+                    logger.exception(f"{type(e).__name__} in {self._label} loop{msg}")
+
+            await asyncio.sleep(self.interval)

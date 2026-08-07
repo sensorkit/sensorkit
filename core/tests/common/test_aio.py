@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-from sensorkit.common.aio import AsyncObserver, AsyncValueLatch
+from sensorkit.common.aio import AsyncLoop, AsyncObserver, AsyncValueLatch
 
 
 @pytest.mark.asyncio
@@ -159,3 +159,121 @@ async def test_async_observer_generator():
 
         with pytest.raises(asyncio.QueueShutDown):
             await underlying_queue.get()
+
+
+@pytest.mark.asyncio
+async def test_async_loop_start_stop():
+    ticks = 0
+
+    async def body():
+        nonlocal ticks
+        ticks += 1
+
+    loop = AsyncLoop(body, interval=0.01)
+    assert not loop.active
+
+    assert loop.start() is loop
+    assert loop.active
+
+    async with asyncio.timeout(1):
+        while ticks < 3:
+            await asyncio.sleep(0.01)
+
+    await loop.stop()
+    assert not loop.active
+
+    # No further iterations once stopped.
+    settled = ticks
+    await asyncio.sleep(0.05)
+    assert ticks == settled
+
+
+@pytest.mark.asyncio
+async def test_async_loop_start_is_idempotent():
+    ticks = 0
+
+    async def body():
+        nonlocal ticks
+        ticks += 1
+
+    loop = AsyncLoop(body, interval=0.01)
+
+    # Starting repeatedly must not leave orphaned tasks behind, which a single stop
+    # would fail to cancel.
+    loop.start()
+    loop.start()
+    loop.start()
+
+    async with asyncio.timeout(1):
+        while ticks < 2:
+            await asyncio.sleep(0.01)
+
+    await loop.stop()
+
+    settled = ticks
+    await asyncio.sleep(0.05)
+    assert ticks == settled
+
+
+@pytest.mark.asyncio
+async def test_async_loop_restart_after_stop():
+    ticks = 0
+
+    async def body():
+        nonlocal ticks
+        ticks += 1
+
+    loop = AsyncLoop(body, interval=0.01)
+    loop.start()
+
+    async with asyncio.timeout(1):
+        while ticks < 1:
+            await asyncio.sleep(0.01)
+
+    await loop.stop()
+    stopped_at = ticks
+
+    loop.start()
+    assert loop.active
+
+    async with asyncio.timeout(1):
+        while ticks == stopped_at:
+            await asyncio.sleep(0.01)
+
+    await loop.stop()
+
+
+@pytest.mark.asyncio
+async def test_async_loop_continues_after_error():
+    attempts = 0
+
+    async def body():
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("boom")
+
+    loop = AsyncLoop(body, interval=0.01)
+    loop.start()
+
+    async with asyncio.timeout(1):
+        while attempts < 3:
+            await asyncio.sleep(0.01)
+
+    assert loop.active
+    await loop.stop()
+
+
+@pytest.mark.asyncio
+async def test_async_loop_stop_without_start():
+    async def body():
+        await asyncio.sleep(0)
+
+    loop = AsyncLoop(body, interval=0.01)
+
+    # Stopping is safe before a first start, and again after a stop.
+    await loop.stop()
+    loop.start()
+    await loop.stop()
+    await loop.stop()
+
+    assert not loop.active
