@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 from typing import Literal, override
 
-from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
@@ -14,6 +13,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect
 
 
@@ -40,12 +40,14 @@ class AlpacaSafetyMonitor(AlpacaDevice):
 
         # Initialize the safety monitor
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.safety_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -66,29 +68,21 @@ class AlpacaSafetyMonitor(AlpacaDevice):
         await sk.device().publish(Connected(is_connected=False))
 
     async def status_publish(self):
-        while True:
-            try:
-                m = self.monitor
-                connected = await self.get(m, "Connected", False)
-                self.device_connected = connected
+        m = self.monitor
+        connected = await self.get(m, "Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected:
-                    is_safe = await self.get(m, "IsSafe", False)
+        if connected:
+            is_safe = await self.get(m, "IsSafe", False)
 
-                    # logger.debug(
-                    #     f"Alpaca safety monitor status: connected={connected}, is_safe={is_safe}"
-                    # )
+            # logger.debug(
+            #     f"Alpaca safety monitor status: connected={connected}, is_safe={is_safe}"
+            # )
 
-                    await device.publish(AlpacaSafety(is_safe=is_safe))
-            except Exception as e:
-                logger.exception(f"Error in safety monitor status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+            await device.publish(AlpacaSafety(is_safe=is_safe))
 
 
 class AlpacaSafetyMonitorConfig(AlpacaDeviceConfig[AlpacaSafetyMonitor]):

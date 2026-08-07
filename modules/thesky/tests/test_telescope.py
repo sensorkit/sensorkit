@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
+import pytest_asyncio
 
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Disconnect, Home, MoveToPark, Slewing, Stop
 from sensorkit.thesky.device import (
     CommandNotSupportedError,
@@ -8,8 +10,8 @@ from sensorkit.thesky.device import (
 from sensorkit.thesky.telescope import TheSkyTelescopeConfig, TheSkyTelescopeState
 
 
-@pytest.fixture
-def telescope(simulator):
+@pytest_asyncio.fixture
+async def telescope(simulator):
     host, port = simulator
     config = TheSkyTelescopeConfig(
         device_type="telescope",
@@ -21,7 +23,13 @@ def telescope(simulator):
     )
     m = config.create_device()
     m.state = TheSkyTelescopeState()
-    return m
+    m.status_loop = AsyncLoop(m.status_publish, interval=config.status_frequency_slow)
+    m.fast_loop = AsyncLoop(m._publish_telescope_status, interval=config.status_frequency_fast)
+
+    yield m
+
+    await m.status_loop.stop()
+    await m.fast_loop.stop()
 
 
 @pytest.fixture

@@ -23,6 +23,7 @@ from sensorkit.astro.target import (
     RateTarget,
     TLETarget,
 )
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.pwi4.device import (
     PWI4Client,
     PWI4Device,
@@ -186,7 +187,6 @@ class PWI4Mount(PWI4Device):
         self._geodetic: Geodetic | None = None
         self._location: EarthLocation | None = None
         self._wrap_task: asyncio.Task | None = None
-        self._fast_status_task: asyncio.Task | None = None
         self._sidereal = False
 
     @sk.on_attach
@@ -221,10 +221,18 @@ class PWI4Mount(PWI4Device):
             f"height={self._site_elev} m"
         )
 
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency_slow, log=True
+        )
+        self.fast_loop = AsyncLoop(
+            self.status_publish_fast, interval=self.config.status_frequency_fast, log=True
+        )
+
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency_slow)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
+        await self.fast_loop.stop()
         await self.mount_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -234,7 +242,7 @@ class PWI4Mount(PWI4Device):
         self._reconnect = lambda: self.mount_connect(Connect())
 
         await self.mount_connect(Connect())
-        self.start_status_loop(self.status_publish_slow())
+        self.status_loop.start()
 
         # Enable the motors
         await asyncio.gather(
@@ -279,7 +287,7 @@ class PWI4Mount(PWI4Device):
                 logger.warning("Unable to connect mount for Deinit park; skipping")
                 return
 
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         await self.mount_stop(Stop())
 
         if self._wrap_task is not None:
@@ -351,7 +359,7 @@ class PWI4Mount(PWI4Device):
         logger.debug("stopped mount")
         self._sidereal = False
 
-        self._stop_fast_status()
+        await self.fast_loop.stop()
 
     @sk.command_handler
     async def mount_home(self, cmd: Home):
@@ -438,7 +446,7 @@ class PWI4Mount(PWI4Device):
 
                 await self._wait_for_mount(tracking=True)
                 self._sidereal = True
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following RADec target")
 
@@ -454,7 +462,7 @@ class PWI4Mount(PWI4Device):
                 )
 
                 await self._wait_for_mount(tracking=False)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following AltAz target")
 
@@ -471,7 +479,7 @@ class PWI4Mount(PWI4Device):
                 )
 
                 await self._wait_for_mount(tracking=True)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following TLE target")
 
@@ -497,7 +505,7 @@ class PWI4Mount(PWI4Device):
                         "dec_set_rate_arcsec_per_sec": target.rates.dec * 3600,
                     },
                 )
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following Rate target")
 
@@ -517,14 +525,14 @@ class PWI4Mount(PWI4Device):
                 await self.client.request("/mount/radecpath/apply")
 
                 await self._wait_for_mount(tracking=True)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following Ephemeris target")
 
             case FrameTarget():
                 match target.frame:
                     case ReferenceFrame.ALTAZ:
-                        self._stop_fast_status()
+                        await self.fast_loop.stop()
                         logger.debug("disabling tracking")
                         await self.client.request("/mount/tracking_off")
                         await self._wait_for_mount(tracking=False, await_onset=False)
@@ -534,7 +542,7 @@ class PWI4Mount(PWI4Device):
                         await self.client.request("/mount/tracking_on")
                         await self._wait_for_mount(tracking=True, await_onset=False)
                         self._sidereal = True
-                        self._start_fast_status()
+                        self.fast_loop.start()
                         logger.debug("enabled sidereal tracking")
 
             case _:
@@ -691,21 +699,6 @@ class PWI4Mount(PWI4Device):
                     break
                 await asyncio.sleep(0.1)
 
-    def _start_fast_status(self):
-        if self._fast_status_task is None or self._fast_status_task.done():
-            logger.debug("starting fast mount status loop")
-            self._fast_status_task = asyncio.create_task(self.status_publish_fast())
-
-    def _stop_fast_status(self):
-        if self._fast_status_task is not None and not self._fast_status_task.done():
-            logger.debug("stopping fast mount status loop")
-            self._fast_status_task.cancel()
-            self._fast_status_task = None
-
-    @property
-    def _fast_status_active(self) -> bool:
-        return self._fast_status_task is not None and not self._fast_status_task.done()
-
     async def _publish_mount_status(self, st: dict[str, str]):
         connected = self.client.get_bool(st, "mount.is_connected")
         self.device_connected = connected
@@ -716,12 +709,8 @@ class PWI4Mount(PWI4Device):
         if not connected:
             return
 
-        await device.publish(
-            Slewing(is_slewing=self.client.get_bool(st, "mount.is_slewing"))
-        )
-        await device.publish(
-            Tracking(is_tracking=self.client.get_bool(st, "mount.is_tracking"))
-        )
+        await device.publish(Slewing(is_slewing=self.client.get_bool(st, "mount.is_slewing")))
+        await device.publish(Tracking(is_tracking=self.client.get_bool(st, "mount.is_tracking")))
 
         ra_hours = self.client.get_float(st, "mount.ra_j2000_hours")
         dec_degs = self.client.get_float(st, "mount.dec_j2000_degs")
@@ -849,37 +838,20 @@ class PWI4Mount(PWI4Device):
                 )
             )
 
-    async def status_publish_slow(self):
-        while True:
-            try:
-                st = await self.client.status()
-                if not self._fast_status_active:
-                    await self._publish_mount_status(st)
-                else:
-                    self.device_connected = self.client.get_bool(st, "mount.is_connected")
-                    await sk.device().publish(Connected(is_connected=self.device_connected))
+    async def status_publish(self):
+        st = await self.client.status()
 
-                # logger.debug(
-                #     f"PWI4 mount status: connected={self.device_connected}"
-                # )
-            except Exception as e:
-                logger.warning(f"Error in slow mount status_publish ({e})")
-                await asyncio.sleep(self.config.status_frequency_slow)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency_slow)
+        # The fast loop publishes the full status while it runs, so defer to it and
+        # report connectivity only.
+        if self.fast_loop.active:
+            self.device_connected = self.client.get_bool(st, "mount.is_connected")
+            await sk.device().publish(Connected(is_connected=self.device_connected))
+        else:
+            await self._publish_mount_status(st)
 
     async def status_publish_fast(self):
-        while True:
-            try:
-                st = await self.client.status()
-                await self._publish_mount_status(st)
-            except Exception as e:
-                logger.warning(f"Error in fast mount status_publish ({e})")
-                await asyncio.sleep(self.config.status_frequency_fast)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency_fast)
+        st = await self.client.status()
+        await self._publish_mount_status(st)
 
     async def init_ot(self):
         """Set heater power levels and turn on fans."""

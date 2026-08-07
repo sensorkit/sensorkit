@@ -226,7 +226,7 @@ alpaca:
           OmniSimTelescope:
             device_type: telescope
             device_number: 0
-            status_frequency_slow: 1.0
+            status_frequency: 1.0
             status_frequency_fast: 0.1
           OmniSimRotator:
             device_type: rotator

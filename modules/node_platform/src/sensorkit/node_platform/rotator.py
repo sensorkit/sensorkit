@@ -8,6 +8,7 @@ import ourskyai_node_platform_api as osapi
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.node_platform.device import (
     NodePlatformDevice,
     NodePlatformDeviceConfig,
@@ -41,7 +42,9 @@ class NodePlatformRotator(NodePlatformDevice):
 
         # Initialize the rotator
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
         # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
@@ -51,7 +54,7 @@ class NodePlatformRotator(NodePlatformDevice):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.api.close()
         await sk.device().kv_put_model(self.state)
 
@@ -96,38 +99,23 @@ class NodePlatformRotator(NodePlatformDevice):
         logger.debug(f"changed rotator to position {cmd.position}°")
 
     async def status_publish(self):
-        while True:
-            try:
-                status: osapi.V1RotatorStatus = await self.api.call("v1_get_rotator_status")
-            except Exception as e:
-                logger.exception(f"Error in status_publish get: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
+        status: osapi.V1RotatorStatus = await self.api.call("v1_get_rotator_status")
+        self.device_connected = status.connected
+        self.rotator_moving = status.moving
 
-            try:
-                self.device_connected = status.connected
-                self.rotator_moving = status.moving
+        if status.position is not None:
+            self.rotator_position = float(status.position.mechanical_angle_degrees)
 
-                if status.position is not None:
-                    self.rotator_position = float(status.position.mechanical_angle_degrees)
+        # logger.debug(
+        #     f"NodePlatform rotator status: connected={status.connected}, "
+        #     f"derotation={status.is_derotation_enabled}, moving={status.moving}, "
+        #     f"position={self.rotator_position}°"
+        # )
 
-                # logger.debug(
-                #     f"NodePlatform rotator status: connected={status.connected}, "
-                #     f"derotation={status.is_derotation_enabled}, moving={status.moving}, "
-                #     f"position={self.rotator_position}°"
-                # )
-
-                device = sk.device()
-                await device.publish(Connected(is_connected=status.connected))
-                if self.rotator_position is not None:
-                    await device.publish(RotatorPosition(position=self.rotator_position))
-
-            except Exception as e:
-                logger.warning(f"Failed to update Node Platform rotator status ({e})")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+        device = sk.device()
+        await device.publish(Connected(is_connected=status.connected))
+        if self.rotator_position is not None:
+            await device.publish(RotatorPosition(position=self.rotator_position))
 
 
 class NodePlatformRotatorConfig(NodePlatformDeviceConfig[NodePlatformRotator]):

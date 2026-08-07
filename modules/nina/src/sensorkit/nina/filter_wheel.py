@@ -7,6 +7,7 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std import Connect, Connected, Disconnect, Filter, Filters, SetFilter
 
@@ -34,7 +35,9 @@ class NinaFilterWheel(NinaDevice):
 
         # Initialize the filter wheel
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
         # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
@@ -44,7 +47,7 @@ class NinaFilterWheel(NinaDevice):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.filter_wheel_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -108,33 +111,25 @@ class NinaFilterWheel(NinaDevice):
         logger.debug(f"changed filter to {filter_id}")
 
     async def status_publish(self):
-        while True:
-            try:
-                info = await self.info("filterwheel")
-                connected = info.get("Connected", False)
-                self.device_connected = connected
+        info = await self.info("filterwheel")
+        connected = info.get("Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected:
-                    selected_filter = info.get("SelectedFilter", {})
-                    position = selected_filter.get("Id")
-                    name = selected_filter.get("Name", "")
-                    if position is not None:
-                        self.filter_wheel_position = position
-                        await device.publish(Filter(name=name, position=position))
+        if connected:
+            selected_filter = info.get("SelectedFilter", {})
+            position = selected_filter.get("Id")
+            name = selected_filter.get("Name", "")
+            if position is not None:
+                self.filter_wheel_position = position
+                await device.publish(Filter(name=name, position=position))
 
-                    # logger.debug(
-                    #     f"NINA filter wheel status: connected={connected}, "
-                    #     f"position={position}, name={name}"
-                    # )
-            except Exception as e:
-                logger.exception(f"Error in filter wheel status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+            # logger.debug(
+            #     f"NINA filter wheel status: connected={connected}, "
+            #     f"position={position}, name={name}"
+            # )
 
 
 class NinaFilterWheelConfig(NinaDeviceConfig[NinaFilterWheel]):

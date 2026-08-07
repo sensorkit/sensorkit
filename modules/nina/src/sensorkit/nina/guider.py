@@ -14,6 +14,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std import Connect, Connected, Disconnect
 
@@ -70,12 +71,14 @@ class NinaGuider(NinaDevice):
 
         # Initialize the guider
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.guider_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -117,37 +120,29 @@ class NinaGuider(NinaDevice):
         )
 
     async def status_publish(self):
-        while True:
-            try:
-                info = await self.info("guider")
-                connected = info.get("Connected", False)
-                self.device_connected = connected
+        info = await self.info("guider")
+        connected = info.get("Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected:
-                    fields: dict = {
-                        "guiding": info.get("Guiding", False),
-                    }
+        if connected:
+            fields: dict = {
+                "guiding": info.get("Guiding", False),
+            }
 
-                    rms_ra = info.get("RMSErrorRA")
-                    rms_dec = info.get("RMSErrorDec")
-                    if rms_ra is not None:
-                        fields["rms_ra"] = rms_ra
-                    if rms_dec is not None:
-                        fields["rms_dec"] = rms_dec
-                    rms_total = info.get("RMSErrorTotal")
-                    if rms_total is not None:
-                        fields["rms_total"] = rms_total
+            rms_ra = info.get("RMSErrorRA")
+            rms_dec = info.get("RMSErrorDec")
+            if rms_ra is not None:
+                fields["rms_ra"] = rms_ra
+            if rms_dec is not None:
+                fields["rms_dec"] = rms_dec
+            rms_total = info.get("RMSErrorTotal")
+            if rms_total is not None:
+                fields["rms_total"] = rms_total
 
-                    await device.publish(NinaGuiderStatus(**fields))
-            except Exception as e:
-                logger.exception(f"Error in guider status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+            await device.publish(NinaGuiderStatus(**fields))
 
 
 class NinaGuiderConfig(NinaDeviceConfig[NinaGuider]):

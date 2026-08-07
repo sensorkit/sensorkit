@@ -61,8 +61,8 @@ value:
         Telescope:
           device_type: telescope
           min_altitude_degrees: 20.0   # floor for the satellite start altitude (sat:startalt)
-          status_frequency_slow: 1.0   # status rate while idle/tracking
-          status_frequency_fast: 0.1   # increased publishing rate during tracking
+          status_frequency: 1.0        # status rate while idle (seconds)
+          status_frequency_fast: 0.1   # status rate while slewing or tracking
         Focuser:
           device_type: focuser
         Rotator:

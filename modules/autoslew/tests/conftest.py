@@ -3,13 +3,12 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-
 import astropy.units as u
 import pytest
 import pytest_asyncio
 from astropy.coordinates import EarthLocation
+
+from sensorkit.common.aio import AsyncLoop
 
 from .fakes import FakeAutoslewSDKDevice
 
@@ -29,8 +28,8 @@ async def telescope():
         host="localhost",
         timeout=5.0,
         min_altitude_degrees=20.0,
+        status_frequency=0.05,
         status_frequency_fast=0.01,
-        status_frequency_slow=0.05,
     )
     t = config.create_device()
     t.state = AutoslewTelescopeState()
@@ -55,21 +54,16 @@ async def telescope():
     t._sidereal = False
     t._icrf_rate = (0.0, 0.0)
     t._tle_target = None
-    t._fast_status_task = None
     t._can_slew = t._can_slew_async = True
     t._can_slew_altaz = t._can_slew_altaz_async = True
     t._can_park = t._can_unpark = t._can_find_home = True
     t._site_lat, t._site_lon, t._site_elev = 20.7, 156.25, 3040.0
     t._location = EarthLocation(lat=20.7 * u.deg, lon=156.25 * u.deg, height=3040.0 * u.m)
     t._geodetic = Geodetic(lon=156.25, lat=20.7, elev=3040.0)
+    t.status_loop = AsyncLoop(t.status_publish, interval=config.status_frequency)
+    t.fast_loop = AsyncLoop(t._publish_telescope_status, interval=config.status_frequency_fast)
 
     yield t
 
-    # Following a target starts a status loop that publishes converted coordinates. Awaiting its
-    # cancellation keeps it from running on into later tests.
-    task = t._fast_status_task
-    t._stop_fast_status()
-
-    if task is not None:
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+    await t.status_loop.stop()
+    await t.fast_loop.stop()

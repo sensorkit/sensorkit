@@ -96,7 +96,6 @@ class TheSkyDevice:
     def __init__(self, config: TheSkyDeviceConfig):
         self.config = config
         self.device_connected: bool | None = None
-        self._status_task: asyncio.Task | None = None
         self._reconnect: Callable[[], Coroutine] | None = None
 
     async def require_connected(self):
@@ -129,24 +128,6 @@ class TheSkyDevice:
                 timeout=self.config.timeout if timeout is _CONFIG_TIMEOUT else timeout,
             )
             return parse_thesky_response(response)
-
-    def start_status_loop(self, coro):
-        """Start a background status publishing task, cancelling any existing one."""
-
-        if self._status_task is not None and not self._status_task.done():
-            self._status_task.cancel()
-        self._status_task = asyncio.create_task(coro)
-
-    async def stop_status_loop(self):
-        """Cancel the background status publishing task."""
-
-        if self._status_task is not None:
-            self._status_task.cancel()
-
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._status_task
-
-            self._status_task = None
 
     async def poll(self, script: str, expected: str, delay: float = 0.1, interval: float = 1.0):
         """Poll TheSky for script completion.

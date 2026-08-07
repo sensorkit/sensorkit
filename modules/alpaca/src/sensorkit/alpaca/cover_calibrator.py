@@ -14,6 +14,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect, Opened, Stop
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 
@@ -82,12 +83,14 @@ class AlpacaCoverCalibrator(AlpacaDevice):
 
         # Initialize the cover calibrator
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.cover_calibrator_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -152,45 +155,39 @@ class AlpacaCoverCalibrator(AlpacaDevice):
         logger.debug("closed cover calibrator")
 
     async def status_publish(self):
-        while True:
-            try:
-                c = self.cover_calibrator
-                connected = await self.get(c, "Connected", False)
-                self.device_connected = connected
+        c = self.cover_calibrator
+        connected = await self.get(c, "Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected:
-                    cover_state = await self.get(c, "CoverState", _COVER_UNKNOWN)
-                    cover_moving = await self.get(c, "CoverMoving", False)
-                    calibrator_state = await self.get(c, "CalibratorState", _CAL_NOT_PRESENT)
-                    calibrator_changing = await self.get(c, "CalibratorChanging", False)
-                    brightness = await self.get(c, "Brightness", None)
+        if connected:
+            cover_state = await self.get(c, "CoverState", _COVER_UNKNOWN)
+            cover_moving = await self.get(c, "CoverMoving", False)
+            calibrator_state = await self.get(c, "CalibratorState", _CAL_NOT_PRESENT)
+            calibrator_changing = await self.get(c, "CalibratorChanging", False)
+            brightness = await self.get(c, "Brightness", None)
 
-                    is_open = cover_state == _COVER_OPEN
+            is_open = cover_state == _COVER_OPEN
 
-                    # logger.debug(
-                    #     f"Alpaca cover calibrator status: connected={connected}, cover_state={cover_state}, "
-                    #     f"cover_moving={cover_moving}, calibrator_state={calibrator_state}, "
-                    #     f"calibrator_changing={calibrator_changing}, brightness={brightness}"
-                    # )
+            # logger.debug(
+            #     f"Alpaca cover calibrator status: connected={connected}, cover_state={cover_state}, "
+            #     f"cover_moving={cover_moving}, calibrator_state={calibrator_state}, "
+            #     f"calibrator_changing={calibrator_changing}, brightness={brightness}"
+            # )
 
-                    await device.publish(Opened(is_open=is_open))
-                    await device.publish(
-                        AlpacaCoverCalibratorStatus(
-                            cover_state=_COVER_NAMES.get(cover_state, "Unknown"),
-                            cover_moving=cover_moving,
-                            calibrator_state=_CAL_NAMES.get(calibrator_state, "Unknown"),
-                            calibrator_changing=calibrator_changing,
-                            brightness=brightness,
-                            max_brightness=self._max_brightness,
-                        )
-                    )
-            except Exception as e:
-                logger.exception(f"Error in cover calibrator status publish: {e}")
-
-            await asyncio.sleep(self.config.status_frequency)
+            await device.publish(Opened(is_open=is_open))
+            await device.publish(
+                AlpacaCoverCalibratorStatus(
+                    cover_state=_COVER_NAMES.get(cover_state, "Unknown"),
+                    cover_moving=cover_moving,
+                    calibrator_state=_CAL_NAMES.get(calibrator_state, "Unknown"),
+                    calibrator_changing=calibrator_changing,
+                    brightness=brightness,
+                    max_brightness=self._max_brightness,
+                )
+            )
 
 
 class AlpacaCoverCalibratorConfig(AlpacaDeviceConfig[AlpacaCoverCalibrator]):

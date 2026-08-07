@@ -12,6 +12,7 @@ from astropy.time import Time
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ArrayInfo, ImageInfo
 from sensorkit.std import (
@@ -58,12 +59,14 @@ class TheSkyCamera(TheSkyDevice):
 
         # Initialize the camera
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.camera_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -311,60 +314,42 @@ class TheSkyCamera(TheSkyDevice):
         return img
 
     async def status_publish(self):
-        while True:
-            try:
-                resp = await self.execute(
-                    """
-                    var Out;
-                    Out = [
-                        ccdsoftCamera.Status,
-                        ccdsoftCamera.Temperature,
-                        ccdsoftCamera.SubframeLeft,
-                        ccdsoftCamera.SubframeTop,
-                        ccdsoftCamera.SubframeRight,
-                        ccdsoftCamera.SubframeBottom,
-                        ccdsoftCamera.BinX,
-                        ccdsoftCamera.BinY
-                    ];
-                    """
-                )
-            except ProcessAbortedError:
-                # TheSky returns 212 transiently after an `abort`; camera is fine
-                pass
-            except Exception as e:
-                logger.exception(f"Error in status_publish execute: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
+        try:
+            resp = await self.execute(
+                """
+                var Out;
+                Out = [
+                    ccdsoftCamera.Status,
+                    ccdsoftCamera.Temperature,
+                    ccdsoftCamera.SubframeLeft,
+                    ccdsoftCamera.SubframeTop,
+                    ccdsoftCamera.SubframeRight,
+                    ccdsoftCamera.SubframeBottom,
+                    ccdsoftCamera.BinX,
+                    ccdsoftCamera.BinY
+                ];
+                """
+            )
+        except ProcessAbortedError:
+            # TheSky returns 212 transiently after an `abort`; camera is fine
+            return
 
-            try:
-                parts = resp.split(",")
-                temp, left, top, right, bottom, binx, biny = map(float, parts[1:])
+        parts = resp.split(",")
+        temp, left, top, right, bottom, binx, biny = map(float, parts[1:])
 
-                connected = parts[0] != "Not Connected"
-                self.device_connected = connected
+        connected = parts[0] != "Not Connected"
+        self.device_connected = connected
 
-                width = int(right - left)
-                height = int(bottom - top)
+        width = int(right - left)
+        height = int(bottom - top)
 
-                # logger.debug(
-                #     f"TheSky camera status: connected={connected}, temperature={temp}, width={width}, height={height}, binx={int(binx)}, biny={int(biny)}"
-                # )
-
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
-                await device.publish(
-                    CameraSensorTemperature(temperature=temp, units=TemperatureUnit.CELSIUS)
-                )
-                await device.publish(CameraSensorSize(x=width, y=height))
-                await device.publish(Binning(x=int(binx), y=int(biny)))
-
-            except Exception as e:
-                logger.warning(f"Failed to update TheSky camera status ({e})")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            # FIXME: Account for query time
-            await asyncio.sleep(self.config.status_frequency)
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
+        await device.publish(
+            CameraSensorTemperature(temperature=temp, units=TemperatureUnit.CELSIUS)
+        )
+        await device.publish(CameraSensorSize(x=width, y=height))
+        await device.publish(Binning(x=int(binx), y=int(biny)))
 
 
 class TheSkyCameraConfig(TheSkyDeviceConfig[TheSkyCamera]):

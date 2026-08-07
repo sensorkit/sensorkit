@@ -3,12 +3,10 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-
 import pytest
 import pytest_asyncio
 
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.pwi4.mount import PWI4Mount, PWI4MountConfig, PWI4MountState
 
 from .fakes import FakePWI4Client
@@ -27,17 +25,14 @@ def client():
 @pytest_asyncio.fixture
 async def mount(client):
     """A connected mount, in the state it reaches once attach has run."""
-    mount = PWI4Mount(config=PWI4MountConfig(device_type="mount"), client=client)
+    config = PWI4MountConfig(device_type="mount")
+    mount = PWI4Mount(config=config, client=client)
     mount.state = PWI4MountState()
     mount.device_connected = True
+    mount.status_loop = AsyncLoop(mount.status_publish, interval=config.status_frequency_slow)
+    mount.fast_loop = AsyncLoop(mount.status_publish_fast, interval=config.status_frequency_fast)
 
     yield mount
 
-    # Following a target starts a status loop that publishes converted coordinates ten times a
-    # second. Awaiting its cancellation keeps it from running on into later tests.
-    task = mount._fast_status_task
-    mount._stop_fast_status()
-
-    if task is not None:
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+    await mount.status_loop.stop()
+    await mount.fast_loop.stop()

@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Test PWI4 mirror cover device."""
 
-import asyncio
-
 import pytest
 
 from sensorkit.pwi4.cover import PWI4Cover, PWI4CoverConfig
@@ -113,10 +111,7 @@ class TestPWI4Cover:
         cover = PWI4Cover(config=config, client=client)
         published = await recorder()
 
-        task = asyncio.create_task(cover.status_publish())
+        await cover.status_publish()
 
-        try:
-            assert (await published.wait_for(Opened)).is_open is True
-            assert cover.device_connected is True
-        finally:
-            task.cancel()
+        assert (await published.wait_for(Opened)).is_open is True
+        assert cover.device_connected is True

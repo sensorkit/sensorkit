@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, Literal
 
@@ -29,7 +28,6 @@ class AlpacaDevice:
         self.config = config
         self.device_connected: bool | None = None
         self.state: AlpacaDeviceState = self.state_model()
-        self._status_task: asyncio.Task | None = None
         self._reconnect: Callable[[], Coroutine] | None = None
 
     @property
@@ -127,24 +125,6 @@ class AlpacaDevice:
 
         self.device_connected = False
         logger.debug(f"disconnected from {self.device_name}")
-
-    def start_status_loop(self, coro):
-        """Start a background status publishing task, cancelling any existing one."""
-
-        if self._status_task is not None and not self._status_task.done():
-            self._status_task.cancel()
-        self._status_task = asyncio.create_task(coro)
-
-    async def stop_status_loop(self):
-        """Cancel the background status publishing task."""
-
-        if self._status_task is not None:
-            self._status_task.cancel()
-
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._status_task
-
-            self._status_task = None
 
 
 class AlpacaDeviceConfig[T: AlpacaDevice = AlpacaDevice](BaseModel):

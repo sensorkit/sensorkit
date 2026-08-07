@@ -8,6 +8,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std import Connect, Connected, Disconnect, Stop
 from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
@@ -45,7 +46,9 @@ class NinaFocuser(NinaDevice):
 
         # Initialize the focuser
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
         # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
@@ -55,7 +58,7 @@ class NinaFocuser(NinaDevice):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.focuser_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -99,47 +102,39 @@ class NinaFocuser(NinaDevice):
         logger.debug(f"changed focuser to {self.focuser_position}")
 
     async def status_publish(self):
-        while True:
-            try:
-                info = await self.info("focuser")
-                connected = info.get("Connected", False)
-                self.device_connected = connected
+        info = await self.info("focuser")
+        connected = info.get("Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected:
-                    position = info.get("Position")
-                    if position is not None:
-                        self.focuser_position = float(position)
-                        await device.publish(FocusPosition(position=self.focuser_position))
+        if connected:
+            position = info.get("Position")
+            if position is not None:
+                self.focuser_position = float(position)
+                await device.publish(FocusPosition(position=self.focuser_position))
 
-                    fields: dict = {
-                        "position": self.focuser_position,
-                        "is_moving": info.get("IsMoving", False),
-                    }
+            fields: dict = {
+                "position": self.focuser_position,
+                "is_moving": info.get("IsMoving", False),
+            }
 
-                    for key, info_key in (
-                        ("temperature", "Temperature"),
-                        ("max_step", "MaxStep"),
-                        ("step_size", "StepSize"),
-                    ):
-                        val = info.get(info_key)
-                        if val is not None:
-                            fields[key] = val
+            for key, info_key in (
+                ("temperature", "Temperature"),
+                ("max_step", "MaxStep"),
+                ("step_size", "StepSize"),
+            ):
+                val = info.get(info_key)
+                if val is not None:
+                    fields[key] = val
 
-                    await device.publish(NinaFocuserStatus(**fields))
+            await device.publish(NinaFocuserStatus(**fields))
 
-                    # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
-                    # logger.debug(
-                    #     f"NINA focuser status: connected={connected}, {fields_str}"
-                    # )
-            except Exception as e:
-                logger.exception(f"Error in focuser status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+            # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+            # logger.debug(
+            #     f"NINA focuser status: connected={connected}, {fields_str}"
+            # )
 
 
 class NinaFocuserConfig(NinaDeviceConfig[NinaFocuser]):

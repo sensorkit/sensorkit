@@ -14,6 +14,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.weather import BasicWeather, StandardWeather
 
@@ -51,12 +52,14 @@ class AlpacaObservingConditions(AlpacaDevice):
 
         # Initialize the observing conditions
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.observing_conditions_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -99,88 +102,80 @@ class AlpacaObservingConditions(AlpacaDevice):
             return None
 
     async def status_publish(self):
-        while True:
+        connected = await self.get(self.oc, "Connected", False)
+        self.device_connected = connected
+
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
+
+        if connected:
+            # Force a hardware refresh if supported
             try:
-                connected = await self.get(self.oc, "Connected", False)
-                self.device_connected = connected
+                await asyncio.to_thread(self.oc.Refresh)
+            except Exception:
+                pass
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+            # BasicWeather sensors
+            weather = BasicWeather(
+                temperature=await self._read_sensor("Temperature"),
+                humidity=await self._read_sensor("Humidity"),
+                pressure=await self._read_sensor("Pressure"),
+                cloud_cover=await self._read_sensor("CloudCover"),
+                dew_point=await self._read_sensor("DewPoint"),
+                rain_rate=await self._read_sensor("RainRate"),
+                wind_direction=await self._read_sensor("WindDirection"),
+                wind_speed=await self._read_sensor("WindSpeed"),
+            )
+            await device.publish(weather)
 
-                if connected:
-                    # Force a hardware refresh if supported
-                    try:
-                        await asyncio.to_thread(self.oc.Refresh)
-                    except Exception:
-                        pass
+            # Extended sensors — only include available ones
+            properties: dict = {}
+            for attr, key in (
+                ("SkyBrightness", "sky_brightness"),
+                ("SkyQuality", "sky_quality"),
+                ("SkyTemperature", "sky_temperature"),
+                ("StarFWHM", "star_fwhm"),
+                ("WindGust", "wind_gust"),
+            ):
+                val = await self._read_sensor(attr)
+                if val is not None:
+                    properties[key] = val
 
-                    # BasicWeather sensors
-                    weather = BasicWeather(
-                        temperature=await self._read_sensor("Temperature"),
-                        humidity=await self._read_sensor("Humidity"),
-                        pressure=await self._read_sensor("Pressure"),
-                        cloud_cover=await self._read_sensor("CloudCover"),
-                        dew_point=await self._read_sensor("DewPoint"),
-                        rain_rate=await self._read_sensor("RainRate"),
-                        wind_direction=await self._read_sensor("WindDirection"),
-                        wind_speed=await self._read_sensor("WindSpeed"),
-                    )
-                    await device.publish(weather)
+            # Time since last update
+            all_sensors = [
+                "Temperature",
+                "Humidity",
+                "Pressure",
+                "CloudCover",
+                "DewPoint",
+                "RainRate",
+                "WindSpeed",
+                "WindDirection",
+                "WindGust",
+                "SkyBrightness",
+                "SkyQuality",
+                "SkyTemperature",
+                "StarFWHM",
+            ]
+            time_since_last_update = {}
+            for sensor in all_sensors:
+                t = await self._time_since_last_update(sensor)
+                if t is not None:
+                    time_since_last_update[sensor] = t
+            if time_since_last_update:
+                properties["time_since_last_update"] = time_since_last_update
 
-                    # Extended sensors — only include available ones
-                    properties: dict = {}
-                    for attr, key in (
-                        ("SkyBrightness", "sky_brightness"),
-                        ("SkyQuality", "sky_quality"),
-                        ("SkyTemperature", "sky_temperature"),
-                        ("StarFWHM", "star_fwhm"),
-                        ("WindGust", "wind_gust"),
-                    ):
-                        val = await self._read_sensor(attr)
-                        if val is not None:
-                            properties[key] = val
+            # weather_str = ", ".join(
+            #     f"{k}={v}" for k, v in weather.model_dump(exclude_none=True).items()
+            # )
+            # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+            # logger.debug(
+            #     f"Alpaca observing conditions status: connected={connected}, "
+            #     f"{weather_str}, {properties_str}"
+            # )
 
-                    # Time since last update
-                    all_sensors = [
-                        "Temperature",
-                        "Humidity",
-                        "Pressure",
-                        "CloudCover",
-                        "DewPoint",
-                        "RainRate",
-                        "WindSpeed",
-                        "WindDirection",
-                        "WindGust",
-                        "SkyBrightness",
-                        "SkyQuality",
-                        "SkyTemperature",
-                        "StarFWHM",
-                    ]
-                    time_since_last_update = {}
-                    for sensor in all_sensors:
-                        t = await self._time_since_last_update(sensor)
-                        if t is not None:
-                            time_since_last_update[sensor] = t
-                    if time_since_last_update:
-                        properties["time_since_last_update"] = time_since_last_update
-
-                    # weather_str = ", ".join(
-                    #     f"{k}={v}" for k, v in weather.model_dump(exclude_none=True).items()
-                    # )
-                    # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
-                    # logger.debug(
-                    #     f"Alpaca observing conditions status: connected={connected}, "
-                    #     f"{weather_str}, {properties_str}"
-                    # )
-
-                    if properties:
-                        await device.publish(AlpacaObservingConditionsStatus(**properties))
-            except Exception as e:
-                logger.exception(f"Error in observing conditions status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+            if properties:
+                await device.publish(AlpacaObservingConditionsStatus(**properties))
 
 
 class AlpacaObservingConditionsConfig(AlpacaDeviceConfig[AlpacaObservingConditions]):

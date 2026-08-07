@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std import (
     Connect,
@@ -55,12 +56,14 @@ class NinaDome(NinaDevice):
 
         # Initialize the dome
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.dome_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -187,50 +190,44 @@ class NinaDome(NinaDevice):
         logger.debug(f"moved enclosure to azimuth {cmd.target_azimuth:.1f}°")
 
     async def status_publish(self):
-        while True:
-            try:
-                info = await self.info("dome")
-                connected = info.get("Connected", False)
-                self.device_connected = connected
+        info = await self.info("dome")
+        connected = info.get("Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected:
-                    shutter_status = info.get("ShutterStatus", "unknown")
-                    is_open = shutter_status == "ShutterOpen"
+        if connected:
+            shutter_status = info.get("ShutterStatus", "unknown")
+            is_open = shutter_status == "ShutterOpen"
 
-                    await device.publish(Opened(is_open=is_open))
+            await device.publish(Opened(is_open=is_open))
 
-                    fields: dict = {
-                        "shutter_status": shutter_status,
-                        "slewing": info.get("Slewing", False),
-                        "at_home": info.get("AtHome", False),
-                        "at_park": info.get("AtPark", False),
-                    }
+            fields: dict = {
+                "shutter_status": shutter_status,
+                "slewing": info.get("Slewing", False),
+                "at_home": info.get("AtHome", False),
+                "at_park": info.get("AtPark", False),
+            }
 
-                    azimuth = info.get("Azimuth")
-                    if azimuth is not None:
-                        fields["azimuth"] = azimuth
-                        await device.publish(AltAzPointing(
-                            azimuth_degrees=azimuth,
-                            altitude_degrees=0.0,
-                        ))
+            azimuth = info.get("Azimuth")
+            if azimuth is not None:
+                fields["azimuth"] = azimuth
+                await device.publish(
+                    AltAzPointing(
+                        azimuth_degrees=azimuth,
+                        altitude_degrees=0.0,
+                    )
+                )
 
-                    following = info.get("Following")
-                    if following is not None:
-                        fields["following"] = following
+            following = info.get("Following")
+            if following is not None:
+                fields["following"] = following
 
-                    await device.publish(NinaDomeStatus(**fields))
+            await device.publish(NinaDomeStatus(**fields))
 
-                    # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
-                    # logger.debug(f"NINA dome status: connected={connected}, {fields_str}")
-            except Exception as e:
-                logger.exception(f"Error in dome status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+            # fields_str = ", ".join(f"{k}={v}" for k, v in fields.items())
+            # logger.debug(f"NINA dome status: connected={connected}, {fields_str}")
 
 
 class NinaDomeConfig(NinaDeviceConfig[NinaDome]):

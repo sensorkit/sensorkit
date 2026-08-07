@@ -19,6 +19,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.data.fits import ArrayInfo, ImageInfo
 from sensorkit.std import (
@@ -145,12 +146,14 @@ class AlpacaCamera(AlpacaDevice):
 
         # Initialize the camera
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
 
         # Drain in-flight image-processing tasks so their DataGraph writes
         # complete before we tear down.
@@ -471,172 +474,164 @@ class AlpacaCamera(AlpacaDevice):
             logger.exception("Failed to publish image to DataGraph")
 
     async def status_publish(self):
-        while True:
-            try:
-                c = self.camera
-                connected = await self.get(c, "Connected", False)
-                self.device_connected = connected
+        c = self.camera
+        connected = await self.get(c, "Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected:
-                    ccd_temperature = await self.get(c, "CCDTemperature", None)
-                    bin_x = await self.get(c, "BinX", 1)
-                    bin_y = await self.get(c, "BinY", 1)
+        if connected:
+            ccd_temperature = await self.get(c, "CCDTemperature", None)
+            bin_x = await self.get(c, "BinX", 1)
+            bin_y = await self.get(c, "BinY", 1)
 
-                    await device.publish(Binning(x=bin_x, y=bin_y))
-                    if self._camera_x_size and self._camera_y_size:
-                        await device.publish(
-                            CameraSensorSize(x=self._camera_x_size, y=self._camera_y_size)
-                        )
-                    if ccd_temperature is not None:
-                        await device.publish(
-                            CameraSensorTemperature(
-                                temperature=ccd_temperature,
-                                units=TemperatureUnit.CELSIUS,
-                            )
-                        )
+            await device.publish(Binning(x=bin_x, y=bin_y))
+            if self._camera_x_size and self._camera_y_size:
+                await device.publish(
+                    CameraSensorSize(x=self._camera_x_size, y=self._camera_y_size)
+                )
+            if ccd_temperature is not None:
+                await device.publish(
+                    CameraSensorTemperature(
+                        temperature=ccd_temperature,
+                        units=TemperatureUnit.CELSIUS,
+                    )
+                )
 
-                    # Full ICameraV4 status — only include properties the camera supports
-                    camera_state = await self.get(c, "CameraState", 0)
-                    properties: dict = {
-                        "camera_state": _CAMERA_STATES.get(camera_state, "Unknown"),
-                        "bin_x": bin_x,
-                        "bin_y": bin_y,
-                        "max_bin_x": self._max_bin_x,
-                        "max_bin_y": self._max_bin_y,
-                        "cooler_on": await self.get(c, "CoolerOn", False),
-                    }
+            # Full ICameraV4 status — only include properties the camera supports
+            camera_state = await self.get(c, "CameraState", 0)
+            properties: dict = {
+                "camera_state": _CAMERA_STATES.get(camera_state, "Unknown"),
+                "bin_x": bin_x,
+                "bin_y": bin_y,
+                "max_bin_x": self._max_bin_x,
+                "max_bin_y": self._max_bin_y,
+                "cooler_on": await self.get(c, "CoolerOn", False),
+            }
 
-                    # Sensor
-                    for attr, key in (
-                        ("_sensor_name", "sensor_name"),
-                        ("_sensor_type", "sensor_type"),
-                        ("_pixel_size_x", "pixel_size_x"),
-                        ("_pixel_size_y", "pixel_size_y"),
-                        ("_max_adu", "max_adu"),
-                        ("_electrons_per_adu", "electrons_per_adu"),
-                        ("_full_well_capacity", "full_well_capacity"),
-                        ("_bayer_offset_x", "bayer_offset_x"),
-                        ("_bayer_offset_y", "bayer_offset_y"),
-                    ):
-                        val = getattr(self, attr, None)
-                        if val is not None:
-                            properties[key] = val
+            # Sensor
+            for attr, key in (
+                ("_sensor_name", "sensor_name"),
+                ("_sensor_type", "sensor_type"),
+                ("_pixel_size_x", "pixel_size_x"),
+                ("_pixel_size_y", "pixel_size_y"),
+                ("_max_adu", "max_adu"),
+                ("_electrons_per_adu", "electrons_per_adu"),
+                ("_full_well_capacity", "full_well_capacity"),
+                ("_bayer_offset_x", "bayer_offset_x"),
+                ("_bayer_offset_y", "bayer_offset_y"),
+            ):
+                val = getattr(self, attr, None)
+                if val is not None:
+                    properties[key] = val
 
-                    if self._camera_x_size:
-                        properties["camera_x_size"] = self._camera_x_size
-                    if self._camera_y_size:
-                        properties["camera_y_size"] = self._camera_y_size
-                    if self._has_shutter:
-                        properties["has_shutter"] = True
-                    if self._can_asymmetric_bin:
-                        properties["can_asymmetric_bin"] = True
+            if self._camera_x_size:
+                properties["camera_x_size"] = self._camera_x_size
+            if self._camera_y_size:
+                properties["camera_y_size"] = self._camera_y_size
+            if self._has_shutter:
+                properties["has_shutter"] = True
+            if self._can_asymmetric_bin:
+                properties["can_asymmetric_bin"] = True
 
-                    # Subframe
-                    start_x = await self.get(c, "StartX", None)
-                    start_y = await self.get(c, "StartY", None)
-                    num_x = await self.get(c, "NumX", None)
-                    num_y = await self.get(c, "NumY", None)
-                    if start_x is not None:
-                        properties["start_x"] = start_x
-                    if start_y is not None:
-                        properties["start_y"] = start_y
-                    if num_x is not None:
-                        properties["num_x"] = num_x
-                    if num_y is not None:
-                        properties["num_y"] = num_y
+            # Subframe
+            start_x = await self.get(c, "StartX", None)
+            start_y = await self.get(c, "StartY", None)
+            num_x = await self.get(c, "NumX", None)
+            num_y = await self.get(c, "NumY", None)
+            if start_x is not None:
+                properties["start_x"] = start_x
+            if start_y is not None:
+                properties["start_y"] = start_y
+            if num_x is not None:
+                properties["num_x"] = num_x
+            if num_y is not None:
+                properties["num_y"] = num_y
 
-                    # Exposure limits
-                    if self._min_exposure is not None:
-                        properties["min_exposure"] = self._min_exposure
-                    if self._max_exposure is not None:
-                        properties["max_exposure"] = self._max_exposure
-                    if self._exposure_resolution is not None:
-                        properties["exposure_resolution"] = self._exposure_resolution
+            # Exposure limits
+            if self._min_exposure is not None:
+                properties["min_exposure"] = self._min_exposure
+            if self._max_exposure is not None:
+                properties["max_exposure"] = self._max_exposure
+            if self._exposure_resolution is not None:
+                properties["exposure_resolution"] = self._exposure_resolution
 
-                    # Dynamic exposure info
-                    last_exposure_duration = await self.get(c, "LastExposureDuration", None)
-                    last_exposure_start_time = await self.get(c, "LastExposureStartTime", None)
-                    pct = await self.get(c, "PercentCompleted", None)
-                    if last_exposure_duration is not None:
-                        properties["last_exposure_duration"] = last_exposure_duration
-                    if last_exposure_start_time is not None:
-                        properties["last_exposure_start_time"] = last_exposure_start_time
-                    if pct is not None:
-                        properties["percent_completed"] = pct
+            # Dynamic exposure info
+            last_exposure_duration = await self.get(c, "LastExposureDuration", None)
+            last_exposure_start_time = await self.get(c, "LastExposureStartTime", None)
+            pct = await self.get(c, "PercentCompleted", None)
+            if last_exposure_duration is not None:
+                properties["last_exposure_duration"] = last_exposure_duration
+            if last_exposure_start_time is not None:
+                properties["last_exposure_start_time"] = last_exposure_start_time
+            if pct is not None:
+                properties["percent_completed"] = pct
 
-                    # Cooler
-                    if ccd_temperature is not None:
-                        properties["ccd_temperature"] = ccd_temperature
-                    if self._can_set_ccd_temperature:
-                        properties["can_set_ccd_temperature"] = True
-                        set_ccd_temperature = await self.get(c, "SetCCDTemperature", None)
-                        if set_ccd_temperature is not None:
-                            properties["set_ccd_temperature"] = set_ccd_temperature
-                    heat_sink_temperature = await self.get(c, "HeatSinkTemperature", None)
-                    if heat_sink_temperature is not None:
-                        properties["heat_sink_temperature"] = heat_sink_temperature
-                    if self._can_get_cooler_power:
-                        properties["can_get_cooler_power"] = True
-                        cooler_power = await self.get(c, "CoolerPower", None)
-                        if cooler_power is not None:
-                            properties["cooler_power"] = cooler_power
+            # Cooler
+            if ccd_temperature is not None:
+                properties["ccd_temperature"] = ccd_temperature
+            if self._can_set_ccd_temperature:
+                properties["can_set_ccd_temperature"] = True
+                set_ccd_temperature = await self.get(c, "SetCCDTemperature", None)
+                if set_ccd_temperature is not None:
+                    properties["set_ccd_temperature"] = set_ccd_temperature
+            heat_sink_temperature = await self.get(c, "HeatSinkTemperature", None)
+            if heat_sink_temperature is not None:
+                properties["heat_sink_temperature"] = heat_sink_temperature
+            if self._can_get_cooler_power:
+                properties["can_get_cooler_power"] = True
+                cooler_power = await self.get(c, "CoolerPower", None)
+                if cooler_power is not None:
+                    properties["cooler_power"] = cooler_power
 
-                    # Readout
-                    if self._readout_modes is not None:
-                        properties["readout_modes"] = self._readout_modes
-                        readout_mode = await self.get(c, "ReadoutMode", None)
-                        if readout_mode is not None:
-                            properties["readout_mode"] = readout_mode
+            # Readout
+            if self._readout_modes is not None:
+                properties["readout_modes"] = self._readout_modes
+                readout_mode = await self.get(c, "ReadoutMode", None)
+                if readout_mode is not None:
+                    properties["readout_mode"] = readout_mode
 
-                    # Gain
-                    if self._gain_min is not None or self._gains is not None:
-                        gain = await self.get(c, "Gain", None)
-                        if gain is not None:
-                            properties["gain"] = gain
-                        if self._gain_min is not None:
-                            properties["gain_min"] = self._gain_min
-                        if self._gain_max is not None:
-                            properties["gain_max"] = self._gain_max
-                        if self._gains is not None:
-                            properties["gains"] = self._gains
+            # Gain
+            if self._gain_min is not None or self._gains is not None:
+                gain = await self.get(c, "Gain", None)
+                if gain is not None:
+                    properties["gain"] = gain
+                if self._gain_min is not None:
+                    properties["gain_min"] = self._gain_min
+                if self._gain_max is not None:
+                    properties["gain_max"] = self._gain_max
+                if self._gains is not None:
+                    properties["gains"] = self._gains
 
-                    # Offset
-                    if self._offset_min is not None or self._offsets is not None:
-                        offset = await self.get(c, "Offset", None)
-                        if offset is not None:
-                            properties["offset"] = offset
-                        if self._offset_min is not None:
-                            properties["offset_min"] = self._offset_min
-                        if self._offset_max is not None:
-                            properties["offset_max"] = self._offset_max
-                        if self._offsets is not None:
-                            properties["offsets"] = self._offsets
+            # Offset
+            if self._offset_min is not None or self._offsets is not None:
+                offset = await self.get(c, "Offset", None)
+                if offset is not None:
+                    properties["offset"] = offset
+                if self._offset_min is not None:
+                    properties["offset_min"] = self._offset_min
+                if self._offset_max is not None:
+                    properties["offset_max"] = self._offset_max
+                if self._offsets is not None:
+                    properties["offsets"] = self._offsets
 
-                    # Capabilities
-                    if self._can_abort_exposure:
-                        properties["can_abort_exposure"] = True
-                    if self._can_stop_exposure:
-                        properties["can_stop_exposure"] = True
-                    if self._can_pulse_guide:
-                        properties["can_pulse_guide"] = True
-                        properties["is_pulse_guiding"] = await self.get(c, "IsPulseGuiding", False)
+            # Capabilities
+            if self._can_abort_exposure:
+                properties["can_abort_exposure"] = True
+            if self._can_stop_exposure:
+                properties["can_stop_exposure"] = True
+            if self._can_pulse_guide:
+                properties["can_pulse_guide"] = True
+                properties["is_pulse_guiding"] = await self.get(c, "IsPulseGuiding", False)
 
-                    # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
-                    # logger.debug(
-                    #     f"Alpaca camera status: connected={connected}, ccd_temperature={ccd_temperature}, "
-                    #     f"bin_x={bin_x}, bin_y={bin_y}, {properties_str}"
-                    # )
+            # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+            # logger.debug(
+            #     f"Alpaca camera status: connected={connected}, ccd_temperature={ccd_temperature}, "
+            #     f"bin_x={bin_x}, bin_y={bin_y}, {properties_str}"
+            # )
 
-                    await device.publish(AlpacaCameraStatus(**properties))
-            except Exception as e:
-                logger.exception(f"Error in camera status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+            await device.publish(AlpacaCameraStatus(**properties))
 
 
 class AlpacaCameraConfig(AlpacaDeviceConfig[AlpacaCamera]):

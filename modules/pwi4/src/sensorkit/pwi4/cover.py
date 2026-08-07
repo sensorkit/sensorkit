@@ -7,6 +7,7 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.pwi4.device import PWI4Client, PWI4Device, PWI4DeviceConfig, PWI4DeviceState
 from sensorkit.std import Connect, Connected, Disconnect, Opened, Stop
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
@@ -33,12 +34,14 @@ class PWI4Cover(PWI4Device):
 
         # Initialize the cover
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.cover_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -129,29 +132,16 @@ class PWI4Cover(PWI4Device):
         logger.debug("closed mirror cover")
 
     async def status_publish(self):
-        while True:
-            try:
-                st = await self.client.status()
-                connected = self.client.get_bool(st, "mirrorcover.is_connected")
-                self.device_connected = connected
+        st = await self.client.status()
+        connected = self.client.get_bool(st, "mirrorcover.is_connected")
+        self.device_connected = connected
 
-                state_name = self.client.get_str(st, "mirrorcover.overall_state_name", "")
-                is_open = state_name.lower() == "open"
+        state_name = self.client.get_str(st, "mirrorcover.overall_state_name", "")
+        is_open = state_name.lower() == "open"
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
-                await device.publish(Opened(is_open=is_open))
-
-                # logger.debug(
-                #     f"PWI4 cover status: connected={connected}, "
-                #     f"state={state_name}, is_open={is_open}"
-                # )
-            except Exception as e:
-                logger.exception(f"Error in cover status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
+        await device.publish(Opened(is_open=is_open))
 
 
 class PWI4CoverConfig(PWI4DeviceConfig[PWI4Cover]):

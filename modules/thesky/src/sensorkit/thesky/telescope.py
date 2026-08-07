@@ -26,6 +26,7 @@ from sensorkit.astro.target import (
     RateTarget,
     TLETarget,
 )
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import (
     AxisRate,
     AxisRates,
@@ -132,7 +133,6 @@ class TheSkyTelescope(TheSkyDevice):
 
     config: TheSkyTelescopeConfig
     device_name = "Telescope"
-    _fast_status_task: asyncio.Task | None = None
 
     # Site info, populated from TheSky in entity_init. Defaulted here so a status
     # publish that lands before the attach completes skips the alt/az rate
@@ -156,6 +156,13 @@ class TheSkyTelescope(TheSkyDevice):
         except Exception:
             logger.warning(f"No saved state for {device.entity}")
             self.state = TheSkyTelescopeState()
+
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency_slow, log=True
+        )
+        self.fast_loop = AsyncLoop(
+            self._publish_telescope_status, interval=self.config.status_frequency_fast, log=True
+        )
 
         # Get TheSky location
         resp = await self.execute(
@@ -201,7 +208,8 @@ class TheSkyTelescope(TheSkyDevice):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency_slow)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
+        await self.fast_loop.stop()
         await self.telescope_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -211,7 +219,7 @@ class TheSkyTelescope(TheSkyDevice):
         self._reconnect = lambda: self.telescope_connect(Connect())
 
         await self.telescope_connect(Connect())
-        self.start_status_loop(self.status_publish_slow())
+        self.status_loop.start()
 
         # Home, as needed
         if not self.state.has_been_homed:
@@ -228,7 +236,7 @@ class TheSkyTelescope(TheSkyDevice):
                 logger.warning("Unable to connect telescope for Deinit park; skipping")
                 return
 
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         await self.telescope_stop(Stop())
         await self.telescope_park(MoveToPark())
 
@@ -271,7 +279,7 @@ class TheSkyTelescope(TheSkyDevice):
 
     @sk.command_handler
     async def telescope_stop(self, cmd: Stop):
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         await self.telescope_unpark()
         logger.debug("stopping telescope")
 
@@ -288,12 +296,12 @@ class TheSkyTelescope(TheSkyDevice):
         except CommandNotSupportedError:
             logger.warning("Mount does not support SetTracking; skipping")
 
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         logger.debug("stopped telescope")
 
     @sk.command_handler
     async def telescope_park(self, cmd: MoveToPark):
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         await self.require_connected()
         logger.debug("parking telescope")
 
@@ -346,7 +354,7 @@ class TheSkyTelescope(TheSkyDevice):
 
     @sk.command_handler
     async def telescope_home(self, cmd: Home):
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         await self.telescope_unpark()
         logger.debug("homing telescope")
 
@@ -387,7 +395,7 @@ class TheSkyTelescope(TheSkyDevice):
 
     @sk.command_handler
     async def telescope_follow_target(self, cmd: FollowTarget):
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         await self.telescope_unpark()
 
         # Must first abort any in-progress Raven3.trackLEOCommand.
@@ -420,7 +428,7 @@ class TheSkyTelescope(TheSkyDevice):
 
                 tracked = await self._set_tracking(1, 1, 0, 0)
                 await self._wait_for_mount(tracking=tracked)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following RADec target")
 
@@ -438,7 +446,7 @@ class TheSkyTelescope(TheSkyDevice):
                 )
 
                 await self._wait_for_mount(tracking=False)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following AltAz target")
 
@@ -519,7 +527,7 @@ class TheSkyTelescope(TheSkyDevice):
 
                 async with asyncio.timeout(self.config.timeout):
                     await self.poll("""Raven3.trackLEOStatus;""", str(LEO_TRACKING), interval=0.2)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("tracking TLE follow")
 
@@ -541,7 +549,7 @@ class TheSkyTelescope(TheSkyDevice):
                 dec_rate_arcsec = target.rates.dec * 3600
                 tracked = await self._set_tracking(1, 0, ra_rate_arcsec, dec_rate_arcsec)
                 await self._wait_for_mount(tracking=tracked)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following rate target")
 
@@ -578,14 +586,14 @@ class TheSkyTelescope(TheSkyDevice):
                 dec_rate_arcsec = ddec_deg / dt_sec * 3600
                 tracked = await self._set_tracking(1, 0, ra_rate_arcsec, dec_rate_arcsec)
                 await self._wait_for_mount(tracking=tracked)
-                self._start_fast_status()
+                self.fast_loop.start()
 
                 logger.debug("following Ephemeris target")
 
             case FrameTarget():
                 match target.frame:
                     case ReferenceFrame.ALTAZ:
-                        self._stop_fast_status()
+                        await self.fast_loop.stop()
                         logger.debug("disabling tracking")
                         await self._set_tracking(0, 1, 0, 0)
                         await self._wait_for_mount(tracking=False, await_onset=False)
@@ -599,7 +607,7 @@ class TheSkyTelescope(TheSkyDevice):
                             await self._slew_to_current_radec()
                         tracked = await self._set_tracking(1, 1, 0, 0)
                         await self._wait_for_mount(tracking=tracked, await_onset=False)
-                        self._start_fast_status()
+                        self.fast_loop.start()
                         logger.debug("enabled sidereal tracking")
 
                     case _:
@@ -688,9 +696,7 @@ class TheSkyTelescope(TheSkyDevice):
                 f"""sky6RASCOMTele.SetTracking({on}, {ignore_rates}, {ra_rate}, {dec_rate});"""
             )
         except CommandNotSupportedError:
-            logger.warning(
-                "Mount does not support SetTracking; tracking no-op"
-            )
+            logger.warning("Mount does not support SetTracking; tracking no-op")
             return False
         return True
 
@@ -756,45 +762,34 @@ class TheSkyTelescope(TheSkyDevice):
 
         await self._wait_for_mount(tracking=True)
 
-    def _start_fast_status(self):
-        if self._fast_status_task is None or self._fast_status_task.done():
-            logger.debug("starting fast telescope status loop")
-            self._fast_status_task = asyncio.create_task(self.status_publish_fast())
-
-    def _stop_fast_status(self):
-        if self._fast_status_task is not None and not self._fast_status_task.done():
-            logger.debug("stopping fast telescope status loop")
-            self._fast_status_task.cancel()
-            self._fast_status_task = None
-
-    @property
-    def _fast_status_active(self) -> bool:
-        return self._fast_status_task is not None and not self._fast_status_task.done()
-
     async def _publish_telescope_status(self):
-        resp = await self.execute(
-            """
-            var LeoStatus = -1;
-            try { LeoStatus = Raven3.trackLEOStatus; } catch (e) {}
-            var SlewComplete = -1;
-            try { SlewComplete = sky6RASCOMTele.IsSlewComplete; } catch (e) {}
-            var Out;
-            sky6RASCOMTele.GetRaDec();
-            sky6RASCOMTele.GetAzAlt();
-            Out = [
-                sky6RASCOMTele.IsConnected,
-                sky6RASCOMTele.dRa,
-                sky6RASCOMTele.dRaTrackingRate,
-                sky6RASCOMTele.dDec,
-                sky6RASCOMTele.dDecTrackingRate,
-                sky6RASCOMTele.dAlt,
-                sky6RASCOMTele.dAz,
-                SlewComplete,
-                sky6RASCOMTele.IsTracking,
-                LeoStatus
-            ];
-            """
-        )
+        try:
+            resp = await self.execute(
+                """
+                var LeoStatus = -1;
+                try { LeoStatus = Raven3.trackLEOStatus; } catch (e) {}
+                var SlewComplete = -1;
+                try { SlewComplete = sky6RASCOMTele.IsSlewComplete; } catch (e) {}
+                var Out;
+                sky6RASCOMTele.GetRaDec();
+                sky6RASCOMTele.GetAzAlt();
+                Out = [
+                    sky6RASCOMTele.IsConnected,
+                    sky6RASCOMTele.dRa,
+                    sky6RASCOMTele.dRaTrackingRate,
+                    sky6RASCOMTele.dDec,
+                    sky6RASCOMTele.dDecTrackingRate,
+                    sky6RASCOMTele.dAlt,
+                    sky6RASCOMTele.dAz,
+                    SlewComplete,
+                    sky6RASCOMTele.IsTracking,
+                    LeoStatus
+                ];
+                """
+            )
+        except ProcessAbortedError:
+            # TheSky returns 212 transiently after an `abort`; telescope is fine
+            return
 
         (
             connected,
@@ -866,37 +861,13 @@ class TheSkyTelescope(TheSkyDevice):
                 )
             )
 
-    async def status_publish_slow(self):
-        while True:
-            try:
-                if not self._fast_status_active:
-                    await self._publish_telescope_status()
-                else:
-                    await sk.device().publish(Connected(is_connected=self.device_connected))
-
-                # logger.debug(
-                #     f"TheSky telescope status: connected={self.device_connected}"
-                # )
-            except ProcessAbortedError:
-                # TheSky returns 212 transiently after an `abort`; telescope is fine
-                pass
-            except Exception as e:
-                logger.warning(f"Error in slow telescope status_publish ({e})")
-                await asyncio.sleep(self.config.status_frequency_slow)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency_slow)
-
-    async def status_publish_fast(self):
-        while True:
-            try:
-                await self._publish_telescope_status()
-            except Exception as e:
-                logger.warning(f"Error in fast telescope status_publish ({e})")
-                await asyncio.sleep(self.config.status_frequency_fast)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency_fast)
+    async def status_publish(self):
+        # The fast loop publishes the full status while it runs, so defer to it and
+        # report connectivity only.
+        if self.fast_loop.active:
+            await sk.device().publish(Connected(is_connected=self.device_connected))
+        else:
+            await self._publish_telescope_status()
 
 
 class TheSkyTelescopeConfig(TheSkyDeviceConfig[TheSkyTelescope]):

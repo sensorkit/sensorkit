@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 from typing import Any, ClassVar, Literal
 
@@ -20,7 +19,6 @@ class NodePlatformDevice:
         self.config = config
         self.device_connected: bool | None = None
         self._api: NodePlatformAPI | None = None
-        self._status_task: asyncio.Task | None = None
 
     @property
     def api(self) -> NodePlatformAPI:
@@ -51,24 +49,6 @@ class NodePlatformDevice:
                 request_timeout=self.config.request_timeout,
             )
         return self._api
-
-    def start_status_loop(self, coro):
-        """Start a background status publishing task, cancelling any existing one."""
-
-        if self._status_task is not None and not self._status_task.done():
-            self._status_task.cancel()
-        self._status_task = asyncio.create_task(coro)
-
-    async def stop_status_loop(self):
-        """Cancel the background status publishing task."""
-
-        if self._status_task is not None:
-            self._status_task.cancel()
-
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._status_task
-
-            self._status_task = None
 
     async def require_connected(self):
         """Raise DeviceConnectionError if device is not connected."""

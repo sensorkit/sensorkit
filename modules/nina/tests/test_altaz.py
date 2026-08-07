@@ -3,7 +3,6 @@ import pytest
 
 from sensorkit.astro.coords import Horizontal
 from sensorkit.astro.target import AltAzTarget
-from sensorkit.nina.mount import NinaMountConfig, NinaMountState
 from sensorkit.std import FollowTarget
 
 from .fakes import FakeNinaClient
@@ -26,20 +25,6 @@ def client():
             "DeclinationRate": 0.0,
         }
     )
-
-
-@pytest.fixture
-def mount(client):
-    config = NinaMountConfig(device_type="mount")
-    m = config.create_device()
-    m._client = client
-    m.state = NinaMountState()
-    m.device_connected = True
-    m._fast_status_task = None
-    m._site_lat = 32.0
-    m._site_lon = -110.0
-    m._site_elev = 700.0
-    return m
 
 
 @pytest.mark.asyncio

@@ -1,15 +1,17 @@
 import astropy.units as u
 import pytest
+import pytest_asyncio
 from astropy.coordinates import EarthLocation
 from astropy.time import Time
 
 from sensorkit.astro.coords import Geodetic
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, FollowTarget
 from sensorkit.thesky.telescope import TheSkyTelescopeConfig, TheSkyTelescopeState
 
 
-@pytest.fixture
-def telescope(simulator):
+@pytest_asyncio.fixture
+async def telescope(simulator):
     host, port = simulator
     config = TheSkyTelescopeConfig(
         device_type="telescope",
@@ -26,7 +28,13 @@ def telescope(simulator):
     # _location is what status_publish needs to reach the alt/az rate conversion.
     m._geodetic = Geodetic(lon=149.0, lat=-31.0, elev=1100.0)
     m._location = EarthLocation(lat=-31.0 * u.deg, lon=149.0 * u.deg, height=1100.0 * u.m)
-    return m
+    m.status_loop = AsyncLoop(m.status_publish, interval=config.status_frequency_slow)
+    m.fast_loop = AsyncLoop(m._publish_telescope_status, interval=config.status_frequency_fast)
+
+    yield m
+
+    await m.status_loop.stop()
+    await m.fast_loop.stop()
 
 
 @pytest.mark.asyncio

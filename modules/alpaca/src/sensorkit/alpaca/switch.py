@@ -14,6 +14,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect
 
 
@@ -59,12 +60,14 @@ class AlpacaSwitch(AlpacaDevice):
 
         # Initialize the switch
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.switch_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -120,32 +123,24 @@ class AlpacaSwitch(AlpacaDevice):
             return None
 
     async def status_publish(self):
-        while True:
-            try:
-                connected = await self.get(self.switch, "Connected", False)
-                self.device_connected = connected
+        connected = await self.get(self.switch, "Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected and self._max_switch > 0:
-                    switches = []
-                    for i in range(self._max_switch):
-                        state = await self._read_switch(i)
-                        if state is not None:
-                            switches.append(state)
+        if connected and self._max_switch > 0:
+            switches = []
+            for i in range(self._max_switch):
+                state = await self._read_switch(i)
+                if state is not None:
+                    switches.append(state)
 
-                    # switches_str = "; ".join(f"{s.name}={s.value}" for s in switches)
-                    # logger.debug(f"Alpaca switch status: connected={connected}, {switches_str}")
+            # switches_str = "; ".join(f"{s.name}={s.value}" for s in switches)
+            # logger.debug(f"Alpaca switch status: connected={connected}, {switches_str}")
 
-                    if switches:
-                        await device.publish(AlpacaSwitchStates(switches=switches))
-            except Exception as e:
-                logger.exception(f"Error in switch status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+            if switches:
+                await device.publish(AlpacaSwitchStates(switches=switches))
 
 
 class AlpacaSwitchConfig(AlpacaDeviceConfig[AlpacaSwitch]):

@@ -7,6 +7,7 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect
 from sensorkit.std.safety import BasicSafety, StandardSafety
 from sensorkit.thesky.device import (
@@ -37,12 +38,14 @@ class TheSkyWeather(TheSkyDevice):
 
         # Initialize the weather
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await sk.device().kv_put_model(self.state)
 
     async def _initialize(self):
@@ -90,43 +93,29 @@ class TheSkyWeather(TheSkyDevice):
         logger.debug("disconnected from weather")
 
     async def status_publish(self):
-        while True:
-            try:
-                resp = await self.execute(
-                    """
-                    var Out;
-                    Out = [
-                        WeatherUtil.isWeatherStationConnected,
-                        WeatherUtil.goodToGo
-                    ];
-                    """
-                )
-            except Exception as e:
-                logger.exception(f"Error in status_publish get: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
+        resp = await self.execute(
+            """
+            var Out;
+            Out = [
+                WeatherUtil.isWeatherStationConnected,
+                WeatherUtil.goodToGo
+            ];
+            """
+        )
 
-            try:
-                connected, is_safe = [float(x) for x in resp.split(",")]
+        connected, is_safe = [float(x) for x in resp.split(",")]
 
-                connected = bool(connected)
-                self.device_connected = connected
-                is_safe = bool(is_safe)
+        connected = bool(connected)
+        self.device_connected = connected
+        is_safe = bool(is_safe)
 
-                # logger.debug(
-                #     f"TheSky weather status: connected={connected}, is_safe={is_safe}"
-                # )
+        # logger.debug(
+        #     f"TheSky weather status: connected={connected}, is_safe={is_safe}"
+        # )
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
-                await device.publish(BasicSafety(is_safe=is_safe))
-
-            except Exception as e:
-                logger.warning(f"Failed to update TheSky weather status ({e})")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
+        await device.publish(BasicSafety(is_safe=is_safe))
 
 
 class TheSkyWeatherConfig(TheSkyDeviceConfig[TheSkyWeather]):

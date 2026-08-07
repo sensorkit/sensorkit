@@ -14,6 +14,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceConfig,
     AlpacaDeviceState,
 )
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect, Stop
 from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
 
@@ -51,7 +52,9 @@ class AlpacaRotator(AlpacaDevice):
 
         # Initialize the rotator
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
         # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
@@ -61,7 +64,7 @@ class AlpacaRotator(AlpacaDevice):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.rotator_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -111,55 +114,47 @@ class AlpacaRotator(AlpacaDevice):
         logger.debug("stopped rotator")
 
     async def status_publish(self):
-        while True:
-            try:
-                r = self.rotator
-                connected = await self.get(r, "Connected", False)
-                self.device_connected = connected
+        r = self.rotator
+        connected = await self.get(r, "Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected:
-                    mechanical_position = await self.get(r, "MechanicalPosition", None)
-                    position = await self.get(r, "Position", None)
-                    target_position = await self.get(r, "TargetPosition", None)
-                    is_moving = await self.get(r, "IsMoving", False)
-                    reverse = await self.get(r, "Reverse", False) if self._can_reverse else False
+        if connected:
+            mechanical_position = await self.get(r, "MechanicalPosition", None)
+            position = await self.get(r, "Position", None)
+            target_position = await self.get(r, "TargetPosition", None)
+            is_moving = await self.get(r, "IsMoving", False)
+            reverse = await self.get(r, "Reverse", False) if self._can_reverse else False
 
-                    if mechanical_position is not None:
-                        self.rotator_position = float(mechanical_position)
+            if mechanical_position is not None:
+                self.rotator_position = float(mechanical_position)
 
-                    await device.publish(RotatorPosition(position=self.rotator_position or 0.0))
-                    properties: dict = {
-                        "is_moving": is_moving,
-                    }
-                    if mechanical_position is not None:
-                        properties["mechanical_position"] = float(mechanical_position)
-                    if position is not None:
-                        properties["position"] = float(position)
-                    if target_position is not None:
-                        properties["target_position"] = float(target_position)
-                    if self._can_reverse:
-                        properties["can_reverse"] = True
-                        properties["reverse"] = reverse
-                    if self._step_size is not None:
-                        properties["step_size"] = self._step_size
+            await device.publish(RotatorPosition(position=self.rotator_position or 0.0))
+            properties: dict = {
+                "is_moving": is_moving,
+            }
+            if mechanical_position is not None:
+                properties["mechanical_position"] = float(mechanical_position)
+            if position is not None:
+                properties["position"] = float(position)
+            if target_position is not None:
+                properties["target_position"] = float(target_position)
+            if self._can_reverse:
+                properties["can_reverse"] = True
+                properties["reverse"] = reverse
+            if self._step_size is not None:
+                properties["step_size"] = self._step_size
 
-                    # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
-                    # logger.debug(
-                    #     f"Alpaca rotator status: connected={connected}, position={position}, "
-                    #     f"target_position={target_position}, is_moving={is_moving}, "
-                    #     f"{properties_str}"
-                    # )
+            # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+            # logger.debug(
+            #     f"Alpaca rotator status: connected={connected}, position={position}, "
+            #     f"target_position={target_position}, is_moving={is_moving}, "
+            #     f"{properties_str}"
+            # )
 
-                    await device.publish(AlpacaRotatorStatus(**properties))
-            except Exception as e:
-                logger.exception(f"Error in rotator status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+            await device.publish(AlpacaRotatorStatus(**properties))
 
 
 class AlpacaRotatorConfig(AlpacaDeviceConfig[AlpacaRotator]):

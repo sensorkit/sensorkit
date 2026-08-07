@@ -7,6 +7,7 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect, Opened
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
 from sensorkit.thesky.device import (
@@ -39,12 +40,14 @@ class TheSkyOTA(TheSkyDevice):
 
         # Initialize the OTA
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.ota_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -126,42 +129,27 @@ class TheSkyOTA(TheSkyDevice):
         logger.debug("closed ota mirror cover")
 
     async def status_publish(self):
-        while True:
-            try:
-                resp = await self.execute(
-                    """
-                    var Out;
-                    Out = [
-                        OpticalTubeAssembly.isConnected,
-                        OpticalTubeAssembly.mirrorCoverState
-                    ];
-                    """
-                )
-            except Exception as e:
-                logger.exception(f"Error in status_publish execute: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
+        resp = await self.execute(
+            """
+            var Out;
+            Out = [
+                OpticalTubeAssembly.isConnected,
+                OpticalTubeAssembly.mirrorCoverState
+            ];
+            """
+        )
 
-            try:
-                connected, cover_num = [float(x) for x in resp.split(",")]
-                connected = bool(connected)
-                self.device_connected = connected
-                is_open = int(cover_num) in (0, 1)
+        connected, cover_num = [float(x) for x in resp.split(",")]
+        connected = bool(connected)
+        self.device_connected = connected
+        is_open = int(cover_num) in (0, 1)
 
-                # cover_str = {0: "unknown", 1: "open", 2: "closed"}.get(int(cover_num), "unknown")
-                # logger.debug(f"TheSky OTA status: connected={connected}, cover={cover_str}")
+        # cover_str = {0: "unknown", 1: "open", 2: "closed"}.get(int(cover_num), "unknown")
+        # logger.debug(f"TheSky OTA status: connected={connected}, cover={cover_str}")
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
-                await device.publish(Opened(is_open=is_open))
-
-            except Exception as e:
-                logger.warning(f"Failed to update TheSky OTA status ({e})")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            # FIXME: Account for query time
-            await asyncio.sleep(self.config.status_frequency)
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
+        await device.publish(Opened(is_open=is_open))
 
 
 class TheSkyOTAConfig(TheSkyDeviceConfig[TheSkyOTA]):

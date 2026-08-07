@@ -52,6 +52,7 @@ from sensorkit.astro.target import (
     TLETarget,
 )
 from sensorkit.autoslew.device import AutoslewMixin, _num, _pick
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import (
     AxisRate,
     AxisRates,
@@ -157,11 +158,10 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
     """ASA Autoslew mount implementation.
 
     Inherits `entity_deinit`/`telescope_connect`/`telescope_disconnect`/
-    `telescope_home`/`telescope_park`/`_wait_for_telescope`/`status_publish_fast`/
-    the fast-status task helpers from `AlpacaTelescope` unchanged — Autoslew's
-    capability probe still populates the `_can_find_home`/`_can_park` flags those
-    rely on. Everything else is overridden below for the ASA-specific
-    init/stop/follow/status behavior.
+    `telescope_home`/`telescope_park`/`_wait_for_telescope` from `AlpacaTelescope`
+    unchanged — Autoslew's capability probe still populates the
+    `_can_find_home`/`_can_park` flags those rely on. Everything else is overridden
+    below for the ASA-specific init/stop/follow/status behavior.
     """
 
     config: AutoslewTelescopeConfig
@@ -180,12 +180,18 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
         self._icrf_rate: tuple[float, float] = (0.0, 0.0)
         # Set while following a TLE so the status loop can refresh the rate mid-pass.
         self._tle_target: TLETarget | None = None
-        self._fast_status_task: asyncio.Task | None = None
         self._geodetic: Geodetic | None = None
         self._location: EarthLocation | None = None
         self._can_slew_async = self._can_slew = False
         self._can_slew_altaz_async = self._can_slew_altaz = False
         self._can_park = self._can_unpark = self._can_find_home = False
+
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        )
+        self.fast_loop = AsyncLoop(
+            self._publish_telescope_status, interval=self.config.status_frequency_fast, log=True
+        )
 
     @sk.command_handler
     async def telescope_init(self, cmd: Init):
@@ -234,7 +240,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
             )
             logger.debug(f"site: lat={self._site_lat} lon={self._site_lon} elev={self._site_elev}")
 
-        self.start_status_loop(self.status_publish_slow())
+        self.status_loop.start()
 
         if self._can_find_home and not self.state.has_been_homed:
             await self.telescope_home(Home())
@@ -248,7 +254,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
                 logger.warning("Unable to connect mount for Deinit park; skipping")
                 return
 
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         await self.telescope_stop(Stop())
         if self._can_park:
             await self.telescope_park(MoveToPark())
@@ -264,7 +270,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
         self._tracking = False
         self._sidereal = False
         await self._wait_for_telescope(await_onset=False)
-        self._stop_fast_status()
+        await self.fast_loop.stop()
         logger.debug("stopped mount")
 
     @sk.command_handler
@@ -275,7 +281,6 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
             return
         await self.call(self.telescope, "SetPark")
 
-    # ---- ASA mount helpers ------------------------------------------------ #
     async def _ensure_motors_on(self):
         """Engage the motors and wait for MotStat — motoron is asynchronous."""
         await self.action("telescope:motoron")
@@ -315,7 +320,6 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
             return 0.0, 0.0
         return _icrf_rate_from_samples(eph.jds, eph.points)
 
-    # ---- follow / tracking ------------------------------------------------ #
     @sk.command_handler
     async def telescope_follow_target(self, cmd: FollowTarget):
         await self.require_connected()
@@ -352,7 +356,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
                 await self._slew_radec(ra_jnow / 15.0, dec_jnow)
                 await self._wait_for_telescope(tracking=True)
                 self._sidereal = True
-                self._start_fast_status()
+                self.fast_loop.start()
 
             case AltAzTarget():
                 logger.debug("executing AltAz follow")
@@ -365,7 +369,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
                         self.telescope.SlewToAltAz, target.coords.az, target.coords.alt
                     )
                 await self._wait_for_telescope()
-                self._start_fast_status()
+                self.fast_loop.start()
 
             case TLETarget():
                 logger.debug("executing native TLE follow")
@@ -394,7 +398,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
                 # target's inertial rate for AxisRates/FITS; refreshed in the slow loop.
                 self._tle_target = target
                 self._icrf_rate = await self._tle_icrf_rate(target)
-                self._start_fast_status()
+                self.fast_loop.start()
 
             case RateTarget():
                 logger.debug("executing Rate follow")
@@ -411,7 +415,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
                 )
                 await self.put(self.telescope, "DeclinationRate", target.rates.dec * 3600.0)
                 self._icrf_rate = (target.rates.ra, target.rates.dec)
-                self._start_fast_status()
+                self.fast_loop.start()
 
             case EphemerisTarget():
                 logger.debug("executing Ephemeris follow (reduced to position + offset rate)")
@@ -431,7 +435,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
                 self._icrf_rate = (ra_rate, dec_rate)
                 await self.put(self.telescope, "RightAscensionRate", ra_rate * 3600.0 / 15.0)
                 await self.put(self.telescope, "DeclinationRate", dec_rate * 3600.0)
-                self._start_fast_status()
+                self.fast_loop.start()
 
             case FrameTarget():
                 match target.frame:
@@ -440,14 +444,14 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
                         await self.put(self.telescope, "Tracking", False)
                         self._tracking = False
                         await self._wait_for_telescope(tracking=False, await_onset=False)
-                        self._stop_fast_status()
+                        await self.fast_loop.stop()
                     case ReferenceFrame.ICRF:
                         logger.debug("enabling sidereal tracking")
                         await self.put(self.telescope, "Tracking", True)
                         self._tracking = True
                         self._sidereal = True
                         await self._wait_for_telescope(tracking=True, await_onset=False)
-                        self._start_fast_status()
+                        self.fast_loop.start()
 
             case _:
                 raise NotImplementedError(
@@ -464,11 +468,6 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
             await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
         elif self._can_slew:
             await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
-
-    # ---- status ----------------------------------------------------------- #
-    # _wait_for_telescope / _start_fast_status / _stop_fast_status /
-    # _fast_status_active / status_publish_fast are inherited from AlpacaTelescope
-    # unchanged (status_publish_fast drives the overridden _publish_telescope_status).
 
     async def _publish_telescope_status(self):
         t = self.telescope
@@ -508,48 +507,38 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
             )
         )
 
-    async def status_publish_slow(self):
-        while True:
-            try:
-                t = self.telescope
-                connected = await self.get(t, "Connected", False)
-                self.device_connected = connected
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
-                if not connected:
-                    await asyncio.sleep(self.config.status_frequency_slow)
-                    continue
+    async def status_publish(self):
+        t = self.telescope
+        connected = await self.get(t, "Connected", False)
+        self.device_connected = connected
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
+        if not connected:
+            return
 
-                self._slewing = await self.get(t, "Slewing", False)
-                self._tracking = await self.get(t, "Tracking", False)
-                await device.publish(Slewing(is_slewing=self._slewing))
-                await device.publish(Tracking(is_tracking=self._tracking))
+        self._slewing = await self.get(t, "Slewing", False)
+        self._tracking = await self.get(t, "Tracking", False)
+        await device.publish(Slewing(is_slewing=self._slewing))
+        await device.publish(Tracking(is_tracking=self._tracking))
 
-                # While following a TLE, refresh the inertial rate (it changes through
-                # the pass) and surface the closed-loop tracking error.
-                if self._tle_target is not None:
-                    self._icrf_rate = await self._tle_icrf_rate(self._tle_target)
-                    with contextlib.suppress(Exception):
-                        sat = json.loads(await self.command_string("getSatStatus"))
-                        status = int(_pick(sat, "Status", default=0))
-                        await device.publish(
-                            SatTrackError(
-                                tracking=bool(status & 0b01),
-                                sunlit=bool(status & 0b10),
-                                track_error_ax1_millirad=_num(
-                                    _pick(sat, "TrackErrAx1", default=0.0)
-                                ),
-                                track_error_ax2_millirad=_num(
-                                    _pick(sat, "TrackErrAx2", default=0.0)
-                                ),
-                            )
-                        )
+        # While following a TLE, refresh the inertial rate (it changes through
+        # the pass) and surface the closed-loop tracking error.
+        if self._tle_target is not None:
+            self._icrf_rate = await self._tle_icrf_rate(self._tle_target)
+            with contextlib.suppress(Exception):
+                sat = json.loads(await self.command_string("getSatStatus"))
+                status = int(_pick(sat, "Status", default=0))
+                await device.publish(
+                    SatTrackError(
+                        tracking=bool(status & 0b01),
+                        sunlit=bool(status & 0b10),
+                        track_error_ax1_millirad=_num(_pick(sat, "TrackErrAx1", default=0.0)),
+                        track_error_ax2_millirad=_num(_pick(sat, "TrackErrAx2", default=0.0)),
+                    )
+                )
 
-                if not self._fast_status_active:
-                    await self._publish_telescope_status()
-            except Exception as e:
-                logger.warning(f"Error in slow mount status publish: {e}")
-            await asyncio.sleep(self.config.status_frequency_slow)
+        if not self.fast_loop.active:
+            await self._publish_telescope_status()
 
 
 class AutoslewTelescopeConfig(AlpacaTelescopeConfig):

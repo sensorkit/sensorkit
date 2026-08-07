@@ -70,8 +70,8 @@ value:
         telescope1:
           device_type: telescope
           device_number: 0
-          status_frequency_slow: 1.0   # status rate while idle/tracking
-          status_frequency_fast: 0.1   # status rate while slewing (seconds)
+          status_frequency: 1.0        # status rate while idle (seconds)
+          status_frequency_fast: 0.1   # status rate while slewing or tracking
         rotator1:
           device_type: rotator
           device_number: 0

@@ -15,6 +15,7 @@ from sensorkit.alpaca.device import (
     AlpacaDeviceState,
 )
 from sensorkit.astro.common import AltAzPointing
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import (
     Connect,
     Connected,
@@ -88,12 +89,14 @@ class AlpacaDome(AlpacaDevice):
 
         # Initialize the dome
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.dome_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -257,92 +260,84 @@ class AlpacaDome(AlpacaDevice):
         )
 
     async def status_publish(self):
-        while True:
-            try:
-                d = self.dome
-                connected = await self.get(d, "Connected", False)
-                self.device_connected = connected
+        d = self.dome
+        connected = await self.get(d, "Connected", False)
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if connected:
-                    shutter_status = await self.get(d, "ShutterStatus", None)
-                    slewing = await self.get(d, "Slewing", False)
-                    at_home = await self.get(d, "AtHome", False)
-                    at_park = await self.get(d, "AtPark", False)
+        if connected:
+            shutter_status = await self.get(d, "ShutterStatus", None)
+            slewing = await self.get(d, "Slewing", False)
+            at_home = await self.get(d, "AtHome", False)
+            at_park = await self.get(d, "AtPark", False)
 
-                    shutter_name = (
-                        _SHUTTER_NAMES.get(shutter_status, "unknown")
-                        if shutter_status is not None
-                        else "unknown"
-                    )
-                    is_open = shutter_status == _SHUTTER_OPEN
+            shutter_name = (
+                _SHUTTER_NAMES.get(shutter_status, "unknown")
+                if shutter_status is not None
+                else "unknown"
+            )
+            is_open = shutter_status == _SHUTTER_OPEN
 
-                    await device.publish(Opened(is_open=is_open))
+            await device.publish(Opened(is_open=is_open))
 
-                    # Full IDomeV3 status — only include properties the dome supports
-                    properties: dict = {
-                        "shutter_status": shutter_name,
-                        "slewing": slewing,
-                        "at_home": at_home,
-                        "at_park": at_park,
-                    }
+            # Full IDomeV3 status — only include properties the dome supports
+            properties: dict = {
+                "shutter_status": shutter_name,
+                "slewing": slewing,
+                "at_home": at_home,
+                "at_park": at_park,
+            }
 
-                    azimuth = None
-                    altitude = None
+            azimuth = None
+            altitude = None
 
-                    if self._can_set_azimuth:
-                        properties["can_set_azimuth"] = True
-                        azimuth = await self.get(d, "Azimuth", None)
-                        if azimuth is not None:
-                            properties["azimuth"] = azimuth
+            if self._can_set_azimuth:
+                properties["can_set_azimuth"] = True
+                azimuth = await self.get(d, "Azimuth", None)
+                if azimuth is not None:
+                    properties["azimuth"] = azimuth
 
-                    if self._can_set_altitude:
-                        properties["can_set_altitude"] = True
-                        altitude = await self.get(d, "Altitude", None)
-                        if altitude is not None:
-                            properties["altitude"] = altitude
+            if self._can_set_altitude:
+                properties["can_set_altitude"] = True
+                altitude = await self.get(d, "Altitude", None)
+                if altitude is not None:
+                    properties["altitude"] = altitude
 
-                    if azimuth is not None and altitude is not None:
-                        await device.publish(AltAzPointing(
-                            azimuth_degrees=azimuth,
-                            altitude_degrees=altitude,
-                        ))
-                    elif azimuth is not None:
-                        await device.publish(AltAzPointing(
-                            azimuth_degrees=azimuth,
-                            altitude_degrees=0.0,
-                        ))
+            if azimuth is not None and altitude is not None:
+                await device.publish(AltAzPointing(
+                    azimuth_degrees=azimuth,
+                    altitude_degrees=altitude,
+                ))
+            elif azimuth is not None:
+                await device.publish(AltAzPointing(
+                    azimuth_degrees=azimuth,
+                    altitude_degrees=0.0,
+                ))
 
-                    if self._can_slave:
-                        properties["can_slave"] = True
-                        properties["slaved"] = await self.get(d, "Slaved", False)
+            if self._can_slave:
+                properties["can_slave"] = True
+                properties["slaved"] = await self.get(d, "Slaved", False)
 
-                    if self._can_find_home:
-                        properties["can_find_home"] = True
-                    if self._can_park:
-                        properties["can_park"] = True
-                    if self._can_set_park:
-                        properties["can_set_park"] = True
-                    if self._can_set_shutter:
-                        properties["can_set_shutter"] = True
-                    if self._can_sync_azimuth:
-                        properties["can_sync_azimuth"] = True
+            if self._can_find_home:
+                properties["can_find_home"] = True
+            if self._can_park:
+                properties["can_park"] = True
+            if self._can_set_park:
+                properties["can_set_park"] = True
+            if self._can_set_shutter:
+                properties["can_set_shutter"] = True
+            if self._can_sync_azimuth:
+                properties["can_sync_azimuth"] = True
 
-                    # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
-                    # logger.debug(
-                    #     f"Alpaca dome status: connected={connected}, shutter_status={shutter_status}, "
-                    #     f"slewing={slewing}, {properties_str}"
-                    # )
+            # properties_str = ", ".join(f"{k}={v}" for k, v in properties.items())
+            # logger.debug(
+            #     f"Alpaca dome status: connected={connected}, shutter_status={shutter_status}, "
+            #     f"slewing={slewing}, {properties_str}"
+            # )
 
-                    await device.publish(AlpacaDomeStatus(**properties))
-            except Exception as e:
-                logger.exception(f"Error in dome status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+            await device.publish(AlpacaDomeStatus(**properties))
 
 
 class AlpacaDomeConfig(AlpacaDeviceConfig[AlpacaDome]):

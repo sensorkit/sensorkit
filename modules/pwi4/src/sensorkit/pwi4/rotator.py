@@ -7,6 +7,7 @@ from typing import Literal, override
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.common.aio import AsyncLoop
 from sensorkit.pwi4.device import PWI4Client, PWI4Device, PWI4DeviceConfig, PWI4DeviceState
 from sensorkit.std import Connect, Connected, Disable, Disconnect, Enable, Enabled, Stop
 from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
@@ -35,7 +36,9 @@ class PWI4Rotator(PWI4Device):
 
         # Initialize the rotator
         await self._initialize()
-        self.start_status_loop(self.status_publish())
+        self.status_loop = AsyncLoop(
+            self.status_publish, interval=self.config.status_frequency, log=True
+        ).start()
 
         # Ensure we have a position
         async with asyncio.timeout(self.config.timeout):
@@ -45,7 +48,7 @@ class PWI4Rotator(PWI4Device):
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
-        await self.stop_status_loop()
+        await self.status_loop.stop()
         await self.rotator_disconnect(Disconnect())
         await sk.device().kv_put_model(self.state)
 
@@ -123,34 +126,21 @@ class PWI4Rotator(PWI4Device):
         logger.debug(f"changed rotator to position {cmd.position}°")
 
     async def status_publish(self):
-        while True:
-            try:
-                st = await self.client.status()
-                connected = self.client.get_bool(st, "rotator.is_connected")
-                self.device_connected = connected
+        st = await self.client.status()
+        connected = self.client.get_bool(st, "rotator.is_connected")
+        self.device_connected = connected
 
-                device = sk.device()
-                await device.publish(Connected(is_connected=connected))
+        device = sk.device()
+        await device.publish(Connected(is_connected=connected))
 
-                if st is not None:
-                    self.rotator_position = self.client.get_float(st, "rotator.mech_position_degs")
+        if st is not None:
+            self.rotator_position = self.client.get_float(st, "rotator.mech_position_degs")
 
-                if connected:
-                    await device.publish(
-                        Enabled(is_enabled=self.client.get_bool(st, "rotator.is_enabled"))
-                    )
-                    await device.publish(RotatorPosition(position=self.rotator_position))
-
-                    # logger.debug(
-                    #     f"PWI4 rotator status: connected={connected}, "
-                    #     f"position={self.rotator_position}"
-                    # )
-            except Exception as e:
-                logger.exception(f"Error in rotator status publish: {e}")
-                await asyncio.sleep(self.config.status_frequency)
-                continue
-
-            await asyncio.sleep(self.config.status_frequency)
+        if connected:
+            await device.publish(
+                Enabled(is_enabled=self.client.get_bool(st, "rotator.is_enabled"))
+            )
+            await device.publish(RotatorPosition(position=self.rotator_position))
 
 
 class PWI4RotatorConfig(PWI4DeviceConfig[PWI4Rotator]):
