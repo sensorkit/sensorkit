@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Bump to apply to the latest tag
+        type: choice
+        required: true
+        default: prerelease
+        options:
+          - prerelease
+          - final
+          - patch
+          - minor
+          - major
+          - explicit
+      version:
+        description: Exact version, normalized before tagging (bump=explicit only)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  draft:
+    name: Draft release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::releases are cut from main, not $REF"
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Resolve version
+        id: resolve
+        env:
+          BUMP: ${{ inputs.bump }}
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: uv run --no-project --with packaging python .github/scripts/next_version.py
+
+      - name: Create draft release
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          PRERELEASE: ${{ steps.resolve.outputs.prerelease }}
+        run: |
+          flags=(--draft --generate-notes --title "$TAG" --target "$GITHUB_SHA")
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+
+          url=$(gh release create "$TAG" "${flags[@]}")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          PRERELEASE: ${{ steps.resolve.outputs.prerelease }}
+          URL: ${{ steps.draft.outputs.url }}
+        run: |
+          {
+            echo "### Created draft release for $TAG"
+            echo
+            echo "- prerelease: $PRERELEASE"
+            echo "- commit: $GITHUB_SHA"
+            echo "- [review and publish]($URL)"
+          } >> "$GITHUB_STEP_SUMMARY"

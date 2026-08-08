@@ -1,0 +1,123 @@
+name: PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate tag name
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          case "$TAG" in
+            v*) ;;
+            *) echo "::error::release tag $TAG must carry the v prefix"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          # hatch-vcs derives the version from tag history, and a shallow clone
+          # yields a dev version rather than failing.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      # uv builds the wheel from the sdist, so this also covers the sdist
+      # carrying the module trees the build hook stitches in.
+      - name: Build
+        run: uv build
+
+      - name: Verify version matches tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          want=${TAG#v}
+
+          for path in dist/*.tar.gz dist/*.whl; do
+            name=$(basename "$path")
+            name=${name%.tar.gz}
+            name=${name%.whl}
+            got=${name#sensorkit-}
+            got=${got%%-*}
+
+            if [ "$got" != "$want" ]; then
+              echo "::error::$name carries version $got, tag $TAG wants $want"
+              exit 1
+            fi
+          done
+
+          echo "dist matches $TAG"
+
+      - name: Check metadata
+        run: uvx twine check dist/*
+
+      # Nothing else in CI installs a built wheel; the dev environment resolves
+      # modules through dev-mode-dirs instead. This is the only check that the
+      # stitched subpackages survive a real build.
+      - name: Validate the build
+        run: |
+          uv venv .smoke --python 3.13
+          uv pip install --python .smoke/bin/python dist/*.whl
+
+          .smoke/bin/python - <<'PY'
+          import importlib.util
+          import sys
+          import tomllib
+
+          with open("pyproject.toml", "rb") as fh:
+              config = tomllib.load(fh)
+
+          modules = config["tool"]["hatch"]["build"]["hooks"]["custom"]["modules"]
+          missing = [m for m in modules if importlib.util.find_spec(f"sensorkit.{m}") is None]
+
+          if missing:
+              sys.exit(f"wheel is missing subpackages: {', '.join(missing)}")
+
+          print(f"{len(modules)} module subpackages present")
+          PY
+
+          .smoke/bin/sensorkit --help > /dev/null
+
+      # Named explicitly so the .gitignore uv writes into dist/ cannot reach the
+      # publish step, which uploads everything it is handed.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: |
+            dist/*.tar.gz
+            dist/*.whl
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sensorkit
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
