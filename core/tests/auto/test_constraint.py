@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import json
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -13,7 +14,7 @@ from sensorkit.auto.constraint import (
     GenericConstraint,
 )
 from sensorkit.backend.base import Backend, Entity
-from sensorkit.common.condition import CrossesAboveCondition
+from sensorkit.common.condition import CrossesAboveCondition, EqualsCondition
 from sensorkit.core.client import SensorKit
 from sensorkit.std.weather import WeatherConstraint
 
@@ -102,6 +103,132 @@ async def test_evaluator_hold_cancelled_on_constrain(ev_timeout):
     # After the original hold duration would have elapsed, constraint is still active
     await asyncio.sleep(0.25)
     assert ev.is_active
+
+    await ev.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_hold_carries_over_active_state(ev_timeout):
+    """An evaluator retiring while active hands its replacement a full hold."""
+    c = WeatherConstraint(provider="dummy", hold=0.3)
+    ev = ConstraintEvaluator(c, timeout=ev_timeout)
+
+    ev.constrain("bad conditions")
+    ev.ready()
+    await ev.cleanup()
+
+    assert ev.hold_remaining() == 0.3
+
+    # The replacement defers its first clear rather than releasing immediately.
+    successor = ConstraintEvaluator(c, timeout=ev_timeout, initial_hold=ev.hold_remaining())
+    successor.clear("conditions improved")
+    successor.ready()
+    assert successor.actual_state.state == "holding"
+
+    await asyncio.sleep(0.4)
+    assert not successor.is_active
+
+    await successor.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_hold_resumes_for_remaining_duration(ev_timeout):
+    """A hold interrupted by a restart resumes with what was left of it, not a fresh full hold."""
+    c = WeatherConstraint(provider="dummy", hold=0.4)
+    ev = ConstraintEvaluator(c, timeout=ev_timeout)
+
+    ev.constrain("bad conditions")
+    ev.ready()
+    ev.clear("conditions improved")
+    assert ev.actual_state.state == "holding"
+
+    # Retire the evaluator part way through the hold.
+    await asyncio.sleep(0.25)
+    await ev.cleanup()
+
+    remaining = ev.hold_remaining()
+    assert 0 < remaining < 0.2
+
+    # The replacement picks up the same clear reading, which does not restart the hold.
+    successor = ConstraintEvaluator(c, timeout=ev_timeout, initial_hold=remaining)
+    successor.clear("conditions improved")
+    successor.ready()
+    assert successor.actual_state.state == "holding"
+
+    # The remainder of the original hold elapses; a fresh 0.4s hold would still be running.
+    await asyncio.sleep(0.25)
+    assert not successor.is_active
+
+    await successor.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_no_hold_remaining_when_clear(ev_timeout):
+    """A constraint that retires clear leaves nothing for its replacement to resume."""
+    c = WeatherConstraint(provider="dummy", hold=0.3)
+    ev = ConstraintEvaluator(c, timeout=ev_timeout)
+
+    ev.clear("all clear")
+    ev.ready()
+    await ev.cleanup()
+
+    assert ev.hold_remaining() == 0
+
+
+@pytest.mark.asyncio
+async def test_no_hold_remaining_without_hold_configured(ev_timeout):
+    """With hold disabled there is nothing to preserve across a restart."""
+    c = WeatherConstraint(provider="dummy")
+    ev = ConstraintEvaluator(c, timeout=ev_timeout)
+
+    ev.constrain("bad conditions")
+    ev.ready()
+
+    assert ev.hold_remaining() == 0
+
+
+@pytest.mark.asyncio
+async def test_carried_hold_stays_constrained_until_ready(ev_timeout):
+    """A resumed hold does not release the constraint before the check task reports."""
+    c = WeatherConstraint(provider="dummy", hold=0.3)
+    ev = ConstraintEvaluator(c, timeout=ev_timeout)
+
+    ev.constrain("bad conditions")
+    ev.ready()
+    ev.clear("conditions improved")
+    await ev.cleanup()
+
+    successor = ConstraintEvaluator(c, timeout=ev_timeout, initial_hold=ev.hold_remaining())
+    assert not successor.is_ready
+    assert successor.is_active
+
+    # The carried hold expires while still awaiting data; the constraint stays engaged.
+    await asyncio.sleep(0.4)
+    assert successor.actual_state.state == "not_ready"
+    assert successor.is_active
+
+    await successor.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_holding_until_dt_projects_deadline(ev_timeout):
+    """A running hold reports its deadline as a UTC instant."""
+    c = WeatherConstraint(provider="dummy", hold=0.3)
+    ev = ConstraintEvaluator(c, timeout=ev_timeout)
+
+    assert ev.holding_until_dt is None
+
+    ev.constrain("bad conditions")
+    ev.ready()
+    ev.clear("conditions improved")
+
+    deadline = ev.holding_until_dt
+    assert deadline is not None
+    assert 0 < (deadline - datetime.now(UTC)).total_seconds() <= 0.3
+
+    # The projection tracks the hold, so it is gone once the hold expires.
+    await asyncio.sleep(0.4)
+    assert ev.holding_until_dt is None
 
     await ev.cleanup()
 
@@ -245,6 +372,56 @@ async def _run_manager_tasks(manager: ConstraintManager, **kwargs):
     """Helper: run ConstraintManager tasks until cancelled."""
     async with asyncio.TaskGroup() as tg:
         await manager.start(task_group=tg, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_supervisor_restart_preserves_hold(backend, monkeypatch):
+    """A constraint active when its check_task restarts still holds on the first clear reading."""
+    monkeypatch.setattr(ConstraintManager, "CONSTRAINT_RESTART_GRACE", 0.2)
+    monkeypatch.setattr(ConstraintManager, "CONSTRAINT_RESTART_DELAY", 0.2)
+
+    c = GenericConstraint(
+        entity="sensor",
+        keyword="Rain",
+        field="state",
+        condition=EqualsCondition(threshold="Wet"),
+        hold=2.0,
+        ttl=1.0,
+    )
+    manager = ConstraintManager([c])
+    task = asyncio.create_task(_run_manager_tasks(manager, kit=SensorKit(backend)))
+
+    async def report_until_settled(value: str) -> str:
+        """Feed a steady reading until the constraint reaches a verdict, and return it.
+
+        Repeating the reading covers the gap before each check_task subscribes, and the first one
+        through only establishes a baseline for the condition.
+        """
+        async with asyncio.timeout(5.0):
+            while manager.entries[0].state == "not_ready":
+                await _publish_raw(backend, "sensor", "Rain", {"state": value})
+                await asyncio.sleep(0.05)
+
+        return manager.entries[0].state
+
+    async def wait_for_state(state: str):
+        async with asyncio.timeout(5.0):
+            while manager.entries[0].state != state:
+                await asyncio.sleep(0.01)
+
+    try:
+        assert await report_until_settled("Wet") == "active"
+
+        # Starve the feed so the supervisor times out and rebuilds the evaluator.
+        await wait_for_state("not_ready")
+
+        # The feed returns dry. The hold from the pre-restart active state still applies.
+        assert await report_until_settled("Dry") == "holding"
+        assert manager.is_constrained()
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 @pytest.mark.asyncio

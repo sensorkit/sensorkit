@@ -6,6 +6,7 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, override
 
 from loguru import logger
@@ -76,8 +77,21 @@ class ConstraintEvaluator:
 
     _QUEUE_MAXSIZE = 10
 
-    def __init__(self, constraint: Constraint, *, timeout: asyncio.Timeout):
+    def __init__(
+        self,
+        constraint: Constraint,
+        *,
+        timeout: asyncio.Timeout,
+        initial_hold: float = 0.0,
+    ):
         self.constraint = constraint
+        self.holding_until: float | None = None
+        """Event loop deadline of the hold in effect, if there is one.
+
+        A hold runs on the monotonic event loop clock so that it cannot be cut short by a
+        wall clock adjustment. Use `holding_until_dt` to express it as an instant.
+        """
+
         self._timeout = timeout
         self._ready = asyncio.Event()
         self._hold_task: asyncio.Task | None = None
@@ -94,6 +108,9 @@ class ConstraintEvaluator:
 
         self.actual_state = self.intended_state
         self._state_updated = asyncio.Event()
+
+        if initial_hold > 0:
+            self._begin_hold(initial_hold)
 
     @property
     def is_active(self) -> bool:
@@ -140,7 +157,7 @@ class ConstraintEvaluator:
         self._update_state()
 
     def clear(self, reason: str = "", *, details: ConstraintDetails | None = None):
-        """Set constraint inactive. If hold_duration > 0, defers the clear until the hold expires.
+        """Set constraint inactive. If hold > 0, defers the clear until the hold expires.
 
         Raises:
             QueueFull: if the status queue is full
@@ -148,7 +165,7 @@ class ConstraintEvaluator:
         self._timeout.reschedule(asyncio.get_event_loop().time() + self.constraint.ttl)
 
         if self.constraint.hold > 0 and self.intended_state.state == "active":
-            self._begin_hold()
+            self._begin_hold(self.constraint.hold)
 
         self.intended_state = ConstraintState(
             kind=self.constraint.kind,
@@ -159,13 +176,40 @@ class ConstraintEvaluator:
         self._update_state()
 
     async def cleanup(self):
-        """Cancel any pending hold task."""
-        self._cancel_hold()
+        """Stop the hold task, leaving its deadline readable by `hold_remaining`."""
+        self._stop_hold_task()
+
+    def hold_remaining(self) -> float:
+        """Hold a replacement evaluator should start with, or zero if there is nothing to resume.
+
+        A hold delays releasing a constraint, so it has to outlive the evaluator that started it.
+        Without this the replacement starts with nothing pending and releases on its first clear
+        reading, cutting the delay short.
+        """
+        if self.holding_until is not None:
+            return max(0.0, self.holding_until - asyncio.get_event_loop().time())
+
+        return self.constraint.hold if self.intended_state.state == "active" else 0.0
+
+    @property
+    def holding_until_dt(self) -> datetime | None:
+        """`holding_until` as a UTC instant, or None if no hold is in effect.
+
+        Projected from the current wall clock on each access rather than stored, so that a clock
+        adjustment cannot move a hold that is already running. A deadline that has already passed
+        projects into the past.
+        """
+        if self.holding_until is None:
+            return None
+
+        remaining = self.holding_until - asyncio.get_event_loop().time()
+
+        return datetime.now(UTC) + timedelta(seconds=remaining)
 
     def _update_state(self):
         if not self._ready.is_set():
             state = ConstraintState(kind=self.constraint.kind, state="not_ready")
-        elif self._hold_task is not None and not self._hold_task.done():
+        elif self.holding_until is not None:
             state = ConstraintState(kind=self.constraint.kind, state="holding")
         else:
             state = self.intended_state
@@ -174,19 +218,33 @@ class ConstraintEvaluator:
         self._state_updated.set()
 
     async def _do_hold(self, wait_secs: float):
-        logger.debug(f"holding {self.constraint.kind} constraint for {wait_secs}s")
+        logger.debug(f"holding {self.constraint.kind} constraint for {wait_secs:.1f}s")
         await asyncio.sleep(wait_secs)
 
-        # It's safe to clear `_hold_task` early here since there are no further awaits.
+        # It's safe to clear the hold early here since there are no further awaits.
         self._hold_task = None
+        self.holding_until = None
         self._update_state()
 
-    def _begin_hold(self):
-        if self._hold_task is None or self._hold_task.done():
-            self._hold_task = asyncio.create_task(self._do_hold(self.constraint.hold))
-            self._hold_task.add_done_callback(cleanup_future)
+    def _begin_hold(self, wait_secs: float):
+        """Start a hold running for the given duration.
+
+        Raises:
+            RuntimeError: if a hold is already in effect.
+        """
+        if self.holding_until is not None:
+            raise RuntimeError(f"{self.constraint.kind} constraint is already holding")
+
+        self.holding_until = asyncio.get_event_loop().time() + wait_secs
+        self._hold_task = asyncio.create_task(self._do_hold(wait_secs))
+        self._hold_task.add_done_callback(cleanup_future)
 
     def _cancel_hold(self):
+        """Abandon any hold, discarding its deadline so it cannot be carried over."""
+        self._stop_hold_task()
+        self.holding_until = None
+
+    def _stop_hold_task(self):
         if self._hold_task is not None and not self._hold_task.done():
             self._hold_task.cancel()
 
@@ -281,8 +339,11 @@ class ConstraintManager:
 
     async def _constraint_supervisor(self, idx: int, constraint: Constraint, **kwargs):
         restarting = False
+        initial_hold = 0.0
 
         while True:
+            evaluator: ConstraintEvaluator | None = None
+
             try:
                 initial_timeout = (
                     None
@@ -292,7 +353,9 @@ class ConstraintManager:
 
                 async with asyncio.timeout(initial_timeout) as timeout:
                     # Create a constraint evaluator and set the initial state.
-                    evaluator = ConstraintEvaluator(constraint, timeout=timeout)
+                    evaluator = ConstraintEvaluator(
+                        constraint, timeout=timeout, initial_hold=initial_hold
+                    )
                     self._set_state(idx, evaluator.actual_state)
 
                     # Sleep if this was a restart.
@@ -319,6 +382,8 @@ class ConstraintManager:
             except Exception:
                 logger.exception(f"{constraint.kind.capitalize()} constraint error")
 
+            # A hold outlives the evaluator that started it, so the replacement resumes it.
+            initial_hold = evaluator.hold_remaining() if evaluator is not None else 0.0
             restarting = True
 
     async def _constraint_task(
