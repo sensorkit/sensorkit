@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, override
 
@@ -24,7 +24,7 @@ class Mode(BaseModel):
     criteria: list[AnyCriterion] = Field(default_factory=list)
     context: dict = Field(default_factory=dict)
 
-    def evaluate(self, context: dict[str, Any]):
+    def evaluate(self, context: Mapping[str, Any]):
         """Evaluate all criteria and return an IntervalTree of common intervals."""
         trees: list[IntervalTree] = []
 
@@ -69,7 +69,7 @@ class Criterion(BaseModel, ABC):
     when: str
 
     @abstractmethod
-    def evaluate(self, context: dict[str, Any]) -> IntervalList:
+    def evaluate(self, context: Mapping[str, Any]) -> IntervalList:
         """Evaluate this criterion and return valid `(start, end)` datetime interval tuples."""
 
     @model_validator(mode="before")
@@ -90,7 +90,7 @@ class TimeRangeCriterion(Criterion):
     end: str
 
     @override
-    def evaluate(self, context: dict[str, Any]):
+    def evaluate(self, context: Mapping[str, Any]):
         time_ref = context.get("time_ref") or datetime.now(UTC)
         symbol_handlers = context.get("time_range_parsers")
         horizon = time_ref + DAILY_PERIOD
@@ -132,7 +132,7 @@ class TaskingAvailableCriterion(Criterion):
     from_program: str | None = None
 
     @override
-    def evaluate(self, context: dict[str, Any]):
+    def evaluate(self, context: Mapping[str, Any]):
         offers: IntervalTree
 
         if offers := context.get("scheduler_previous_combined"):
@@ -150,7 +150,7 @@ class AfterActivityCriterion(Criterion):
     duration: str
 
     @override
-    def evaluate(self, context: dict[str, Any]):
+    def evaluate(self, context: Mapping[str, Any]):
         tree = IntervalTree()
         duration = parse_time_delta(self.duration)
 
