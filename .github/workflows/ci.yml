@@ -26,6 +26,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.13"
+          cache-suffix: lint
 
       - name: Install ruff
         run: uv sync --locked --only-group lint
@@ -44,6 +45,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.13"
+          cache-suffix: imports
 
       - name: Install import-linter
         run: |
@@ -69,6 +71,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.13"
+          cache-suffix: complexity
 
       - name: Install complexipy
         run: uv sync --locked --only-group complexity
@@ -118,6 +121,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.13"
+          cache-suffix: test
 
       - name: Install
         # The systemd extra is an sdist needing headers the runner lacks, and
