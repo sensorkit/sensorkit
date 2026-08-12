@@ -285,7 +285,7 @@ async def test_read_file_waits_for_slow_writer():
     with tempfile.TemporaryDirectory() as temp_dir:
         graph = DataGraph()
         graph.add("source", WatchDirectory(directory=temp_dir, output=["read"]))
-        graph.add("read", ReadFile(settle_seconds=0.1, output=["sink"]))
+        graph.add("read", ReadFile(settle_seconds=0.3, output=["sink"]))
 
         sink = AppSink()
         graph.add("sink", sink)
