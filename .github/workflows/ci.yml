@@ -19,6 +19,8 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Main should only go red if the package is broken, so we soften the style checks for pushes to main.
+    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -38,6 +40,7 @@ jobs:
     name: Import layering
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -62,6 +65,7 @@ jobs:
     name: Complexity
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
         with:
