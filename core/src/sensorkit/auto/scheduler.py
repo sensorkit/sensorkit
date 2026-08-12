@@ -83,13 +83,13 @@ class Scheduler:
     ):
         """Updates the schedule."""
         mode_context = mode_context.copy() if mode_context else {}
-
         now = datetime.now(UTC)
 
         # Snapshot the previous combined offers before rebuilding so we can
         # detect offers that were removed mid-window (e.g. task finished early).
         prev_combined = self.combined_offers
 
+        mode_context["time_ref"] = now
         mode_context["scheduler_previous_combined"] = prev_combined
         mode_context["scheduler_offer_history"] = self._offer_history
 

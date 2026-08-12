@@ -7,6 +7,7 @@ from pydantic import TypeAdapter
 
 from sensorkit.astro.observer import EarthObserver
 from sensorkit.auto.mode import (
+    DAILY_PERIOD,
     AfterActivityCriterion,
     Mode,
     ModeList,
@@ -17,46 +18,49 @@ from sensorkit.common.time import parse_time_range
 
 
 def test_mode_evaluate():
-    mode = Mode(
-        name="night_ops",
-        state="operate",
-        criteria=[
-            TimeRangeCriterion(start="6pm", end="5am"),
-            TimeRangeCriterion(start="8pm", end="8am"),
-            TimeRangeCriterion(start="3am", end="4am"),
-        ],
-    )
+    """Criteria intersect on their common window whatever time of day they are evaluated at."""
+    for minutes in range(0, 24 * 60, 30):
+        time_ref = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=minutes)
 
-    context: dict = {}
-    tree: IntervalTree = mode.evaluate(context)
+        mode = Mode(
+            name="night_ops",
+            state="operate",
+            criteria=[
+                TimeRangeCriterion(start="6pm utc", end="5am utc"),
+                TimeRangeCriterion(start="8pm utc", end="8am utc"),
+                TimeRangeCriterion(start="3am utc", end="4am utc"),
+            ],
+        )
 
-    assert isinstance(tree, IntervalTree)
-    assert not tree.is_empty()
+        context: dict = {"time_ref": time_ref}
+        tree: IntervalTree = mode.evaluate(context)
 
-    # The intersection should be exactly the 3am-4am window for the current ref day.
-    expected_start, expected_end = parse_time_range("3am", "4am")
+        assert isinstance(tree, IntervalTree)
+        assert not tree.is_empty()
 
-    # Grab the single interval present.
-    ivs = tree.at(expected_start)
-    assert len(ivs) == 1
-    iv = next(iter(ivs))
+        # The next intersection is the upcoming 3am-4am window.
+        expected_start, expected_end = parse_time_range("3am utc", "4am utc", time_ref=time_ref)
 
-    assert iv.begin == expected_start
-    assert iv.end == expected_end
+        ivs = tree.at(expected_start)
+        assert len(ivs) == 1
+        iv = next(iter(ivs))
 
-    # Include a criterion that yields no intervals; evaluate should short-circuit to empty tree.
-    mode = Mode(
-        name="no_tasking",
-        state="operate",
-        criteria=[
-            TimeRangeCriterion(start="12am", end="1am"),
-            TimeRangeCriterion(start="3am", end="4am"),
-        ],
-    )
+        assert iv.begin == expected_start
+        assert iv.end == expected_end
 
-    tree = mode.evaluate({})
-    assert isinstance(tree, IntervalTree)
-    assert tree.is_empty()
+        # Ranges that never overlap intersect to an empty tree.
+        mode = Mode(
+            name="no_tasking",
+            state="operate",
+            criteria=[
+                TimeRangeCriterion(start="12am utc", end="1am utc"),
+                TimeRangeCriterion(start="3am utc", end="4am utc"),
+            ],
+        )
+
+        tree = mode.evaluate(context)
+        assert isinstance(tree, IntervalTree)
+        assert tree.is_empty()
 
 
 def test_mode_ordering():
@@ -94,17 +98,61 @@ def test_time_range():
     criterion = TimeRangeCriterion(start="4pm utc-10", end="1am hst")
 
     intervals = list(criterion.evaluate(context={}))
-    assert len(intervals) == 1
-    start, end = intervals[0]
+    assert intervals
 
-    assert isinstance(start, datetime)
-    assert isinstance(end, datetime)
-    assert start.tzinfo is not None
-    assert end.tzinfo is not None
-    # We cannot assert specific absolute times due to current date dependency,
-    # but we can require a reasonable ordering and duration
-    assert start < end
-    assert (end - start) < timedelta(hours=24)
+    for start, end in intervals:
+        assert isinstance(start, datetime)
+        assert isinstance(end, datetime)
+        assert start.tzinfo is not None
+        assert end.tzinfo is not None
+        # We cannot assert specific absolute times due to current date dependency,
+        # but we can require a reasonable ordering and duration
+        assert start < end
+        assert (end - start) < timedelta(hours=24)
+
+
+def test_time_range_covers_horizon():
+    """Occurrences are resolved until the evaluation horizon is covered."""
+    time_ref = datetime(2026, 1, 1, 6, tzinfo=timezone.utc)
+    criterion = TimeRangeCriterion(start="8pm utc", end="8am utc")
+
+    intervals = list(criterion.evaluate(context={"time_ref": time_ref}))
+
+    # The window in progress, then the one following it.
+    assert intervals[0] == (
+        datetime(2025, 12, 31, 20, tzinfo=timezone.utc),
+        datetime(2026, 1, 1, 8, tzinfo=timezone.utc),
+    )
+    assert intervals[-1] == (
+        datetime(2026, 1, 1, 20, tzinfo=timezone.utc),
+        datetime(2026, 1, 2, 8, tzinfo=timezone.utc),
+    )
+    assert intervals[-1][1] >= time_ref + DAILY_PERIOD
+
+
+def test_time_range_full_day_duration_covers_horizon():
+    """A range whose start and end resolve to the same clock time spans a full day.
+
+    Resolving the following occurrence from this one's start reproduces the same occurrence
+    rather than advancing, since the range already spans an entire period; the following
+    occurrence must instead be resolved by advancing it by one period directly.
+    """
+    time_ref = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    criterion = TimeRangeCriterion(start="1am utc", end="1am utc")
+
+    intervals = list(criterion.evaluate(context={"time_ref": time_ref}))
+
+    assert intervals == [
+        (
+            datetime(2025, 12, 31, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 1, 1, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2026, 1, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 2, 1, tzinfo=timezone.utc),
+        ),
+    ]
+    assert intervals[-1][1] >= time_ref + DAILY_PERIOD
 
 
 @pytest.mark.asyncio
@@ -125,28 +173,29 @@ async def test_time_range_with_sunrise_sunset():
 
     for criterion in criteria:
         intervals = list(criterion.evaluate(context))
-        assert len(intervals) == 1
-        start, end = intervals[0]
+        assert intervals
 
-        # Basic shape and ordering checks
-        assert isinstance(start, datetime)
-        assert isinstance(end, datetime)
-        assert start.tzinfo is not None
-        assert end.tzinfo is not None
-        assert start < end
+        for start, end in intervals:
+            # Basic shape and ordering checks
+            assert isinstance(start, datetime)
+            assert isinstance(end, datetime)
+            assert start.tzinfo is not None
+            assert end.tzinfo is not None
+            assert start < end
 
-        # Sanity-check: interval should be within a plausible daily window (< 36h)
-        assert end - start < timedelta(hours=36)
+            # Sanity-check: interval should be within a plausible daily window (< 36h)
+            assert end - start < timedelta(hours=36)
 
 
 def test_time_range_24h_format():
     criterion = TimeRangeCriterion(start="22:00 utc", end="06:00 utc")
     intervals = list(criterion.evaluate(context={}))
-    assert len(intervals) == 1
-    start, end = intervals[0]
-    assert start < end
-    duration = end - start
-    assert timedelta(hours=7) < duration < timedelta(hours=9)
+    assert intervals
+
+    for start, end in intervals:
+        assert start < end
+        duration = end - start
+        assert timedelta(hours=7) < duration < timedelta(hours=9)
 
 
 def test_time_range_compat_kind_to_when():
