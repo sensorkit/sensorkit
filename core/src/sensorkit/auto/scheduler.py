@@ -124,6 +124,9 @@ class Scheduler:
             (it[1] for it in offers),
         )
 
+        self._support_after_activity(now, prev_combined)
+
+    def _support_after_activity(self, now: datetime, prev_combined: IntervalTree):
         # FIXME: Below only exists to support the `after_activity` mode criterion, which should
         #        instead use closed-loop feedback about task execution (including manual).
         # Detect offers that disappeared while still in-progress, and inform schedule
