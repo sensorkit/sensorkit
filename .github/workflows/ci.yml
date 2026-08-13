@@ -19,6 +19,8 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Main should only go red if the package is broken, so we soften the style checks for pushes to main.
+    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -26,6 +28,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.13"
+          cache-suffix: lint
 
       - name: Install ruff
         run: uv sync --locked --only-group lint
@@ -37,6 +40,7 @@ jobs:
     name: Import layering
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -44,6 +48,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.13"
+          cache-suffix: imports
 
       - name: Install import-linter
         run: |
@@ -60,6 +65,7 @@ jobs:
     name: Complexity
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -69,6 +75,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.13"
+          cache-suffix: complexity
 
       - name: Install complexipy
         run: uv sync --locked --only-group complexity
@@ -97,7 +104,7 @@ jobs:
             exit 0
           fi
 
-          uv run --no-sync complexipy --no-ignore --diff "$base"
+          uv run --no-sync complexipy --no-ignore --failed --diff "$base"
 
   test:
     name: Test
@@ -118,6 +125,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.13"
+          cache-suffix: test
 
       - name: Install
         # The systemd extra is an sdist needing headers the runner lacks, and

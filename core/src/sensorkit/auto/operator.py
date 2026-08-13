@@ -290,25 +290,25 @@ class ProgramStateManager:
             return
 
         self._desired_enable[program] = target
-        await self.on_change.notify(program)
+        self.on_change.notify(program)
 
     async def disable(self, program: str):
         """Mark *program* as disabled, removing it from the enabled set."""
         if self._desired_enable.get(program) is not None:
             del self._desired_enable[program]
-            await self.on_change.notify(program)
+            self.on_change.notify(program)
 
     async def global_enable(self):
         """Enable the global scheduling gate, allowing all individually-enabled programs to run."""
         if not self._global_enabled:
             self._global_enabled = True
-            await self.on_change.notify(None)
+            self.on_change.notify(None)
 
     async def global_disable(self):
         """Disable the global scheduling gate, preventing all programs from running."""
         if self._global_enabled:
             self._global_enabled = False
-            await self.on_change.notify(None)
+            self.on_change.notify(None)
 
     def is_enabled(self, program: str) -> bool:
         """Return True if *program* is individually enabled and the global gate is open."""
