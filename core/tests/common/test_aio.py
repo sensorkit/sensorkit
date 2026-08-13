@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
+import gc
 
 import pytest
 
@@ -88,7 +89,7 @@ async def test_async_observer():
         q1.task_done()
         assert q2.empty()
 
-        await obs.notify(1)
+        obs.notify(1)
         assert obs.value == 1
         assert await q1.get() == 1
         q1.task_done()
@@ -97,9 +98,9 @@ async def test_async_observer():
 
         # Unsubscribe one queue; it should not receive further notifications.
         obs.unsubscribe(q2)
-        assert q2 not in obs._observers
+        assert obs.subscriber_count == 1
 
-        await obs.notify(2)
+        obs.notify(2)
         assert await q1.get() == 2
         q1.task_done()
 
@@ -114,7 +115,7 @@ async def test_async_observer():
 
         assert obs.subscribe(initial_value=True).empty()
 
-        await obs.notify(42)
+        obs.notify(42)
         assert obs.value == 42
 
 
@@ -145,20 +146,118 @@ async def test_async_observer_generator():
         assert await queue.get() == "x"
 
         # Add a second value, which will cause the reader to exit its generator.
-        await obs.notify("y")
+        obs.notify("y")
         assert await queue.get() == "y"
 
-        # Wait for the reader task to end. We need to force a suspend with a sleep(0) in order
-        # to ensure the `consume()` generator cleanup happens!
+        # Wait for the reader task to end. Cleanup runs when the event loop finalizes the
+        # abandoned generator, which takes an iteration or two.
         await task
-        await asyncio.sleep(0)
+
+        while obs.subscriber_count:
+            await asyncio.sleep(0)
 
         # Make sure everything cleaned up.
-        assert len(obs._observers) == 0
+        assert obs.subscriber_count == 0
         await underlying_queue.join()
 
         with pytest.raises(asyncio.QueueShutDown):
             await underlying_queue.get()
+
+
+@pytest.mark.asyncio
+async def test_async_observer_retains_unreferenced_subscriber():
+    obs = AsyncObserver(0)
+
+    # Nothing outside the observer references this queue. It must stay subscribed regardless,
+    # so that a consumer which goes away without unsubscribing leaks visibly instead of
+    # silently ceasing to receive values.
+    obs.subscribe()
+    gc.collect()
+
+    assert obs.subscriber_count == 1
+
+
+@pytest.mark.asyncio
+async def test_async_observer_subscription_scope():
+    obs = AsyncObserver(0)
+
+    with obs.subscription() as queue:
+        assert obs.subscriber_count == 1
+
+        obs.notify(1)
+        assert await queue.get() == 1
+
+    assert obs.subscriber_count == 0
+
+    with pytest.raises(asyncio.QueueShutDown):
+        await queue.get()
+
+    # An exception leaving the block must still unsubscribe.
+    with pytest.raises(RuntimeError), obs.subscription():
+        raise RuntimeError("boom")
+
+    assert obs.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+async def test_async_observer_rejects_unbounded_subscriber():
+    obs = AsyncObserver(0)
+
+    # asyncio.Queue treats a non-positive maxsize as unbounded.
+    for maxsize in (0, -1):
+        with pytest.raises(ValueError):
+            obs.subscribe(maxsize=maxsize)
+
+
+@pytest.mark.asyncio
+async def test_async_observer_drops_oldest_when_full():
+    obs = AsyncObserver(0)
+    queue = obs.subscribe(maxsize=2)
+
+    # The third value overflows the queue.
+    for value in (1, 2, 3):
+        obs.notify(value)
+
+    assert obs.dropped == 1
+
+    # The oldest value gave way, leaving the subscriber converged on the latest.
+    assert await queue.get() == 2
+    queue.task_done()
+    assert await queue.get() == 3
+    queue.task_done()
+    assert queue.empty()
+
+    # A dropped value must not be left outstanding, which would strand join() forever.
+    async with asyncio.timeout(1):
+        await queue.join()
+
+
+@pytest.mark.asyncio
+async def test_async_observer_notify_does_not_suspend():
+    obs = AsyncObserver(0)
+    queue = obs.subscribe()
+    seen = []
+
+    async def reader():
+        while True:
+            seen.append(await queue.get())
+
+    task = asyncio.create_task(reader())
+
+    # Let the reader reach its first get() and block there.
+    await asyncio.sleep(0)
+
+    for value in (1, 2, 3):
+        obs.notify(value)
+
+    # No subscriber could have run between the notifications.
+    assert not seen
+    assert queue.qsize() == 3
+
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 @pytest.mark.asyncio

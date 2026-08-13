@@ -118,16 +118,13 @@ class ServeLocalFITSHandler(ServeHandler):
 
     @override
     async def watch_listing(self):
-        queue = self._observer.subscribe()
+        # Subscribe before reading the listing so that updates in between are not missed.
+        with self._observer.subscription() as queue:
+            for info in await self.get_listing():
+                yield info
 
-        for info in await self.get_listing():
-            yield info
-
-        try:
             while True:
                 yield await queue.get()
-        finally:
-            self._observer.unsubscribe(queue)
 
     @override
     def has_product(self, controller_id: str, product_id: str):
@@ -251,6 +248,6 @@ class ServeLocalFITSHandler(ServeHandler):
 
             # Cache and notify observers.
             self._cache[controller_id][info.product_id] = _CacheEntry(info, path, metadata)
-            await self._observer.notify(info)
+            self._observer.notify(info)
         except Exception:
             logger.exception(f"error processing {path}")

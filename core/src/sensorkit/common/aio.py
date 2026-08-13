@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import weakref
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import AsyncContextManager, ClassVar, Self, overload
+
+from sensorkit.common.logging import limited_logger
 
 
 def scoped_waiter[T](aw: Awaitable[T]) -> AsyncContextManager[asyncio.Future[T]]:
@@ -100,26 +101,35 @@ class AsyncValueLatch[T]:
 
 
 class AsyncObserver[T]:
-    """Observer pattern with concurrent value updates.
+    """Fan out notified values to independent, bounded subscriber queues.
 
-    For simple notifications, call notify() directly. For atomic check-and-notify patterns, use
-    the async context manager:
-
-        async with observer:
-            if observer.value != new_value:
-                await observer.notify(new_value)
+    Each subscriber receives values notified after it subscribes, in order. With
+    `initial_value=True`, it first receives the current value, if one has been set.
+    When a subscriber's queue is full, its oldest pending value is discarded.
     """
 
     NOT_SET: ClassVar[object] = object()
+    DEFAULT_MAXSIZE: ClassVar[int] = 1024
 
     def __init__(self, initial_value: T = NOT_SET):
-        self._observers: weakref.WeakSet[asyncio.Queue[T]] = weakref.WeakSet()
+        self._observers: set[asyncio.Queue[T]] = set()
         self._value = initial_value
-        self._lock = asyncio.Lock()
+        self._dropped = 0
 
-    def subscribe(self, *, initial_value: bool = False):
-        """Create and return a new observer queue."""
-        queue: asyncio.Queue[T] = asyncio.Queue()
+    def subscribe(self, *, initial_value: bool = False, maxsize: int = DEFAULT_MAXSIZE):
+        """Create and return a new observer queue.
+
+        Args:
+            initial_value: Whether to seed the queue with the current value, if one is set.
+            maxsize: Bound on values queued for this subscriber.
+
+        Raises:
+            ValueError: If `maxsize` is not positive, which would leave the queue unbounded.
+        """
+        if maxsize < 1:
+            raise ValueError(f"maxsize must be positive, got {maxsize}")
+
+        queue: asyncio.Queue[T] = asyncio.Queue(maxsize)
         self._observers.add(queue)
 
         if initial_value and self._value is not self.NOT_SET:
@@ -132,10 +142,37 @@ class AsyncObserver[T]:
         self._observers.discard(queue)
         queue.shutdown()
 
-    async def notify(self, value: T):
-        """Update the current value and notify all observers."""
+    @contextlib.contextmanager
+    def subscription(self, *, initial_value: bool = False, maxsize: int = DEFAULT_MAXSIZE):
+        """Context manager that provides a subscriber queue and unsubscribes it on exit."""
+        queue = self.subscribe(initial_value=initial_value, maxsize=maxsize)
+
+        try:
+            yield queue
+        finally:
+            self.unsubscribe(queue)
+
+    def notify(self, value: T):
+        """Update the current value and notify all observers.
+
+        Delivery never blocks on a subscriber. A subscriber whose queue is full loses its
+        oldest pending value to make room.
+        """
         self._value = value
-        await asyncio.gather(*(queue.put(value) for queue in self._observers))
+
+        for queue in self._observers:
+            try:
+                queue.put_nowait(value)
+            except asyncio.QueueFull:
+                queue.get_nowait()
+                queue.task_done()
+                queue.put_nowait(value)
+                self._dropped += 1
+
+                limited_logger().warning(
+                    f"observer queue full at {queue.maxsize}; dropping the oldest value. "
+                    "A subscriber is not keeping up, or leaked without unsubscribing."
+                )
 
     @property
     def value(self) -> T:
@@ -145,9 +182,19 @@ class AsyncObserver[T]:
 
         return self._value
 
-    async def consume(self, *, initial_value: bool = False):
+    @property
+    def subscriber_count(self) -> int:
+        """The number of queues currently subscribed."""
+        return len(self._observers)
+
+    @property
+    def dropped(self) -> int:
+        """The number of values dropped because a subscriber's queue was full."""
+        return self._dropped
+
+    async def consume(self, *, initial_value: bool = False, maxsize: int = DEFAULT_MAXSIZE):
         """Yield successive values as an async generator, unsubscribing automatically on exit."""
-        queue = self.subscribe(initial_value=initial_value)
+        queue = self.subscribe(initial_value=initial_value, maxsize=maxsize)
 
         try:
             while True:
@@ -159,13 +206,6 @@ class AsyncObserver[T]:
             raise StopAsyncIteration() from e
         finally:
             self.unsubscribe(queue)
-
-    async def __aenter__(self):
-        await self._lock.acquire()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        self._lock.release()
 
 
 class AsyncLoop:

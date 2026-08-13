@@ -132,7 +132,7 @@ class EntityClient(EntityBase):
 
             if self._online_observer.value != online:
                 logger.debug(f"{self.entity} is now {'offline' if entry.deleted() else 'online'}")
-                await self._online_observer.notify(online)
+                self._online_observer.notify(online)
 
     def observe_online_state(self):
         """Return an async generator that yields True/False as the entity comes online or goes offline."""

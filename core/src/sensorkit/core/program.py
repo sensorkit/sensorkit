@@ -371,12 +371,12 @@ class ProgramDiscovery:
                 if program in tasks:
                     task = tasks.pop(program)
                     task.cancel()
-                    await self._known_programs.notify(frozenset(tasks.keys()))
+                    self._known_programs.notify(frozenset(tasks.keys()))
             elif program not in tasks:
                 # Start a new enable state monitor for the newly discovered program.
                 events.append(asyncio.Event())
                 tasks[program] = asyncio.create_task(self._monitor_task(client, events[-1]))
-                await self._known_programs.notify(frozenset(tasks.keys()))
+                self._known_programs.notify(frozenset(tasks.keys()))
 
             # Wait for the initial enablement status of each discovered program.
             await asyncio.gather(*(event.wait() for event in events), return_exceptions=True)
@@ -404,7 +404,7 @@ class ProgramDiscovery:
                     else:
                         new_set = observer.value.difference({program})
 
-                    await observer.notify(new_set)
+                    observer.notify(new_set)
 
                 initial_update.set()
         finally:
@@ -448,16 +448,16 @@ class ProgramStateMonitor:
         """Return an async generator yielding the current ProgramEnableState (or None if offline) on each change."""
         return self._observer.consume(initial_value=True)
 
-    async def _notify(self):
+    def _notify(self):
         if not self.online:
-            await self._observer.notify(None)
+            self._observer.notify(None)
         else:
-            await self._observer.notify(self.enable_state)
+            self._observer.notify(self.enable_state)
 
     async def _monitor_liveness(self):
         async for is_online in self.client.observe_online_state():
             self.online = is_online
-            await self._notify()
+            self._notify()
 
     async def _monitor_state(self):
         program = str(self.client.entity)
@@ -471,12 +471,12 @@ class ProgramStateMonitor:
 
         logger.debug(f"monitoring discovered program {program}")
         self.enable_state = initial_state.enable_state
-        await self._notify()
+        self._notify()
 
         async for event in stream:
             if event.timestamp() > self.enable_state.timestamp():
                 self.enable_state = event
-                await self._notify()
+                self._notify()
 
 
 class ProgramInterface(EntityInterface):
