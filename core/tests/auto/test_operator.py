@@ -8,6 +8,8 @@ program discovery, and lifecycle management.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 
 import pytest
 
@@ -18,8 +20,11 @@ from sensorkit.auto.agent import (
     AgentSchedulerState,
     AgentState,
 )
+from sensorkit.auto.constraint import GenericConstraint
 from sensorkit.auto.operator import ControllerConfig, VirtualOperator
 from sensorkit.auto.scheduler import ProgramConfig
+from sensorkit.backend.base import Entity
+from sensorkit.common.condition import EqualsCondition
 from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.program import ProgramDiscovery, ProgramState
 from sensorkit.core.task import InitTask, ShutdownTask
@@ -155,6 +160,102 @@ async def test_operator_override_false_shuts_down(kit, service_context):
             while driver.lifecycle.belief_state != InternalControllerState.SHUTDOWN:
                 await asyncio.sleep(0.05)
     finally:
+        async with asyncio.timeout(10.0):
+            await operator.stop()
+
+
+@pytest.mark.asyncio
+async def test_active_constraint_aborts_running_task(kit, backend, service_context):
+    """A constraint going active aborts the running task instead of waiting for it to finish."""
+    init_started = asyncio.Event()
+    init_aborted = asyncio.Event()
+
+    config = ControllerConfig(
+        constraints=[
+            GenericConstraint(
+                entity="weather",
+                keyword="Rain",
+                field="state",
+                condition=EqualsCondition(threshold="Wet"),
+            )
+        ],
+    )
+    config.name = "ctrl1"
+    operator = VirtualOperator([config])
+
+    async def report(value: str):
+        """Publish a weather reading for the constraint check task to consume."""
+        await backend.stream(Entity.at("weather")).publish(
+            "Rain", json.dumps({"state": value}).encode()
+        )
+
+    async def report_until_cancelled(value: str):
+        """Keep a reading flowing, covering the gap before the check task subscribes."""
+        while True:
+            await report(value)
+            await asyncio.sleep(0.05)
+
+    async with asyncio.timeout(5.0):
+        controller = await service_context.register_controller("ctrl1")
+        await controller.kv_put_model(_test_position)
+
+        @controller.task_handler(InitTask)
+        async def handle_init(task):
+            # This task never completes on its own, so an abort is the only way out of it.
+            init_started.set()
+
+            try:
+                await asyncio.sleep(float("inf"))
+            except asyncio.CancelledError:
+                init_aborted.set()
+                raise
+
+        @controller.task_handler(ShutdownTask)
+        async def handle_shutdown(task):
+            pass
+
+        await kit.controller("ctrl1").enable()
+
+    state = AgentState(
+        operating_state=AgentOperatingState(
+            global_control_enabled=True,
+            controllers={"ctrl1": AgentControllerInfo(
+                control_enabled=True,
+                elected_state=None,
+                demand_override=True,
+            )},
+        ),
+        scheduler_state=AgentSchedulerState(scheduling_enabled=False),
+    )
+
+    # Constraints are fail-closed and the driver waits on them before it is ready, so clear
+    # weather has to be flowing before the operator starts. Two readings are needed, since the
+    # first one through only establishes a baseline for the condition.
+    clear_weather = asyncio.create_task(report_until_cancelled("Dry"))
+
+    try:
+        async with asyncio.timeout(20.0):
+            await operator.start(client=kit, task_group=asyncio)
+            await state.apply_to_operator(operator, {"ctrl1": config})
+            await init_started.wait()
+
+        # Turn the constraint high with the init task still in flight.
+        clear_weather.cancel()
+        await report("Wet")
+
+        async with asyncio.timeout(20.0):
+            await init_aborted.wait()
+
+            driver = operator.drivers["ctrl1"]
+
+            while driver.lifecycle.belief_state != InternalControllerState.SHUTDOWN:
+                await asyncio.sleep(0.05)
+    finally:
+        clear_weather.cancel()
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await clear_weather
+
         async with asyncio.timeout(10.0):
             await operator.stop()
 
