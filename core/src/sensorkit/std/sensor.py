@@ -12,11 +12,21 @@ from pydantic import BaseModel, Field
 import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
 from sensorkit.astro.target import CatalogTarget, FrameTarget, ICRSTarget, TLETarget
+from sensorkit.backend.base import KeyNotFound
 from sensorkit.std.collect import Collect, StandardCollectTask
 from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
 from sensorkit.std.instrument import Binning, CameraCapture, ConfigureCameraSensor
 from sensorkit.std.mount import AxisRates, FollowTarget
-from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover, SetFilter
+from sensorkit.std.optics import (
+    ChangeFocusPosition,
+    CloseMirrorCover,
+    Filter,
+    Filters,
+    FocusCorrection,
+    FocusPosition,
+    OpenMirrorCover,
+    SetFilter,
+)
 from sensorkit.std.traits import Connect, Deinit, Init, Stop
 
 
@@ -24,16 +34,36 @@ class Sensor:
     """High-level client to a set of devices comprising a logical sensor."""
 
     def __init__(self, impl: sk.ControllerImpl, devices: SensorDevices, policies: SensorPolicies):
+        self.impl = impl
         self.policies = policies
-        self.mount = impl.use_device(
-            devices.mount,
-            subscribe=[AltAzPointing, RADecPointing, AxisRates],
-        ) if devices.mount else None
+        self.mount = (
+            impl.use_device(
+                devices.mount,
+                subscribe=[AltAzPointing, RADecPointing, AxisRates],
+            )
+            if devices.mount
+            else None
+        )
         self.camera = impl.use_device(devices.camera) if devices.camera else None
-        self.focuser = impl.use_device(devices.focuser) if devices.focuser else None
+        self.focuser = (
+            impl.use_device(
+                devices.focuser,
+                subscribe=[FocusPosition],
+            )
+            if devices.focuser
+            else None
+        )
         self.rotator = impl.use_device(devices.rotator) if devices.rotator else None
         self.mirror_cover = impl.use_device(devices.mirror_cover) if devices.mirror_cover else None
-        self.filter_wheel = impl.use_device(devices.filter_wheel) if devices.filter_wheel else None
+        self.filter_wheel = (
+            impl.use_device(
+                devices.filter_wheel,
+                # Filters = the catalog (per-filter focus offsets); Filter = what's in the beam.
+                subscribe=[Filter, Filters],
+            )
+            if devices.filter_wheel
+            else None
+        )
         self.dome = impl.use_device(devices.dome) if devices.dome else None
 
     async def init_dome(self):
@@ -223,6 +253,62 @@ class SensorControl:
 
         logger.info(f"Sensor '{sk.controller().entity}' is standing by")
 
+    async def _change_focus(self, task: StandardCollectTask):
+        """Drive the focuser for this capture, if the sensor has one.
+
+        Stating a focus IS the request to preserve it: an explicit task focus is driven verbatim
+        with nothing else applied — no filter offset, no FocusCorrection — which covers both a
+        manual/interactive capture holding the operator's focus and an autofocus V-curve step.
+        A task with no focus is MANAGED: base + the active filter's offset + the standing
+        correction, and the focuser is left alone entirely if it has published no base position.
+        """
+        if self.sensor.focuser is None:
+            return
+
+        position = task.focus_position
+        if position is None:
+            # An absent correction key is the ordinary case — nothing has ever corrected this
+            # focuser. Any other failure is not: treating it as zero DISCARDS a learned residual
+            # and moves the focuser by that much, so log it rather than hide it.
+            correction = FocusCorrection()
+            try:
+                correction = await self.sensor.focuser.kv_get_model(FocusCorrection)
+            except KeyNotFound:
+                pass
+            except Exception as e:
+                logger.warning(f"Could not read FocusCorrection; using no residual ({e})")
+
+            devices = self.config.devices
+            focus = self.sensor.impl.get_device(devices.focuser).subscription.snapshot().get(
+                FocusPosition
+            )
+
+            filter = None
+            if self.sensor.filter_wheel is not None:
+                wheel = self.sensor.impl.get_device(devices.filter_wheel).subscription.snapshot()
+                if task.camera_params.filter_name is None:
+                    # No filter on the task: offset for whatever is actually in the beam.
+                    filter = wheel.get(Filter)
+                else:
+                    # The task names a filter: take that filter's offset from the wheel's
+                    # catalog, which is right even before telemetry catches up with SetFilter.
+                    filters = wheel.get(Filters)
+                    if filters is not None:
+                        filter = next(
+                            (
+                                f
+                                for f in filters.filters
+                                if f.name == task.camera_params.filter_name
+                            ),
+                            None,
+                        )
+
+            # None -> no base position published; leave the focuser wherever it is.
+            position = correction.adapt(focus, filter)
+
+        if position is not None:
+            await self.sensor.focuser.command(ChangeFocusPosition(position=position))
+
     @sk.task_handler
     async def sensor_collect(self, task: StandardCollectTask):
         """Execute a StandardCollectTask: slew, configure camera, capture frames."""
@@ -239,6 +325,16 @@ class SensorControl:
             await self.sensor.filter_wheel.command(
                 SetFilter(filter=task.camera_params.filter_name)
             )
+
+        await self._change_focus(task)
+
+        # Instrument-state keywords stamped on every frame (FOCUSPOS / FILTER) for downstream
+        # analysis such as autofocus.
+        optics_kws = []
+        if task.focus_position is not None:
+            optics_kws.append(FocusPosition(current_position=task.focus_position))
+        if task.camera_params.filter_name is not None:
+            optics_kws.append(Filter(name=task.camera_params.filter_name))
 
         # Configure camera capture parameters.
         if None not in (task.camera_params.binning_x, task.camera_params.binning_y):
@@ -280,19 +376,23 @@ class SensorControl:
 
             if want_sidereal and not currently_sidereal:
                 # Hold the current RA/Dec under sidereal tracking.
-                logger.info(f"Frame #{frame_num+1} of {task.camera_params.frame_count}: switching to sidereal track")
+                logger.info(
+                    f"Frame #{frame_num + 1} of {task.camera_params.frame_count}: switching to sidereal track"
+                )
                 collect.target = FrameTarget(frame=ReferenceFrame.ICRF)
                 await self.sensor.mount.command(FollowTarget(target=collect.target))
                 currently_sidereal = True
             elif not want_sidereal and currently_sidereal:
                 # Resume following the original target.
-                logger.info(f"Frame #{frame_num+1} of {task.camera_params.frame_count}: resuming target track")
+                logger.info(
+                    f"Frame #{frame_num + 1} of {task.camera_params.frame_count}: resuming target track"
+                )
                 collect.target = task.target
                 await self.sensor.mount.command(FollowTarget(target=collect.target))
                 currently_sidereal = False
 
-            logger.info(f"Acquiring frame #{frame_num+1} of {task.camera_params.frame_count}")
-            context = await sk.controller().update_context(collect)
+            logger.info(f"Acquiring frame #{frame_num + 1} of {task.camera_params.frame_count}")
+            context = await sk.controller().update_context(collect, *optics_kws)
             _add_compat_context(context)
 
             await self.sensor.camera.command(

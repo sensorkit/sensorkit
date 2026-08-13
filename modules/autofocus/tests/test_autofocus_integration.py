@@ -8,11 +8,12 @@ These are 8120x8120 float32 FITS with minimal headers (no WCS).
 Focus position is encoded in the filename: FOCUS{position}.fit
 
 Run with:
-    cd /opt/sensorkit && uv run pytest analysis/autofocus/tests/test_autofocus_integration.py -v -s
+    cd /opt/sensorkit && .venv/bin/python -m pytest modules/autofocus/tests/test_autofocus_integration.py -v -s
 """
 
 import math
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +44,7 @@ skip_no_data = pytest.mark.skipif(not _have_data(), reason="Focus test data not 
 # ---------------------------------------------------------------------------
 # Helpers — lightweight source detection + FWHM (no SENPAI dependency)
 # ---------------------------------------------------------------------------
+
 
 def load_fits(path: Path) -> np.ndarray:
     """Load a FITS file and return the image data as float64."""
@@ -156,6 +158,7 @@ def measure_frame_fwhm(
 # Test: Quadrupole moments on synthetic PSF
 # ---------------------------------------------------------------------------
 
+
 class TestQuadrupoleMoments:
     """Test compute_quadrupole_moments and determine_defocus_sign with synthetic data."""
 
@@ -172,7 +175,7 @@ class TestQuadrupoleMoments:
         dx_r = dx * cos_a + dy * sin_a
         dy_r = -dx * sin_a + dy * cos_a
 
-        return 1000.0 * np.exp(-0.5 * (dx_r ** 2 / sigma_x ** 2 + dy_r ** 2 / sigma_y ** 2))
+        return 1000.0 * np.exp(-0.5 * (dx_r**2 / sigma_x**2 + dy_r**2 / sigma_y**2))
 
     def test_circular_psf_has_zero_ellipticity(self):
         """A perfectly circular PSF should have e1 ~ 0, e2 ~ 0."""
@@ -228,9 +231,16 @@ class TestQuadrupoleMoments:
             e1 = e_mag * math.cos(2 * angle)
             e2 = e_mag * math.sin(2 * angle)
 
-            sources.append(SourceMeasurement(
-                x=x, y=y, fwhm_px=5.0, e1=e1, e2=e2, snr=50.0,
-            ))
+            sources.append(
+                SourceMeasurement(
+                    x=x,
+                    y=y,
+                    fwhm_px=5.0,
+                    e1=e1,
+                    e2=e2,
+                    snr=50.0,
+                )
+            )
 
         sign = determine_defocus_sign(sources, center)
         assert sign == 1, f"Expected intra-focal (+1), got {sign}"
@@ -256,17 +266,55 @@ class TestQuadrupoleMoments:
             e1 = e_mag * math.cos(2 * angle)
             e2 = e_mag * math.sin(2 * angle)
 
-            sources.append(SourceMeasurement(
-                x=x, y=y, fwhm_px=5.0, e1=e1, e2=e2, snr=50.0,
-            ))
+            sources.append(
+                SourceMeasurement(
+                    x=x,
+                    y=y,
+                    fwhm_px=5.0,
+                    e1=e1,
+                    e2=e2,
+                    snr=50.0,
+                )
+            )
 
         sign = determine_defocus_sign(sources, center)
         assert sign == -1, f"Expected extra-focal (-1), got {sign}"
+
+    def test_defocus_sign_survives_snr_none(self):
+        """SENPAI's detection-stage stars carry snr=None — the sign path must not crash on them.
+
+        Regression: snr=None reached the weighting as-is and raised TypeError, which the
+        analyzer swallowed, silently reading every live frame as sign=0.
+        """
+        from sensorkit.autofocus.pipeline import compute_defocus_sign
+
+        size = 400
+        image = np.zeros((size, size), dtype=np.float64)
+        rng = np.random.default_rng(7)
+        image += rng.normal(100.0, 2.0, image.shape)
+
+        class SenpaiStar:  # mirrors sensorkit.senpai.models.Star
+            def __init__(self, x, y):
+                self.x, self.y, self.snr = x, y, None
+
+        dets = []
+        for angle_deg in range(0, 360, 45):
+            angle = math.radians(angle_deg)
+            x = size / 2 + 150.0 * math.cos(angle)
+            y = size / 2 + 150.0 * math.sin(angle)
+            yy, xx = np.mgrid[0:size, 0:size]
+            image += 500.0 * np.exp(-(((xx - x) ** 2) + ((yy - y) ** 2)) / (2 * 3.0**2))
+            dets.append(SenpaiStar(x, y))
+
+        # Must complete without raising; round sources are legitimately indeterminate.
+        sign = compute_defocus_sign(image, image.shape, dets, 5.0)
+        assert sign == 0
 
 
 # ---------------------------------------------------------------------------
 # Test: V-curve fitting
 # ---------------------------------------------------------------------------
+
 
 class TestVCurveFit:
     """Test fit_vcurve with synthetic and real data."""
@@ -282,10 +330,9 @@ class TestVCurveFit:
 
         positions = np.linspace(23000, 27000, 9)
         fwhm_values = [
-            math.sqrt(a_true * (p - p_opt_true) ** 2 + fwhm_best_true ** 2)
-            for p in positions
+            math.sqrt(a_true * (p - p_opt_true) ** 2 + fwhm_best_true**2) for p in positions
         ]
-        data = list(zip(positions, fwhm_values))
+        data = list(zip(positions, fwhm_values, strict=True))
 
         result = fit_vcurve(data)
 
@@ -306,11 +353,11 @@ class TestVCurveFit:
         positions = np.linspace(23000, 26500, 7)
         fwhm_values = []
         for p in positions:
-            fwhm_clean = math.sqrt(a_true * (p - p_opt_true) ** 2 + fwhm_best_true ** 2)
+            fwhm_clean = math.sqrt(a_true * (p - p_opt_true) ** 2 + fwhm_best_true**2)
             fwhm_noisy = fwhm_clean + rng.normal(0, 0.3)
             fwhm_values.append(max(fwhm_noisy, 1.0))
 
-        data = list(zip(positions, fwhm_values))
+        data = list(zip(positions, fwhm_values, strict=True))
         result = fit_vcurve(data)
 
         # Should be within ~200 steps of true optimum given noise
@@ -376,8 +423,7 @@ class TestVCurveFit:
         # FWHM_best should be reasonable (> 0 and < max measured)
         max_fwhm = max(d[1] for d in data_points)
         assert 0 < result.best_fwhm < max_fwhm, (
-            f"FWHM_best {result.best_fwhm:.2f} is not reasonable "
-            f"(max measured: {max_fwhm:.2f})"
+            f"FWHM_best {result.best_fwhm:.2f} is not reasonable (max measured: {max_fwhm:.2f})"
         )
 
         # Slope must be positive (V-curve opens upward)
@@ -387,6 +433,7 @@ class TestVCurveFit:
 # ---------------------------------------------------------------------------
 # Test: Quadrupole moments on real data
 # ---------------------------------------------------------------------------
+
 
 @skip_no_data
 class TestQuadrupoleMomentsOnRealData:
@@ -480,6 +527,7 @@ class TestQuadrupoleMomentsOnRealData:
 # Test: Correction computation
 # ---------------------------------------------------------------------------
 
+
 class TestCorrectionComputation:
     """Test the passive focus correction formula."""
 
@@ -498,7 +546,7 @@ class TestCorrectionComputation:
             controller="test_ctrl",
             senpai_entity="senpai_test",
             focuser=FocuserConfig(entity="focuser", min_position=20000, max_position=30000),
-            correction=CorrectionConfig(max_step=500, min_correction=10),
+            correction=CorrectionConfig(),
         )
 
         # Create analyzer without initializing the pipeline
@@ -518,11 +566,14 @@ class TestCorrectionComputation:
             defocus_sign=1,
         )
         expected = math.sqrt((36 - 9) / 0.001)
-        assert abs(abs(delta) - expected) < 1.0, f"Expected |delta| ≈ {expected:.1f}, got {delta:.1f}"
+        assert abs(abs(delta) - expected) < 1.0, (
+            f"Expected |delta| ≈ {expected:.1f}, got {delta:.1f}"
+        )
         assert delta > 0, "Positive defocus_sign + positive convention → positive delta"
 
-    def test_correction_clamped_by_max_step(self):
-        """Correction should be clamped to max_step."""
+    def test_correction_not_step_capped(self):
+        """_compute_correction returns the full formula magnitude — there is no focuser-step cap
+        anymore; the arcsec excursion ceiling gates correction upstream in _evaluate_correction."""
         from sensorkit.autofocus.analyzer import AutofocusAnalyzer
         from sensorkit.autofocus.models import (
             AutofocusConfig,
@@ -536,7 +587,7 @@ class TestCorrectionComputation:
             controller="test_ctrl",
             senpai_entity="senpai_test",
             focuser=FocuserConfig(entity="focuser", min_position=20000, max_position=30000),
-            correction=CorrectionConfig(max_step=100, min_correction=10),
+            correction=CorrectionConfig(),
         )
 
         analyzer = AutofocusAnalyzer.__new__(AutofocusAnalyzer)
@@ -552,49 +603,118 @@ class TestCorrectionComputation:
             pixel_scale_arcsec=None,
             defocus_sign=1,
         )
-        assert abs(delta) <= 100.0, f"Delta {delta:.1f} should be clamped to max_step=100"
+        expected = math.sqrt((100 - 9) / 0.0001)  # ≈ 954, previously clamped to 100
+        assert abs(abs(delta) - expected) < 1.0, (
+            f"Expected uncapped |delta| ≈ {expected:.1f}, got {delta:.1f}"
+        )
+
+    @staticmethod
+    def _analyzer_with(convention):
+        from sensorkit.autofocus.analyzer import AutofocusAnalyzer
+        from sensorkit.autofocus.models import (
+            AutofocusConfig,
+            AutofocusState,
+            CorrectionConfig,
+            FocuserConfig,
+        )
+
+        analyzer = AutofocusAnalyzer.__new__(AutofocusAnalyzer)
+        analyzer.config = AutofocusConfig(
+            entity="test_af",
+            controller="test_ctrl",
+            senpai_entity="senpai_test",
+            focuser=FocuserConfig(entity="focuser", min_position=20000, max_position=30000),
+            correction=CorrectionConfig(),
+        )
+        analyzer.state = AutofocusState(
+            enabled=True,
+            vcurve_slope=0.001,
+            vcurve_best_fwhm_pixels=3.0,
+            defocus_sign_convention=convention,
+        )
+        return analyzer
+
+    def test_uncalibrated_convention_yields_no_delta(self):
+        """Without a learned sign→direction mapping there is no defensible direction to move."""
+        analyzer = self._analyzer_with(None)
+        assert (
+            analyzer._compute_correction(
+                median_fwhm_px=6.0, pixel_scale_arcsec=None, defocus_sign=1
+            )
+            == 0.0
+        )
+
+    def test_uncalibrated_convention_skips_passive_correction(self):
+        """Same frame corrects once the convention is known, and is skipped while it is not."""
+        # 4.0px against a 3.0px best at 1"/px -> 1.0" excursion: inside the passive band.
+        args = dict(
+            median_fwhm_pixels=4.0,
+            pixel_scale_arcsec=1.0,
+            solved=True,
+            focus_position=25000.0,
+            defocus_sign=1,
+        )
+        assert self._analyzer_with(1)._evaluate_correction(**args) == "correct"
+        assert self._analyzer_with(None)._evaluate_correction(**args) == "skip"
+
+    def test_recalibration_still_fires_while_uncalibrated(self):
+        """The bootstrap path: a grossly defocused frame must still queue the V-curve that
+        TEACHES the convention, otherwise an uncalibrated sensor could never recover."""
+        analyzer = self._analyzer_with(None)
+        # 7.0px against a 3.0px best at 1"/px -> 4.0" excursion, above the 3.0" ceiling.
+        decision = analyzer._evaluate_correction(
+            median_fwhm_pixels=7.0,
+            pixel_scale_arcsec=1.0,
+            solved=True,
+            focus_position=25000.0,
+            defocus_sign=0,
+        )
+        assert decision == "recalibrate"
 
 
 # ---------------------------------------------------------------------------
 # Test: Target selection
 # ---------------------------------------------------------------------------
 
-class TestTargetSelection:
-    """Test the V-curve target auto-selection."""
 
-    def test_select_target_returns_valid(self):
-        """Target selection should return an ICRSTarget above min altitude."""
+class TestTargetSelection:
+    """Test the V-curve target auto-selection (SSTRC7 catalog only)."""
+
+    def test_no_catalog_returns_none(self):
+        """Without a catalog_path there is no star source, so selection returns None."""
         from sensorkit.autofocus.program import _select_vcurve_target
 
-        # Use a mid-latitude site
         target = _select_vcurve_target(
             min_altitude=15.0,
+            min_solar_elongation=0.0,
+            min_magnitude=8.0,
+            max_magnitude=None,
             site_lat=35.0,
             site_lon=-106.0,
+            catalog_path=None,
         )
+        assert target is None
 
-        # May return None if no stars are up (unlikely for a reasonable location)
-        if target is not None:
-            assert hasattr(target, "coords")
-            assert 0 <= target.coords.ra < 360
-            assert -90 <= target.coords.dec <= 90
-
-    def test_select_target_respects_altitude(self):
-        """No target should be returned if min_altitude is impossibly high."""
+    def test_bad_catalog_returns_none(self):
+        """A failing SSTRC7 query is caught and selection returns None."""
         from sensorkit.autofocus.program import _select_vcurve_target
 
         target = _select_vcurve_target(
-            min_altitude=89.9,  # Nearly zenith — very few candidates
+            min_altitude=15.0,
+            min_solar_elongation=0.0,
+            min_magnitude=8.0,
+            max_magnitude=None,
             site_lat=35.0,
             site_lon=-106.0,
+            catalog_path="/nonexistent/catalog",
         )
-        # This might return None, which is acceptable
-        # Just verify it doesn't crash
+        assert target is None
 
 
 # ---------------------------------------------------------------------------
 # Test: Full pipeline integration (real data → FWHM → V-curve)
 # ---------------------------------------------------------------------------
+
 
 @skip_no_data
 class TestFullPipelineIntegration:
@@ -631,7 +751,7 @@ class TestFullPipelineIntegration:
         # (though with noisy data this isn't guaranteed for every frame)
 
         # Fit and verify
-        data = list(zip(positions, fwhms))
+        data = list(zip(positions, fwhms, strict=True))
         result = fit_vcurve(data)
 
         print(f"  V-curve optimal: {result.best_position:.0f}")
@@ -642,3 +762,383 @@ class TestFullPipelineIntegration:
         assert result.slope > 0
         assert result.best_fwhm > 0
         assert result.best_fwhm < max(fwhms)
+
+
+# ---------------------------------------------------------------------------
+# Test: Track-mode gating (commanded TRKMODE beats SENPAI's inference)
+# ---------------------------------------------------------------------------
+
+
+class TestTrackModeGate:
+    """Only sidereal frames measure focus; a rate frame's streaks are not defocus."""
+
+    def test_commanded_trkmode_wins_over_inference(self):
+        """Regression: SENPAI infers track mode and resolves ties to SIDEREAL, so a rate frame
+        can arrive labelled sidereal — live, one queued a spurious V-curve off 4.31" of pure
+        trailing. The controller's TRKMODE card is authoritative."""
+        from sensorkit.autofocus.analyzer import _is_sidereal
+
+        assert _is_sidereal("rate", "SIDEREAL") is False
+        assert _is_sidereal("sidereal", "RATE") is True
+
+    def test_case_and_whitespace_tolerant(self):
+        from sensorkit.autofocus.analyzer import _is_sidereal
+
+        assert _is_sidereal("SIDEREAL", None) is True
+        assert _is_sidereal(" Sidereal ", None) is True
+        assert _is_sidereal("RATE", None) is False
+
+    def test_falls_back_to_inference_without_the_card(self):
+        from sensorkit.autofocus.analyzer import _is_sidereal
+
+        assert _is_sidereal(None, "SIDEREAL") is True
+        assert _is_sidereal(None, "RATE") is False
+        assert _is_sidereal(None, "UNKNOWN") is False
+
+
+# ---------------------------------------------------------------------------
+# Test: Stale-frame time parsing (guard against double-corrections from SENPAI lag)
+# ---------------------------------------------------------------------------
+
+
+class TestFrameTimeParse:
+    """_parse_frame_time turns FITS DATE-OBS into an aware UTC datetime for staleness checks."""
+
+    def test_naive_fits_date_obs_gets_utc(self):
+        from datetime import UTC, datetime
+
+        from sensorkit.autofocus.analyzer import _parse_frame_time
+
+        t = _parse_frame_time("2026-08-06T06:12:49.385130")
+        assert t == datetime(2026, 8, 6, 6, 12, 49, 385130, tzinfo=UTC)
+        # Comparable against aware state timestamps — the actual guard operation.
+        assert t < datetime(2026, 8, 6, 6, 13, 0, tzinfo=UTC)
+
+    def test_aware_timestamp_preserved(self):
+        from sensorkit.autofocus.analyzer import _parse_frame_time
+
+        t = _parse_frame_time("2026-08-06T06:12:49+00:00")
+        assert t is not None and t.tzinfo is not None
+
+    def test_absent_or_garbage_returns_none(self):
+        from sensorkit.autofocus.analyzer import _parse_frame_time
+
+        assert _parse_frame_time(None) is None
+        assert _parse_frame_time("") is None
+        assert _parse_frame_time("not a date") is None
+
+
+# ---------------------------------------------------------------------------
+# Test: Sign-convention calibration from sweep quadrupole votes
+# ---------------------------------------------------------------------------
+
+
+class TestConventionCalibration:
+    """The V-curve calibrates state.defocus_sign_convention from per-frame quadrupole signs."""
+
+    @staticmethod
+    def _analyzer():
+        from unittest.mock import AsyncMock, MagicMock
+
+        from sensorkit.autofocus.analyzer import AutofocusAnalyzer
+        from sensorkit.autofocus.models import (
+            AutofocusConfig,
+            FocuserConfig,
+        )
+
+        config = AutofocusConfig(
+            entity="test_af",
+            controller="test_ctrl",
+            senpai_entity="senpai_test",
+            focuser=FocuserConfig(entity="focuser", min_position=0, max_position=50000),
+        )
+        analyzer = AutofocusAnalyzer(config, MagicMock())
+        analyzer._entity = AsyncMock()
+        analyzer._save_state = AsyncMock()
+        analyzer.state.enabled = False  # skip the residual fold; calibration happens before it
+        return analyzer
+
+    def _run_sweep(self, sign_above: int):
+        """Finalize a clean V sweep whose frames above best measured `sign_above` (and below,
+        the opposite), and return the calibrated convention."""
+        import asyncio
+
+        from sensorkit.autofocus.analyzer import _Sweep
+
+        analyzer = self._analyzer()
+        best = 25000.0
+        positions = [best + (i - 4) * 35.0 for i in range(9)]
+        sweep = _Sweep(session="cal", expected_steps=9)
+        sweep.points = [(p, (2.0**2 + (0.02 * (p - best)) ** 2) ** 0.5) for p in positions]
+        sweep.sign_votes = [
+            (p, sign_above if p > best else -sign_above) for p in positions if p != best
+        ]
+        analyzer._sweep = sweep
+        asyncio.run(analyzer._finalize_sweep())
+        return analyzer.state.defocus_sign_convention
+
+    def test_positive_sign_above_best_calibrates_negative_convention(self):
+        # Extra-focal frames measuring +1 need negative corrections: convention -1.
+        assert self._run_sweep(sign_above=1) == -1
+
+    def test_negative_sign_above_best_calibrates_positive_convention(self):
+        assert self._run_sweep(sign_above=-1) == 1
+
+    def test_no_votes_leaves_convention_untouched(self):
+        import asyncio
+
+        from sensorkit.autofocus.analyzer import _Sweep
+
+        analyzer = self._analyzer()
+        prior = analyzer.state.defocus_sign_convention
+        best = 25000.0
+        positions = [best + (i - 4) * 35.0 for i in range(9)]
+        sweep = _Sweep(session="cal", expected_steps=9)
+        sweep.points = [(p, (2.0**2 + (0.02 * (p - best)) ** 2) ** 0.5) for p in positions]
+        analyzer._sweep = sweep
+        asyncio.run(analyzer._finalize_sweep())
+        assert analyzer.state.defocus_sign_convention == prior
+
+
+# ---------------------------------------------------------------------------
+# Test: Sweep finalization (instant on expected count, dedup, stall timeout)
+# ---------------------------------------------------------------------------
+
+
+class TestSweepFinalization:
+    """Test the analyzer's sweep-completion logic without a live pipeline."""
+
+    @staticmethod
+    def _analyzer(frame_timeout_seconds: float = 90.0):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from sensorkit.autofocus.analyzer import AutofocusAnalyzer
+        from sensorkit.autofocus.models import (
+            AutofocusConfig,
+            CorrectionConfig,
+            FocuserConfig,
+            VCurveConfig,
+        )
+
+        config = AutofocusConfig(
+            entity="test_af",
+            controller="test_ctrl",
+            senpai_entity="senpai_test",
+            focuser=FocuserConfig(entity="focuser", min_position=0, max_position=50000),
+            vcurve=VCurveConfig(frame_timeout_seconds=frame_timeout_seconds),
+            correction=CorrectionConfig(),
+        )
+        analyzer = AutofocusAnalyzer(config, MagicMock())
+        analyzer._finalize_sweep = AsyncMock()
+        return analyzer
+
+    def test_finalizes_instantly_when_expected_count_arrives(self):
+        """With the step count announced, the fit runs on the last frame — no timeout wait."""
+        import asyncio
+
+        analyzer = self._analyzer()
+
+        async def run():
+            analyzer.expect_sweep("s1", 3)
+            for i, (pos, fwhm) in enumerate([(100.0, 3.0), (200.0, 2.0), (300.0, 3.0)]):
+                await analyzer._process_vcurve("s1", f"/f{i}.fits", pos, fwhm, 1.0)
+            if analyzer._sweep and analyzer._sweep.timer:
+                analyzer._sweep.timer.cancel()
+
+        asyncio.run(run())
+        analyzer._finalize_sweep.assert_awaited_once()
+
+    def test_duplicate_frame_paths_do_not_count(self):
+        """A duplicate filesystem event for the same frame must not complete the sweep early."""
+        import asyncio
+
+        analyzer = self._analyzer()
+
+        async def run():
+            analyzer.expect_sweep("s1", 3)
+            await analyzer._process_vcurve("s1", "/f0.fits", 100.0, 3.0, 1.0)
+            await analyzer._process_vcurve("s1", "/f0.fits", 100.0, 3.0, 1.0)  # duplicate
+            await analyzer._process_vcurve("s1", "/f1.fits", 200.0, 2.0, 1.0)
+            if analyzer._sweep and analyzer._sweep.timer:
+                analyzer._sweep.timer.cancel()
+
+        asyncio.run(run())
+        analyzer._finalize_sweep.assert_not_awaited()  # only 2 distinct of 3 expected
+
+    def test_stall_timeout_finalizes_partial_sweep(self):
+        """A lost frame must not wedge the sweep: the stall timer finalizes what arrived."""
+        import asyncio
+
+        analyzer = self._analyzer(frame_timeout_seconds=0.05)
+
+        async def run():
+            analyzer.expect_sweep("s1", 3)
+            await analyzer._process_vcurve("s1", "/f0.fits", 100.0, 3.0, 1.0)
+            await analyzer._process_vcurve("s1", "/f1.fits", 200.0, 2.0, 1.0)
+            await asyncio.sleep(0.2)  # third frame never arrives
+
+        asyncio.run(run())
+        analyzer._finalize_sweep.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Test: Sweep-in-flight guard (passive correction must not race the fold)
+# ---------------------------------------------------------------------------
+
+
+class TestSweepInFlightGuard:
+    """While a V-curve is queued/running, a stray science frame's passive write to FocusCorrection
+    would corrupt the fold's residual baseline. The guard suppresses passive correction from the
+    sweep's announce until its fit folds."""
+
+    @staticmethod
+    def _analyzer():
+        from unittest.mock import AsyncMock, MagicMock
+
+        from sensorkit.autofocus.analyzer import AutofocusAnalyzer
+        from sensorkit.autofocus.models import (
+            AutofocusConfig,
+            CorrectionConfig,
+            FocuserConfig,
+            VCurveConfig,
+        )
+
+        config = AutofocusConfig(
+            entity="test_af",
+            controller="test_ctrl",
+            senpai_entity="senpai_test",
+            focuser=FocuserConfig(entity="focuser", min_position=20000, max_position=30000),
+            vcurve=VCurveConfig(),
+            correction=CorrectionConfig(),
+        )
+        analyzer = AutofocusAnalyzer(config, MagicMock())
+        analyzer._entity = AsyncMock()
+        analyzer._save_state = AsyncMock()
+        analyzer.state.enabled = True
+        analyzer.state.defocus_sign_convention = 1
+        analyzer.state.vcurve_slope = 0.001
+        analyzer.state.vcurve_best_fwhm_pixels = 3.0
+        return analyzer
+
+    @staticmethod
+    def _science_result():
+        from sensorkit.senpai.models import SenpaiResult
+
+        return SenpaiResult(
+            file_path="/f.fits",
+            timestamp=datetime.now(UTC),
+            track_mode="sidereal",
+            n_sources=50,
+            median_fwhm_pixels=4.0,
+            std_fwhm_pixels=0.5,
+            pixel_scale_arcsec=1.0,
+            median_fwhm_arcsec=4.0,
+            std_fwhm_arcsec=0.5,
+            solved=True,
+            detections=[],
+        )
+
+    def test_expect_sweep_arms_guard(self):
+        analyzer = self._analyzer()
+        assert analyzer._sweep_in_flight_since is None
+        analyzer.expect_sweep("s1", 9)
+        assert analyzer._sweep_in_flight_since is not None
+
+    def test_finalize_clears_guard_even_on_early_return(self):
+        """The fold's `finally` must clear the guard however finalize exits, or passive locks out
+        forever. Here the sweep has too few points to fit — an early return."""
+        import asyncio
+
+        from sensorkit.autofocus.analyzer import _Sweep
+
+        analyzer = self._analyzer()
+        analyzer._sweep_in_flight_since = datetime.now(UTC)
+        sweep = _Sweep(session="s1", expected_steps=9)
+        sweep.points = [(25000.0, 3.0), (25100.0, 4.0)]  # <3 -> "cannot fit" early return
+        analyzer._sweep = sweep
+        asyncio.run(analyzer._finalize_sweep())
+        assert analyzer._sweep_in_flight_since is None
+
+    def test_passive_skipped_while_sweep_in_flight(self):
+        """A science frame during the sweep window never reaches the correction decision."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        analyzer = self._analyzer()
+        analyzer._read_fits_header = MagicMock(
+            return_value={"FOCUSPOS": 25000.0, "TRKMODE": "sidereal"}
+        )
+        analyzer._measure_defocus_sign = AsyncMock(return_value=1)
+        analyzer._evaluate_correction = MagicMock(return_value="skip")
+        result = self._science_result()
+
+        async def run(inflight):
+            analyzer._sweep = None
+            analyzer._sweep_in_flight_since = inflight
+            analyzer._evaluate_correction.reset_mock()
+            await analyzer._process_senpai(result)
+
+        asyncio.run(run(datetime.now(UTC)))  # sweep in flight
+        analyzer._evaluate_correction.assert_not_called()
+
+        asyncio.run(run(None))  # guard clear
+        analyzer._evaluate_correction.assert_called_once()
+
+    def test_stuck_guard_self_clears_after_budget(self):
+        """A queued sweep that never produced a frame must not lock passive out permanently."""
+        import asyncio
+        from datetime import timedelta
+        from unittest.mock import AsyncMock, MagicMock
+
+        analyzer = self._analyzer()
+        analyzer._read_fits_header = MagicMock(
+            return_value={"FOCUSPOS": 25000.0, "TRKMODE": "sidereal"}
+        )
+        analyzer._measure_defocus_sign = AsyncMock(return_value=1)
+        analyzer._evaluate_correction = MagicMock(return_value="skip")
+        analyzer._sweep = None  # no sweep ever materialized
+        analyzer._sweep_in_flight_since = datetime.now(UTC) - timedelta(hours=1)
+
+        asyncio.run(analyzer._process_senpai(self._science_result()))
+
+        assert analyzer._sweep_in_flight_since is None  # self-cleared
+        analyzer._evaluate_correction.assert_called_once()  # passive proceeded
+
+
+# ---------------------------------------------------------------------------
+# Test: AFMODE — autofocus telling SENPAI how to process a sweep
+# ---------------------------------------------------------------------------
+
+
+class TestPipelineModeCard:
+    """The requested pipeline mode reaches SENPAI on the frames, since nothing calls SENPAI.
+
+    Autofocus only subscribes to SenpaiResult; SENPAI is driven by its own directory watcher.
+    So the FITS header is the transport, and VCurveStep is what writes it.
+    """
+
+    def test_mode_is_emitted_as_afmode(self):
+        from sensorkit.autofocus.models import VCurveStep
+
+        cards = dict(VCurveStep(session="abc123", pipeline_mode="full").get_fits_cards())
+        assert cards["AFID"][0] == "abc123"
+        assert cards["AFMODE"][0] == "full"
+
+    def test_afmode_always_accompanies_afid(self):
+        """Every sweep frame states its mode — there is no 'unspecified' sweep."""
+        from sensorkit.autofocus.models import VCurveStep
+
+        cards = dict(VCurveStep(session="abc123").get_fits_cards())
+        assert cards["AFID"][0] == "abc123"
+        assert cards["AFMODE"][0] == "detect"
+
+    def test_config_default_is_detect(self):
+        from sensorkit.autofocus.models import VCurveConfig
+
+        assert VCurveConfig().pipeline_mode == "detect"
+
+    def test_afmode_fits_the_8_char_keyword_limit(self):
+        from sensorkit.autofocus.models import VCurveStep
+
+        for key in dict(VCurveStep(session="s", pipeline_mode="detect_solve").get_fits_cards()):
+            assert len(key) <= 8, f"{key} exceeds the FITS keyword limit"

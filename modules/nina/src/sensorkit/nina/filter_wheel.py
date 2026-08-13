@@ -69,10 +69,22 @@ class NinaFilterWheel(NinaDevice):
         await sk.device().publish(
             Filters(
                 filters=[
-                    Filter(name=f.get("Name", str(i)), position=f.get("Id", i)) for i, f in enumerate(available)
+                    Filter(
+                        name=f.get("Name", str(i)),
+                        position=f.get("Id", i),
+                        focus_offset=self._focus_offset(f.get("Id", i)),
+                    )
+                    for i, f in enumerate(available)
                 ]
             )
         )
+
+    def _focus_offset(self, position: int) -> float | None:
+        """Per-filter focus offset from config, paired with the wheel's filter positions."""
+        offsets = self.config.focus_offsets
+        if offsets is not None and position < len(offsets):
+            return offsets[position]
+        return None
 
     @sk.command_handler
     async def filter_wheel_connect(self, cmd: Connect):
@@ -124,7 +136,13 @@ class NinaFilterWheel(NinaDevice):
             name = selected_filter.get("Name", "")
             if position is not None:
                 self.filter_wheel_position = position
-                await device.publish(Filter(name=name, position=position))
+                await device.publish(
+                    Filter(
+                        name=name,
+                        position=position,
+                        focus_offset=self._focus_offset(position),
+                    )
+                )
 
             # logger.debug(
             #     f"NINA filter wheel status: connected={connected}, "
@@ -136,6 +154,9 @@ class NinaFilterWheelConfig(NinaDeviceConfig[NinaFilterWheel]):
     device_type: Literal["filter_wheel"] = "filter_wheel"
     status_frequency: float = 5.0
     timeout: float = 60.0
+    # Per-filter focus offsets [steps], paired positionally with the wheel's filter slots;
+    # published as Filter.focus_offset and applied by the controller at capture.
+    focus_offsets: list[float] | None = None
 
     @override
     def create_device(self):

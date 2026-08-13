@@ -233,6 +233,16 @@ class WebAPI:
 
             return _status_ok()
 
+        # Entity
+
+        @app.post("/entity/{entity_id}/command", tags=["Entity"])
+        async def run_entity_command(entity_id: str, command: sk.DeviceCommand):
+            """Execute a command on any entity (e.g. an analyzer, not just a device)."""
+            with _error_handler():
+                await self.kit.entity(entity_id).command(command)
+
+            return _status_ok()
+
         # Controller
 
         @app.get("/controller/{controller_id}/state", tags=["Controller"])

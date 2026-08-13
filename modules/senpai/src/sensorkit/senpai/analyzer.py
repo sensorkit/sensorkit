@@ -138,7 +138,10 @@ class SenpaiAnalyzer:
     def __init__(self, config: SenpaiConfig):
         self.config = config
 
-        self._pipeline = SenpaiPipeline(self.config.senpai_config, self.config.senpai_output_dir)
+        self._pipeline = SenpaiPipeline(
+            self.config.senpai_config,
+            self.config.senpai_output_dir,
+        )
 
         self._entity = None
         self._tasks: list[asyncio.Task] = []

@@ -56,7 +56,7 @@ def fake_mount_sub(
 
 def fake_focuser_sub(position: float):
     """A stand-in for a started focuser ContextSubscription."""
-    return SimpleNamespace(cache={FocusPosition: FocusPosition(position=position)})
+    return SimpleNamespace(cache={FocusPosition: FocusPosition(current_position=position)})
 
 
 def make_camera(**overrides) -> SdasimCamera:

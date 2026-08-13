@@ -13,6 +13,9 @@ class SenpaiConfig(BaseModel):
     senpai_config: str
     senpai_output_dir: str
     process_sequence: bool = Field(default=True)
+    # NB: a batch can request a cheaper pipeline mode per-frame via the AFMODE FITS card
+    # (see sensorkit.autofocus VCurveConfig.pipeline_mode). There is no config
+    # knob here: the requesting module owns the choice, and it travels on the frames.
 
 
 sk.declare_config_section(
@@ -21,6 +24,16 @@ sk.declare_config_section(
     entity_mapper=lambda raw: raw.pop("id", "senpai"),
     service_path="sensorkit.senpai.service",
 )
+
+
+class Star(BaseModel):
+    """A detected field star, for consumers needing per-source geometry in any pipeline mode
+    (e.g. the autofocus defocus-sign quadrupoles) — unlike `detections`, which the full-mode
+    catalog pass builds (catalog-unmatched sources) and UDL publishes as observations."""
+
+    x: float
+    y: float
+    snr: float | None = None
 
 
 class Detection(BaseModel):
@@ -99,4 +112,6 @@ class SenpaiResult(BaseModel):
     std_fwhm_arcsec: float | None
     solved: bool
     detections: list[Detection]
+    # Detection-stage field stars — populated in EVERY pipeline mode (see Star).
+    stars: list[Star] = Field(default_factory=list)
     photometry: Photometry | None = None

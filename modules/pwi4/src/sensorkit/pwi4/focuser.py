@@ -45,6 +45,14 @@ class PWI4Focuser(PWI4Device):
             while self.focuser_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
+        # Establish the configured base position — the anchor that per-filter offsets
+        # and FocusCorrection are relative to (published as FocusPosition.base_position).
+        if (
+            self.config.base_position is not None
+            and int(self.focuser_position) != int(self.config.base_position)
+        ):
+            await self.focuser_change(ChangeFocusPosition(position=self.config.base_position))
+
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
@@ -140,11 +148,19 @@ class PWI4Focuser(PWI4Device):
             await device.publish(
                 Enabled(is_enabled=self.client.get_bool(st, "focuser.is_enabled"))
             )
-            await device.publish(FocusPosition(position=self.focuser_position))
+            await device.publish(
+                FocusPosition(
+                    base_position=self.config.base_position,
+                    current_position=self.focuser_position,
+                )
+            )
 
 
 class PWI4FocuserConfig(PWI4DeviceConfig[PWI4Focuser]):
     device_type: Literal["focuser"] = "focuser"
+    # Base focuser position: driven to at init; published as
+    # FocusPosition.base_position — the anchor for filter offsets and FocusCorrection.
+    base_position: float | None = None
 
     @override
     def create_device(self, client: PWI4Client):

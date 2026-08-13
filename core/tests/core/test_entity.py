@@ -180,3 +180,40 @@ async def test_entity_event(kit):
 
         await ent.emit_event(MyEvent(my_key="foobar"))
         await done.wait()
+
+
+@pytest.mark.asyncio
+async def test_entity_command(kit):
+    """A non-device entity can register and handle commands (Option B)."""
+    from typing import Literal
+
+    from sensorkit.core.entity import DeviceCommand
+
+    async with asyncio.timeout(1.0):
+        sc = await kit.register_service("testservice", "0.1.0")
+        ent = await sc.register_entity("myentity")
+
+    class Ping(DeviceCommand):
+        command_id: Literal["Ping"] = "Ping"
+        n: int
+
+    class Pong(BaseModel):
+        n: int
+
+    @ent.command_handler(Ping)
+    async def handle_ping(cmd: Ping):
+        return Pong(n=cmd.n + 1)
+
+    async with asyncio.timeout(1.0):
+        result = await kit.entity("myentity").command(Ping(n=41))
+        assert Pong.model_validate(result.data).n == 42
+
+    # An unhandled command is rejected, not silently accepted.
+    class Nope(DeviceCommand):
+        command_id: Literal["Nope"] = "Nope"
+
+    from sensorkit.backend.request import CallError
+
+    with pytest.raises(CallError):
+        async with asyncio.timeout(1.0):
+            await kit.entity("myentity").command(Nope())

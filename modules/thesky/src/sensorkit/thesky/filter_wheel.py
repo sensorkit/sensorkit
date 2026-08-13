@@ -73,10 +73,18 @@ class TheSkyFilterWheel(TheSkyDevice):
         await sk.device().publish(
             Filters(
                 filters=[
-                    Filter(name=name, position=idx) for name, idx in self.config.filters.items()
+                    Filter(name=name, position=idx, focus_offset=self._focus_offset(idx))
+                    for name, idx in self.config.filters.items()
                 ]
             )
         )
+
+    def _focus_offset(self, position: int) -> float | None:
+        """Per-filter focus offset from config, paired with the wheel's filter positions."""
+        offsets = self.config.focus_offsets
+        if offsets is not None and position < len(offsets):
+            return offsets[position]
+        return None
 
     @sk.command_handler
     async def filter_wheel_connect(self, cmd: Connect):
@@ -168,7 +176,11 @@ class TheSkyFilterWheel(TheSkyDevice):
         device = sk.device()
         await device.publish(Connected(is_connected=connected))
         await device.publish(
-            Filter(name=self.filter_wheel_name, position=self.filter_wheel_position)
+            Filter(
+                name=self.filter_wheel_name,
+                position=self.filter_wheel_position,
+                focus_offset=self._focus_offset(self.filter_wheel_position),
+            )
         )
 
     @property
@@ -183,6 +195,9 @@ class TheSkyFilterWheelConfig(TheSkyDeviceConfig[TheSkyFilterWheel]):
     filters: dict[str, int] = {}
     status_frequency: float = 1.0
     timeout: float = 60.0
+    # Per-filter focus offsets [steps], indexed by the filter position from `filters` above;
+    # published as Filter.focus_offset and applied by the controller at capture.
+    focus_offsets: list[float] | None = None
 
     @override
     def create_device(self):

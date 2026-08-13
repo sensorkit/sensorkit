@@ -3004,6 +3004,9 @@ alpaca = [
     { name = "alpyca" },
     { name = "numpy" },
 ]
+autofocus = [
+    { name = "astro-senpai" },
+]
 autoslew = [
     { name = "alpyca" },
     { name = "numpy" },
@@ -3095,6 +3098,7 @@ requires-dist = [
     { name = "alpyca", marker = "extra == 'autoslew'", specifier = ">=3.1.1" },
     { name = "alpyca", marker = "extra == 'sky-transmission'", specifier = ">=3.1.0" },
     { name = "astro-burr", marker = "extra == 'burr'" },
+    { name = "astro-senpai", marker = "extra == 'autofocus'", specifier = ">=2.3.1" },
     { name = "astro-senpai", marker = "extra == 'senpai'", specifier = ">=2.3.1" },
     { name = "astropy", specifier = ">=7.1.0" },
     { name = "asyncclick", specifier = "==8.1.8" },
@@ -3136,7 +3140,7 @@ requires-dist = [
     { name = "watchdog", specifier = ">=6.0.0" },
     { name = "websockets", marker = "extra == 'indigo'", specifier = ">=14.0" },
 ]
-provides-extras = ["alpaca", "autoslew", "burr", "filesys", "indigo", "nina", "node-platform", "otto", "pwi4", "sdasim", "senpai", "sky-transmission", "slack", "systemd", "thesky", "thesky-simulator", "udl", "webapi"]
+provides-extras = ["alpaca", "autofocus", "autoslew", "burr", "filesys", "indigo", "nina", "node-platform", "otto", "pwi4", "sdasim", "senpai", "sky-transmission", "slack", "systemd", "thesky", "thesky-simulator", "udl", "webapi"]
 
 [package.metadata.requires-dev]
 complexity = [{ name = "complexipy", specifier = ">=6.2.0" }]

@@ -25,6 +25,7 @@ from sensorkit.std import (
     CameraCapture,
     CameraParameterSet,
     Capabilities,
+    ChangeFocusPosition,
     CloseEnclosure,
     CloseMirrorCover,
     ConfigureCameraSensor,
@@ -1197,6 +1198,170 @@ async def test_sensor_control_collect_with_filter_and_binning():
             await filter_called.wait()
             await binning_called.wait()
             await capture_called.wait()
+    finally:
+        await cleanup_service(svc, svc_task, sc)
+
+
+@pytest.mark.asyncio
+async def test_collect_with_focus_position_drives_it_verbatim():
+    """A task that states a focus gets exactly that focus — nothing else applied.
+
+    Stating a focus IS the request to preserve it (manual/interactive capture, or a V-curve
+    sweep step): no filter offset and no FocusCorrection may be folded in.
+    """
+    commanded: list[float] = []
+    focus_called = asyncio.Event()
+    capture_called = asyncio.Event()
+
+    mount = declare_device(name="mock-mount")
+    camera = declare_device(name="mock-camera")
+    focuser = declare_device(name="mock-focuser")
+
+    @command_handler(mount)
+    async def handle_init(cmd: Init):
+        pass
+
+    @command_handler(mount)
+    async def handle_follow(cmd: FollowTarget):
+        pass
+
+    @command_handler(mount)
+    async def handle_stop(cmd: Stop):
+        pass
+
+    @command_handler(focuser)
+    async def handle_focus(cmd: ChangeFocusPosition):
+        commanded.append(cmd.position)
+        focus_called.set()
+
+    @command_handler(camera)
+    async def handle_capture(cmd: CameraCapture):
+        capture_called.set()
+
+    config = SensorConfig(
+        controller_name="test-sensor",
+        devices=SensorDevices(
+            mount="mock-mount",
+            camera="mock-camera",
+            focuser="mock-focuser",
+        ),
+        site_position=_site(),
+    )
+    sc = SensorControl(config=config)
+    svc = Service("test-collect-focus", "0.1.0")
+    svc.add(mount)
+    svc.add(camera)
+    svc.add(focuser)
+    svc.include(sc, name="test-sensor")
+
+    svc_task = await run_service(svc)
+    try:
+        cli = svc.client.controller("test-sensor")
+        await cli.enable()
+        await cli.execute_task(
+            InitTask(task_id=uuid.uuid4(), controller_id="test-sensor")
+        )
+        await asyncio.sleep(0.2)
+
+        _bypass_pointing_monitor(sc)
+
+        await cli.execute_task(
+            StandardCollectTask(
+                task_id=uuid.uuid4(),
+                controller_id="test-sensor",
+                target=ICRSTarget(coords=Equatorial(ra=0.0, dec=0.0)),
+                camera_params=CameraParameterSet(
+                    integration_time_seconds=0.1,
+                    frame_count=1,
+                ),
+                focus_position=25123.0,
+                end_time=datetime(2099, 1, 1, tzinfo=timezone.utc),
+            )
+        )
+
+        async with asyncio.timeout(10.0):
+            await focus_called.wait()
+            await capture_called.wait()
+
+        assert commanded == [25123.0]
+    finally:
+        await cleanup_service(svc, svc_task, sc)
+
+
+@pytest.mark.asyncio
+async def test_collect_without_focus_position_is_managed():
+    """A task with no focus is managed; with no published base the focuser is left alone."""
+    commanded: list[float] = []
+    capture_called = asyncio.Event()
+
+    mount = declare_device(name="mock-mount")
+    camera = declare_device(name="mock-camera")
+    focuser = declare_device(name="mock-focuser")
+
+    @command_handler(mount)
+    async def handle_init(cmd: Init):
+        pass
+
+    @command_handler(mount)
+    async def handle_follow(cmd: FollowTarget):
+        pass
+
+    @command_handler(mount)
+    async def handle_stop(cmd: Stop):
+        pass
+
+    @command_handler(focuser)
+    async def handle_focus(cmd: ChangeFocusPosition):
+        commanded.append(cmd.position)
+
+    @command_handler(camera)
+    async def handle_capture(cmd: CameraCapture):
+        capture_called.set()
+
+    config = SensorConfig(
+        controller_name="test-sensor",
+        devices=SensorDevices(
+            mount="mock-mount",
+            camera="mock-camera",
+            focuser="mock-focuser",
+        ),
+        site_position=_site(),
+    )
+    sc = SensorControl(config=config)
+    svc = Service("test-collect-managed", "0.1.0")
+    svc.add(mount)
+    svc.add(camera)
+    svc.add(focuser)
+    svc.include(sc, name="test-sensor")
+
+    svc_task = await run_service(svc)
+    try:
+        cli = svc.client.controller("test-sensor")
+        await cli.enable()
+        await cli.execute_task(
+            InitTask(task_id=uuid.uuid4(), controller_id="test-sensor")
+        )
+        await asyncio.sleep(0.2)
+
+        _bypass_pointing_monitor(sc)
+
+        await cli.execute_task(
+            StandardCollectTask(
+                task_id=uuid.uuid4(),
+                controller_id="test-sensor",
+                target=ICRSTarget(coords=Equatorial(ra=0.0, dec=0.0)),
+                camera_params=CameraParameterSet(
+                    integration_time_seconds=0.1,
+                    frame_count=1,
+                ),
+                end_time=datetime(2099, 1, 1, tzinfo=timezone.utc),
+            )
+        )
+
+        async with asyncio.timeout(10.0):
+            await capture_called.wait()
+
+        assert commanded == []  # no base published -> nothing to drive to
     finally:
         await cleanup_service(svc, svc_task, sc)
 

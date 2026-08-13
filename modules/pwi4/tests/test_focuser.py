@@ -97,6 +97,6 @@ class TestPWI4Focuser:
 
         await focuser.status_publish()
 
-        assert (await published.wait_for(FocusPosition)).position == 15000.0
+        assert (await published.wait_for(FocusPosition)).current_position == 15000.0
         assert focuser.device_connected is True
         assert published.keys() >= {"Connected", "Enabled", "FocusPosition"}

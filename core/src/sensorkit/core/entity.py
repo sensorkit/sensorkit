@@ -4,8 +4,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import uuid
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Callable, ClassVar, Coroutine, Literal
 
 from loguru import logger
 from pydantic import BaseModel, PlainSerializer, PlainValidator, ValidationError
@@ -16,6 +17,7 @@ from sensorkit.backend.request import (
     Call,
     ExtendedCall,
     ExtendedHandlerFunc,
+    ExtendedResponse,
     HandlerFunc,
     Request,
 )
@@ -26,6 +28,7 @@ from sensorkit.common.keyword import (
     get_keyword_info,
     validate_keyword_json,
 )
+from sensorkit.common.model import ModelRegistry, RegistryBaseModel
 from sensorkit.core.trait import match_archetype, match_traits
 from sensorkit.data.graph import DataGraph
 
@@ -116,6 +119,65 @@ class EntityBase:
                     yield model_type.model_validate_json(entry.value)
 
 
+# --- Commands -------------------------------------------------------------------------------
+# Command vocabulary lives here, on the entity layer, rather than in core.device: every entity
+# can now receive commands, and both the client (EntityClient.command, below) and the impl
+# (EntityImpl) reference these. core.device re-exports them for back-compat.
+
+
+class DeviceCommand(RegistryBaseModel):
+    """Base Command model. (Historically device-only; named for back-compat.)"""
+
+    command_id: str = None
+
+    registry: ClassVar[ModelRegistry[DeviceCommand]] = ModelRegistry(discriminator="command_id")
+
+    @classmethod
+    def model_registry(cls):
+        return cls.registry
+
+
+type CommandHandlerCallback = Callable[[DeviceCommand], Coroutine[Any, Any, BaseModel | None]]
+
+
+class Abort(DeviceCommand):
+    """Built-in abort command."""
+
+
+class CommandStarted(Event):
+    """Event indicating a Command has been accepted and execution has begun."""
+
+    command_id: str
+    call_id: uuid.UUID
+
+
+class CommandDone(Event):
+    """Event indicating a Command has finished execution."""
+
+    command_id: str
+    call_id: uuid.UUID
+    success: bool
+
+
+class CommandRequestMessage(BaseModel):
+    """Message model representing a Command execution request."""
+
+    command: DeviceCommand
+
+
+class CommandResult(BaseModel):
+    """Message model representing a response to a Command execution request."""
+
+    data: Any
+
+
+run_command_request = Request.define(
+    "command",
+    payload=CommandRequestMessage,
+    result=CommandResult,
+)
+
+
 class EntityClient(EntityBase):
     """Object that exposes client-side functionality of an entity."""
 
@@ -123,6 +185,10 @@ class EntityClient(EntityBase):
         super().__init__(sensorkit, entity)
         self._online_monitor: asyncio.Task | None = None
         self._online_observer = AsyncObserver(False)
+
+    def command(self, command: DeviceCommand) -> Call[ExtendedResponse, CommandResult]:
+        """Send a command to this entity and return a Call tracking the result."""
+        return self.call(run_command_request, CommandRequestMessage(command=command))
 
     async def _monitor_online_state(self):
         stream = await self._kv.monitor("EntityLease")

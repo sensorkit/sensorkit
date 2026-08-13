@@ -52,7 +52,9 @@ def compute_quadrupole_moments(
     for det in detections:
         xc = det.x
         yc = det.y
-        snr = det.snr if hasattr(det, "snr") else 0.0
+        # SENPAI's detection-stage stars carry snr=None (only the catalog-matched list has
+        # real SNRs) — coerce to 0 so downstream weighting floors it rather than crashing.
+        snr = float(getattr(det, "snr", 0) or 0.0)
 
         # Bounds check
         x0 = max(int(xc - half_box), 0)
@@ -101,14 +103,16 @@ def compute_quadrupole_moments(
         # Estimate FWHM from moments
         source_fwhm = 2.355 * math.sqrt(trace / 2.0)
 
-        sources.append(SourceMeasurement(
-            x=xc,
-            y=yc,
-            fwhm_px=source_fwhm,
-            e1=e1,
-            e2=e2,
-            snr=snr,
-        ))
+        sources.append(
+            SourceMeasurement(
+                x=xc,
+                y=yc,
+                fwhm_px=source_fwhm,
+                e1=e1,
+                e2=e2,
+                snr=snr,
+            )
+        )
 
     return sources
 
@@ -116,15 +120,27 @@ def compute_quadrupole_moments(
 def determine_defocus_sign(
     sources: list[SourceMeasurement],
     image_center: tuple[float, float],
+    threshold: float = 0.02,
 ) -> int:
     """Determine defocus direction from radial ellipticity pattern.
 
     Intra-focal defocus produces positive radial ellipticity (stars
     elongated radially), extra-focal produces negative (tangential).
 
+    The signal comes from FIELD-DEPENDENT astigmatism and grows as the SQUARE of field
+    radius — a frame-center star carries ~zero direction information but full measurement
+    noise (per-star ellipticity scatter is ~0.1 even for bright stars). So the inner field
+    is excluded outright, and the rest is weighted by (r/r_max)^2 — matched to the signal's
+    field law — times an SNR term CAPPED so a single bright star (typically the on-axis
+    target, exactly where the signal vanishes) cannot dominate the mean.
+
     Args:
         sources: Source measurements with quadrupole ellipticities.
         image_center: (x, y) center of the image.
+        threshold: Minimum |leverage-weighted mean radial ellipticity| to call a direction.
+            Depends on how much field-dependent aberration the optics have (a
+            constant-orientation astigmatism averages toward zero over a full field), so it
+            is tunable per sensor.
 
     Returns:
         +1 for intra-focal, -1 for extra-focal, 0 for indeterminate.
@@ -133,16 +149,21 @@ def determine_defocus_sign(
         return 0
 
     cx, cy = image_center
+    r_max = math.hypot(cx, cy)  # center to corner
+    if r_max <= 0:
+        return 0
+
     weighted_er_sum = 0.0
     weight_sum = 0.0
 
     for src in sources:
         dx = src.x - cx
         dy = src.y - cy
-        r = math.sqrt(dx * dx + dy * dy)
+        r = math.hypot(dx, dy)
 
-        # Skip sources too close to center (position angle is noisy)
-        if r < 10.0:
+        # Inner field: no signal (it grows as r^2), pure noise — and the position angle is
+        # ill-defined near the center anyway.
+        if r < 0.15 * r_max:
             continue
 
         # Position angle from center to star
@@ -151,8 +172,8 @@ def determine_defocus_sign(
         # Radial ellipticity: project (e1, e2) onto the radial direction
         e_r = src.e1 * math.cos(2.0 * theta) + src.e2 * math.sin(2.0 * theta)
 
-        # Weight by SNR
-        w = max(src.snr, 1.0)
+        # Leverage weighting matched to the r^2 field law, with capped SNR
+        w = (r / r_max) ** 2 * min(max(src.snr, 1.0), 20.0)
         weighted_er_sum += e_r * w
         weight_sum += w
 
@@ -162,9 +183,9 @@ def determine_defocus_sign(
     mean_er = weighted_er_sum / weight_sum
 
     # Threshold to declare a direction
-    if mean_er > 0.02:
+    if mean_er > threshold:
         return 1  # intra-focal
-    elif mean_er < -0.02:
+    elif mean_er < -threshold:
         return -1  # extra-focal
     else:
         return 0  # indeterminate
@@ -175,6 +196,7 @@ def compute_defocus_sign(
     image_shape: tuple[int, ...],
     detections: list,
     median_fwhm_px: float,
+    threshold: float = 0.02,
 ) -> int:
     """Compute defocus sign from image data and point-source detections.
 
@@ -183,6 +205,8 @@ def compute_defocus_sign(
         image_shape: Shape of the image (height, width).
         detections: Objects with x, y, snr attributes.
         median_fwhm_px: Median FWHM in pixels for Gaussian weighting.
+        threshold: Minimum |mean radial ellipticity| to call a direction (see
+            determine_defocus_sign).
 
     Returns:
         +1 for intra-focal, -1 for extra-focal, 0 for indeterminate.
@@ -192,7 +216,7 @@ def compute_defocus_sign(
     if not sources:
         return 0
     image_center = (image_shape[1] / 2.0, image_shape[0] / 2.0)
-    return determine_defocus_sign(sources, image_center)
+    return determine_defocus_sign(sources, image_center, threshold)
 
 
 def fit_vcurve(data: list[tuple[float, float]]) -> VCurveFitResult:
@@ -209,7 +233,7 @@ def fit_vcurve(data: list[tuple[float, float]]) -> VCurveFitResult:
     """
     positions = np.array([d[0] for d in data])
     fwhm_values = np.array([d[1] for d in data])
-    fwhm_sq = fwhm_values ** 2
+    fwhm_sq = fwhm_values**2
 
     def parabola(p, a, p_opt, b):
         return a * (p - p_opt) ** 2 + b
@@ -221,11 +245,13 @@ def fit_vcurve(data: list[tuple[float, float]]) -> VCurveFitResult:
     # Rough slope from spread
     pos_range = positions.max() - positions.min()
     fwhm_sq_range = fwhm_sq.max() - fwhm_sq.min()
-    a0 = fwhm_sq_range / (pos_range ** 2 / 4.0) if pos_range > 0 else 1e-6
+    a0 = fwhm_sq_range / (pos_range**2 / 4.0) if pos_range > 0 else 1e-6
 
     try:
         popt, _ = curve_fit(
-            parabola, positions, fwhm_sq,
+            parabola,
+            positions,
+            fwhm_sq,
             p0=[a0, p0_opt, b0],
             bounds=([0, positions.min(), 0], [np.inf, positions.max(), np.inf]),
         )
@@ -245,7 +271,9 @@ def fit_vcurve(data: list[tuple[float, float]]) -> VCurveFitResult:
     ss_tot = np.sum((fwhm_sq - np.mean(fwhm_sq)) ** 2)
     r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
-    fwhm_best = math.sqrt(max(b_fit, 0.0))
+    # The fitted vertex depth (b) is poorly constrained with steep arms + few bottom points and
+    # can pin to the b>=0 fit bound; report the best MEASURED FWHM as the achievable best focus.
+    fwhm_best = max(math.sqrt(max(b_fit, 0.0)), float(fwhm_values.min()))
 
     return VCurveFitResult(
         best_position=p_opt_fit,

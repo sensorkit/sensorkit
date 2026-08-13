@@ -49,6 +49,14 @@ class NodePlatformFocuser(NodePlatformDevice):
             while self.focuser_position is None:
                 await asyncio.sleep(self.config.status_frequency)
 
+        # Establish the configured base position — the anchor that per-filter offsets
+        # and FocusCorrection are relative to (published as FocusPosition.base_position).
+        if (
+            self.config.base_position is not None
+            and int(self.focuser_position) != int(self.config.base_position)
+        ):
+            await self.focuser_change(ChangeFocusPosition(position=self.config.base_position))
+
     @sk.on_detach
     async def entity_deinit(self):
         await asyncio.sleep(self.config.status_frequency)
@@ -101,7 +109,12 @@ class NodePlatformFocuser(NodePlatformDevice):
         device = sk.device()
         await device.publish(Connected(is_connected=status.connected))
         if self.focuser_position is not None:
-            await device.publish(FocusPosition(position=self.focuser_position))
+            await device.publish(
+                FocusPosition(
+                    base_position=self.config.base_position,
+                    current_position=self.focuser_position,
+                )
+            )
 
 
 class NodePlatformFocuserConfig(NodePlatformDeviceConfig[NodePlatformFocuser]):
@@ -110,6 +123,9 @@ class NodePlatformFocuserConfig(NodePlatformDeviceConfig[NodePlatformFocuser]):
     device_type: Literal["focuser"] = "focuser"
     status_frequency: float = 1.0
     timeout: float = 60.0
+    # Base focuser position: driven to at init; published as
+    # FocusPosition.base_position — the anchor for filter offsets and FocusCorrection.
+    base_position: float | None = None
 
     @override
     def create_device(self):

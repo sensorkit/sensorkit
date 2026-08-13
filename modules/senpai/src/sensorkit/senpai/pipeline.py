@@ -11,7 +11,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from sensorkit.senpai.models import Detection, Photometry, SenpaiResult
+from sensorkit.senpai.models import Detection, Photometry, SenpaiResult, Star
 
 # Importing the engine is noisy, and self-defeatingly so: `senpai` installs a
 # console handler on the root logger partway through (see `sensorkit.senpai`), and
@@ -51,6 +51,31 @@ def _obs_time(image) -> datetime | None:
         return datetime.fromisoformat(image.header["DATE-OBS"]).replace(tzinfo=UTC)
     except (KeyError, TypeError, ValueError):
         return None
+
+
+_PIPELINE_MODES = ("full", "detect_solve", "detect")
+
+
+def _requested_pipeline_mode(images) -> str | None:
+    """The pipeline mode a batch asks for via the AFMODE FITS card, else None.
+
+    Autofocus stamps AFMODE on its V-curve sweep frames so a sweep can be processed cheaply
+    while science batches keep the configured mode. Reading it from the frame is the only
+    option available: SENPAI is driven by a directory watcher, so nothing calls it with
+    arguments. Unrecognized or disagreeing values are ignored rather than guessed at — the
+    configured mode is always the safe fallback.
+    """
+    modes = {m for m in (im.header.get("AFMODE") for im in images) if m}
+    if not modes:
+        return None
+    if len(modes) > 1:
+        logger.warning(f"Batch requests conflicting AFMODE values {sorted(modes)}; ignoring")
+        return None
+    mode = str(next(iter(modes))).strip()
+    if mode not in _PIPELINE_MODES:
+        logger.warning(f"Ignoring unknown AFMODE {mode!r}; expected one of {_PIPELINE_MODES}")
+        return None
+    return mode
 
 
 class SenpaiPipeline:
@@ -97,7 +122,23 @@ class SenpaiPipeline:
         # line can report a duration on every path — SENPAI only fills in its own
         # compute_seconds on success, leaving nothing to report when a run fails.
         t0 = time.perf_counter()
-        senpai_run = process_senpai_collect(images)
+        # A batch may ask to be processed cheaply (autofocus stamps AFMODE on its sweep frames);
+        # anything else keeps this entity's configured mode. The kwarg is only passed when a
+        # mode was requested, so an astro-senpai predating the per-call override still runs
+        # every science batch normally — and says which card to drop if a sweep arrives.
+        requested_mode = _requested_pipeline_mode(images)
+        if requested_mode:
+            try:
+                senpai_run = process_senpai_collect(images, pipeline_mode=requested_mode)
+            except TypeError:
+                logger.warning(
+                    "This astro-senpai has no per-call pipeline_mode; processing the batch in "
+                    "the configured mode instead. Set the autofocus entity's "
+                    "vcurve.pipeline_mode to `full`, or upgrade astro-senpai."
+                )
+                senpai_run = process_senpai_collect(images)
+        else:
+            senpai_run = process_senpai_collect(images)
         elapsed = time.perf_counter() - t0
 
         # Generate annotated plots (WCS overlay, detections, etc.)
@@ -237,6 +278,15 @@ class SenpaiPipeline:
             if frame.seeing:
                 std_fwhm_pixels = frame.seeing.pixel_fwhm_stdev
 
+        # Field stars from the detection stage — present in every pipeline mode, unlike the
+        # catalog-pass `detections` below (bounded by astrometry.max_sources, so tiny).
+        # getattr-guarded: rate-frame starfields (and test fakes) may not carry the field.
+        stars: list[Star] = []
+        field_stars = getattr(frame.starfield, "detections", None) if frame.starfield else None
+        for s in field_stars or []:
+            if s.x is not None and s.y is not None:
+                stars.append(Star(x=s.x, y=s.y, snr=getattr(s, "snr", None)))
+
         # Extract photometry
         photometry = None
         if frame.photometry_summary:
@@ -326,6 +376,7 @@ class SenpaiPipeline:
             from_sequence=from_sequence,
             exposure_time_seconds=exposure,
             n_sources=len(detections),
+            stars=stars,
             median_fwhm_pixels=median_fwhm_pixels,
             std_fwhm_pixels=std_fwhm_pixels,
             pixel_scale_arcsec=pixel_scale_arcsec,

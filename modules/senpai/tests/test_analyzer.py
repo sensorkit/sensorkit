@@ -19,7 +19,7 @@ def pipeline(monkeypatch) -> FakePipeline:
     """Stand the SENPAI engine down so the analyzer runs against a recording pipeline."""
 
     fake = FakePipeline()
-    monkeypatch.setattr(analyzer_mod, "SenpaiPipeline", lambda *args: fake)
+    monkeypatch.setattr(analyzer_mod, "SenpaiPipeline", lambda *args, **kwargs: fake)
 
     return fake
 

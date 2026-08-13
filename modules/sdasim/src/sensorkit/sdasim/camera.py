@@ -282,9 +282,9 @@ class SdasimCamera:
         self._defocus_um = None
         focus = self._focuser_sub.cache.get(FocusPosition) if self._focuser_sub else None
         if focus is not None:
-            self._focus_position = focus.position
+            self._focus_position = focus.current_position
             self._defocus_um = (
-                focus.position - self.config.best_focus_position
+                focus.current_position - self.config.best_focus_position
             ) * self.config.microns_per_step
 
         exposure_start = datetime.now(UTC)

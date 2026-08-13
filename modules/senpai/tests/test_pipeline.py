@@ -91,7 +91,7 @@ def run_pipeline(
         "ProcessedFitsImage",
         SimpleNamespace(from_file_bytes=lambda data, file_path: images[file_path]),
     )
-    monkeypatch.setattr(pipeline_mod, "process_senpai_collect", lambda imgs: run)
+    monkeypatch.setattr(pipeline_mod, "process_senpai_collect", lambda imgs, **kwargs: run)
     monkeypatch.setattr(pipeline_mod, "final_plots", lambda run, out: None)
 
     return p.process_frames(inputs, from_sequence)
@@ -202,3 +202,46 @@ class TestProcessFrames:
         )
 
         assert [r.file_path for r in results] == ["a.fits"]
+
+
+# ---------------------------------------------------------------------------
+# AFMODE: a batch can request a cheaper pipeline mode via its FITS header
+# ---------------------------------------------------------------------------
+
+
+class _Img:
+    def __init__(self, **cards):
+        self.header = dict(cards)
+
+
+class TestRequestedPipelineMode:
+    """Reading the requested mode off the frames. Unsafe inputs fall back to configured."""
+
+    def test_reads_a_valid_request(self):
+        from sensorkit.senpai.pipeline import _requested_pipeline_mode
+
+        assert _requested_pipeline_mode([_Img(AFMODE="detect")]) == "detect"
+        assert _requested_pipeline_mode([_Img(AFMODE=" detect_solve ")]) == "detect_solve"
+
+    def test_science_frames_request_nothing(self):
+        from sensorkit.senpai.pipeline import _requested_pipeline_mode
+
+        assert _requested_pipeline_mode([_Img(), _Img(FOCUSPOS=25000.0)]) is None
+
+    def test_unknown_mode_is_ignored(self):
+        """Header content drives behaviour here, so an unrecognized value must not be guessed."""
+        from sensorkit.senpai.pipeline import _requested_pipeline_mode
+
+        assert _requested_pipeline_mode([_Img(AFMODE="turbo")]) is None
+
+    def test_conflicting_requests_are_ignored(self):
+        from sensorkit.senpai.pipeline import _requested_pipeline_mode
+
+        batch = [_Img(AFMODE="detect"), _Img(AFMODE="full")]
+        assert _requested_pipeline_mode(batch) is None
+
+    def test_agreeing_requests_across_a_batch_are_honoured(self):
+        from sensorkit.senpai.pipeline import _requested_pipeline_mode
+
+        batch = [_Img(AFMODE="detect"), _Img(AFMODE="detect"), _Img()]
+        assert _requested_pipeline_mode(batch) == "detect"

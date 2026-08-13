@@ -107,6 +107,13 @@ class StandardCollectTask(sk.CollectTask):
         target_id: Optional name or identifier of the object being observed. If not supplied,
             the handler may infer an identifier (e.g., NORAD ID for TLE targets, catalog name
             for catalog targets) on a per-target basis
+        focus_position: Optional focuser position (steps), and the switch between manual and
+            managed focus. When SET, the handler drives the focuser exactly here and applies
+            nothing else — no filter offset, no FocusCorrection — so a caller stating a focus
+            (a manual/interactive capture preserving the operator's focus, or one step of an
+            autofocus V-curve sweep) gets precisely what it asked for. When None, the capture is
+            managed: the handler drives base + the active filter's offset + the standing
+            FocusCorrection.
     """
 
     task_type: Literal["standard_collect"] = "standard_collect"
@@ -115,3 +122,4 @@ class StandardCollectTask(sk.CollectTask):
     end_time: datetime | None = None
     sidereal_frames: list[int] = Field(default_factory=list)
     target_id: str | None = None
+    focus_position: float | None = None

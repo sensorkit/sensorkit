@@ -73,10 +73,18 @@ class AlpacaFilterWheel(AlpacaDevice):
         await sk.device().publish(
             Filters(
                 filters=[
-                    Filter(name=name, position=i) for i, name in enumerate(self._filter_names)
+                    Filter(name=name, position=i, focus_offset=self._focus_offset(i))
+                    for i, name in enumerate(self._filter_names)
                 ]
             )
         )
+
+    def _focus_offset(self, position: int) -> float | None:
+        """Per-filter focus offset from config, paired with the wheel's filter positions."""
+        offsets = self.config.focus_offsets
+        if offsets is not None and position < len(offsets):
+            return offsets[position]
+        return None
 
     @sk.command_handler
     async def filter_wheel_connect(self, cmd: Connect):
@@ -136,13 +144,22 @@ class AlpacaFilterWheel(AlpacaDevice):
                 #     f"Alpaca filter wheel status: connected={connected}, position={position}"
                 # )
 
-                await device.publish(Filter(name=name, position=position))
+                await device.publish(
+                    Filter(
+                        name=name,
+                        position=position,
+                        focus_offset=self._focus_offset(position),
+                    )
+                )
 
 
 class AlpacaFilterWheelConfig(AlpacaDeviceConfig[AlpacaFilterWheel]):
     device_type: Literal["filter_wheel"] = "filter_wheel"
     status_frequency: float = 5.0
     timeout: float = 60.0
+    # Per-filter focus offsets [steps], paired positionally with the wheel's filter slots;
+    # published as Filter.focus_offset and applied by the controller at capture.
+    focus_offsets: list[float] | None = None
 
     @override
     def create_device(self):
