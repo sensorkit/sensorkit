@@ -16,6 +16,7 @@ from sensorkit.common.interval import (
     stack_interval_trees,
     stamp_interval_trees,
 )
+from sensorkit.common.logging import limited_logger
 from sensorkit.core.program import OfferInterval
 from sensorkit.core.task import TaskContextOverlay
 
@@ -95,7 +96,19 @@ class Scheduler:
 
         # Evaluate observing mode criteria. This gets us an IntervalTree for each configured
         # observing mode.
-        evaluated_modes = [mode.evaluate(mode_context) for mode in self.modes]
+        evaluated_modes = []
+
+        for mode in self.modes:
+            try:
+                intervals = mode.evaluate(mode_context)
+            except Exception as e:
+                exc_name = type(e).__name__
+                limited_logger(f"{mode.name}-{exc_name}", interval=300).warning(
+                    f"{exc_name} while evaluating mode {mode.name}: {e}"
+                )
+                intervals = IntervalTree()
+
+            evaluated_modes.append(intervals)
 
         # Get all the program offers for this Controller and sort them by configured priority.
         offers = sorted(
