@@ -155,12 +155,15 @@ class DemandProc(ABC):
                     self._aio_task.uncancel()
 
                 # Gracefully stop awaitables and SK tasks.
-                prereq_coro = asyncio.gather(
-                    *(future for future in self._cleanup_futures if not future.done()),
-                    *(
-                        self.lifecycle.controller.wait_for_task(task_id)
-                        for task_id in self._cleanup_tasks
+                prereq_coro = asyncio.wait_for(
+                    asyncio.gather(
+                        *(future for future in self._cleanup_futures if not future.done()),
+                        *(
+                            self.lifecycle.controller.wait_for_task(task_id)
+                            for task_id in self._cleanup_tasks
+                        ),
                     ),
+                    150,
                 )
 
                 # Run the user stop logic at the next iteration.
@@ -175,11 +178,14 @@ class DemandProc(ABC):
                 for fut in self._cleanup_futures:
                     fut.cancel("Demand procedure abort")
 
-                prereq_coro = asyncio.gather(
-                    *(
-                        self.lifecycle.controller.abort_task(task_id)
-                        for task_id in self._cleanup_tasks
-                    )
+                prereq_coro = asyncio.wait_for(
+                    asyncio.gather(
+                        *(
+                            self.lifecycle.controller.abort_task(task_id)
+                            for task_id in self._cleanup_tasks
+                        )
+                    ),
+                    15,
                 )
 
                 # Run the user abort logic at the next iteration.
@@ -635,7 +641,17 @@ class ControllerLifecycle:
         async def stop_logic(self):
             if self.demand.program:
                 try:
-                    await self.demand.program.stop_tasking()
+                    async with asyncio.timeout(150):
+                        await self.demand.program.stop_tasking()
+                except TimeoutError as e:
+                    # The procedure ends with this phase, so the abort rung has to be taken here.
+                    # The reactor is blocked awaiting us and cannot escalate on our behalf.
+                    logger.error("Program stop timed out, aborting tasking")
+
+                    with contextlib.suppress(Exception):
+                        await self.abort_logic()
+
+                    raise DemandProcError("Program stop timed out", kind="program") from e
                 except BaseException as e:
                     logger.error(f"Program stop logic failed with {type(e).__name__}: {e}")
                     raise
@@ -643,7 +659,11 @@ class ControllerLifecycle:
         @override
         async def abort_logic(self):
             if self.demand.program:
-                await self.demand.program.abort_tasking()
+                try:
+                    async with asyncio.timeout(5):
+                        await self.demand.program.abort_tasking()
+                except TimeoutError as e:
+                    raise DemandProcError("Program abort timed out", kind="program") from e
 
     class StandbyProc(DemandProc):
         """Drives the Controller to the STANDBY state."""
