@@ -169,7 +169,7 @@ indent-width = 4
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "B", "I"]
-ignore = ["E501", "E203", "B027", "B019"]
+ignore = ["E501", "E203", "E731", "B027", "B019"]
 unfixable = ["B"]
 
 [tool.ruff.lint.isort]
