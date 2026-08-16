@@ -18,7 +18,8 @@ class SenpaiConfig(BaseModel):
 sk.declare_config_section(
     "senpai",
     SenpaiConfig,
-    entity_mapper=lambda raw: raw.pop("id", "senpai"),
+    id_source="by_key",
+    id_default="senpai",
     service_path="sensorkit.senpai.service",
 )
 

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import pathlib
 
 import asyncclick as click
 import yaml
@@ -21,6 +23,33 @@ from sensorkit.config.parser import (
 @click.group("config")
 async def config_group():
     """Manage unified SensorKit configuration."""
+
+
+def config_error_message(e: Exception, file: str | None) -> str | None:
+    """Describe a configuration loading failure.
+
+    Args:
+        e: The exception raised while loading configuration.
+        file: The configuration file the command was given, if any.
+
+    Returns:
+        A message to report, or None if the exception is not a loading failure.
+    """
+    match e:
+        case FileNotFoundError():
+            return f"file not found: {file}"
+        case yaml.YAMLError():
+            return f"invalid YAML in {file}: {e}"
+        case ConfigVersionUnsupported():
+            return f"unsupported config version: {e}"
+        case ConfigSectionUnknown():
+            return f"unknown config section: {e}"
+        case ConfigError():
+            return f"config processing failed: {e}"
+        case ValidationError():
+            return f"config validation failed: {e}"
+        case _:
+            return None
 
 
 async def get_changed_ekv(
@@ -89,23 +118,11 @@ async def config_load(kit, *, file: str | None, force: bool, dry_run: bool, verb
     try:
         sk.set_config_location(file)
         config = await sk.load_config()
-    except FileNotFoundError:
-        console.print(f"[bold red]ERROR: file not found: {file}[/bold red]")
-        return
-    except yaml.YAMLError as e:
-        console.print(f"[bold red]ERROR: invalid YAML in {file}: {e}[/bold red]")
-        return
-    except ConfigVersionUnsupported as e:
-        console.print(f"[bold red]ERROR: unsupported config version: {e}[/bold red]")
-        return
-    except ConfigSectionUnknown as e:
-        console.print(f"[bold red]ERROR: unknown config section: {e}[/bold red]")
-        return
-    except ConfigError as e:
-        console.print(f"[bold red]ERROR: config processing failed: {e}[/bold red]")
-        return
-    except ValidationError as e:
-        console.print(f"[bold red]ERROR: config validation failed: {e}[/bold red]")
+    except Exception as e:
+        if (message := config_error_message(e, file)) is None:
+            raise
+
+        console.print(f"[bold red]ERROR: {message}[/bold red]")
         return
 
     ekv = config.entity_kv
@@ -144,3 +161,32 @@ async def config_load(kit, *, file: str | None, force: bool, dry_run: bool, verb
         print_ekv(config.entity_kv, status=status, show_values=verbose >= 2)
     elif updated := sum(len(models) for models in ekv.values()):
         console.print(f"[green]{updated}[/green] updated keys for [red]{len(ekv)}[/red] entities")
+
+
+@config_group.command("schema")
+@click.option("-c", "--config", "file", help="Config file naming the modules to describe")
+@click.option("-o", "--output", help="Write the schema to FILE instead of standard output")
+async def config_schema(*, file: str | None, output: str | None):
+    """Generate a JSON Schema for the unified configuration file.
+
+    Sections are contributed by modules, so the schema describes the ones imported for this
+    run. Point at a config file (or set SENSORKIT_CONFIG) to cover a whole site, including
+    the sections its own modules register.
+    """
+    try:
+        sk.set_config_location(file)
+        await sk.import_modules(fail_policy="warn")
+    except Exception as e:
+        if (message := config_error_message(e, file)) is None:
+            raise
+
+        console.print(f"[bold red]ERROR: {message}[/bold red]")
+        return
+
+    document = json.dumps(sk.config_json_schema(), indent=2)
+
+    if output:
+        pathlib.Path(output).write_text(f"{document}\n")
+        console.print(f"[green]{output}[/green] written")
+    else:
+        click.echo(document)

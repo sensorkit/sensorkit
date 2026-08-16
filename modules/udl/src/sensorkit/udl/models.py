@@ -186,7 +186,6 @@ class UDLConfig(BaseModel):
 sk.declare_config_section(
     "udl",
     list[UDLConfig],
-    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
-    model_mapper=iter,
+    id_source="by_subkey",
     service_path="sensorkit.udl.service",
 )

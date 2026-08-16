@@ -37,10 +37,10 @@ class TestSdasimCameraConfig:
 
 
 class TestSdasimSection:
-    def test_unified_list_form_pops_id(self):
-        # Mirrors the entity_mapper contract: a flat list of camera entries, each
-        # with an `id` popped for the entity name; the rest validates as a camera
-        # config. One entry == one camera == one service (delegate entity).
+    def test_unified_list_form_names_each_camera(self):
+        # Mirrors the by_subkey contract: a flat list of camera entries, each naming its
+        # entity with `id`; the entry validates as a camera config with the key still in
+        # place. One entry == one camera == one service (delegate entity).
         raw = [
             {
                 "id": "sdasimCameraAlpaca",
@@ -55,7 +55,7 @@ class TestSdasimSection:
                 "mount_entity": "PWI4Telescope",
             },
         ]
-        ids = [elem.pop("id") for elem in raw]
+        ids = [elem["id"] for elem in raw]
         assert ids == ["sdasimCameraAlpaca", "sdasimCameraPWI4"]
 
         parsed = TypeAdapter(list[SdasimCameraConfig]).validate_python(raw)

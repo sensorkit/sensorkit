@@ -9,6 +9,7 @@ This page covers the file format, how to load and update configuration, and the 
 A minimal but realistic example:
 
 ```yaml
+# yaml-language-server: $schema=https://sensorkit.github.io/main/config-schema.json
 version: 1
 
 sensorkit:
@@ -42,6 +43,7 @@ pwi4:
 # The sensor controller: devices composed into one instrument
 sensors:
   - id: MySensor
+    controller_name: MySensor
     devices:
       mount: MyMount
       camera: MyCamera
@@ -141,6 +143,23 @@ sensorkit config load sensorkit.yaml -f     # write everything, even unchanged k
 ```bash
 sensorkit go -c sensorkit.yaml -l
 ```
+
+## Editor support
+
+SensorKit publishes a JSON Schema covering the core sections and every built-in module. Reference it from the top of your config file to get completion and inline validation as you edit. In VS Code, with the YAML extension installed:
+
+```yaml
+# yaml-language-server: $schema=https://sensorkit.github.io/main/config-schema.json
+version: 1
+```
+
+Sites running their own plugins can generate a schema that also covers the sections those plugins register:
+
+```bash
+sensorkit config schema -c sensorkit.yaml -o sensorkit.schema.json
+```
+
+`sensorkit config load -n` remains the full check, covering the cross-field rules the models enforce.
 
 ## Data flow
 

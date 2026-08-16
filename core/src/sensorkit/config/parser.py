@@ -102,7 +102,7 @@ def _validate_mapper_return_value[T](value: Any, expected_type: type[T]) -> tupl
 
 def _parse_section(section: ConfigSection, value: Any) -> Iterable[tuple[str, BaseModel]]:
     try:
-        ids = _validate_mapper_return_value(section.entity_mapper(value), str)
+        ids = _validate_mapper_return_value(section.id_mapper(value), str)
     except Exception as e:
         raise ConfigError(f"Error in config section {section.key!r} (id mapper error)") from e
 

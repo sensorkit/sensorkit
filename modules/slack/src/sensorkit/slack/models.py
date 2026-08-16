@@ -56,6 +56,7 @@ class SlackConfig(BaseModel):
 sk.declare_config_section(
     "slack",
     SlackConfig,
-    entity_mapper=lambda raw: raw.pop("id", "slack"),
+    id_source="by_key",
+    id_default="slack",
     service_path="sensorkit.slack.service",
 )

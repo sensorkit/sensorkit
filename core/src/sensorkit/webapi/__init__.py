@@ -7,7 +7,8 @@ from .fastapi import WebAPI, WebAPIConfig
 sk.declare_config_section(
     "webapi",
     WebAPIConfig,
-    entity_mapper=lambda raw: raw.pop("id", "webapi"),
+    id_source="by_key",
+    id_default="webapi",
     service_path=__name__,
 )
 
