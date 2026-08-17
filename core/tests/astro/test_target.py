@@ -23,6 +23,7 @@ from sensorkit.astro.target import (
     ObserveWindow,
     StateVectorTarget,
     Target,
+    TargetTrack,
     TLETarget,
     altitude_mask,
     is_observable,
@@ -257,11 +258,20 @@ async def test_adapt_raises_when_unsupported():
 
 
 @pytest.mark.asyncio
-async def test_adapt_requires_observer_for_propagation():
-    """adapt() raises AssertionError when propagation is needed but observer is absent."""
+async def test_adapt_requires_observer_for_observer_relative_frame():
+    """adapt() rejects an observer-relative frame when no observer was given."""
     target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
-    with pytest.raises(AssertionError):
+    with pytest.raises(RuntimeError, match="observer location is required"):
         await target.adapt((EphemerisTarget, ReferenceFrame.CIRF))
+
+
+@pytest.mark.asyncio
+async def test_adapt_allows_geocentric_frame_without_observer():
+    """A geocentric frame needs no observer, so adapt() propagates without one."""
+    target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
+    eph = await target.adapt((EphemerisTarget, ReferenceFrame.GCRF))
+    assert isinstance(eph, EphemerisTarget)
+    assert eph.points
 
 
 @pytest.mark.asyncio
@@ -415,3 +425,85 @@ async def test_adapt_state_vector_to_ephemeris():
     assert result.frame == ReferenceFrame.CIRF
     assert len(result.jds) > 0
     assert len(result.points) == len(result.jds)
+
+
+@pytest.mark.asyncio
+async def test_adapt_to_track_binds_observing_context():
+    """adapt() hands back a track already bound to the requested frame and observer."""
+    target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
+    track = await target.adapt(
+        ICRSTarget,
+        (TargetTrack, ReferenceFrame.CIRF),
+        observer=_OBSERVER,
+    )
+    assert isinstance(track, TargetTrack)
+    assert track.frame == ReferenceFrame.CIRF
+    assert track.observer is _OBSERVER
+
+
+@pytest.mark.asyncio
+async def test_adapt_prefers_track_over_ephemeris():
+    """A consumer accepting both gets the track, which imposes no bound on the dwell."""
+    target = TLETarget(tle=_ISS_TLE)
+    result = await target.adapt(
+        (EphemerisTarget, ReferenceFrame.ICRF),
+        (TargetTrack, ReferenceFrame.ICRF),
+        observer=_OBSERVER,
+    )
+    assert isinstance(result, TargetTrack)
+
+
+@pytest.mark.asyncio
+async def test_adapt_fixed_target_to_track_is_unsupported():
+    """A target with no trajectory reports that it cannot be adapted, not that it is unimplemented."""
+    target = AltAzTarget(coords=Horizontal(az=90.0, alt=45.0))
+    with pytest.raises(RuntimeError, match="Could not adapt"):
+        await target.adapt((TargetTrack, ReferenceFrame.ICRF), observer=_OBSERVER)
+
+
+@pytest.mark.asyncio
+async def test_track_sample_matches_ephemeris_target():
+    """A track samples the same points the equivalent EphemerisTarget is built from."""
+    start = datetime(2025, 1, 15, 9, 32, 0, tzinfo=UTC)
+    window = dict(duration=timedelta(seconds=30), step=timedelta(seconds=10))
+    target = TLETarget(tle=_ISS_TLE)
+
+    track = target.to_track(ReferenceFrame.ICRF, _OBSERVER)
+    jds, points = await track.sample(start, **window)
+    eph = await target.to_ephemeris_target(
+        start_time=start, frame=ReferenceFrame.ICRF, observer=_OBSERVER, **window
+    )
+
+    assert jds == list(eph.jds)
+    assert [(p.ra, p.dec) for p in points] == [(p.ra, p.dec) for p in eph.points]
+
+
+@pytest.mark.asyncio
+async def test_track_stream_yields_successive_windows_covering_the_present():
+    """Each window starts at or before the moment it is produced, and advances in time."""
+    track = TLETarget(tle=_ISS_TLE).to_track(ReferenceFrame.ICRF, _OBSERVER)
+    windows = []
+
+    async for jds, points in track.stream(
+        window=timedelta(seconds=2), step=timedelta(seconds=1), lead=timedelta(seconds=1.9)
+    ):
+        assert len(points) == len(jds)
+        assert jds[0] <= Time.now().jd
+        windows.append(jds)
+
+        if len(windows) == 2:
+            break
+
+    assert windows[1][0] > windows[0][0]
+
+
+@pytest.mark.asyncio
+async def test_track_stream_rejects_lead_longer_than_window():
+    """A lead that leaves no time to consume a window is rejected."""
+    track = TLETarget(tle=_ISS_TLE).to_track(ReferenceFrame.ICRF, _OBSERVER)
+    stream = track.stream(
+        window=timedelta(seconds=10), step=timedelta(seconds=1), lead=timedelta(seconds=10)
+    )
+
+    with pytest.raises(ValueError, match="lead must be shorter"):
+        await anext(stream)

@@ -328,10 +328,10 @@ def _to_sk_ratetarget(
     arcsec/s (burr's unit, stored in `Rates`) to deg/s (sensorkit's
     `Coordinates` unit convention). The frame label on the returned
     `RateTarget` is set by `frame`: ICRF is what pwi4 accepts, CIRF
-    is what node_platform accepts. Picking the wrong one sends the
-    target through sensorkit's BaseTarget.adapt() → to_ephemeris_target()
-    path, which is unimplemented for RateTarget. AltAz/Lunar inputs are
-    converted using the provided `site` and `initial_time`.
+    is what node_platform accepts. Picking the wrong one leaves the
+    mount with no accepted form of the target, since a RateTarget
+    cannot be propagated, and BaseTarget.adapt() rejects it. AltAz/Lunar
+    inputs are converted using the provided `site` and `initial_time`.
 
     Parameters
     ----------
