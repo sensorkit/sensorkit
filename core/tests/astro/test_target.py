@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+import asyncio
+import itertools
 import math
 from datetime import UTC, datetime, timedelta
 
@@ -485,7 +487,7 @@ async def test_track_stream_yields_successive_windows_covering_the_present():
     windows = []
 
     async for jds, points in track.stream(
-        window=timedelta(seconds=2), step=timedelta(seconds=1), lead=timedelta(seconds=1.9)
+        window=timedelta(seconds=3), step=timedelta(seconds=1), lead=timedelta(seconds=1)
     ):
         assert len(points) == len(jds)
         assert jds[0] <= Time.now().jd
@@ -498,12 +500,114 @@ async def test_track_stream_yields_successive_windows_covering_the_present():
 
 
 @pytest.mark.asyncio
-async def test_track_stream_rejects_lead_longer_than_window():
-    """A lead that leaves no time to consume a window is rejected."""
-    track = TLETarget(tle=_ISS_TLE).to_track(ReferenceFrame.ICRF, _OBSERVER)
-    stream = track.stream(
-        window=timedelta(seconds=10), step=timedelta(seconds=1), lead=timedelta(seconds=10)
-    )
+async def test_track_stream_windows_leave_no_uncovered_interval():
+    """The next window begins before the samples of the previous one run out.
 
-    with pytest.raises(ValueError, match="lead must be shorter"):
+    A window that is not a whole number of steps ends at its last sample rather than at
+    the full span, and the next window has to be timed against that.
+    """
+    track = TLETarget(tle=_ISS_TLE).to_track(ReferenceFrame.ICRF, _OBSERVER)
+    windows = []
+
+    async for jds, _points in track.stream(
+        window=timedelta(seconds=5), step=timedelta(seconds=2), lead=timedelta(seconds=0.5)
+    ):
+        windows.append(jds)
+
+        if len(windows) == 3:
+            break
+
+    for previous, following in itertools.pairwise(windows):
+        assert following[0] <= previous[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lead", [timedelta(seconds=10), timedelta(seconds=9)])
+async def test_track_stream_rejects_lead_that_outruns_the_window(lead):
+    """A lead leaving no time to consume a window is rejected.
+
+    A lead shorter than the window can still consume all of it, since a window covers
+    its first sample onward and the next one is produced a step early.
+    """
+    track = TLETarget(tle=_ISS_TLE).to_track(ReferenceFrame.ICRF, _OBSERVER)
+    stream = track.stream(window=timedelta(seconds=10), step=timedelta(seconds=1), lead=lead)
+
+    with pytest.raises(ValueError, match="lead must leave at least one step"):
         await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_track_reuses_a_propagation_within_the_horizon():
+    """Windows inside the horizon are served without propagating again."""
+    target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
+    track = target.to_track(ReferenceFrame.ICRF, _OBSERVER)
+    propagations = 0
+    propagate = track.trajectory.propagate
+
+    async def counted(when):
+        nonlocal propagations
+        propagations += 1
+        return await propagate(when)
+
+    track.trajectory.propagate = counted
+    base = _GEO_SV.t + timedelta(minutes=1)
+
+    for minutes in range(0, 20, 2):
+        await track.sample(base + timedelta(minutes=minutes), timedelta(seconds=10), timedelta(seconds=5))
+
+    assert propagations == 1
+
+    await track.sample(base + timedelta(hours=2), timedelta(seconds=10), timedelta(seconds=5))
+    assert propagations == 2
+
+
+@pytest.mark.asyncio
+async def test_track_retries_after_a_failed_propagation():
+    """A propagation that fails leaves the track able to serve the window on a retry."""
+    target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
+    track = target.to_track(ReferenceFrame.ICRF, _OBSERVER)
+    base = _GEO_SV.t + timedelta(minutes=1)
+    window = dict(duration=timedelta(seconds=10), step=timedelta(seconds=5))
+
+    await track.sample(base, **window)
+
+    propagate = track.trajectory.propagate
+    failing = True
+
+    async def flaky(when):
+        if failing:
+            raise RuntimeError("propagator outage")
+
+        return await propagate(when)
+
+    track.trajectory.propagate = flaky
+
+    with pytest.raises(RuntimeError, match="propagator outage"):
+        await track.sample(base + timedelta(hours=5), **window)
+
+    failing = False
+    jds, points = await track.sample(base + timedelta(hours=2), **window)
+    assert len(points) == len(jds) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_samples_share_one_propagation():
+    """Consumers sampling the same track at once do not each pay for a propagation."""
+    target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
+    track = target.to_track(ReferenceFrame.ICRF, _OBSERVER)
+    propagations = 0
+    propagate = track.trajectory.propagate
+
+    async def counted(when):
+        nonlocal propagations
+        propagations += 1
+        return await propagate(when)
+
+    track.trajectory.propagate = counted
+    base = _GEO_SV.t + timedelta(minutes=1)
+
+    await asyncio.gather(*[
+        track.sample(base, timedelta(seconds=10), timedelta(seconds=5)) for _ in range(4)
+    ])
+
+    assert propagations == 1

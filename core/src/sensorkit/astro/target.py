@@ -182,6 +182,7 @@ class TargetTrack:
         self.propagation_horizon = propagation_horizon
         self._propagated: Trajectory | None = None
         self._propagated_until: datetime | None = None
+        self._propagating = asyncio.Lock()
 
     async def sample(
         self,
@@ -191,8 +192,9 @@ class TargetTrack:
     ) -> tuple[list[float], list[Coordinates]]:
         """Sample the track over a window, returning Julian dates and points in `frame`.
 
-        The first sample sits one *step* after *start_time*, and the last at
-        *start_time* plus *duration*.
+        The first sample sits one *step* after *start_time*, and samples run to the last
+        whole *step* within *duration*, which falls short of the full span where the two
+        do not divide evenly.
         """
         trajectory = await self._propagate_through(start_time + duration)
         location = self.observer.to_astropy() if self.observer else None
@@ -236,27 +238,39 @@ class TargetTrack:
         Raises:
             ValueError: If *lead* leaves no time to consume a window.
         """
-        if lead >= window:
-            raise ValueError("lead must be shorter than window")
+        # A window that is not a whole number of steps is covered only as far as its
+        # last sample, which is what the next window has to be timed against.
+        covered = (window // step) * step
+
+        if lead >= covered - step:
+            raise ValueError("lead must leave at least one step of the window to consume")
 
         while True:
             start = datetime.now(UTC) - step
             yield await self.sample(start, window, step)
 
-            delay = (start + window - lead - datetime.now(UTC)).total_seconds()
+            delay = (start + covered - lead - datetime.now(UTC)).total_seconds()
 
             if delay > 0:
                 await asyncio.sleep(delay)
 
     async def _propagate_through(self, until: datetime) -> Trajectory:
         """Return a trajectory propagated at least as far as *until*."""
-        if self._propagated is None or until > self._propagated_until:
-            self._propagated_until = until + self.propagation_horizon
+        async with self._propagating:
+            if self._propagated is not None and until <= self._propagated_until:
+                return self._propagated
+
+            horizon = until + self.propagation_horizon
             # Propagate from the original trajectory rather than the last result, which
             # would accumulate error over a long-running track.
-            self._propagated = await self.trajectory.propagate(self._propagated_until)
+            propagated = await self.trajectory.propagate(horizon)
 
-        return self._propagated
+            # Record the reach only once it is backed by a result, so a failed
+            # propagation leaves the previous one in place to be retried.
+            self._propagated = propagated
+            self._propagated_until = horizon
+
+            return propagated
 
 
 def _accepted_frame(
