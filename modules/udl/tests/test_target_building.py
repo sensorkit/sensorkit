@@ -100,3 +100,30 @@ class TestBuildTargetPriority:
         target = program._build_target(request)
 
         assert target is None
+
+
+class TestTrackMode:
+    """`type` -> sidereal frame indices (0-based). Free-string match, so the
+    same rules serve UDL and UDL-compliant endpoints alike."""
+
+    def test_rate_track_is_all_rate(self, program):
+        assert program._track_mode(tle_request(type="RATE TRACK", num_frames=3)) == []
+
+    def test_object_is_all_rate(self, program):
+        assert program._track_mode(tle_request(type="OBJECT", num_frames=4)) == []
+
+    def test_compound_type_is_last_frame_only(self, program):
+        # "RATE TRACK SIDEREAL": rate-track with only the final frame sidereal.
+        assert program._track_mode(tle_request(type="RATE TRACK SIDEREAL", num_frames=3)) == [2]
+
+    def test_stare_is_all_sidereal(self, program):
+        assert program._track_mode(tle_request(type="STARE", num_frames=3)) == [0, 1, 2]
+
+    def test_sidereal_is_all_sidereal(self, program):
+        assert program._track_mode(tle_request(type="SIDEREAL", num_frames=2)) == [0, 1]
+
+    def test_match_is_case_insensitive(self, program):
+        assert program._track_mode(tle_request(type="rate track sidereal", num_frames=5)) == [4]
+
+    def test_unrecognized_type_defaults_to_rate(self, program):
+        assert program._track_mode(tle_request(type="DWELL", num_frames=3)) == []

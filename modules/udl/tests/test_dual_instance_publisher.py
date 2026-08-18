@@ -141,8 +141,8 @@ def make_program(
         base_url=base_url,
         timeout=program.config.api.timeout,
     )
-    program._udl_username = "test"
-    program._udl_password = "test"
+    program._username = "test"
+    program._password = "test"
     if upload_base_url:
         program.upload_client = AsyncUnifieddatalibrary(
             username="test",
@@ -154,8 +154,8 @@ def make_program(
         program._upload_password = "test"
     else:
         program.upload_client = program.client
-        program._upload_username = program._udl_username
-        program._upload_password = program._udl_password
+        program._upload_username = program._username
+        program._upload_password = program._password
     program._site = SitePosition(
         latitude_degrees=36.06789,
         longitude_degrees=-115.121193,
@@ -191,7 +191,7 @@ async def publish_frames(
             )
 
         async with asyncio.timeout(timeout):
-            while program.frames_seen < num_frames:
+            while len(program._seen_frames) < num_frames:
                 await asyncio.sleep(0.05)
     finally:
         loop.cancel()
@@ -564,7 +564,7 @@ async def test_poll_from_a_respond_to_a_publish_to_b(
     3. Published SkyImagery goes to B (the upload endpoint), not A
     """
     # Poll instance A exactly as the background loop does
-    await polling_program._poll_collect_requests()
+    await fakes.poll_once(polling_program)
 
     assert seeded_collect_request.id in polling_program.tasks, (
         "Poller should have picked up the seeded request"
@@ -612,7 +612,7 @@ async def test_program_init_without_credentials(program: UDLProgram) -> None:
     assert program._client_headers == {"Authorization": omit}
 
     # An unauthenticated poll against the live instance must succeed. Use the
-    # same per-request headers the program applies in _poll_collect_requests;
+    # same per-request headers the program's poll loop applies;
     # without the omit the SDK raises before sending.
     await program.client.collect_requests.list(
         start_time=f"<{datetime.now(UTC):%Y-%m-%dT%H:%M:%S.%f}Z",

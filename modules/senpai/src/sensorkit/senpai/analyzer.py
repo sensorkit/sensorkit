@@ -18,9 +18,6 @@ from sensorkit.senpai import PRE_IMPORT_ROOT_HANDLERS
 from sensorkit.senpai.models import SenpaiConfig
 from sensorkit.senpai.pipeline import FrameInput, SenpaiPipeline
 
-# Default destination for the SENPAI engine's (stdlib `logging`) output.
-DEFAULT_ENGINE_LOG_PATH = "/opt/sk/senpai.log"
-
 # Libraries that bolt their *own* stderr handler on import (so they bypass the
 # root logger). We import them eagerly to strip those handlers.
 _OWN_HANDLER_LIBS = ("astropy", "astroquery")
@@ -83,7 +80,7 @@ def quiet_engine_logging() -> None:
     _drop_console(logging.getLogger("senpai"))
 
 
-def redirect_engine_logging(path: str = DEFAULT_ENGINE_LOG_PATH) -> None:
+def redirect_engine_logging(path: str) -> None:
     """Route the SENPAI engine's stdlib logging — and its astro deps — to a file.
 
     Every importer of this module already drops those records (see
@@ -94,6 +91,7 @@ def redirect_engine_logging(path: str = DEFAULT_ENGINE_LOG_PATH) -> None:
     """
     quiet_engine_logging()
 
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     file_handler = RotatingFileHandler(path, maxBytes=10 * 1024 * 1024, backupCount=5)
     file_handler.setFormatter(
         logging.Formatter(
@@ -152,7 +150,7 @@ class SenpaiAnalyzer:
     @sk.on_attach
     async def entity_init(self):
         self._entity = sk.entity()
-        redirect_engine_logging()
+        redirect_engine_logging(str(Path(self.config.senpai_output_dir) / "senpai_engine.log"))
         logger.info("Starting SenpaiAnalyzer")
         self._tasks.append(asyncio.create_task(self._process_frames()))
 

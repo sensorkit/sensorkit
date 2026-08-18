@@ -6,6 +6,7 @@ import math
 from datetime import UTC, datetime
 
 import pytest
+from unifieddatalibrary.types import CollectRequestFull
 
 from sensorkit.astro.common import AltAzPointing, SitePosition
 from sensorkit.senpai.models import Detection, SenpaiResult
@@ -18,13 +19,11 @@ from sensorkit.udl.models import (
 from sensorkit.udl.program import UDLProgram
 from sensorkit.udl.publishers import (
     EOObservationPublisher,
-    RequestSnapshot,
     _add_annual_aberration,
-    build_eo_observations,
-    convert_wcs_observation,
+    _to_udl_eoobservation,
 )
 
-from .fakes import FakeUDLClient, tle_request
+from .fakes import FakeUDLClient, make_collect_request, tle_request
 
 TIMESTAMP = datetime(2026, 3, 21, 7, 18, 47, 82000, tzinfo=UTC)
 
@@ -69,9 +68,9 @@ def make_result(
 
 
 @pytest.fixture
-def snapshot():
-    return RequestSnapshot(
-        request_id="test-request-001",
+def collect_request():
+    return make_collect_request(
+        id="test-request-001",
         classification_marking="U",
         data_mode="REAL",
         origin="TEST_ORG",
@@ -99,28 +98,40 @@ def site():
     )
 
 
-def build(result, snapshot, api_config, eo_config, site=None):
-    return build_eo_observations(result, snapshot, site=site, api=api_config, config=eo_config)
+def build(result, collect_request, api_config, eo_config, site=None):
+    """Publish through a stub program; returns the posted records ([] when nothing shipped)."""
+    program = UDLProgram()
+    program.config = UDLConfig(
+        controller="controller1",
+        api=api_config,
+        publish=PublishConfig(eo_observation=eo_config),
+    )
+    program._site = site
+    program.upload_client = FakeUDLClient()
+    publisher = EOObservationPublisher(program)
+    asyncio.run(publisher.publish(result, collect_request))
+    batches = program.upload_client.observations.eo_observations.batches
+    return batches[-1] if batches else []
 
 
-class TestConvertWcsObservation:
+class TestToUdlEOObservation:
     """UDL EO conventions: photon-arrival obTime, annual aberration added back."""
 
     def test_ob_time_is_photon_arrival_mid_exposure(self):
         result = make_result(exposure=4.0)
-        ob_time, _, _ = convert_wcs_observation(result, result.detections[0])
+        ob_time, _, _ = _to_udl_eoobservation(result, result.detections[0])
         assert ob_time == "2026-03-21T07:18:49.082000Z"
 
     def test_ob_time_without_exposure_is_frame_timestamp(self):
         result = make_result(exposure=None)
-        ob_time, _, _ = convert_wcs_observation(result, result.detections[0])
+        ob_time, _, _ = _to_udl_eoobservation(result, result.detections[0])
         assert ob_time == "2026-03-21T07:18:47.082000Z"
 
     def test_position_carries_annual_aberration(self):
         # Expected values are astropy's aberration of (210.5, -12.25) at the
         # mid-exposure epoch; the tolerance is the model's known residual.
         result = make_result()
-        _, ra, declination = convert_wcs_observation(result, result.detections[0])
+        _, ra, declination = _to_udl_eoobservation(result, result.detections[0])
         assert (ra, declination) != (210.5, -12.25)
         assert ra == pytest.approx(210.5046, abs=3e-4)
         assert declination == pytest.approx(-12.2516, abs=3e-4)
@@ -173,48 +184,48 @@ class TestAnnualAberration:
 
 
 class TestBuildEOObservations:
-    def test_required_fields_present(self, snapshot, api_config, eo_config):
-        [record] = build(make_result(), snapshot, api_config, eo_config)
+    def test_required_fields_present(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(), collect_request, api_config, eo_config)
         assert record["classification_marking"] == "U"
         assert record["data_mode"] == "REAL"
         assert record["source"] == "TEST_SOURCE"
         assert "ob_time" in record
 
-    def test_ob_time_is_mid_exposure(self, snapshot, api_config, eo_config):
-        [record] = build(make_result(exposure=4.0), snapshot, api_config, eo_config)
+    def test_ob_time_is_mid_exposure(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(exposure=4.0), collect_request, api_config, eo_config)
         assert record["ob_time"] == "2026-03-21T07:18:49.082000Z"
         assert record["exp_duration"] == 4.0
 
-    def test_ob_time_falls_back_to_timestamp(self, snapshot, api_config, eo_config):
-        [record] = build(make_result(exposure=None), snapshot, api_config, eo_config)
+    def test_ob_time_falls_back_to_timestamp(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(exposure=None), collect_request, api_config, eo_config)
         assert record["ob_time"] == "2026-03-21T07:18:47.082000Z"
         assert "exp_duration" not in record
 
-    def test_rate_mode_posts_points_only(self, snapshot, api_config, eo_config):
+    def test_rate_mode_posts_points_only(self, collect_request, api_config, eo_config):
         result = make_result(track_mode="RATE", kinds=("point", "streak", "streak_candidate"))
-        records = build(result, snapshot, api_config, eo_config)
+        records = build(result, collect_request, api_config, eo_config)
         assert len(records) == 1
 
-    def test_sidereal_mode_posts_confirmed_streaks_only(self, snapshot, api_config, eo_config):
+    def test_sidereal_mode_posts_confirmed_streaks_only(self, collect_request, api_config, eo_config):
         result = make_result(track_mode="SIDEREAL", kinds=("point", "streak", "streak_candidate"))
-        records = build(result, snapshot, api_config, eo_config)
+        records = build(result, collect_request, api_config, eo_config)
         assert len(records) == 1
 
-    def test_unknown_track_mode_posts_nothing(self, snapshot, api_config, eo_config):
-        assert build(make_result(track_mode="UNKNOWN"), snapshot, api_config, eo_config) == []
+    def test_unknown_track_mode_posts_nothing(self, collect_request, api_config, eo_config):
+        assert build(make_result(track_mode="UNKNOWN"), collect_request, api_config, eo_config) == []
 
-    def test_detection_without_radec_skipped(self, snapshot, api_config, eo_config):
+    def test_detection_without_radec_skipped(self, collect_request, api_config, eo_config):
         result = make_result(detections=[make_detection(ra=None, dec=None)])
-        assert build(result, snapshot, api_config, eo_config) == []
+        assert build(result, collect_request, api_config, eo_config) == []
 
-    def test_records_are_raw_uncorrelated_tracks(self, snapshot, api_config, eo_config):
-        [record] = build(make_result(), snapshot, api_config, eo_config)
+    def test_records_are_raw_uncorrelated_tracks(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(), collect_request, api_config, eo_config)
         assert record["uct"] is True
         assert "sat_no" not in record
         assert "id_on_orbit" not in record
 
-    def test_identity_and_provenance_fields(self, snapshot, api_config, eo_config):
-        [record] = build(make_result(), snapshot, api_config, eo_config)
+    def test_identity_and_provenance_fields(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(), collect_request, api_config, eo_config)
         # Position is the detection's, plus annual aberration (< 20.5");
         # TestConvertWcsObservation pins the correction itself.
         assert record["ra"] == pytest.approx(210.5, abs=0.006)
@@ -227,41 +238,40 @@ class TestBuildEOObservations:
         assert record["origin"] == "TEST_ORG"
         assert record["descriptor"] == "frame_0001.fits"
 
-    def test_site_fields(self, snapshot, api_config, eo_config, site):
-        [record] = build(make_result(), snapshot, api_config, eo_config, site=site)
+    def test_site_fields(self, collect_request, api_config, eo_config, site):
+        [record] = build(make_result(), collect_request, api_config, eo_config, site=site)
         assert record["senlat"] == 41.9168354
         assert record["senlon"] == -84.0290721
         assert record["senalt"] == 0.05
 
-    def test_no_site_fields_without_site(self, snapshot, api_config, eo_config):
-        [record] = build(make_result(), snapshot, api_config, eo_config, site=None)
+    def test_no_site_fields_without_site(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(), collect_request, api_config, eo_config, site=None)
         assert "senlat" not in record
 
     def test_none_values_stripped(self, api_config, eo_config):
-        snapshot = RequestSnapshot(
-            request_id="r1",
-            classification_marking="U",
-            data_mode=None,
-            origin=None,
-            task_id=None,
-        )
-        [record] = build(make_result(), snapshot, api_config, eo_config)
+        request = make_collect_request(id="r1", origin=None, task_id=None)
+        [record] = build(make_result(), request, api_config, eo_config)
         assert "origin" not in record
-        assert record["data_mode"] == "TEST"  # fallback, as with SkyImagery
+        assert "task_id" not in record
 
-    def test_mag_band_priority(self, snapshot, api_config):
+    def test_schema_violating_record_not_posted(self, api_config, eo_config):
+        # No dataMode and no fallback: schema validation drops the record.
+        request = CollectRequestFull.construct(**{"id": "r1", "classificationMarking": "U"})
+        assert build(make_result(), request, api_config, eo_config) == []
+
+    def test_mag_band_priority(self, collect_request, api_config):
         config = EOObservationPublishConfig(sequence_only=False, mag_bands=["G", "V"])
         det = make_detection(
             calibrated_magnitudes={"V": 12.34},
             magnitude_errs={"V": 0.05},
         )
-        [record] = build(make_result(detections=[det]), snapshot, api_config, config)
+        [record] = build(make_result(detections=[det]), collect_request, api_config, config)
         assert record["mag"] == 12.34
         assert record["mag_unc"] == 0.05
 
-    def test_instrumental_mag_never_posted(self, snapshot, api_config, eo_config):
+    def test_instrumental_mag_never_posted(self, collect_request, api_config, eo_config):
         det = make_detection(instrumental_mag=10.0, calibrated_magnitudes=None)
-        [record] = build(make_result(detections=[det]), snapshot, api_config, eo_config)
+        [record] = build(make_result(detections=[det]), collect_request, api_config, eo_config)
         assert "mag" not in record
 
 

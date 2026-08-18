@@ -95,7 +95,6 @@ class TestUDLConfig:
         assert config.poll_frequency == 10.0
         assert config.end_time_deadband_s == 0.0
         # Publishers are opt-in: with no blocks, nothing is delivered.
-        assert config.publish.upload is True
         assert config.publish.sky_imagery is None
         assert config.publish.eo_observation is None
 
@@ -111,10 +110,6 @@ class TestPublishConfig:
         assert config.eo_observation.sequence_only is True
         assert config.eo_observation.mag_bands == ["G"]
         assert config.eo_observation.save_path is None
-
-    def test_master_switch_default_on(self):
-        assert PublishConfig().upload is True
-
 
 class TestPollFilterConfig:
     def test_default_is_id_sensor(self):

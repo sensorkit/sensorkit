@@ -16,71 +16,53 @@ import math
 import re
 import time
 import zipfile
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
 from loguru import logger
+from pydantic import TypeAdapter, ValidationError
+from unifieddatalibrary.types.observations.eo_observation_unvalidated_publish_params import (
+    Body as EOObservationRecord,
+)
+from unifieddatalibrary.types.sky_imagery_get_response import (
+    SkyImageryGetResponse as SkyImageryRecord,
+)
 
 from sensorkit.backend.base import SpecialProperty, Subject
 from sensorkit.common.keyword import get_keyword_info, validate_keyword_json
 from sensorkit.data.filesys import FileInfo
 from sensorkit.senpai.models import Detection, SenpaiResult
 from sensorkit.udl.models import (
-    EOObservationPublishConfig,
-    UDLAPIConfig,
     UDLEndpointConfig,
 )
 
 if TYPE_CHECKING:
     from unifieddatalibrary.types import CollectRequestFull
 
-    from sensorkit.astro.common import SitePosition
     from sensorkit.udl.program import UDLProgram
 
 
 _LIGHT_AU_PER_DAY = 173.1446  # speed of light in AU/day
 
+# Both publishers build their records as plain dicts and both deliver through
+# filedrop ingests, which accept payloads without reporting validation results
+# synchronously — so UDL-schema compliance is enforced here, each record
+# validated against the SDK's transcription of the schema before anything
+# ships. (EO records use the SDK's snake_case body keys; SkyImagery metadata
+# uses camelCase wire keys, which the response model's aliases accept.)
+_EO_OBSERVATION_VALIDATOR = TypeAdapter(EOObservationRecord)
+_SKY_IMAGERY_VALIDATOR = TypeAdapter(SkyImageryRecord)
 
-def _udl_ts(dt: datetime) -> str:
+
+def _to_udl_timestamp(dt: datetime) -> str:
     """Format a datetime as UDL expects: ISO 8601 UTC with trailing 'Z' (no offset)."""
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-class Publisher(ABC):
-    """Base class for UDL data publishers."""
-
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Identifies this publisher in logs and error messages."""
-
-    async def start(self) -> None:
-        """Start any background machinery this publisher needs."""
-
-    @abstractmethod
-    async def publish(
-        self, context: dict, data: bytes, request: CollectRequestFull | None = None
-    ) -> None:
-        """Deliver one frame to the destination.
-
-        Args:
-            context: DataGraph sink metadata (task_id, frame_num, FileInfo, …).
-            data: Raw FITS bytes from the sink's async stream.
-            request: The CollectRequest the frame was collected for.
-        """
-
-    async def close(self) -> None:
-        """Release connections and resources."""
-
-
-# ── SkyImagery ──
-
-
-class SkyImageryPublisher(Publisher):
+class SkyImageryPublisher:
     """Uploads FITS frames to the UDL SkyImagery filedrop.
 
     Each frame is zipped together with a SkyImagery metadata JSON and POSTed as
@@ -91,10 +73,6 @@ class SkyImageryPublisher(Publisher):
     def __init__(self, program: UDLProgram):
         self._program = program
         self._config = program.config.publish.sky_imagery
-
-    @property
-    def name(self) -> str:
-        return "sky_imagery"
 
     async def publish(
         self, context: dict, data: bytes, request: CollectRequestFull | None = None
@@ -126,9 +104,10 @@ class SkyImageryPublisher(Publisher):
         metadata = {
             "classificationMarking": request.classification_marking,
             "idSensor": program.config.api.id_sensor,
+            "origSensorId": program.config.api.id_sensor,
             "satNo": request.sat_no,
-            "expStartTime": _udl_ts(exp_start_time),
-            "expEndTime": _udl_ts(exp_end_time),
+            "expStartTime": _to_udl_timestamp(exp_start_time),
+            "expEndTime": _to_udl_timestamp(exp_end_time),
             "imageSetLength": image_set_length,
             "sequenceId": sequence_id,
             "frameWidthPixels": context.get("image_width"),
@@ -138,8 +117,14 @@ class SkyImageryPublisher(Publisher):
             "filesize": len(data),
             "source": program.config.api.source,
             "origin": request.origin,
-            "dataMode": request.data_mode or "TEST",
+            "dataMode": request.data_mode,
             "imageType": context.get("image_type") or self._config.image_type,
+            # Correlate to the originating tasking: idRequest = this
+            # CollectRequest; taskId echoes the request's own taskId.
+            # Not yet in the published UDL schema (issue #12) — UDL's filedrop
+            # tolerates unknown fields until Bluestaq's addition lands.
+            "idRequest": request.id,
+            "taskId": request.task_id,
         }
 
         # imageSetId groups multiple frames of one collect into a set. Per UDL:
@@ -161,13 +146,17 @@ class SkyImageryPublisher(Publisher):
         # Remove None values
         metadata = {k: v for k, v in metadata.items() if v is not None}
 
+        # UDL-schema compliance before shipping (see module header). Raises so
+        # the program counts this frame as undelivered.
+        _SKY_IMAGERY_VALIDATOR.validate_python(metadata)
+
         metadata_bytes = json.dumps(metadata).encode()
         metadata_fname = f"{Path(filename).stem}_skyimagery.json"
 
         # Save locally if configured
         if self._config.save_path:
             await asyncio.to_thread(
-                self._save_archive_locally_sync,
+                self._save_locally,
                 request.id,
                 filename,
                 data,
@@ -182,12 +171,12 @@ class SkyImageryPublisher(Publisher):
             zf.writestr(filename, data)
         zip_buffer.seek(0)
 
-        await self._upload_skyimagery_zip(zip_buffer.getvalue())
+        await self._upload(zip_buffer.getvalue())
         logger.debug(
-            f"task ({request.id}) uploaded skyimagery ({sequence_id}/{image_set_length})"
+            f"task {request.id}: uploaded SkyImagery {sequence_id}/{image_set_length}"
         )
 
-    def _save_archive_locally_sync(
+    def _save_locally(
         self,
         task_id: str,
         data_fname: str,
@@ -199,38 +188,26 @@ class SkyImageryPublisher(Publisher):
         try:
             save_path = Path(self._config.save_path)
             save_path.mkdir(parents=True, exist_ok=True)
-            zip_path = save_path / f"{Path(data_fname).stem}.zip"
+            out_path = save_path / f"{Path(data_fname).stem}.zip"
 
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr(data_fname, data)
                 zf.writestr(metadata_fname, metadata_bytes)
 
-            logger.debug(f"task ({task_id}) saved archive to {zip_path}")
+            logger.debug(f"saved SkyImagery locally to {out_path} for task {task_id}")
         except Exception as e:
-            logger.warning(f"Task ({task_id}) failed to save archive locally: {e}")
+            logger.warning(f"Failed to save SkyImagery locally for task {task_id}: {e}")
 
-    def _upload_endpoint(self) -> UDLEndpointConfig:
-        """Effective endpoint settings for SkyImagery uploads.
+    def _resolve_upload_url(self, endpoint: UDLEndpointConfig) -> str:
+        """SkyImagery filedrop URL for the endpoint.
 
-        The separate upload endpoint when configured, the primary otherwise.
+        UDL proper serves the imagery filedrop on a dedicated subdomain, so the
+        known UDL hosts are mapped there. Any other configured base_url is
+        presumed to serve the UDL-compliant route itself.
         """
-        return self._program.config.api.upload or self._program.config.api
-
-    def _imagery_filedrop_url(self) -> str | None:
-        """Resolve the SkyImagery filedrop URL.
-
-        UDL serves the imagery filedrop on a dedicated subdomain. The SDK's
-        sky_imagery.upload_zip() only targets it correctly for the production
-        default; when base_url is overridden (e.g. the test environment) it
-        POSTs to '{base_url}/filedrop/udl-skyimagery', which 404s. We therefore
-        derive the correct host and POST the ZIP ourselves.
-
-        Returns None for hosts we don't recognise (custom UDL-compliant
-        endpoints), signalling the caller to fall back to the SDK's upload_zip().
-        """
-        base = self._upload_endpoint().base_url
+        base = endpoint.base_url
         if not base:
-            # SDK default → production UDL
+            # No override → production UDL
             return "https://imagery.unifieddatalibrary.com/filedrop/udl-skyimagery"
 
         host = base.rstrip("/").split("://", 1)[-1]
@@ -238,31 +215,18 @@ class SkyImageryPublisher(Publisher):
             return "https://imagery-test.unifieddatalibrary.com/filedrop/udl-skyimagery"
         if host == "unifieddatalibrary.com":
             return "https://imagery.unifieddatalibrary.com/filedrop/udl-skyimagery"
-        return None
+        return base.rstrip("/") + "/filedrop/udl-skyimagery"
 
-    async def _upload_skyimagery_zip(self, zip_bytes: bytes) -> None:
-        """Upload a SkyImagery ZIP to the UDL imagery filedrop.
+    async def _upload(self, zip_bytes: bytes) -> None:
+        """Upload a SkyImagery ZIP to the imagery filedrop.
 
-        POSTs the raw ZIP as application/zip with Basic auth (or client cert)
-        to the imagery subdomain — the approach proven against the live UDL
-        filedrop. Falls back to the SDK when the filedrop host can't be derived
-        (a custom base_url).
+        POSTs the raw ZIP as application/zip with Basic auth (or client cert) —
+        the payload proven against the live UDL filedrop ("a zip is all that's
+        required"), which UDL-compliant endpoints are presumed to accept alike.
         """
         program = self._program
-        endpoint = self._upload_endpoint()
-
-        url = self._imagery_filedrop_url()
-        if url is None:
-            # The UDL filedrop contract is "a zip is all that's required" — no
-            # multipart filename. We rely on that, and our integration tests
-            # assert UDL-compliant endpoints keep parity by accepting the same
-            # payload.
-            await program.upload_client.sky_imagery.upload_zip(
-                file=zip_bytes,
-                timeout=endpoint.upload_timeout,
-                extra_headers=program._upload_headers,
-            )
-            return
+        endpoint = program.config.api.upload or program.config.api
+        url = self._resolve_upload_url(endpoint)
 
         if endpoint.use_certs:
             client_kwargs = {
@@ -270,7 +234,12 @@ class SkyImageryPublisher(Publisher):
                 "verify": endpoint.client_verify,
             }
         else:
-            client_kwargs = {"auth": (program._upload_username, program._upload_password)}
+            client_kwargs = {"verify": endpoint.client_verify}
+            if program._upload_username:
+                client_kwargs["auth"] = (
+                    program._upload_username,
+                    program._upload_password,
+                )
 
         async with httpx.AsyncClient(timeout=endpoint.upload_timeout, **client_kwargs) as http:
             resp = await http.post(
@@ -282,34 +251,6 @@ class SkyImageryPublisher(Publisher):
                 raise RuntimeError(
                     f"SkyImagery upload to {url} failed: HTTP {resp.status_code} {resp.text}"
                 )
-
-
-# ── EOObservation ──
-
-
-@dataclass
-class RequestSnapshot:
-    """The CollectRequest fields an EOObservation needs, captured at request time.
-
-    Snapshots outlive the program's task-reference cleanup so late-arriving
-    SenpaiResults (SENPAI runs take minutes) can still correlate.
-    """
-
-    request_id: str
-    classification_marking: str | None
-    data_mode: str | None
-    origin: str | None
-    task_id: str | None
-
-    @classmethod
-    def from_request(cls, request: CollectRequestFull) -> RequestSnapshot:
-        return cls(
-            request_id=request.id,
-            classification_marking=request.classification_marking,
-            data_mode=request.data_mode,
-            origin=request.origin,
-            task_id=request.task_id,
-        )
 
 
 # Track-mode → Detection.kind values that represent the satellite. RATE-tracked
@@ -363,7 +304,7 @@ def _add_annual_aberration(ra_deg: float, dec_deg: float, when: datetime) -> tup
     return ra_deg + math.degrees(d_ra), dec_deg + math.degrees(d_dec)
 
 
-def convert_wcs_observation(
+def _to_udl_eoobservation(
     result: SenpaiResult, detection: Detection
 ) -> tuple[str, float, float]:
     """Convert a WCS-fit detection to UDL's EO observation conventions.
@@ -382,80 +323,20 @@ def convert_wcs_observation(
         ob_time = ob_time + timedelta(seconds=result.exposure_time_seconds / 2.0)
 
     ra, declination = _add_annual_aberration(detection.ra, detection.dec, ob_time)
-    return _udl_ts(ob_time), ra, declination
+    return _to_udl_timestamp(ob_time), ra, declination
 
 
-def build_eo_observations(
-    result: SenpaiResult,
-    snapshot: RequestSnapshot,
-    *,
-    site: SitePosition | None,
-    api: UDLAPIConfig,
-    config: EOObservationPublishConfig,
-) -> list[dict]:
-    """Map a solved SenpaiResult onto UDL EOObservation records (one per satellite detection).
-
-    Records use the SDK's snake_case body keys (aliased to camelCase on the
-    wire) with None values stripped. Observations are raw against the WCS: no
-    catalog correlation is performed, so every record is an uncorrelated track
-    (uct=true, no satNo).
-    """
-    kinds = _SATELLITE_KINDS.get(result.track_mode, ())
-    if not kinds:
-        return []
-
-    records: list[dict] = []
-    for det in result.detections:
-        if det.kind not in kinds or det.ra is None or det.dec is None:
-            continue
-
-        ob_time, ra, declination = convert_wcs_observation(result, det)
-        record = {
-            "classification_marking": snapshot.classification_marking,
-            "data_mode": snapshot.data_mode or "TEST",
-            "ob_time": ob_time,
-            "source": api.source,
-            "id_sensor": api.id_sensor,
-            "orig_sensor_id": api.id_sensor,
-            "ra": ra,
-            "declination": declination,
-            "reference_frame": "J2000",
-            "uct": True,
-            "track_id": snapshot.request_id,
-            "task_id": snapshot.task_id,
-            "origin": snapshot.origin,
-            "exp_duration": result.exposure_time_seconds,
-            "descriptor": Path(result.file_path).name,
-        }
-
-        if site:
-            record["senlat"] = site.latitude_degrees
-            record["senlon"] = site.longitude_degrees
-            record["senalt"] = site.altitude_km
-
-        for band in config.mag_bands:
-            if det.calibrated_magnitudes and band in det.calibrated_magnitudes:
-                record["mag"] = det.calibrated_magnitudes[band]
-                if det.magnitude_errs and band in det.magnitude_errs:
-                    record["mag_unc"] = det.magnitude_errs[band]
-                break
-
-        records.append({k: v for k, v in record.items() if v is not None})
-
-    return records
-
-
-class EOObservationPublisher(Publisher):
+class EOObservationPublisher:
     """Posts senpai satellite detections to UDL as EOObservations.
 
     Keyword-driven: consumes SenpaiResult keywords from the backend stream (a
     cross-entity wildcard subscription, so the senpai entity needs no naming
     here), correlates each result to its CollectRequest by task_id, and POSTs
-    one createBulk batch per frame. Frames senpai processed that were not
+    one filedrop batch per frame. Frames senpai processed that were not
     UDL-tasked (no task_id) are dropped.
     """
 
-    _SNAPSHOT_TTL_S = 6 * 3600.0
+    _REQUEST_TTL_S = 6 * 3600.0
     _SEEN_CAP = 512
     _WATCHDOG_INTERVAL_S = 600.0
     _RECONNECT_DELAY_S = 5.0
@@ -464,9 +345,11 @@ class EOObservationPublisher(Publisher):
         self._program = program
         self._config = program.config.publish.eo_observation
 
-        # CollectRequest snapshots by task id, with insertion timestamps for
-        # TTL pruning.
-        self._snapshots: dict[str, tuple[RequestSnapshot, float]] = {}
+        # CollectRequests by request id, with insertion timestamps for TTL
+        # pruning: retained past the program's task-reference cleanup so
+        # late-arriving SenpaiResults (SENPAI runs take minutes) can still
+        # correlate.
+        self._requests: dict[str, tuple[CollectRequestFull, float]] = {}
 
         # Recently handled result file_paths (transport redelivery dedupe).
         self._seen: dict[str, None] = {}
@@ -480,26 +363,14 @@ class EOObservationPublisher(Publisher):
         # Set once the intake consumer is established, cleared while it reconnects.
         self.intake_ready = asyncio.Event()
 
-    @property
-    def name(self) -> str:
-        return "eo_observation"
-
-    async def publish(
-        self, context: dict, data: bytes, request: CollectRequestFull | None = None
-    ) -> None:
-        """No-op: EOObservations are keyword-driven, not frame-driven."""
-
-    def note_request(self, request: CollectRequestFull) -> RequestSnapshot:
-        """Snapshot a CollectRequest for later correlation by task_id."""
-        snapshot = RequestSnapshot.from_request(request)
+    def note_request(self, request: CollectRequestFull) -> None:
+        """Retain a CollectRequest for later correlation by task_id."""
         now = time.monotonic()
-        self._snapshots[request.id] = (snapshot, now)
+        self._requests[request.id] = (request, now)
 
-        for task_id, (_, added) in list(self._snapshots.items()):
-            if now - added > self._SNAPSHOT_TTL_S:
-                self._snapshots.pop(task_id, None)
-
-        return snapshot
+        for request_id, (_, added) in list(self._requests.items()):
+            if now - added > self._REQUEST_TTL_S:
+                self._requests.pop(request_id, None)
 
     async def start(self) -> None:
         await self._warn_if_senpai_missing()
@@ -531,9 +402,10 @@ class EOObservationPublisher(Publisher):
             await asyncio.sleep(self._WATCHDOG_INTERVAL_S)
             if self.results_received > 0:
                 return
-            if self._program.frames_seen > 0:
+            frames_seen = len(self._program._seen_frames)
+            if frames_seen > 0:
                 logger.warning(
-                    f"eo_observation publishing is enabled and {self._program.frames_seen} "
+                    f"eo_observation publishing is enabled and {frames_seen} "
                     f"frame(s) have flowed, but no SenpaiResults have been received — "
                     f"is the senpai service running?"
                 )
@@ -619,12 +491,17 @@ class EOObservationPublisher(Publisher):
             )
             return
 
-        entry = self._snapshots.get(result.task_id)
-        snapshot = entry[0] if entry else None
-        if snapshot is None:
-            request = self._program.tasks.get(result.task_id)
+        # SenpaiResults carry the framework's execution id (from the frame
+        # headers); translate to the CollectRequest it served, falling back to
+        # a direct match for pipelines that already carry the request id.
+        request_id = self._program.state.task_requests.get(result.task_id, result.task_id)
+
+        entry = self._requests.get(request_id)
+        request = entry[0] if entry else None
+        if request is None:
+            request = self._program.tasks.get(request_id)
             if request is not None:
-                snapshot = self.note_request(request)
+                self.note_request(request)
             else:
                 logger.warning(
                     f"EO: no CollectRequest known for task_id {result.task_id}; "
@@ -632,37 +509,105 @@ class EOObservationPublisher(Publisher):
                 )
                 return
 
-        records = build_eo_observations(
-            result,
-            snapshot,
-            site=self._program._site,
-            api=self._program.config.api,
-            config=self._config,
-        )
+        await self.publish(result, request)
+
+    async def publish(self, result: SenpaiResult, request: CollectRequestFull) -> None:
+        """Build and post EOObservations for a solved SenpaiResult.
+
+        One record per satellite detection, using the SDK's snake_case body
+        keys (aliased to camelCase on the wire) with None values stripped.
+        Observations are raw against the WCS: no catalog correlation is
+        performed, so every record is an uncorrelated track (uct=true, no
+        satNo).
+        """
+        program = self._program
+        name = Path(result.file_path).name
+        kinds = _SATELLITE_KINDS.get(result.track_mode, ())
+
+        # Build EOObservation records
+        records: list[dict] = []
+        for det in result.detections:
+            if det.kind not in kinds or det.ra is None or det.dec is None:
+                continue
+
+            ob_time, ra, declination = _to_udl_eoobservation(result, det)
+            record = {
+                "classification_marking": request.classification_marking,
+                "data_mode": request.data_mode,
+                "ob_time": ob_time,
+                "source": program.config.api.source,
+                "id_sensor": program.config.api.id_sensor,
+                "orig_sensor_id": program.config.api.id_sensor,
+                "ra": ra,
+                "declination": declination,
+                "reference_frame": "J2000",
+                "uct": True,
+                "track_id": request.id,
+                "task_id": request.task_id,
+                "origin": request.origin,
+                "exp_duration": result.exposure_time_seconds,
+                "descriptor": name,
+            }
+
+            if program._site:
+                record["senlat"] = program._site.latitude_degrees
+                record["senlon"] = program._site.longitude_degrees
+                record["senalt"] = program._site.altitude_km
+
+            for band in self._config.mag_bands:
+                if det.calibrated_magnitudes and band in det.calibrated_magnitudes:
+                    record["mag"] = det.calibrated_magnitudes[band]
+                    if det.magnitude_errs and band in det.magnitude_errs:
+                        record["mag_unc"] = det.magnitude_errs[band]
+                    break
+
+            # Remove None values
+            record = {k: v for k, v in record.items() if v is not None}
+
+            # UDL-schema compliance before shipping (see module header). Drops
+            # so one bad record doesn't sink the frame's batch.
+            try:
+                _EO_OBSERVATION_VALIDATOR.validate_python(record)
+            except ValidationError as e:
+                logger.error(f"EO: record for {name} violates the UDL schema; dropped: {e}")
+                continue
+
+            records.append(record)
+
         if not records:
-            logger.debug(f"EO: no postable satellite detections in {name}")
+            # Show why nothing posted: 0 detections is a SENPAI/optics problem;
+            # detections present but of the wrong kind is a track-mode/filter
+            # mismatch (RATE wants point, SIDEREAL wants confirmed streak).
+            kind_counts = Counter(det.kind for det in result.detections)
+            logger.debug(
+                f"EO: no postable satellite detections in {name} "
+                f"(track_mode={result.track_mode}, {len(result.detections)} "
+                f"detection(s): {dict(kind_counts)})"
+            )
             return
 
+        # Save locally if configured
         if self._config.save_path:
-            await asyncio.to_thread(self._save_locally_sync, name, records)
+            await asyncio.to_thread(self._save_locally, request.id, name, records)
 
-        await self._program.upload_client.observations.eo_observations.create_bulk(
+        # UDL and UDL-compliant endpoints expose EO writes only through the filedrop
+        # (/filedrop/udl-eo); the /udl/eoobservation REST create is query-only.
+        await program.upload_client.observations.eo_observations.unvalidated_publish(
             body=records,
-            extra_headers=self._program._upload_headers,
+            extra_headers=program._upload_client_headers,
         )
         self.posted += len(records)
         logger.info(
-            f"task ({snapshot.request_id}): posted {len(records)} EO observation(s) "
-            f"for {name}"
+            f"task {request.id}: sent {len(records)} EOObservation(s) for {name}"
         )
 
-    def _save_locally_sync(self, frame_name: str, records: list[dict]) -> None:
+    def _save_locally(self, task_id: str, frame_name: str, records: list[dict]) -> None:
         """Save posted EOObservation records to the local filesystem."""
         try:
             save_path = Path(self._config.save_path)
             save_path.mkdir(parents=True, exist_ok=True)
             out_path = save_path / f"{Path(frame_name).stem}_eoobs.json"
             out_path.write_text(json.dumps(records, indent=2))
-            logger.debug(f"saved EO observations to {out_path}")
+            logger.debug(f"saved EOObservations locally to {out_path} for task {task_id}")
         except Exception as e:
-            logger.warning(f"Failed to save EO observations locally: {e}")
+            logger.warning(f"Failed to save EOObservations locally for task {task_id}: {e}")

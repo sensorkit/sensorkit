@@ -60,7 +60,6 @@ value:
   poll_frequency: 10.0                 # seconds between CollectRequest polls
   end_time_deadband_s: 300             # extra seconds added to each task's deadline
   publish:
-    upload: true                       # master switch for all data delivery
     sky_imagery:                       # block present ⇒ imagery upload enabled
       image_type: FITS                 # default SkyImagery imageType
       # save_path: /data/udl           # optional; archive each upload ZIP locally

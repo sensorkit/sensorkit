@@ -45,13 +45,9 @@ class UDLReferenceFrame(StrEnum):
                 raise ValueError(f"Unsupported reference frame: {self}")
 
 
-# =============================================================================
-# Configuration Models
-# =============================================================================
-
 class UDLEndpointConfig(BaseModel):
     """Connection and auth settings for one UDL-compatible endpoint."""
-    # Base URL (optional - SDK defaults to UDL production)
+    # Base URL (optional; SDK defaults to UDL production)
     base_url: str | None = None
 
     # Timeouts
@@ -59,13 +55,11 @@ class UDLEndpointConfig(BaseModel):
     upload_timeout: float = Field(
         default=300.0,
         description=(
-            "Timeout for SkyImagery uploads in seconds. Imagery can be "
-            "hundreds of MB, so this is more generous than the per-request "
-            "timeout used for the JSON API."
+            "Timeout for SkyImagery uploads in seconds."
         ),
     )
 
-    # Auth method selector
+    # Authentication method selector
     use_certs: bool = Field(
         default=False,
         description=(
@@ -75,7 +69,6 @@ class UDLEndpointConfig(BaseModel):
     )
 
     # Path to .env file for username/password auth (when use_certs=False)
-    # Expects UDL_USERNAME and UDL_PASSWORD
     env_file: str = Field(default=".env", description="Path to .env file containing UDL_USERNAME and UDL_PASSWORD")
 
     # Cert-based auth (when use_certs=True)
@@ -89,27 +82,25 @@ class UDLAPIConfig(UDLEndpointConfig):
     # Optional separate endpoint for SkyImagery uploads, with its own auth
     # settings (e.g. poll UDL with basic auth, upload to a cert-authenticated
     # UDL-compliant endpoint). When None (default), imagery is uploaded to the
-    # primary endpoint (backward compatible).
+    # primary endpoint.
     upload: UDLEndpointConfig | None = Field(
         default=None,
         description=(
-            "Separate endpoint for SkyImagery uploads. Polling and "
-            "CollectResponses always use the primary endpoint."
+            "Separate endpoint for SkyImagery uploads. Polling, CollectResponses, "
+            "and EOObservations use the primary endpoint."
         ),
     )
 
-    # Sensor identification — the CollectRequest poll filter value, and stamped
-    # as both idSensor and origSensorId on CollectResponses (and as idSensor on
-    # SkyImagery)
-    id_sensor: str = Field(description="Sensor ID (poll filter value; maps to idSensor and origSensorId)")
+    # Identify the sensor and the polling method
+    id_sensor: str = Field(description="The sensor ID, mapping to 'idSensor' and 'origSensorId'.")
+    # Poll for CollectRequests based on idSensor *or* origSensorId
     poll_filter: Literal["id_sensor", "orig_sensor_id"] = Field(
         default="id_sensor",
         description=(
-            "Which CollectRequest field the poll matches id_sensor against: "
-            "idSensor (default) or origSensorId."
+            "The UDL key ('idSensor' or 'origSensorId', defaults to 'idSensor') to use for CollectRequest polling."
         ),
     )
-    source: str = Field(description="Data source identifier (e.g. 'DAO')")
+    source: str = Field(description="The UDL data 'source' identifier.")
 
 
 class SkyImageryPublishConfig(BaseModel):
@@ -123,17 +114,12 @@ class SkyImageryPublishConfig(BaseModel):
     )
     save_path: str | None = Field(
         default=None,
-        description="Path to save skyimagery archives locally before upload"
+        description="Path to save SkyImagery locally."
     )
 
 
 class EOObservationPublishConfig(BaseModel):
-    """EOObservation delivery settings; presence of the block enables the publisher.
-
-    Detections come from the senpai module's published SenpaiResults; only
-    frames correlated to a CollectRequest produce records. Detection-quality
-    thresholds live in SENPAI's own engine config, not here.
-    """
+    """EOObservation delivery settings; presence of the block enables the publisher."""
     sequence_only: bool = Field(
         default=True,
         description=(
@@ -151,23 +137,19 @@ class EOObservationPublishConfig(BaseModel):
     )
     save_path: str | None = Field(
         default=None,
-        description="Path to save posted EOObservation JSON locally"
+        description="Path to save EOObservations locally."
     )
 
 
 class PublishConfig(BaseModel):
-    """Data delivery configuration: which UDL record types to publish."""
-    upload: bool = Field(
-        default=True,
-        description="Master switch; False disables all data delivery without removing the blocks.",
-    )
+    """Which UDL record types to publish. CollectResponses are always published."""
     sky_imagery: SkyImageryPublishConfig | None = Field(
         default=None,
-        description="SkyImagery upload of collected frames. Absent ⇒ disabled.",
+        description="Upload SkyImagery; absent=disabled.",
     )
     eo_observation: EOObservationPublishConfig | None = Field(
         default=None,
-        description="EOObservation posting of senpai detections. Absent ⇒ disabled.",
+        description="Upload EOObservation(s); absent=disabled.).",
     )
 
 
@@ -175,11 +157,15 @@ class UDLConfig(BaseModel):
     """Main configuration for UDL program."""
     controller: str
     api: UDLAPIConfig
-    poll_frequency: float = Field(default=10.0, description="Polling interval in seconds")
-    end_time_deadband_s: float = Field(default=0.0, description="Deadband added to task end times")
+    poll_frequency: float = Field(default=10.0, description="Polling interval in seconds.")
+    poll_horizon: float = Field(
+        default=86400.0,
+        description="Polling horizon in seconds.",
+    )
+    end_time_deadband_s: float = Field(default=0.0, description="Deadband added to task end times in seconds.")
     publish: PublishConfig = Field(
         default_factory=PublishConfig,
-        description="Data delivery: sky_imagery and/or eo_observation blocks.",
+        description="Data delivery: `sky_imagery` and/or `eo_observation` block(s).",
     )
 
 

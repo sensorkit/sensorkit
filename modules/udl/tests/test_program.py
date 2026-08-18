@@ -2,6 +2,8 @@
 """Test UDLProgram request handling and response logic."""
 
 import asyncio
+import gzip
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -14,7 +16,7 @@ from sensorkit.udl.models import ResponseStatus, UDLAPIConfig, UDLConfig
 from sensorkit.udl.program import UDLProgram, UDLState
 from sensorkit.udl.task_queue import TaskQueue
 
-from .fakes import FakeUDLClient, tle_request
+from .fakes import FakeUDLClient, poll_once, tle_request
 
 
 @pytest.fixture
@@ -105,7 +107,7 @@ class TestPersistedState:
         restored.program = program_impl
         await restored._restore_state()
 
-        (task_dict,) = restored.state.pending_tasks
+        (task_dict,) = json.loads(gzip.decompress(restored.state.pending_tasks))
         revived = CollectRequestFull.model_validate(task_dict)
         assert revived.id == request.id
         assert revived.num_frames == request.num_frames
@@ -179,7 +181,7 @@ class TestEnvVarFallback:
 class TestPollFilter:
     @pytest.mark.asyncio
     async def test_default_polls_by_id_sensor(self, program):
-        await program._poll_collect_requests()
+        await poll_once(program)
 
         (query,) = program.client.collect_requests.queries
         assert query["extra_query"]["idSensor"] == "SENSOR-01"
@@ -189,7 +191,7 @@ class TestPollFilter:
     async def test_orig_sensor_id_filter(self, program):
         program.config.api.poll_filter = "orig_sensor_id"
 
-        await program._poll_collect_requests()
+        await poll_once(program)
 
         (query,) = program.client.collect_requests.queries
         assert query["extra_query"]["origSensorId"] == "SENSOR-01"
@@ -200,7 +202,7 @@ class TestPollFilter:
         """A page of results is handled, not just fetched."""
         program.client.collect_requests.page.items = [tle_request(id="polled-1")]
 
-        await program._poll_collect_requests()
+        await poll_once(program)
 
         assert "polled-1" in program.tasks
         assert program.client.collect_responses.statuses() == ["ACCEPTED"]
