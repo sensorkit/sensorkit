@@ -18,3 +18,18 @@ intents for the same compilers.
 `SensorController` serves a structure and policies from the `sensors`
 configuration section as a controller.
 """
+
+from sensorkit.sensor.topology import (
+    Component,
+    Device,
+    DeviceKey,
+    Placement,
+    Port,
+    Selector,
+    Structure,
+    StructurePath,
+    TagKey,
+    Topology,
+    TraitKey,
+    Unit,
+)
