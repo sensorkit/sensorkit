@@ -135,6 +135,8 @@ class WebAPI:
         self._serve_handlers: list[ServeHandler] = []
         self._product_forwarders: list[ProductForwarder] = []
         self.authenticator = config.auth.create_authenticator()
+        self._stopped = asyncio.Event()
+        self._stopped.set()
 
         ssl_options = config.tls.uvicorn_options() if config.tls else {}
 
@@ -656,19 +658,28 @@ class WebAPI:
 
     async def serve(self, *, task_group: asyncio.TaskGroup):
         """Run the FastAPI server."""
-        await self._start_forwarders(task_group=task_group)
+        # Already shut down or shutting down.
+        if self.server.should_exit:
+            return
 
-        if self.config.tls is not None:
-            # Loading the config is what builds the SSL context, and also what surfaces
-            # an unreadable or mismatched certificate and key.
-            self.server.config.load()
+        self._stopped.clear()
 
-            if (context := self.server.config.ssl) is not None:
-                self.config.tls.apply_minimum_version(context)
+        try:
+            await self._start_forwarders(task_group=task_group)
 
-        self._warn_if_exposed()
+            if self.config.tls is not None:
+                # Loading the config is what builds the SSL context, and also what surfaces
+                # an unreadable or mismatched certificate and key.
+                self.server.config.load()
 
-        await self.server.serve()
+                if (context := self.server.config.ssl) is not None:
+                    self.config.tls.apply_minimum_version(context)
+
+            self._warn_if_exposed()
+
+            await self.server.serve()
+        finally:
+            self._stopped.set()
 
     async def shutdown(self):
         # Unblock any parked firehose generators so uvicorn's graceful shutdown
@@ -682,8 +693,10 @@ class WebAPI:
 
             queue.put_nowait(None)
 
-        if self.server.started:
-            await self.server.shutdown()
+        # Signal a graceful shutdown to Uvicorn. Note that explicitly shutting down the server here
+        # does not cause `serve` to return!
+        self.server.should_exit = True
+        await self._stopped.wait()
 
         for handler in self._serve_handlers:
             await handler.stop_monitor()
