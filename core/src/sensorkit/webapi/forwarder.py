@@ -80,9 +80,10 @@ class Forwarder(ABC):
     def _monitor(self) -> AsyncIterator[SKRecord]:
         """Yield updates as they are received from the backend."""
 
-    def snapshot(self) -> list[SKRecord]:
-        """Return a list of Update objects representing the current state."""
-        return [update for attrs in self.cache.values() for update in attrs.values()]
+    def snapshot(self, entity_id: str | None = None) -> list[SKRecord]:
+        """Return the cached records, optionally limited to a single entity."""
+        caches = self.cache.values() if entity_id is None else (self.cache.get(entity_id, {}),)
+        return [record for attrs in caches for record in attrs.values()]
 
 
 class KeyValueForwarder(Forwarder):
