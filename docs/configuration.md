@@ -227,6 +227,10 @@ webapi:
 
 This is the integration point for dashboards and remote monitoring.
 
+### Limits
+
+`max_stream_clients` (default 32) caps concurrent event-stream subscribers, and `stream_queue_size` (default 4096) bounds each subscriber's backlog.
+
 ## Under the hood: the KV store
 
 Everything `config load` writes lands in the NATS key-value store, namespaced by entity. Each entity (a device, sensor, program, or the agent) has its own keyspace, and each key holds one typed record — `SensorConfig` for a sensor, `AgentConfig` for the agent, and so on. Runtime state (controller state, agent decisions, offers) lives in the same store, which is what makes the system inspectable:

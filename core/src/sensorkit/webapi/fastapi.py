@@ -6,7 +6,7 @@ from typing import Any, Callable, Iterable
 
 import uuid_utils.compat as uuid
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from loguru import logger
@@ -46,6 +46,8 @@ class WebAPIConfig(BaseModel):
     host: str = "0.0.0.0"
     agent: sk.EntityRef = sk.EntityRef("agent")
     serve_data_products: list[ServeDataConfig] = []
+    max_stream_clients: int = 32
+    stream_queue_size: int = 4096
 
 
 class AgentOverrideRequest(BaseModel):
@@ -137,6 +139,11 @@ class WebAPI:
         """Every active forwarder: key-value, stream, and one per data-product handler."""
         return self.kv_forwarder, self.stream_forwarder, *self._product_forwarders
 
+    async def _check_stream_capacity(self):
+        """Reject a new subscriber once the concurrent stream limit is reached."""
+        if len(self.client_queues) >= self.config.max_stream_clients:
+            raise HTTPException(status_code=503, detail="Too many concurrent stream subscribers")
+
     async def _stream_records(
         self,
         request: Request,
@@ -149,9 +156,7 @@ class WebAPI:
         by predicate; `sources` narrows the snapshot alone and `match` must cover both.
         """
         request.state.is_sse = True
-        queue: asyncio.Queue[SKRecord | None] = asyncio.Queue()
-        # Registering the queue and taking the snapshot must remain a single event-loop
-        # step: an await between them would let an update land in neither.
+        queue: asyncio.Queue[SKRecord | None] = asyncio.Queue(self.config.stream_queue_size)
         self.client_queues.add(queue)
 
         try:
@@ -173,7 +178,7 @@ class WebAPI:
             host = request.client.host if request.client else "unknown"
             logger.debug(f"SSE client disconnected: {host}")
         finally:
-            self.client_queues.remove(queue)
+            self.client_queues.discard(queue)
 
     async def _product_listing(self) -> list[ProductInfo]:
         """Return every handler's product listing.
@@ -220,7 +225,12 @@ class WebAPI:
         return app
 
     def _create_global_endpoints(self, app: FastAPI):
-        @app.get("/data/subscribe", tags=["Global"], response_class=EventSourceResponse)
+        @app.get(
+            "/data/subscribe",
+            tags=["Global"],
+            response_class=EventSourceResponse,
+            dependencies=[Depends(self._check_stream_capacity)],
+        )
         async def firehose_subscription(request: Request):
             """SSE endpoint for real-time updates."""
             async with contextlib.aclosing(self._stream_records(request, self.forwarders)) as recs:
@@ -339,7 +349,12 @@ class WebAPI:
                 if info.controller_id == controller_id
             ]
 
-        @app.get("/controller/{controller_id}/products/subscribe", tags=["Controller"], response_class=EventSourceResponse)
+        @app.get(
+            "/controller/{controller_id}/products/subscribe",
+            tags=["Controller"],
+            response_class=EventSourceResponse,
+            dependencies=[Depends(self._check_stream_capacity)],
+        )
         async def subscribe_controller_products(request: Request, controller_id: str):
             """SSE stream of product arrivals for a controller, including initial listing."""
 
@@ -585,6 +600,11 @@ class WebAPI:
         # isn't stuck waiting on a never-ending SSE response. Snapshot the set
         # because each generator removes its own queue on exit.
         for queue in tuple(self.client_queues):
+            if queue.full():
+                # Give up a record to make room for the sentinel.
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    queue.get_nowait()
+
             queue.put_nowait(None)
 
         if self.server.started:

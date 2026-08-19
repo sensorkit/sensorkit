@@ -73,8 +73,18 @@ class Forwarder(ABC):
                 attr_cache[attr] = update
 
             # Broadcast to all targets.
-            for queue in self.targets:
-                queue.put_nowait(update)
+            for queue in tuple(self.targets):
+                try:
+                    queue.put_nowait(update)
+                except asyncio.QueueFull:
+                    # A subscriber that has stopped draining is cut loose.
+                    logger.warning("dropping a subscriber that is not keeping up")
+                    self.targets.discard(queue)
+
+                    while not queue.empty():
+                        queue.get_nowait()
+
+                    queue.put_nowait(None)
 
     @abstractmethod
     def _monitor(self) -> AsyncIterator[SKRecord]:
