@@ -206,6 +206,28 @@ class WebAPI:
 
         raise HTTPException(status_code=404, detail="Product not found")
 
+    async def _product_data(self, controller_id: str, product_id: str) -> bytes:
+        """Return a product's raw bytes, or raise 404 if it is not being served.
+
+        A product can leave the handler's listing between the lookup and the read, so
+        the miss is reported the same way an unknown product is.
+        """
+        handler = self._product_handler(controller_id, product_id)
+
+        try:
+            return await handler.get_data(controller_id, product_id)
+        except KeyError as err:
+            raise HTTPException(status_code=404, detail="Product not found") from err
+
+    def _product_metadata(self, controller_id: str, product_id: str) -> dict:
+        """Return a product's cached metadata, or raise 404 if it is not being served."""
+        handler = self._product_handler(controller_id, product_id)
+
+        try:
+            return handler.get_metadata(controller_id, product_id)
+        except KeyError as err:
+            raise HTTPException(status_code=404, detail="Product not found") from err
+
     def _create_fastapi_app(self):
         app = FastAPI(title="SensorKit Web API")
         app.add_middleware(
@@ -370,22 +392,21 @@ class WebAPI:
         @app.get("/controller/{controller_id}/product/{product_id}/data", tags=["Controller"])
         async def get_controller_product_data(controller_id: str, product_id: str):
             """Return the raw FITS data for a product."""
-            handler = self._product_handler(controller_id, product_id)
-            raw_bytes = await handler.get_data(controller_id, product_id)
+            raw_bytes = await self._product_data(controller_id, product_id)
 
             return Response(content=raw_bytes, media_type="application/fits")
 
         @app.get("/controller/{controller_id}/product/{product_id}/preview", tags=["Controller"])
         async def get_controller_product_preview(controller_id: str, product_id: str):
             """Return a JPEG preview image generated from the FITS product data."""
-            handler = self._product_handler(controller_id, product_id)
-            data = await handler.get_data(controller_id, product_id)
+            data = await self._product_data(controller_id, product_id)
 
             try:
                 preview = await PreviewJPEG.from_fits(data)
             except Exception as err:
+                logger.warning(f"Could not generate preview for {product_id}: {err}")
                 raise HTTPException(
-                    status_code=422, detail=f"Could not generate preview: {err}"
+                    status_code=422, detail="Could not generate preview"
                 ) from err
 
             return Response(content=preview.jpeg_bytes, media_type="image/jpeg")
@@ -393,8 +414,7 @@ class WebAPI:
         @app.get("/controller/{controller_id}/product/{product_id}/metadata", tags=["Controller"])
         async def get_controller_product_metadata(controller_id: str, product_id: str) -> dict:
             """Return the cached metadata for a product as a JSON object."""
-            handler = self._product_handler(controller_id, product_id)
-            metadata = handler.get_metadata(controller_id, product_id)
+            metadata = self._product_metadata(controller_id, product_id)
 
             if not metadata.get(ProductInfo):
                 logger.warning(f"Product {product_id} has no ProductInfo keyword set")
