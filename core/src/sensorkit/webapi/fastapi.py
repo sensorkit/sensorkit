@@ -130,7 +130,6 @@ class WebAPI:
 
     def _create_fastapi_app(self):
         app = FastAPI(title="SensorKit Web API")
-
         app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
@@ -139,8 +138,15 @@ class WebAPI:
             allow_headers=["*"],
         )
 
-        # Global
+        self._create_global_endpoints(app)
+        self._create_device_endpoints(app)
+        self._create_controller_endpoints(app)
+        self._create_program_endpoints(app)
+        self._create_agent_endpoints(app)
 
+        return app
+
+    def _create_global_endpoints(self, app: FastAPI):
         @app.get("/data/subscribe", tags=["Global"], response_class=EventSourceResponse)
         async def firehose_subscription(request: Request):
             """SSE endpoint for real-time updates."""
@@ -217,8 +223,7 @@ class WebAPI:
 
             return output
 
-        # Device
-
+    def _create_device_endpoints(self, app: FastAPI):
         @app.get("/device/{device_id}/state", tags=["Device"])
         async def get_device_state(device_id: str) -> DeviceState:
             """Return the current state of a device."""
@@ -233,8 +238,7 @@ class WebAPI:
 
             return _status_ok()
 
-        # Controller
-
+    def _create_controller_endpoints(self, app: FastAPI):
         @app.get("/controller/{controller_id}/state", tags=["Controller"])
         async def get_controller_state(controller_id: str) -> ControllerState:
             """Return the current state of a controller."""
@@ -386,8 +390,7 @@ class WebAPI:
 
             raise HTTPException(status_code=404, detail="Product not found")
 
-        # Program
-
+    def _create_program_endpoints(self, app: FastAPI):
         @app.get("/program/{program_id}/state", tags=["Program"])
         async def get_program_state(program_id: str) -> ProgramState:
             """Return the current state of a program."""
@@ -444,8 +447,7 @@ class WebAPI:
 
             return _status_ok()
 
-        # Agent
-
+    def _create_agent_endpoints(self, app: FastAPI):
         @app.get("/agent/state", tags=["Agent"])
         async def get_agent_state() -> AgentState:
             """Get the current status of the agent."""
