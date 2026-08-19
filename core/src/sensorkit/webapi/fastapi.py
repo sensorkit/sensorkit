@@ -34,6 +34,15 @@ from sensorkit.webapi.forwarder import (
 )
 from sensorkit.webapi.preview import PreviewJPEG
 from sensorkit.webapi.schema import add_sensorkit_schema
+from sensorkit.webapi.security import (
+    LOOPBACK_HOSTS,
+    AuthConfig,
+    AuthMiddleware,
+    CORSConfig,
+    NoAuthConfig,
+    SecurityHeadersMiddleware,
+    TLSConfig,
+)
 from sensorkit.webapi.serve import ProductInfo, ServeDataConfig, ServeHandler
 
 PRODUCT_LISTING_TIMEOUT = 10.0
@@ -43,9 +52,13 @@ class WebAPIConfig(BaseModel):
     """Configuration for the WebAPI service."""
 
     port: int = 8000
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     agent: sk.EntityRef = sk.EntityRef("agent")
     serve_data_products: list[ServeDataConfig] = []
+    tls: TLSConfig | None = None
+    auth: AuthConfig = NoAuthConfig()
+    cors: CORSConfig = CORSConfig()
+    expose_docs: bool = False
     max_stream_clients: int = 32
     stream_queue_size: int = 4096
 
@@ -121,6 +134,10 @@ class WebAPI:
         self.stream_forwarder = StreamForwarder(kit, targets=self.client_queues)
         self._serve_handlers: list[ServeHandler] = []
         self._product_forwarders: list[ProductForwarder] = []
+        self.authenticator = config.auth.create_authenticator()
+
+        ssl_options = config.tls.uvicorn_options() if config.tls else {}
+
         self.app = self._create_fastapi_app()
         self.server = uvicorn.Server(
             uvicorn.Config(
@@ -128,6 +145,7 @@ class WebAPI:
                 host=self.config.host,
                 port=self.config.port,
                 log_level="info",
+                **ssl_options,
             )
         )
 
@@ -229,22 +247,33 @@ class WebAPI:
             raise HTTPException(status_code=404, detail="Product not found") from err
 
     def _create_fastapi_app(self):
-        app = FastAPI(title="SensorKit Web API")
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=False,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+        hidden = {"docs_url": None, "redoc_url": None}
+        app = FastAPI(title="SensorKit Web API", **({} if self.config.expose_docs else hidden))
+
+        # CORS goes last so it answers preflight requests itself, which carry no credentials to
+        # authorize.
+        app.add_middleware(AuthMiddleware, authenticator=self.authenticator)
+        app.add_middleware(SecurityHeadersMiddleware, hsts=self.config.tls is not None)
+        app.add_middleware(CORSMiddleware, **self.config.cors.middleware_options())
 
         self._create_global_endpoints(app)
         self._create_device_endpoints(app)
         self._create_controller_endpoints(app)
         self._create_program_endpoints(app)
         self._create_agent_endpoints(app)
+        self._finalize_openapi(app)
 
         return app
+
+    def _finalize_openapi(self, app: FastAPI):
+        """Generate the OpenAPI document and fold in the SensorKit and security schemas."""
+        app.openapi()
+        schema = app.openapi_schema
+        add_sensorkit_schema(schema["components"]["schemas"])
+
+        if scheme := self.authenticator.openapi_scheme():
+            schema["components"]["securitySchemes"] = {"bearerAuth": scheme}
+            schema["security"] = [{"bearerAuth": []}]
 
     def _create_global_endpoints(self, app: FastAPI):
         @app.get(
@@ -582,11 +611,6 @@ class WebAPI:
 
             return _status_ok()
 
-        app.openapi()
-        add_sensorkit_schema(app.openapi_schema["components"]["schemas"])
-
-        return app
-
     async def _start_forwarders(self, *, task_group: asyncio.TaskGroup):
         """Start the KV/stream forwarders and any configured data-product handlers.
 
@@ -610,9 +634,40 @@ class WebAPI:
             self._serve_handlers.append(handler)
             self._product_forwarders.append(forwarder)
 
+    def _warn_if_exposed(self):
+        """Warn when the service is reachable off-host without TLS or authentication."""
+        if self.config.host in LOOPBACK_HOSTS:
+            return
+
+        missing = [
+            name
+            for name, present in (
+                ("TLS", self.config.tls is not None),
+                ("authentication", self.authenticator.enabled),
+            )
+            if not present
+        ]
+
+        if missing:
+            logger.warning(
+                f"web API is bound to {self.config.host}:{self.config.port} with no "
+                f"{' and no '.join(missing)}; anyone who can reach it can control this system"
+            )
+
     async def serve(self, *, task_group: asyncio.TaskGroup):
         """Run the FastAPI server."""
         await self._start_forwarders(task_group=task_group)
+
+        if self.config.tls is not None:
+            # Loading the config is what builds the SSL context, and also what surfaces
+            # an unreadable or mismatched certificate and key.
+            self.server.config.load()
+
+            if (context := self.server.config.ssl) is not None:
+                self.config.tls.apply_minimum_version(context)
+
+        self._warn_if_exposed()
+
         await self.server.serve()
 
     async def shutdown(self):

@@ -3066,6 +3066,7 @@ complexity = [
 dev = [
     { name = "complexipy" },
     { name = "coverage" },
+    { name = "cryptography" },
     { name = "httpx" },
     { name = "import-linter" },
     { name = "pygtrie" },
@@ -3144,6 +3145,7 @@ complexity = [{ name = "complexipy", specifier = ">=6.2.0" }]
 dev = [
     { name = "complexipy", specifier = ">=6.2.0" },
     { name = "coverage", specifier = ">=7.8.0" },
+    { name = "cryptography", specifier = ">=44.0.0" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "import-linter", specifier = ">=2.1" },
     { name = "pygtrie", specifier = ">=2.5.0" },

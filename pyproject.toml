@@ -144,6 +144,7 @@ dev = [
     {include-group = "complexity"},
     {include-group = "imports"},
     "coverage>=7.8.0",
+    "cryptography>=44.0.0",
     "httpx>=0.28.0",
     "pygtrie>=2.5.0",
     "pytest-asyncio>=0.25.2",

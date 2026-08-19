@@ -227,9 +227,58 @@ webapi:
 
 This is the integration point for dashboards and remote monitoring.
 
+### Reaching the service
+
+`host` defaults to `127.0.0.1`, so the service answers only on the machine running it. A containerized deployment has to bind every interface, since the port is published from outside the container:
+
+```yaml
+webapi:
+  host: 0.0.0.0
+```
+
+If the web API is exposed on non-loopback interfaces and no authentication is configured, the service will log a warning at startup.
+
+### TLS
+
+```yaml
+webapi:
+  tls:
+    certfile: /etc/sensorkit/tls/server.crt
+    keyfile: /etc/sensorkit/tls/server.key
+    keyfile_password_env: SENSORKIT_TLS_PASSWORD   # optional, for an encrypted key
+    minimum_version: "1.2"                         # or "1.3"
+```
+
+Certificates are read when the service starts, so renewing one takes a restart.
+
+### Authentication
+
+Bearer token auth applies to every endpoint. Set `allow_anonymous_read` to leave `GET` requests, including the event streams, open to a dashboard while still guarding the endpoints that act:
+
+```yaml
+webapi:
+  auth:
+    kind: token
+    token_env: SENSORKIT_API_TOKEN   # or token_file: /etc/sensorkit/api-token
+    allow_anonymous_read: false
+```
+
+Clients present it as `Authorization: Bearer <token>`. Anonymous read does not extend to `/openapi.json`, `/docs`, or `/redoc`.
+
+### Browser access
+
+Cross-origin requests are refused unless the origin is listed. A dashboard served from somewhere other than the API's own origin needs:
+
+```yaml
+webapi:
+  cors:
+    allow_origins:
+      - https://dashboard.example.org
+```
+
 ### Limits
 
-`max_stream_clients` (default 32) caps concurrent event-stream subscribers, and `stream_queue_size` (default 4096) bounds each subscriber's backlog.
+`max_stream_clients` (default 32) caps concurrent event-stream subscribers, and `stream_queue_size` (default 4096) bounds each subscriber's backlog. `expose_docs: true` serves the browser documentation pages at `/docs` and `/redoc`, which are off by default. `/openapi.json` is always served to a caller the authentication settings admit.
 
 ## Under the hood: the KV store
 
