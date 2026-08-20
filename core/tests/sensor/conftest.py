@@ -15,6 +15,7 @@ import pytest
 
 from sensorkit.sensor.topology import Placement, Topology, Structure
 
+from .common import REPORTED
 
 
 
@@ -26,6 +27,9 @@ def topology() -> Topology:
 
 
 
+@pytest.fixture(scope="session")
+def facts(topology):
+    return ReportedFacts(topology)
 
 
 @pytest.fixture(scope="session")
@@ -39,3 +43,34 @@ def at(topology):
     index = {p.device: p for p in topology.placements()}
 
     return index.__getitem__
+
+class ReportedFacts:
+    def __init__(self, topology):
+        self.topology = topology
+
+    def commands(self, device):
+        return frozenset(REPORTED[device][0])
+
+    def keywords(self, device):
+        return frozenset(REPORTED[device][1])
+
+    def traits(self, placement):
+        from sensorkit.core.entity import DeviceDetails
+        from sensorkit.core.trait import match_traits
+        details = DeviceDetails(supported_commands=self.commands(placement.device),
+                                published_keywords=self.keywords(placement.device))
+        return frozenset(t.name for t in match_traits(details))
+
+    def tags(self, placement):
+        return frozenset(self.topology.record(placement).tags)
+
+    def instrument(self, placement):
+        from sensorkit.sensor.topology import Device
+        record = self.topology.record(placement)
+        return isinstance(record, Device) and record.instrument
+
+    def kind(self, placement):
+        from sensorkit.sensor.topology import Selector
+        if isinstance(self.topology.record(placement), Selector):
+            return "selector"
+        return "instrument" if self.instrument(placement) else "device"

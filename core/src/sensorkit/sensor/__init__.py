@@ -19,6 +19,13 @@ intents for the same compilers.
 configuration section as a controller.
 """
 
+from sensorkit.sensor.selection import (
+    AnySelection,
+    DeviceFacts,
+    PlacementFacts,
+    Selection,
+    SelectionError,
+)
 from sensorkit.sensor.topology import (
     Component,
     Device,
