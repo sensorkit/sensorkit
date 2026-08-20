@@ -2,7 +2,9 @@
 site_name = "SensorKit"
 site_description = "An open-source control system for autonomous observatories, built for space domain awareness and time-domain astronomy."
 site_author = ""
+site_url = "https://sensorkit.github.io/sensorkit/"
 docs_dir = "docs"
+extra_css = ["assets/extra.css"]
 site_dir = "site"
 
 nav = [
@@ -14,6 +16,8 @@ nav = [
 
 [project.theme]
 language = "en"
+logo = "assets/sensorkit-logomark-light.svg"
+favicon = "assets/sensorkit-logomark-light.svg"
 features = [
     "content.code.annotate",
     "content.code.copy",
