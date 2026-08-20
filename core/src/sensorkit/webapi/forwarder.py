@@ -40,6 +40,7 @@ class Forwarder(ABC):
     def __init__(self, *, targets: RecordQueueSet):
         self.targets = targets
         self.cache: dict[str, dict[str, SKRecord]] = collections.defaultdict(dict)
+        self.task: asyncio.Task | None = None
 
     async def start(self, *, task_group: asyncio.TaskGroup):
         """Start background monitoring task for this forwarder."""
@@ -47,11 +48,10 @@ class Forwarder(ABC):
         return self.task
 
     async def stop(self):
-        """Stop the background monitoring task.
+        """Stop the background monitoring task, if one is running."""
+        if self.task is None:
+            return
 
-        Raises:
-            AttributeError: if start() was not called before stop()
-        """
         self.task.cancel()
 
         with contextlib.suppress(asyncio.CancelledError):

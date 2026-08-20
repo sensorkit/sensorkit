@@ -513,9 +513,6 @@ async def test_shutdown_before_serve_keeps_the_server_down(kit):
 
     async with asyncio.timeout(30):
         async with asyncio.TaskGroup() as tg:
-            await webapi.kv_forwarder.start(task_group=tg)
-            await webapi.stream_forwarder.start(task_group=tg)
-
             await webapi.shutdown()
 
             # Stands in for a serve task that is only scheduled after the shutdown; an

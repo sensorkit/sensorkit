@@ -188,3 +188,12 @@ async def test_backlogged_subscriber_is_dropped(kit, service_context):
             assert last is None
         finally:
             await forwarder.stop()
+
+
+@pytest.mark.asyncio
+async def test_stopping_a_forwarder_that_never_started(kit):
+    """An attach that fails partway still gets detached, so stopping is always allowed."""
+    forwarder = KeyValueForwarder(kit, targets=set())
+
+    await forwarder.stop()
+

@@ -15,6 +15,8 @@ sk.declare_config_section(
 
 @sk.declare_entity
 class WebAPIService:
+    webapi: WebAPI | None = None
+
     @sk.on_attach
     async def startup(self):
         entity = sk.entity()
@@ -29,7 +31,8 @@ class WebAPIService:
 
     @sk.on_detach
     async def shutdown(self):
-        await self.webapi.shutdown()
+        if self.webapi is not None:
+            await self.webapi.shutdown()
 
 
 @sk.service_entrypoint(version=sk.VERSION)
