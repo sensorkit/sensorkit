@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Main should only go red if the package is broken, so the style checks warn
+  # there instead of failing.
+  SOFT_CHECKS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -19,8 +24,6 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Main should only go red if the package is broken, so we soften the style checks for pushes to main.
-    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -34,13 +37,13 @@ jobs:
         run: uv sync --locked --only-group lint
 
       - name: Lint sources
+        continue-on-error: ${{ env.SOFT_CHECKS == 'true' }}
         run: uv run --no-sync ruff check
 
   imports:
     name: Import layering
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -59,13 +62,13 @@ jobs:
           uv pip install --no-deps -e .
 
       - name: Check import layering
+        continue-on-error: ${{ env.SOFT_CHECKS == 'true' }}
         run: uv run --no-sync lint-imports
 
   complexity:
     name: Complexity
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -81,6 +84,7 @@ jobs:
         run: uv sync --locked --only-group complexity
 
       - name: Check code complexity
+        continue-on-error: ${{ env.SOFT_CHECKS == 'true' }}
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -174,9 +178,8 @@ jobs:
           if-no-files-found: ignore
 
   pages:
-    name: Publish docs and coverage
+    name: Docs
     needs: test
-    # The site is what a reader lands on, so it tracks main alone.
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
