@@ -10,7 +10,10 @@ __pycache__/
 /.venv
 /.idea/
 /.claude/
+/.junie/
 /.coverage
+/coverage.xml
+/htmlcov/
 /.pytest_cache
 /.vscode
 
@@ -22,7 +25,7 @@ appdata/
 certs/
 logs/
 tmp/
-de421.bsp
+de4*.bsp
 /site/
 # Local deployment configs with real site paths (never commit)
 deploy/**/*_dev.yaml

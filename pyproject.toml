@@ -139,10 +139,15 @@ imports = [
     "import-linter>=2.1",
 ]
 
+docs = [
+    "zensical>=0.0.1",
+]
+
 dev = [
     {include-group = "lint"},
     {include-group = "complexity"},
     {include-group = "imports"},
+    {include-group = "docs"},
     "coverage>=7.8.0",
     "cryptography>=44.0.0",
     "httpx>=0.28.0",
@@ -155,7 +160,6 @@ dev = [
     "pytest>=8.3.4",
     "sensorkit[thesky-simulator]",
     "testcontainers[nats]>=4.9.0",
-    "zensical>=0.0.1",
 ]
 
 [[tool.uv.dependency-metadata]]

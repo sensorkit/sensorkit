@@ -3081,6 +3081,9 @@ dev = [
     { name = "testcontainers", extra = ["nats"] },
     { name = "zensical" },
 ]
+docs = [
+    { name = "zensical" },
+]
 imports = [
     { name = "import-linter" },
 ]
@@ -3160,6 +3163,7 @@ dev = [
     { name = "testcontainers", extras = ["nats"], specifier = ">=4.9.0" },
     { name = "zensical", specifier = ">=0.0.1" },
 ]
+docs = [{ name = "zensical", specifier = ">=0.0.1" }]
 imports = [{ name = "import-linter", specifier = ">=2.1" }]
 lint = [{ name = "ruff", specifier = "~=0.9" }]
 

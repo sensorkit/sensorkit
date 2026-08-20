@@ -117,7 +117,7 @@ jobs:
     env:
       # Device drivers log non-ASCII (degree signs); keep Windows off cp1252.
       PYTHONUTF8: "1"
-      COV: ${{ matrix.os == 'ubuntu-latest' && '--cov --cov-report=xml' || '' }}
+      COV: ${{ matrix.os == 'ubuntu-latest' && '--cov --cov-report=xml --cov-report=html:htmlcov' || '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -168,5 +168,55 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: coverage
-          path: coverage.xml
+          path: |
+            coverage.xml
+            htmlcov/
           if-no-files-found: ignore
+
+  pages:
+    name: Publish docs and coverage
+    needs: test
+    # The site is what a reader lands on, so it tracks main alone.
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+          cache-suffix: docs
+
+      - name: Install zensical
+        run: uv sync --locked --only-group docs
+
+      - name: Build docs
+        run: uv run --no-sync zensical build
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: coverage
+          path: coverage-report/
+
+      # Pages replaces the whole site on every deploy, so the report has to be
+      # assembled alongside the docs rather than published on its own.
+      - name: Attach the coverage report
+        run: |
+          mkdir -p site/coverage
+          cp -r coverage-report/htmlcov/. site/coverage/
+          python .github/scripts/coverage_badge.py coverage-report/coverage.xml site/coverage/badge.json
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
