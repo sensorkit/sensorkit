@@ -3,13 +3,14 @@
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sensorkit/sensorkit/main/docs/assets/sensorkit-horizontal-dark.svg">
     <img src="https://raw.githubusercontent.com/sensorkit/sensorkit/main/docs/assets/sensorkit-horizontal-light.svg" alt="SensorKit" width="460">
   </picture>
+  <br/>
 
 [![CI](https://img.shields.io/github/actions/workflow/status/sensorkit/sensorkit/ci.yml?branch=main&style=flat-square&logo=github&label=CI)](https://github.com/sensorkit/sensorkit/actions/workflows/ci.yml?query=branch%3Amain)
 [![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fsensorkit.github.io%2Fsensorkit%2Fcoverage%2Fbadge.json&style=flat-square)](https://sensorkit.github.io/sensorkit/coverage/)
+[![Docs](https://img.shields.io/badge/docs-zensical-blue)](https://sensorkit.github.io/sensorkit/)
 [![PyPI](https://img.shields.io/pypi/v/sensorkit?style=flat-square&logo=pypi&logoColor=white&color=131c4b)](https://pypi.org/project/sensorkit/)
 [![Python](https://img.shields.io/pypi/pyversions/sensorkit?style=flat-square&logo=python&logoColor=white&color=131c4b)](https://pypi.org/project/sensorkit/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-131c4b?style=flat-square)](https://github.com/sensorkit/sensorkit/blob/main/LICENSE)
-[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square)](https://github.com/astral-sh/ruff)
 
 </div>
 

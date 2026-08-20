@@ -121,7 +121,7 @@ jobs:
     env:
       # Device drivers log non-ASCII (degree signs); keep Windows off cp1252.
       PYTHONUTF8: "1"
-      COV: ${{ matrix.os == 'ubuntu-latest' && '--cov --cov-report=xml --cov-report=html:htmlcov' || '' }}
+      COV: ${{ matrix.os == 'ubuntu-latest' && '--cov' || '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -167,14 +167,47 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Build coverage reports
+        if: ${{ !cancelled() && matrix.os == 'ubuntu-latest' }}
+        shell: bash
+        run: |
+          # Core sits at the report root so its published URL is unchanged, and
+          # each module gets a subdirectory named for it.
+          mkdir -p coverage-report
+          uv run --no-sync coverage xml --include='core/src/*' -o coverage-report/coverage.xml
+          uv run --no-sync coverage html --include='core/src/*' -d coverage-report --quiet
+
+          {
+            echo "### Coverage"
+            echo
+            echo "| Scope | Line coverage |"
+            echo "| --- | --- |"
+            echo "| core | $(uv run --no-sync coverage report --format=total --include='core/src/*')% |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for path in modules/*/; do
+            name=$(basename "$path")
+            out="coverage-report/$name"
+            mkdir -p "$out"
+
+            # A module scaffolded without sources has nothing to measure.
+            if ! uv run --no-sync coverage xml --include="modules/$name/*" -o "$out/coverage.xml"; then
+              rm -rf "$out"
+              continue
+            fi
+
+            uv run --no-sync coverage html --include="modules/$name/*" -d "$out" --quiet
+
+            total=$(uv run --no-sync coverage report --format=total --include="modules/$name/*")
+            echo "| $name | $total% |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
       - name: Upload coverage
         if: ${{ !cancelled() && matrix.os == 'ubuntu-latest' }}
         uses: actions/upload-artifact@v7
         with:
           name: coverage
-          path: |
-            coverage.xml
-            htmlcov/
+          path: coverage-report/
           if-no-files-found: ignore
 
   pages:
@@ -214,8 +247,12 @@ jobs:
       - name: Attach the coverage report
         run: |
           mkdir -p site/coverage
-          cp -r coverage-report/htmlcov/. site/coverage/
-          python .github/scripts/coverage_badge.py coverage-report/coverage.xml site/coverage/badge.json
+          cp -r coverage-report/. site/coverage/
+
+          # Every report directory carries its own badge, core at the root.
+          find site/coverage -name coverage.xml | while read -r report; do
+            python .github/scripts/coverage_badge.py "$report" "$(dirname "$report")/badge.json"
+          done
 
       - uses: actions/upload-pages-artifact@v4
         with:
