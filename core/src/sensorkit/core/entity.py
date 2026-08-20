@@ -308,6 +308,16 @@ class EntityRef[T: EntityClient = EntityClient]:
         """Convenience accessor for `get`."""
         return self.get()
 
+    def __eq__(self, other: object) -> bool:
+        """Compare references by the entity they name."""
+        return isinstance(other, EntityRef) and self.name == other.name
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self.name!r})"
+
     @classmethod
     def __get_pydantic_core_schema__(cls, _source_type, handler):
         # Treat this reference as a string-like value.

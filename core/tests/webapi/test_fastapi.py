@@ -522,3 +522,17 @@ async def test_shutdown_before_serve_keeps_the_server_down(kit):
     async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
         with pytest.raises(httpx.ConnectError):
             await client.get("/data/snapshot")
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_config_survives_a_key_value_round_trip(kit):
+    config = WebAPIConfig()
+    entity = kit.entity("webapi")
+
+    await entity.kv_put_model(config)
+
+    assert await entity.kv_get_model(WebAPIConfig) == config
