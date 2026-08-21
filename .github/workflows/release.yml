@@ -65,9 +65,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.resolve.outputs.tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
           PRERELEASE: ${{ steps.resolve.outputs.prerelease }}
         run: |
-          flags=(--draft --generate-notes --title "$TAG" --target "$GITHUB_SHA")
+          flags=(--draft --generate-notes --title "SensorKit $VERSION" --target "$GITHUB_SHA")
           if [ "$PRERELEASE" = "true" ]; then
             flags+=(--prerelease)
           fi
