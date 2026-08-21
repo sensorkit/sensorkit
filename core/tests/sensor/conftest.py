@@ -13,16 +13,20 @@ from __future__ import annotations
 
 import pytest
 
-from sensorkit.sensor.topology import Placement, Topology, Structure
+from sensorkit.sensor.definition import SensorDefinition
+from sensorkit.sensor.topology import Placement, Topology
 
-from .common import REPORTED
-
-
+from .common import REPORTED, SENSOR_YAML
 
 
 @pytest.fixture(scope="session")
-def topology() -> Topology:
-    return Topology(Structure.model_validate({'name': 'demo', 'components': [{'device': 'mount', 'traits': 'MustConnect', 'tags': ['primary']}, {'device': 'dome', 'traits': ['MustConnect', 'MustEnable']}, {'unit': 'ota', 'components': [{'device': 'cover'}, {'selector': 'pickoff', 'traits': 'MustConnect', 'ports': [{'name': 'science', 'components': [{'device': 'foc-sci'}, {'device': 'wheel'}, {'device': 'cam-sci', 'instrument': True, 'tags': ['science']}]}, {'name': 'guide', 'components': [{'device': 'cam-guide', 'instrument': True, 'tags': ['guiding']}, {'device': 'cam-acq', 'instrument': True}]}]}]}]}))
+def definition() -> SensorDefinition:
+    return SensorDefinition.from_yaml(SENSOR_YAML.read_text())
+
+
+@pytest.fixture(scope="session")
+def topology(definition) -> Topology:
+    return Topology(definition.sensor)
 
 
 

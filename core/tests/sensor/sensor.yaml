@@ -1,0 +1,100 @@
+# A sensor exercising every structural feature the package has: root devices
+# shared by everything, a nested unit, a selector with two ports, a private
+# focuser, two instruments behind one port, and a tagged service camera.
+sensor:
+  name: demo
+  components:
+    - device: mount
+      traits: MustConnect
+      tags: [primary]
+    - device: dome
+      traits: [MustConnect, MustEnable]
+    - unit: ota
+      components:
+        - device: cover
+        - selector: pickoff
+          traits: MustConnect
+          ports:
+            - name: science
+              components:
+                - device: foc-sci
+                - device: wheel
+                - device: cam-sci
+                  instrument: true
+                  tags: [science]
+            - name: guide
+              components:
+                - device: cam-guide
+                  instrument: true
+                  tags: [guiding]
+                - device: cam-acq
+                  instrument: true
+
+tables:
+  bring-up:
+    fail_fast: true
+    phases:
+      - name: connect
+        entries:
+          - select: {kind: any}
+            ops: Connect
+            id: connect-all
+      - name: initialize
+        entries:
+          - select: MustEnable
+            ops:
+              - Enable
+              - command: Init
+                timeout_s: 45.0
+            id: enable-enclosure
+          - select: {instrument: true}
+            exclude: {tag: guiding}
+            ops:
+              - command: Init
+                unsupported: omit
+            id: init-instruments
+            require:
+              - name: connect-all
+                join: same-chain
+      - name: home
+        after: [connect]
+        entries:
+          - select: {supports: Home}
+            ops:
+              - command: Home
+                optional: true
+                unsupported: omit
+            require: {name: initialize, on: completion}
+    cleanup:
+      - name: halt
+        when: failure
+        armed_by: [init-instruments]
+        entries:
+          - select: {kind: any}
+            ops:
+              - command: Stop
+                unsupported: omit
+
+  shutdown:
+    fail_fast: false
+    phases:
+      - name: park
+        entries:
+          - select: MustConnect
+            ops:
+              - command: Deinit
+                sequence: completion
+                unsupported: omit
+              - command: Disconnect
+                sequence: completion
+
+deadlines:
+  - trait: MustConnect
+    command: Connect
+    seconds: 30.0
+  - device: mount
+    command: Home
+    seconds: 300.0
+  - any: true
+    command: Stop
+    seconds: 5.0
