@@ -162,6 +162,37 @@ dev = [
     "testcontainers[nats]>=4.9.0",
 ]
 
+# These groups allow the user to opt in to using the pytorch indexes, and,
+# crucially, allows selection of the CPU-only variant.
+torch-cpu = [
+    "torch>=2.6",
+]
+
+torch-cu128 = [
+    "torch>=2.6",
+]
+
+[tool.uv]
+conflicts = [
+    [{ group = "torch-cpu" }, { group = "torch-cu128" }],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", group = "torch-cpu" },
+    { index = "pytorch-cu128", group = "torch-cu128" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
 [[tool.uv.dependency-metadata]]
 name = "systemd-python"
 version = "235"

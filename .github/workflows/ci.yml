@@ -132,9 +132,9 @@ jobs:
           cache-suffix: test
 
       - name: Install
-        # The systemd extra is an sdist needing headers the runner lacks, and
-        # journal logging degrades gracefully without it.
-        run: uv sync --locked --all-extras --no-extra systemd --dev
+        # No systemd on the runner; degrades gracefully in code.
+        # CPU torch keeps the CUDA libraries out of the runner cache.
+        run: uv sync --locked --all-extras --no-extra systemd --group torch-cpu --dev
 
       - name: Cache JPL ephemeris
         uses: actions/cache@v6
