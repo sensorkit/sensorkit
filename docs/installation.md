@@ -36,6 +36,7 @@ pip install "sensorkit[alpaca,pwi4]"     # both
 If you're working from a clone of the repository instead, [uv](https://docs.astral.sh/uv/) sets up everything at once:
 
 ```bash
+git clone https://github.com/sensorkit/sensorkit.git && cd sensorkit
 uv sync --all-extras
 uv run sensorkit --help
 ```

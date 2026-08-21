@@ -44,7 +44,7 @@ The repository ships a complete simulated observatory: mount, camera, dome, and 
 No hardware, just Docker:
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/sensorkit/sensorkit.git
 cd sensorkit/deploy/simulated
 docker compose up --build
 ```
@@ -125,7 +125,7 @@ uv run zensical serve
 **Requirements:** Python 3.13+, [uv](https://docs.astral.sh/uv/)
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/sensorkit/sensorkit.git
 cd sensorkit
 uv sync --all-extras
 
