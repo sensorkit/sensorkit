@@ -19,6 +19,7 @@ intents for the same compilers.
 configuration section as a controller.
 """
 
+from sensorkit.sensor.definition import SensorDefinition
 from sensorkit.sensor.selection import (
     AnySelection,
     DeviceFacts,

@@ -21,7 +21,7 @@ from .common import REPORTED, SENSOR_YAML
 
 @pytest.fixture(scope="session")
 def definition() -> SensorDefinition:
-    return SensorDefinition.from_yaml(SENSOR_YAML.read_text())
+    return SensorDefinition.load(SENSOR_YAML)
 
 
 @pytest.fixture(scope="session")

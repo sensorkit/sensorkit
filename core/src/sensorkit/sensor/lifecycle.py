@@ -17,11 +17,12 @@ that should keep going needs completion sequencing and non-fail-fast policy.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, model_validator
 
+from sensorkit.common.dag import GraphBuilder
 from sensorkit.core.device import DeviceCommand
 from sensorkit.sensor.selection import AnySelection
 from sensorkit.sensor.topology import Placement
@@ -213,3 +214,163 @@ class LifecycleWorkflow(BaseModel, frozen=True, extra="forbid"):
             return after
 
         return (self.phases[index - 1].name,) if index else ()
+
+    def check(self) -> None:
+        """Check names, references and symbolic cycles without device facts.
+
+        Compilation additionally checks declaration order and selected
+        operations.
+
+        Raises:
+            ValueError: Names repeat, references are invalid, or dependencies
+                cycle. The error includes the table name.
+        """
+        try:
+            self._check()
+        except ValueError as e:
+            raise ValueError(f"table '{self.name}': {e}") from e
+
+    def _check(self) -> None:
+        """Validate phase, entry and cleanup namespaces and dependencies.
+
+        Raises:
+            ValueError: Names collide, references are invalid, or dependencies
+                cycle.
+        """
+        phases = [phase.name for phase in self.phases]
+        rows = [entry for phase in self.phases for entry in phase.entries]
+        ids = [entry.id for entry in rows if entry.id is not None]
+
+        _unique(phases, "a phase is named twice")
+        _unique([spec.name for spec in self.cleanup],
+                "a cleanup is named twice")
+        _unique(ids, "an entry id is used twice")
+        _disjoint(phases, ids)
+        _acyclic(self._dependencies(set(phases) | set(ids), set(ids)))
+
+        for spec in self.cleanup:
+            _check_cleanup(spec, set(ids))
+
+    def _dependencies(self, known: set[str], ids: set[str]
+                      ) -> dict[tuple[str, str], set[tuple[str, str]]]:
+        """Build symbolic phase and entry dependencies, validating
+        references.
+
+        A phase depends on its entries so cycles through an entry include its
+        phase.
+        """
+        phases = {phase.name for phase in self.phases}
+        deps: dict[tuple[str, str], set[tuple[str, str]]] = {}
+
+        for index, phase in enumerate(self.phases):
+            follows = self.follows(index)
+            _resolves(follows, phases, f"phase '{phase.name}' after")
+            node = ("phase", phase.name)
+            deps[node] = set()
+
+            for position, entry in enumerate(phase.entries):
+                row = ("entry", entry.id or f"{phase.name}[{position}]")
+                deps[node].add(row)
+                deps[row] = ({("phase", name) for name in follows}
+                             | _required(entry, known, ids))
+
+        return deps
+
+
+
+
+
+
+def _unique(names: list[str], what: str) -> None:
+    """Reject repeated names in a namespace.
+
+    Raises:
+        ValueError: A name occurs more than once.
+    """
+    dupes = sorted({n for n in names if names.count(n) > 1})
+
+    if dupes:
+        raise ValueError(f"{what}: {', '.join(dupes)}")
+
+
+def _disjoint(phases: list[str], ids: list[str]) -> None:
+    """Require phase names and entry ids to occupy separate namespaces.
+
+    Raises:
+        ValueError: A phase and an entry share a name.
+    """
+    shared = sorted(set(phases) & set(ids))
+
+    if shared:
+        raise ValueError(
+            f"a phase and an entry share a name: {', '.join(shared)}")
+
+
+def _resolves(names: Iterable[str], known: set[str], what: str) -> None:
+    """Check that each referenced name is declared.
+
+    Raises:
+        ValueError: A reference names no declaration.
+    """
+    unknown = sorted(n for n in names if n not in known)
+
+    if unknown:
+        raise ValueError(f"{what} names nothing: {', '.join(unknown)}")
+
+
+def _required(entry: Entry, known: set[str],
+              ids: set[str]) -> set[tuple[str, str]]:
+    """Resolve requirement names to symbolic phase or entry nodes."""
+    named = [clause.name for clause in entry.require]
+    _resolves(named, known, "require")
+
+    return {("entry", name) if name in ids else ("phase", name)
+            for name in named}
+
+
+def _check_cleanup(spec: CleanupSpec, armable: set[str]) -> None:
+    """Validate a cleanup's local references and main-workflow trigger ids.
+
+    Requirements stay inside the spec; only arming references main entries.
+
+    Raises:
+        ValueError: Ids repeat, references are invalid, or dependencies cycle.
+    """
+    ids = [entry.id for entry in spec.entries if entry.id is not None]
+    named = {clause.name for entry in spec.entries
+             for clause in entry.require}
+
+    _unique(ids, f"cleanup '{spec.name}' uses an entry id twice")
+    _resolves(spec.armed_by or (), armable, f"cleanup '{spec.name}' armed_by")
+
+    outside = sorted(named - set(ids))
+
+    if outside:
+        raise ValueError(
+            f"cleanup '{spec.name}' require names entries outside it: "
+            f"{', '.join(outside)}")
+
+    deps: dict[tuple[str, str], set[tuple[str, str]]] = {}
+
+    for position, entry in enumerate(spec.entries):
+        row = ("entry", entry.id or f"{spec.name}[{position}]")
+        deps[row] = {("entry", clause.name) for clause in entry.require}
+
+    _acyclic(deps)
+
+
+def _acyclic(deps: dict[tuple[str, str], set[tuple[str, str]]]) -> None:
+    """Check symbolic dependencies with the DAG builder, without device
+    facts.
+
+    Raises:
+        ValueError: Dependencies contain a cycle.
+    """
+    builder = GraphBuilder()
+    ids = {(kind, name): builder.add(f"{kind} '{name}'", kind, None)
+           for kind, name in sorted(deps)}
+
+    for node, following in deps.items():
+        builder.require(ids[node], (ids[f] for f in following))
+
+    builder.build()
