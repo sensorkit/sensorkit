@@ -388,34 +388,32 @@ class OttoProgram:
                 + timedelta(seconds=self.config.task.end_time_deadband_seconds)
             )
 
-            logger.info(
-                f"task ({queued.id}): target -> {task.target}, camera -> {task.camera_params}"
-            )
+            logger.info(f"Executing {queued.id} with end_time={task.end_time}")
 
             try:
                 # `end_time` is the domain scheduling deadline; pass it through as the
                 # execution `expiry_time` so the controller enforces the same deadline. Await the
                 # yielded execution so completion (and any failure) surfaces here.
                 await (yield task.submit(context=queued.context, expiry_time=task.end_time))
-                logger.info(f"task ({queued.id}) finished execution successfully.")
+                logger.info(f"Finished executing {queued.id}")
                 # Optional fixed gap after each completed task. Skipped on
                 # cancellation/failure so those propagate without delay.
                 if self.config.task.inter_task_delay_seconds > 0:
                     logger.info(
-                        f"waiting {self.config.task.inter_task_delay_seconds}s before next task"
+                        f"Waiting {self.config.task.inter_task_delay_seconds} s before next task"
                     )
                     await asyncio.sleep(self.config.task.inter_task_delay_seconds)
             except asyncio.CancelledError as e:
-                logger.warning(f"Task ({queued.id}) cancelled: {e}")
+                logger.warning(f"{queued.id} cancelled: {e}")
                 raise
             except Exception as e:
-                logger.exception(f"Task ({queued.id}) failed with exception: {e}")
+                logger.exception(f"{queued.id} failed: {e}")
                 raise
         else:
             # Peek at next task to provide info
             if queued := await self.task_queue.peek_task():
                 time_until = (queued.task.end_time - datetime.now(UTC)).total_seconds()
-                logger.info(f"next task {queued.id} available for {time_until:.1f}s")
+                logger.info(f"Next task ({queued.id}) available for {time_until:.1f} s")
             else:
                 logger.debug("no tasks available")
             yield None
