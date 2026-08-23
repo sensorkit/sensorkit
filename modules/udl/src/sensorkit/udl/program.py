@@ -38,10 +38,9 @@ from sensorkit.udl.publishers import (
 )
 from sensorkit.udl.task_queue import TaskQueue
 
-# Statuses that resolve a request for good: once one is sent, the request must
-# never be re-accepted while its window is still open (the poll re-fetches it
-# after a restart or after the task-reference cleanup). CANCELLED is deliberately
-# absent so an interrupted collect is re-collected on restart.
+# Status values that are persisted to state and, upon restore, prevent
+# reacceptance (CollectResponse=ACCEPT) by the poller when the CollectRequest
+# window is still open.
 _RESOLUTION_STATUSES = frozenset(
     {
         ResponseStatus.COLLECTED,
@@ -51,43 +50,21 @@ _RESOLUTION_STATUSES = frozenset(
     }
 )
 
-# Outbound CollectResponses are checked against the SDK's transcription of the
-# UDL schema before they ship; the SDK itself never validates at runtime.
+# Neither the UDL nor the `udl_sdk` module validate payloads, so we choose to handle
+# that within this module.
 _COLLECT_RESPONSE_VALIDATOR = TypeAdapter(CollectResponseCreateParams)
 
 
-def _prune_blank(value):
-    """Drop dict members that carry no data (None, or objects of only blanks).
-
-    UDL-compliant endpoints have been observed attaching placeholder sub-objects
-    (e.g. ``"stateVector": {}``) to requests whose target is carried elsewhere.
-    Schema-wise those fields are optional, but their object type has required
-    members, so a placeholder would fail validation of an otherwise compliant
-    request. Treating all-blank objects as absent keeps such requests valid
-    while leaving partially-filled objects to fail loudly.
-    """
-    if isinstance(value, dict):
-        pruned = {k: _prune_blank(v) for k, v in value.items()}
-        pruned = {k: v for k, v in pruned.items() if v is not None}
-        return pruned or None
-    return value
-
-
-# Bound on the persisted correlation/progress caches (insertion-ordered, oldest
-# evicted first). Sized to outlive SENPAI's minutes-later results by a wide
-# margin without letting state grow unbounded.
+# Max entries per persisted cache, oldest evicted first. Sized to outlive
+# late-arriving SENPAI results.
 _STATE_CACHE_CAP = 512
 
 
 class _PublishProgress(BaseModel):
-    """Per-request imagery-publishing bookkeeping used to finalize a collect.
+    """Per-CollectRequest frame upload progress, used to send COMPLETED.
 
-    attempted/uploaded count the frames the publisher has tried and landed in
-    UDL, used to detect set completion and whether the set was fully delivered.
-    window is the (start, end) execution window stashed by the task factory on
-    the success path, so the deferred COMPLETED response can stamp the same
-    actual times COLLECTED reported; it stays None until the collect succeeds,
-    which also gates whether COMPLETED is sent at all.
+    window is the (start, end) execution window from the task factory, set
+    only when the collect succeeded; COMPLETED is not sent without it.
     """
 
     attempted: int = 0
@@ -98,23 +75,29 @@ class _PublishProgress(BaseModel):
 class UDLState(BaseModel):
     """Persistent state for UDL program."""
 
-    # Gzipped JSON array of full CollectRequest dumps. The whole state rides in
-    # one NATS message (1 MB max payload); ~290 raw bodies hit that cap, and
-    # gzip on this schema-repetitive JSON buys ~38x.
-    pending_tasks: Base64Bytes = b""
+    # Compressed JSON array of full CollectRequests. Note, the default NATS max
+    # payload size is 1 MB such that if a deployment / program implementation
+    # begins to see "Failed to save state: MaxPayloadError: nats: maximum
+    # payload exceeded" warnings, the max payload size must be increased via
+    # `max_payload` in the NATS server configuration file, presuming that there
+    # are no upstream means to reduce the number of CollectRequests in the
+    # polling horizon.
+    pending_collect_requests: Base64Bytes = Field(
+        default_factory=lambda: gzip.compress(b"[]", mtime=0)
+    )
 
     # Requests already answered with a resolving CollectResponse, mapped to
     # their window end; pruned once the poll filter (endTime > now) can no
     # longer return them.
-    resolved: Dict[str, datetime] = Field(default_factory=dict)
+    resolved_collect_requests: Dict[str, datetime] = Field(default_factory=dict)
 
-    # Frame/EO correlation: the pipeline stamps frames (and thus SenpaiResults)
-    # with the framework's execution task id, while everything here is keyed by
-    # CollectRequest id. Recorded at dispatch, capped at _STATE_CACHE_CAP.
-    task_requests: Dict[str, str] = Field(default_factory=dict)
+    # Maps the framework's execution task ID (stamped on frames and
+    # SenpaiResults) to the CollectRequest ID. Persisted because SENPAI results
+    # arrive minutes after the collect, possibly across a restart.
+    collect_request_ids: Dict[str, str] = Field(default_factory=dict)
 
-    # Imagery-delivery bookkeeping by request id; persisted so a set whose
-    # uploads were interrupted by a restart can still be finalized.
+    # CollectResponses, SkyImagery, and/or EOObservations that did not finish
+    # uploading before a service interruption are continued.
     publish_progress: Dict[str, _PublishProgress] = Field(default_factory=dict)
 
 
@@ -122,27 +105,19 @@ class UDLState(BaseModel):
 class UDLProgram:
     """SensorKit program for UDL (Unified Data Library) integration.
 
-    This program:
-    - Polls UDL for CollectRequests assigned to our sensor
-    - Converts CollectRequests to StandardCollectTasks
-    - Delivers data products per the publish config: SkyImagery frame uploads
-      and/or EOObservations built from senpai detections (see publishers.py)
+    Polls UDL for CollectRequests assigned to our sensor, executes them as
+    StandardCollectTasks, and delivers SkyImagery and/or EOObservations per the
+    publish config (see publishers.py).
 
-    CollectResponse lifecycle for a request: ACCEPTED on receipt, then COLLECTED
-    once the collect task finishes executing, then COMPLETED once the frame set
-    has been delivered (see _finalize_set). REJECTED (unusable/expired request),
-    CANCELLED, or FAILED replace the success path as appropriate.
+    CollectResponse lifecycle: ACCEPTED on receipt, COLLECTED when the task
+    finishes executing, COMPLETED once the frame set has been delivered;
+    REJECTED, CANCELLED, or FAILED otherwise. Resolved requests are remembered
+    in state until their windows close so the poller cannot re-accept them.
 
-    Requests are validated against the UDL schema at receipt and on restore
-    (see _validate_collect_request), and target viability is triaged at receipt so an
-    unusable request is REJECTED while the originating tasker can still re-assign it.
-    Outbound CollectResponses are schema-validated before they ship. Once a
-    request has a resolving response (see _RESOLUTION_STATUSES) it is
-    remembered in state until its window closes, so a poll re-fetch — after a
-    restart or the post-task reference cleanup — cannot re-accept it.
-
-    Supports both username/password and cert-based authentication. The base_url
-    can be pointed at UDL itself or any UDL-compliant endpoint.
+    CollectRequests are schema-validated at receipt and on restore, and the
+    target is validated at receipt so the tasker hears REJECTED while it can
+    still re-assign. The base_url can be UDL itself or any UDL-compliant
+    endpoint.
     """
 
     def __init__(self):
@@ -173,47 +148,47 @@ class UDLProgram:
         # would double-count set progress and double-upload SkyImagery.
         self._seen_frames: Dict[str, None] = {}
 
-        # Background tasks
+        # Background CollectRequest poller
         self._poller: asyncio.Task | None = None
-        self._publisher: asyncio.Task | None = None
 
-        # Data publishers
-        self._imagery: SkyImageryPublisher | None = None
+        # SkyImagery and EOObservation publishers
+        self._publisher: asyncio.Task | None = None
+        self._sky_imagery: SkyImageryPublisher | None = None
         self._eo_observation: EOObservationPublisher | None = None
 
         # Site location (populated from controller)
         self._site: SitePosition | None = None
 
-        # State
         self.state = UDLState()
 
     async def _save_state(self) -> None:
-        """Persist current state to KV store."""
+        """Persist state to KV."""
         try:
-            # Save ACCEPTED tasks that have not yet been COLLECTED.
+            # Save ACCEPTED tasks that have not yet been COLLECTED
             pending = (
                 [request.model_dump(mode="json", by_alias=True) for request in self.queue.iter()]
                 if self.queue
                 else []
             )
-            self.state.pending_tasks = gzip.compress(json.dumps(pending).encode())
+            self.state.pending_collect_requests = gzip.compress(json.dumps(pending).encode())
 
-            # Save publish progress so that we can continue when the service returns.
+            # Save publish progress
             now = datetime.now(UTC)
-            self.state.resolved = {k: v for k, v in self.state.resolved.items() if v > now}
-            for cache in (self.state.task_requests, self.state.publish_progress):
+            self.state.resolved_collect_requests = {k: v for k, v in self.state.resolved_collect_requests.items() if v > now}
+            for cache in (self.state.collect_request_ids, self.state.publish_progress):
                 while len(cache) > _STATE_CACHE_CAP:
                     cache.pop(next(iter(cache)))
             await self.program.kv_put_model(self.state)
+            logger.debug(f"saved state for {self.program.entity}")
         except Exception as e:
             logger.warning(f"Failed to save state: {e}")
 
     async def _restore_state(self) -> None:
-        """Restore state from KV store."""
+        """Restore state from KV."""
         try:
             self.state = await self.program.kv_get_model(UDLState)
             now = datetime.now(UTC)
-            self.state.resolved = {k: v for k, v in self.state.resolved.items() if v > now}
+            self.state.resolved_collect_requests = {k: v for k, v in self.state.resolved_collect_requests.items() if v > now}
             logger.debug(f"restored state for {self.program.entity}")
         except Exception:
             logger.warning(f"No saved state for {self.program.entity}")
@@ -221,13 +196,7 @@ class UDLProgram:
 
     @staticmethod
     def _load_credentials(endpoint: UDLEndpointConfig) -> tuple[str | None, str | None]:
-        """Read UDL_USERNAME/UDL_PASSWORD for an endpoint (use_certs=False).
-
-        Returns (None, None) when no credentials are configured, allowing
-        unauthenticated requests against local UDL-compliant endpoints that
-        don't enforce auth. When exactly one of username/password is provided,
-        the partial config is treated as a mistake and rejected.
-        """
+        """Read UDL_USERNAME/UDL_PASSWORD from .env."""
         env = dotenv_values(endpoint.env_file)
         username = env.get("UDL_USERNAME") or os.environ.get("UDL_USERNAME")
         password = env.get("UDL_PASSWORD") or os.environ.get("UDL_PASSWORD")
@@ -240,21 +209,26 @@ class UDLProgram:
 
         return username or None, password or None
 
-    def _create_client(
+    @staticmethod
+    def _use_certs(endpoint: UDLEndpointConfig) -> bool:
+        """Cert-based auth is selected by configuring BOTH client_cert and client_key."""
+        if bool(endpoint.client_cert) != bool(endpoint.client_key):
+            raise RuntimeError(
+                f"client_cert and client_key must both be set for cert-based auth "
+                f"(endpoint {endpoint.base_url})"
+            )
+        return bool(endpoint.client_cert)
+
+    def _get_client(
         self, endpoint: UDLEndpointConfig, username: str | None, password: str | None
     ) -> AsyncUnifieddatalibrary:
-        """Create an SDK client for an endpoint.
-
-        Auth that doesn't ride the Authorization header (cert/TLS, or none) is
-        handled per request; see program_init.
-        """
-        if endpoint.use_certs:
+        """Create a `udl_sdk` client."""
+        if self._use_certs(endpoint):
             http_client = httpx.AsyncClient(
                 cert=(endpoint.client_cert, endpoint.client_key),
                 verify=endpoint.client_verify,
                 timeout=endpoint.timeout,
             )
-            logger.debug(f"using cert-based auth for {endpoint.base_url}")
             return AsyncUnifieddatalibrary(
                 http_client=http_client,
                 base_url=endpoint.base_url,
@@ -264,13 +238,11 @@ class UDLProgram:
         if endpoint.base_url:
             client_kwargs["base_url"] = endpoint.base_url
         if not endpoint.client_verify:
-            # Basic-auth against a self-signed endpoint (e.g. a local mock):
-            # TLS verification settings only ride on a custom transport.
             client_kwargs["http_client"] = httpx.AsyncClient(verify=False)
 
         if not (username and password):
             logger.warning(
-                f"no UDL credentials configured; issuing unauthenticated requests "
+                f"No UDL credentials configured; issuing unauthenticated requests "
                 f"to {endpoint.base_url}"
             )
 
@@ -288,25 +260,24 @@ class UDLProgram:
         # Restore last known state
         await self._restore_state()
 
-        # Primary client: CollectRequest polling and CollectResponses
-        if not self.config.api.use_certs:
+        # Create main client: CollectRequest polling and CollectResponse posting
+        if not self._use_certs(self.config.api):
             self._username, self._password = self._load_credentials(self.config.api)
-        self.client = self._create_client(
+        self.client = self._get_client(
             self.config.api, self._username, self._password
         )
 
-        # Upload client: SkyImagery only. Aliases the primary client unless a
-        # separate upload endpoint is configured.
+        # Optionally create upload client: SkyImagery posting
         if self.config.api.upload:
-            if not self.config.api.upload.use_certs:
+            if not self._use_certs(self.config.api.upload):
                 self._upload_username, self._upload_password = self._load_credentials(
                     self.config.api.upload
                 )
-            self.upload_client = self._create_client(
+            self.upload_client = self._get_client(
                 self.config.api.upload, self._upload_username, self._upload_password
             )
             logger.debug(
-                f"SkyImagery uploads routed to {self.config.api.upload.base_url}"
+                f"posting SkyImagery to {self.config.api.upload.base_url}"
             )
         else:
             self.upload_client = self.client
@@ -327,28 +298,24 @@ class UDLProgram:
             self._site = await controller_client.kv_get_model(SitePosition)
             logger.debug(
                 f"site location: lat={self._site.latitude_degrees}, "
-                f"lon={self._site.longitude_degrees}, alt={self._site.altitude_km}km"
+                f"lon={self._site.longitude_degrees}, alt={self._site.altitude_km } km"
             )
         except Exception as e:
             logger.warning(
-                f"Could not read SitePosition from controller {self.config.controller}: {e}. "
-                f"SkyImagery will be uploaded without senlat/senlon/senalt."
+                f"Unable to read SitePosition from {self.config.controller}. "
+                f"Uploading SkyImagery without senlat/senlon/senalt: {e}"
             )
 
-        # Initialize task queue with offer window integration.
+        # Initialize task queue with offer window integration
         self.queue = TaskQueue(
             self.program,
             on_expired=self._cancel_collect_request,
-            executing_deadband_s=self.config.end_time_deadband_s,
+            end_time_deadband_s=self.config.end_time_deadband_s,
         )
 
-        # Restore pending tasks from state.
+        # Restore pending tasks from state
         try:
-            pending = (
-                json.loads(gzip.decompress(self.state.pending_tasks))
-                if self.state.pending_tasks
-                else []
-            )
+            pending = json.loads(gzip.decompress(self.state.pending_collect_requests))
         except Exception as e:
             logger.warning(f"Failed to restore pending tasks: {e}")
             pending = []
@@ -363,28 +330,28 @@ class UDLProgram:
             except Exception as e:
                 logger.warning(f"Failed to restore task {task_dict.get('id', '<unknown>')}: {e}")
 
-        await self._init_publishers()
+        await self._publishers_init()
 
-        # Start background poller
+        # Start poller
         self._poller = asyncio.create_task(self._poll_loop())
 
-        # Start frame publisher (feeds the data publishers from the graph sink)
+        # Start publishers
         self._publisher = asyncio.create_task(self._publish_loop())
 
-    async def _init_publishers(self) -> None:
-        """Create the data publishers enabled by the publish config."""
+    async def _publishers_init(self) -> None:
+        """Create the data publishers."""
         if self.config.publish.sky_imagery:
-            self._imagery = SkyImageryPublisher(self)
+            self._sky_imagery = SkyImageryPublisher(self)
         if self.config.publish.eo_observation:
             self._eo_observation = EOObservationPublisher(self)
 
         if self._eo_observation:
             for request in self.tasks.values():
-                self._eo_observation.note_request(request)
+                self._eo_observation.get_collect_request(request)
             await self._eo_observation.start()
 
     async def _cancel_collect_request(self, request: CollectRequestFull) -> None:
-        """A queued request ran out its window without ever executing."""
+        """Cancel a CollectRequest whose window has expired."""
         self.tasks.pop(request.id, None)
         await self._send_response(
             request, ResponseStatus.CANCELLED, notes="Expired before execution"
@@ -395,7 +362,7 @@ class UDLProgram:
         """Cancel tasks, save state, close connections."""
         logger.debug(f"stopping UDL program {self.program.entity}")
 
-        # Send a CANCELLED response for any in-flight CollectRequest executions.
+        # Send a CANCELLED response for any in-flight CollectRequest executions
         if self._in_flight:
             request = self.tasks.get(self._in_flight)
             self._in_flight = None
@@ -414,35 +381,27 @@ class UDLProgram:
                     await task
 
         if self._eo_observation:
-            await self._eo_observation.close()
+            await self._eo_observation.stop()
 
         await self._save_state()
 
         if self.upload_client and self.upload_client is not self.client:
             await self.upload_client.close()
-
         if self.client:
             await self.client.close()
 
-    # ── Polling ──
-
     async def _poll_loop(self) -> None:
-        """Poll UDL for CollectRequests assigned to our sensor."""
+        """Poll UDL for CollectRequests assigned to the configured sensor."""
         logger.debug("poller started")
 
         while True:
             try:
                 now = datetime.now(UTC)
                 horizon = now + timedelta(seconds=self.config.poll_horizon)
-                filter_field = (
-                    "origSensorId"
-                    if self.config.api.poll_filter == "orig_sensor_id"
-                    else "idSensor"
-                )
                 page = await self.client.collect_requests.list(
                     start_time=f"<{_to_udl_timestamp(horizon)}",
                     extra_query={
-                        filter_field: self.config.api.id_sensor,
+                        self.config.api.poll_filter: self.config.api.id_sensor,
                         "endTime": f">{_to_udl_timestamp(now)}",
                     },
                     extra_headers=self._client_headers,
@@ -458,22 +417,35 @@ class UDLProgram:
 
     @staticmethod
     def _validate_collect_request(payload: Dict) -> CollectRequestFull:
-        """Schema-validate a CollectRequest payload (UDL schema via the SDK models).
+        """Schema-validate a CollectRequest payload.
 
-        Blank sub-objects are treated as absent (see _prune_blank); everything
-        else must validate in full. The SDK never validates at runtime — its
-        poll responses are constructed leniently — so this is the only
+        Blank sub-objects are treated as absent (see prune_blank). Note, the
+        `udl_sdk` constructs poll responses leniently, so this is the only
         enforcement point.
         """
-        return CollectRequestFull.model_validate(_prune_blank(payload))
+
+        def prune_blank(value):
+            """Remove dict members that carry no data.
+
+            UDL-compliant endpoints have been observed attaching placeholder
+            sub-objects (e.g. ``"stateVector": {}``) whose required members
+            would fail validation of an otherwise compliant request.
+            """
+            if isinstance(value, dict):
+                pruned = {k: prune_blank(v) for k, v in value.items()}
+                pruned = {k: v for k, v in pruned.items() if v is not None}
+                return pruned or None
+            return value
+
+        return CollectRequestFull.model_validate(prune_blank(payload))
 
     async def _handle_collect_request(self, request: CollectRequestFull) -> None:
-        """Validate a polled CollectRequest, then accept or reject it."""
+        """Process a CollectRequest."""
         if not request.id:
-            logger.error("Ignoring CollectRequest without an id")
+            logger.error("Ignoring CollectRequest without an ID")
             return
 
-        if request.id in self.tasks or request.id in self.state.resolved:
+        if request.id in self.tasks or request.id in self.state.resolved_collect_requests:
             return
 
         if request.end_time and request.end_time < datetime.now(UTC):
@@ -492,9 +464,9 @@ class UDLProgram:
             )
             return
 
-        # Triage the target now rather than at window open, so the tasker
-        # hears REJECTED while it can still re-assign the collect.
-        if self._build_target(request) is None:
+        # Validate/create the target now, before the window opens, to allow the original
+        # tasker to receive a REJECTED response early.
+        if self._get_target(request) is None:
             await self._send_response(
                 request, ResponseStatus.REJECTED, notes="Unsupported target type"
             )
@@ -504,13 +476,11 @@ class UDLProgram:
 
         self.tasks[request.id] = request
         if self._eo_observation:
-            self._eo_observation.note_request(request)
+            self._eo_observation.get_collect_request(request)
         await self.queue.push_task(request)
 
         await self._send_response(request, ResponseStatus.ACCEPTED)
         await self._save_state()
-
-    # ── Responses ──
 
     async def _send_response(
         self,
@@ -521,15 +491,10 @@ class UDLProgram:
         actual_end_time: datetime | None = None,
         notes: str | None = None,
     ) -> None:
-        """Send a CollectResponse.
-
-        Resolving statuses are recorded (and persisted) before the send is
-        attempted: the disposition of the request is decided regardless of
-        whether this particular response reaches the endpoint.
-        """
+        """Send a CollectResponse."""
         if status in _RESOLUTION_STATUSES and request.id:
-            # No window end → retire the resolved record after the poll horizon.
-            self.state.resolved[request.id] = request.end_time or (
+            # No window end → retire the resolved record after the poll horizon
+            self.state.resolved_collect_requests[request.id] = request.end_time or (
                 datetime.now(UTC) + timedelta(seconds=self.config.poll_horizon)
             )
             await self._save_state()
@@ -552,15 +517,13 @@ class UDLProgram:
             "actual_end_time": _to_udl_timestamp(actual_end_time) if actual_end_time else None,
             "notes": notes,
         }
-        # Optional fields ride only when set: the SDK serializes an explicit
-        # None as JSON null, which is off the UDL schema.
         params = {k: v for k, v in params.items() if v is not None}
 
         try:
             _COLLECT_RESPONSE_VALIDATOR.validate_python(params)
         except ValidationError as e:
             logger.error(
-                f"CollectResponse for {request.id} violates the UDL schema; not sent: {e}"
+                f"Unable to send CollectResponse for {request.id} due to schema violation: {e}"
             )
             return
 
@@ -569,11 +532,9 @@ class UDLProgram:
                 **params,
                 extra_headers=self._client_headers,
             )
-            logger.debug(f"sent {status.value} response for request {request.id}")
+            logger.debug(f"sent {status.value} response for {request.id}")
         except Exception as e:
-            logger.warning(f"Failed to send response for {request.id}: {e}")
-
-    # ── Publishing ──
+            logger.warning(f"Failed to send CollectResponse for {request.id}: {e}")
 
     async def _publish_loop(self) -> None:
         logger.debug("publisher started")
@@ -593,59 +554,57 @@ class UDLProgram:
     async def _handle_frame(self, context: dict, data: bytes) -> None:
         """Track set progress for a collected frame and hand it to the publishers."""
         task_id: str | None = context.get("task_id")
-        if not task_id:
-            return
 
-        # The pipeline stamps the framework's execution id; translate to the
-        # CollectRequest it served (falling back to a direct match for
-        # pipelines that already carry the request id).
-        request_id = self.state.task_requests.get(task_id, task_id)
+        # The pipeline stamps the framework's execution ID; translate to the
+        # CollectRequest it served.
+        request_id = self.state.collect_request_ids.get(task_id, task_id)
         request = self.tasks.get(request_id)
-        if not request:
-            logger.warning(f"No CollectRequest found for task_id {task_id}")
-            return
 
         info = context.get(FileInfo)
         frame_key = str(info.path) if info else f"{request_id}:{context.get('frame_num')}"
         if frame_key in self._seen_frames:
-            logger.debug(f"task ({request.id}): duplicate frame event for {frame_key}; skipping")
+            logger.debug(f"duplicate frame event for {frame_key}; skipping")
             return
         self._seen_frames[frame_key] = None
         while len(self._seen_frames) > _STATE_CACHE_CAP:
             self._seen_frames.pop(next(iter(self._seen_frames)))
 
+        if request is None:
+            cfg = self.config.publish.sky_imagery
+            if task_id in self.state.collect_request_ids:
+                logger.warning(f"No CollectRequest found for {task_id}")
+            elif self._sky_imagery and cfg.classification_marking and cfg.data_mode:
+                await self._sky_imagery.publish(context, data)
+            return
+
         image_set_length = request.num_frames or 1
         progress = self.state.publish_progress.setdefault(request.id, _PublishProgress())
         progress.attempted += 1
 
-        if self._imagery:
+        if self._sky_imagery:
             try:
-                await self._imagery.publish(context, data, request)
+                await self._sky_imagery.publish(context, data, request)
                 progress.uploaded += 1
             except Exception as e:
-                logger.warning(f"Task ({request.id}) failed to upload skyimagery: {e}")
+                logger.warning(f"Failed to upload SkyImagery for {request.id}: {e}")
 
-        await self._finalize_set(request, progress, image_set_length)
+        await self._send_completed_collect_response(request, progress, image_set_length)
 
-    async def _finalize_set(
+    async def _send_completed_collect_response(
         self, request: CollectRequestFull, progress: _PublishProgress, image_set_length: int
     ) -> None:
         """Send COMPLETED once every frame in the set has been seen.
 
-        With imagery publishing enabled, at least one frame must have reached
-        UDL — a partially-delivered set is still "completed" enough to ack, so
-        per-frame upload failures (including the final frame) are tolerated.
-        Without it (including EO-only publishing), seeing the full set is
-        completion. The window guard scopes COMPLETED to tasks that collected
-        successfully (the factory only stashes a window on the success path).
-        EO posting never gates COMPLETED: SENPAI results arrive minutes later
-        and are best-effort.
+        With imagery publishing enabled, at least one frame must have been
+        uploaded (per-frame failures are tolerated). The window guard limits
+        COMPLETED to tasks that collected successfully. EO posting never gates
+        COMPLETED (SENPAI results arrive minutes later, best-effort).
         """
         if progress.attempted < image_set_length:
             return
 
         self.state.publish_progress.pop(request.id, None)
-        delivered = self._imagery is None or progress.uploaded > 0
+        delivered = self._sky_imagery is None or progress.uploaded > 0
 
         if delivered and progress.window is not None:
             start_time, end_time = progress.window
@@ -656,18 +615,15 @@ class UDLProgram:
                 actual_end_time=end_time,
             )
             detail = (
-                f"uploaded {progress.uploaded}/{image_set_length} frames"
-                if self._imagery
-                else f"{image_set_length} frames seen (imagery publishing disabled)"
+                f": uploaded {progress.uploaded}/{image_set_length} frames"
+                if self._sky_imagery
+                else ""
             )
-            logger.info(f"task {request.id} COMPLETED: {detail}")
-        elif self._imagery and progress.uploaded == 0:
+            logger.info(f"{request.id} COMPLETED{detail}")
+        elif self._sky_imagery and progress.uploaded == 0:
             logger.warning(
-                f"task ({request.id}): all {image_set_length} frame uploads "
-                f"failed; COMPLETED not sent"
+                f"Failed to upload all frames for {request.id}; COMPLETED not sent"
             )
-
-    # ── Task generation ──
 
     @sk.task_factory
     async def generate(self):
@@ -677,7 +633,7 @@ class UDLProgram:
             yield None
             return
 
-        target = self._build_target(request)
+        target = self._get_target(request)
         if target is None:
             logger.warning(f"Task ({request.id}): Could not build target, skipping")
             await self._send_response(
@@ -702,10 +658,10 @@ class UDLProgram:
                 else 1.0,
                 frame_count=request.num_frames or 1,
             ),
-            sidereal_frames=self._track_mode(request),
+            sidereal_frames=self._get_sidereal_frames(request),
         )
 
-        logger.info(f"Task ({request.id}): starting execution with end_time={task.end_time}")
+        logger.info(f"Executing {request.id} with end_time={task.end_time}")
 
         # A fresh execution is a fresh frame set: drop bookkeeping left by any
         # earlier interrupted attempt of this request.
@@ -713,23 +669,18 @@ class UDLProgram:
         self._in_flight = request.id
 
         try:
-            # The yield hands back the minted TaskExecution; awaiting it yields
-            # a TaskExecutionResult whose start_time/end_time bracket the
-            # controller's task execution (before slew … after the mount stop),
-            # which we report as the CollectResponse's actual window.
-            # Per-exposure precision is carried separately by SkyImagery's
-            # expStartTime/expEndTime.
+            # The yield returns the minted TaskExecution; awaiting it returns a
+            # TaskExecutionResult whose start/end times bracket the execution
+            # (reported as the CollectResponse actual window).
             execution = yield task.submit(expiry_time=end_time)
             # Frames (and thus SenpaiResults) are stamped with the framework's
-            # execution id, not the CollectRequest id; record the pairing for
+            # execution ID, not the CollectRequest ID; record the pairing for
             # the publishers.
-            self.state.task_requests[str(execution.task_id)] = request.id
+            self.state.collect_request_ids[str(execution.task_id)] = request.id
             result = await execution
-            logger.info(f"Task ({request.id}): finished execution successfully")
-            # Stash the execution window so the COMPLETED response — sent later
-            # from _finalize_set once the imagery set finishes uploading — can
-            # report the same actual times COLLECTED carries here. setdefault
-            # preserves any frame counts the publisher already recorded.
+            logger.info(f"Finished executing {request.id}")
+            # Stash the execution window so the later COMPLETED response
+            # reports the same actual times as COLLECTED.
             progress = self.state.publish_progress.setdefault(request.id, _PublishProgress())
             progress.window = (
                 result.start_time if result else None,
@@ -742,9 +693,7 @@ class UDLProgram:
                 actual_end_time=result.end_time if result else None,
             )
         except asyncio.CancelledError as e:
-            logger.warning(f"Task ({request.id}): cancelled. {e=}")
-            # program_deinit clears _in_flight after sending its own CANCELLED;
-            # only respond here for cancellations it didn't already cover.
+            logger.warning(f"{request.id} cancelled: {e}")
             if self._in_flight == request.id:
                 await self._send_response(
                     request,
@@ -753,7 +702,7 @@ class UDLProgram:
                 )
             raise
         except Exception as e:
-            logger.warning(f"Task ({request.id}): failed. {e=}")
+            logger.warning(f"{request.id} failed: {e}")
             await self._send_response(
                 request,
                 ResponseStatus.FAILED,
@@ -763,9 +712,8 @@ class UDLProgram:
         finally:
             self._in_flight = None
             await self.queue.remove_task(request.id)
-            # Keep the task reference and publish progress for imagery-publishing
-            # correlation, then drop them after a grace period (bounds leaks when
-            # a set never finishes, e.g. dropped frames).
+            # Drop the task reference and publish progress after a grace
+            # period (bounds leaks when a set never finishes).
             asyncio.get_event_loop().call_later(
                 300,
                 lambda rid=request.id: (
@@ -774,20 +722,8 @@ class UDLProgram:
                 ),
             )
 
-    # ── Target building ──
-
-    def _track_mode(self, request: CollectRequestFull) -> list[int]:
-        """Frame indices (0-based) to hold under sidereal tracking.
-
-        The mount rate-tracks a satellite target by default (stars streak);
-        listing a frame here instead holds RA/Dec fixed for it (the satellite
-        streaks). UDL's ``type`` is a free string, so one match serves UDL and
-        UDL-compliant endpoints alike: ``STARE``/``SIDEREAL`` request the whole
-        collect sidereally, while the compound ``RATE TRACK SIDEREAL`` means
-        rate-track with only the final frame sidereal. Everything else
-        (``RATE TRACK``, ``OBJECT``, …) is all-rate. A RA/Dec target is already
-        sidereal at the handler regardless of this.
-        """
+    def _get_sidereal_frames(self, request: CollectRequestFull) -> list[int]:
+        """Sidereal frame indices for StandardCollectTask."""
         num_frames = request.num_frames or 1
         request_type = (request.type or "").upper()
         # Check the compound type before the bare SIDEREAL/STARE match, since it
@@ -798,29 +734,21 @@ class UDLProgram:
             return list(range(num_frames))
         return []
 
-    def _build_target(self, request: CollectRequestFull) -> Target | None:
-        """Build a SensorKit Target from a CollectRequest.
-
-        Supports Elset (TLE), StateVector, and RA/Dec targets.
-        """
-        # Try Elset (TLE) first
-        if request.elset and request.elset.line1 and request.elset.line2:
-            elset = request.elset
-            line0 = f"0 {elset.sat_no or request.orig_object_id or 'UNKNOWN'}"
-
-            return TLETarget(
-                tle=TLE(
-                    line0=line0,
-                    line1=elset.line1,
-                    line2=elset.line2,
+    def _get_target(self, request: CollectRequestFull) -> Target | None:
+        """Build a SensorKit Target from a CollectRequest."""
+        match request:
+            case CollectRequestFull(elset=elset) if elset and elset.line1 and elset.line2:
+                return TLETarget(
+                    tle=TLE(
+                        line0=f"0 {elset.sat_no or request.orig_object_id or 'UNKNOWN'}",
+                        line1=elset.line1,
+                        line2=elset.line2,
+                    )
                 )
-            )
 
-        # Try StateVector. A position without its epoch is not a usable target:
-        # propagating from a made-up time yields confidently wrong pointing.
-        if request.state_vector:
-            sv = request.state_vector
-            if None not in (sv.xpos, sv.ypos, sv.zpos, sv.epoch):
+            case CollectRequestFull(state_vector=sv) if sv and None not in (
+                sv.xpos, sv.ypos, sv.zpos, sv.epoch
+            ):
                 frame_str = sv.reference_frame or "J2000"
                 try:
                     ref_frame = UDLReferenceFrame(frame_str).to_sensorkit_frame()
@@ -847,11 +775,9 @@ class UDLProgram:
                     ),
                 )
 
-        # Fallback: RA/Dec pointing
-        if request.ra is not None and request.dec is not None:
-            return ICRSTarget(
-                coords=Equatorial(ra=request.ra, dec=request.dec),
-            )
+            case CollectRequestFull(ra=ra, dec=dec) if ra is not None and dec is not None:
+                return ICRSTarget(coords=Equatorial(ra=ra, dec=dec))
 
-        logger.warning(f"Task ({request.id}): No supported target data found")
-        return None
+            case _:
+                logger.warning(f"No supported target data found in CollectRequest {request.id}")
+                return None

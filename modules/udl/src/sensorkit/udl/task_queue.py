@@ -9,18 +9,14 @@ from unifieddatalibrary.types import CollectRequestFull
 
 
 class TaskQueue:
-    """A queue of CollectRequests to be executed, integrated with UDL.
+    """A queue of CollectRequests to be executed."""
 
-    Stores CollectRequestFull objects from the UDL API. Conversion to
-    StandardCollectTask happens in the program's task generator.
-    """
-
-    def __init__(self, program_binding, on_expired=None, executing_deadband_s: float = 0.0):
+    def __init__(self, program, on_expired=None, end_time_deadband_s: float = 0.0):
+        self.program = program
         self.tasks: list[CollectRequestFull] = []
-        self.program_binding = program_binding
         self._lock = asyncio.Lock()
 
-        # Async callback invoked for each request whose window ends while it is still queued.
+        # Async callback invoked for each request whose window ends while it is still queued
         self._on_expired = on_expired
 
         # The popped request currently executing. Its offer is kept standing
@@ -30,7 +26,7 @@ class TaskQueue:
         # same deadband the task itself is granted, so a deadband overrun
         # doesn't lose its offer mid-run.
         self._executing: CollectRequestFull | None = None
-        self._executing_deadband = timedelta(seconds=executing_deadband_s)
+        self.end_time_deadband_s = timedelta(seconds=end_time_deadband_s)
 
     async def push_task(self, request: CollectRequestFull) -> None:
         """Add a CollectRequest to the queue and update offers."""
@@ -96,25 +92,25 @@ class TaskQueue:
 
     async def _update_offers(self) -> None:
         """Update the offer window from the executing request plus queued tasks."""
-        self.program_binding.clear_offers()
+        self.program.clear_offers()
 
         now = datetime.now(UTC)
         if self._executing is not None:
             request = self._executing
-            self.program_binding.add_offer(
+            self.program.add_offer(
                 start=request.start_time or now,
-                end=request.end_time + self._executing_deadband if request.end_time else None,
+                end=request.end_time + self.end_time_deadband_s if request.end_time else None,
                 obj=request.id,
             )
 
         for request in self.tasks:
-            self.program_binding.add_offer(
+            self.program.add_offer(
                 start=request.start_time or now,
                 end=request.end_time,
                 obj=request.id,
             )
 
-        await self.program_binding.publish_offers()
+        await self.program.publish_offers()
 
     def iter(self):
         return iter(self.tasks)

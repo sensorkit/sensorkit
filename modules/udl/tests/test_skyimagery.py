@@ -43,7 +43,7 @@ def frame_context(name="test.fits", **fields):
 
 def uploaded_metadata(program, index=-1):
     """The SkyImagery metadata JSON from an uploaded ZIP, newest by default."""
-    zip_bytes = program._imagery._upload.uploads[index]
+    zip_bytes = program._sky_imagery._upload.uploads[index]
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         (name,) = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
@@ -67,14 +67,22 @@ def program(program_impl):
     p._site = SITE
     p.client = FakeUDLClient()
     p.upload_client = p.client
-    p._imagery = SkyImageryPublisher(p)
-    p._imagery._upload = FakeUpload()
+    p._sky_imagery = SkyImageryPublisher(p)
+    p._sky_imagery._upload = FakeUpload()
     return p
 
 
 async def publish_frame(program, request, **context_fields):
-    """Hand one collected frame to the program, as the publish loop does."""
+    """Hand one collected frame to the program, as the publish loop does.
+
+    Provides every context key SkyImageryPublisher.publish requires; tests
+    override via context_fields.
+    """
     program.tasks[request.id] = request
+    context_fields.setdefault("exptime", 4.0)
+    context_fields.setdefault("image_width", 2048)
+    context_fields.setdefault("image_height", 2048)
+    context_fields.setdefault("bits_per_pixel", 16)
     context = frame_context(
         task_id=request.id,
         frame_num=0,
@@ -201,6 +209,42 @@ class TestSkyImageryMetadata:
         assert metadata["imageSetId"] == request.id
 
 
+class TestUntaskedFrames:
+    """Frames with no CollectRequest publish only with configured provenance."""
+
+    CONTEXT = dict(
+        task_id="not-a-known-task",
+        frame_num=0,
+        date_obs="2026-03-21T07:18:47.082000",
+        exptime=4.0,
+        image_width=2048,
+        image_height=2048,
+        bits_per_pixel=16,
+        frame_count=1,
+    )
+
+    @pytest.mark.asyncio
+    async def test_untasked_frame_dropped_without_provenance(self, program):
+        await program._handle_frame(frame_context(**self.CONTEXT), b"\x00" * 100)
+        assert program._sky_imagery._upload.uploads == []
+
+    @pytest.mark.asyncio
+    async def test_untasked_frame_uses_configured_provenance(self, program):
+        cfg = program.config.publish.sky_imagery
+        cfg.classification_marking = "U"
+        cfg.data_mode = "TEST"
+        cfg.origin = "TEST_ORG"
+
+        await program._handle_frame(frame_context(**self.CONTEXT), b"\x00" * 100)
+
+        metadata = uploaded_metadata(program)
+        assert metadata["classificationMarking"] == "U"
+        assert metadata["dataMode"] == "TEST"
+        assert metadata["origin"] == "TEST_ORG"
+        assert "idRequest" not in metadata
+        assert "satNo" not in metadata
+
+
 class TestResolveUploadUrl:
     """UDL proper serves the imagery filedrop on a dedicated subdomain, so the
     known UDL hosts map there; any other base_url is presumed to serve the
@@ -208,7 +252,7 @@ class TestResolveUploadUrl:
     """
 
     def resolve(self, program):
-        return program._imagery._resolve_upload_url(program.config.api)
+        return program._sky_imagery._get_upload_url(program.config.api)
 
     def test_default_base_url_uses_production_imagery(self, program):
         program.config.api.base_url = None
@@ -257,7 +301,7 @@ class TestCompletedResponse:
         """
         request = tle_request(num_frames=num_frames)
         program.tasks[request.id] = request
-        program._imagery._upload.fail = upload_fails
+        program._sky_imagery._upload.fail = upload_fails
 
         if stash_window:
             program.state.publish_progress[request.id] = _PublishProgress(window=cls.WINDOW)
@@ -274,6 +318,10 @@ class TestCompletedResponse:
                 task_id=request.id,
                 frame_num=frame_num,
                 date_obs="2026-03-21T07:18:47.082000",
+                exptime=4.0,
+                image_width=2048,
+                image_height=2048,
+                bits_per_pixel=16,
             )
             await program._handle_frame(context, b"\x00" * 100)
 
@@ -333,7 +381,7 @@ class TestCompletedResponse:
     async def test_completed_without_imagery_publisher(self, program):
         """With imagery publishing disabled, seeing the full set is completion."""
         request = self.arm(program, num_frames=2)
-        program._imagery = None
+        program._sky_imagery = None
         await self.publish_frames(program, request, 2)
 
         assert program.client.collect_responses.statuses() == [ResponseStatus.COMPLETED.value]
@@ -342,7 +390,7 @@ class TestCompletedResponse:
     async def test_no_completed_without_imagery_until_set_seen(self, program):
         """Imagery disabled: COMPLETED still waits for the full set."""
         request = self.arm(program, num_frames=3)
-        program._imagery = None
+        program._sky_imagery = None
         await self.publish_frames(program, request, 2)
 
         assert program.client.collect_responses.statuses() == []

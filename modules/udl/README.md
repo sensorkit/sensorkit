@@ -70,8 +70,8 @@ value:
   api:
     # base_url: https://test.unifieddatalibrary.com   # omit for production UDL
     id_sensor: MY_UDL_SENSOR           # UDL-registered sensor ID
-    poll_filter: id_sensor             # CollectRequest field matched against id_sensor:
-                                       # id_sensor (default) | orig_sensor_id
+    poll_filter: idSensor              # CollectRequest field matched against id_sensor:
+                                       # idSensor (default) | origSensorId
     source: MY_ORG                     # UDL provenance: org/system originating records
     env_file: .env                     # UDL_USERNAME / UDL_PASSWORD
     timeout: 60.0                      # JSON API request timeout (seconds)
@@ -139,13 +139,12 @@ UDL_PASSWORD=<your_udl_password>
 
 Set both or neither — with neither, requests are issued unauthenticated (for
 local UDL-compliant endpoints that don't enforce auth). For endpoints that
-require client certificates instead, set `use_certs: true` with `client_cert`,
-`client_key`, and optionally `client_verify: false`:
+require client certificates instead, set `client_cert` and `client_key` (both,
+which selects cert auth), and optionally `client_verify: false`:
 
 ```yaml
   api:
     base_url: https://udl-compliant.example
-    use_certs: true
     client_cert: /path/to/client.cert
     client_key: /path/to/client.key
 ```
@@ -203,7 +202,6 @@ basic auth, upload to a cert-authenticated UDL-compliant endpoint), add an
     env_file: .env
     upload:
       base_url: https://udl-compliant.example
-      use_certs: true
       client_cert: /path/to/client.pem
       client_key: /path/to/client.key
 ```

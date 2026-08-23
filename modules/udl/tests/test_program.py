@@ -107,7 +107,7 @@ class TestPersistedState:
         restored.program = program_impl
         await restored._restore_state()
 
-        (task_dict,) = json.loads(gzip.decompress(restored.state.pending_tasks))
+        (task_dict,) = json.loads(gzip.decompress(restored.state.pending_collect_requests))
         revived = CollectRequestFull.model_validate(task_dict)
         assert revived.id == request.id
         assert revived.num_frames == request.num_frames
@@ -189,7 +189,7 @@ class TestPollFilter:
 
     @pytest.mark.asyncio
     async def test_orig_sensor_id_filter(self, program):
-        program.config.api.poll_filter = "orig_sensor_id"
+        program.config.api.poll_filter = "origSensorId"
 
         await poll_once(program)
 

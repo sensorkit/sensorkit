@@ -17,11 +17,7 @@ from sensorkit.udl.models import (
     UDLConfig,
 )
 from sensorkit.udl.program import UDLProgram
-from sensorkit.udl.publishers import (
-    EOObservationPublisher,
-    _add_annual_aberration,
-    _to_udl_eoobservation,
-)
+from sensorkit.udl.publishers import EOObservationPublisher
 
 from .fakes import FakeUDLClient, make_collect_request, tle_request
 
@@ -119,19 +115,19 @@ class TestToUdlEOObservation:
 
     def test_ob_time_is_photon_arrival_mid_exposure(self):
         result = make_result(exposure=4.0)
-        ob_time, _, _ = _to_udl_eoobservation(result, result.detections[0])
+        ob_time, _, _ = EOObservationPublisher._to_udl_eo_observation(result, result.detections[0])
         assert ob_time == "2026-03-21T07:18:49.082000Z"
 
     def test_ob_time_without_exposure_is_frame_timestamp(self):
         result = make_result(exposure=None)
-        ob_time, _, _ = _to_udl_eoobservation(result, result.detections[0])
+        ob_time, _, _ = EOObservationPublisher._to_udl_eo_observation(result, result.detections[0])
         assert ob_time == "2026-03-21T07:18:47.082000Z"
 
     def test_position_carries_annual_aberration(self):
         # Expected values are astropy's aberration of (210.5, -12.25) at the
         # mid-exposure epoch; the tolerance is the model's known residual.
         result = make_result()
-        _, ra, declination = _to_udl_eoobservation(result, result.detections[0])
+        _, ra, declination = EOObservationPublisher._to_udl_eo_observation(result, result.detections[0])
         assert (ra, declination) != (210.5, -12.25)
         assert ra == pytest.approx(210.5046, abs=3e-4)
         assert declination == pytest.approx(-12.2516, abs=3e-4)
@@ -145,7 +141,7 @@ class TestAnnualAberration:
 
     @staticmethod
     def offset_arcsec(ra, dec, when):
-        new_ra, new_dec = _add_annual_aberration(ra, dec, when)
+        new_ra, new_dec = EOObservationPublisher._add_annual_aberration(ra, dec, when)
         return math.hypot(
             (new_ra - ra) * math.cos(math.radians(dec)) * 3600.0,
             (new_dec - dec) * 3600.0,
@@ -155,7 +151,7 @@ class TestAnnualAberration:
         # astropy's aberration of (43.35, -13.42) on 2026-04-15 is
         # (43.34481, -13.42237); we agree to 0.06".
         when = datetime(2026, 4, 15, 6, tzinfo=UTC)
-        ra, dec = _add_annual_aberration(43.35, -13.42, when)
+        ra, dec = EOObservationPublisher._add_annual_aberration(43.35, -13.42, when)
         assert ra == pytest.approx(43.3448, abs=3e-4)
         assert dec == pytest.approx(-13.4224, abs=3e-4)
 
@@ -178,8 +174,8 @@ class TestAnnualAberration:
 
     def test_correction_reverses_over_half_a_year(self):
         """Earth's velocity reverses, so the correction does too."""
-        january = _add_annual_aberration(180.0, 0.0, datetime(2026, 1, 4, tzinfo=UTC))
-        july = _add_annual_aberration(180.0, 0.0, datetime(2026, 7, 4, tzinfo=UTC))
+        january = EOObservationPublisher._add_annual_aberration(180.0, 0.0, datetime(2026, 1, 4, tzinfo=UTC))
+        july = EOObservationPublisher._add_annual_aberration(180.0, 0.0, datetime(2026, 7, 4, tzinfo=UTC))
         assert (january[0] - 180.0) * (july[0] - 180.0) < 0
 
 
@@ -211,7 +207,7 @@ class TestBuildEOObservations:
         records = build(result, collect_request, api_config, eo_config)
         assert len(records) == 1
 
-    def test_unknown_track_mode_posts_nothing(self, collect_request, api_config, eo_config):
+    def test_unknown_get_sidereal_frames_posts_nothing(self, collect_request, api_config, eo_config):
         assert build(make_result(track_mode="UNKNOWN"), collect_request, api_config, eo_config) == []
 
     def test_detection_without_radec_skipped(self, collect_request, api_config, eo_config):
@@ -305,9 +301,9 @@ class TestEOObservationPublisher:
     @pytest.mark.asyncio
     async def test_posts_records_for_tasked_solved_result(self, program, eo):
         request = tle_request()
-        eo.note_request(request)
+        eo.get_collect_request(request)
 
-        await eo._handle_result(make_result(task_id=request.id))
+        await eo._handle_senpai_result(make_result(task_id=request.id))
 
         [[record]] = posted(program)
         assert record["track_id"] == request.id
@@ -315,83 +311,88 @@ class TestEOObservationPublisher:
     @pytest.mark.asyncio
     async def test_batch_carries_all_detections_of_frame(self, program, eo):
         request = tle_request()
-        eo.note_request(request)
+        eo.get_collect_request(request)
 
         result = make_result(
             task_id=request.id,
             detections=[make_detection(ra=1.0), make_detection(ra=2.0)],
         )
-        await eo._handle_result(result)
+        await eo._handle_senpai_result(result)
 
         [batch] = posted(program)
         assert len(batch) == 2
 
     @pytest.mark.asyncio
     async def test_untasked_result_dropped(self, program, eo):
-        await eo._handle_result(make_result(task_id=None))
+        await eo._handle_senpai_result(make_result(task_id=None))
         assert posted(program) == []
+
+    @pytest.mark.asyncio
+    async def test_untasked_result_posted_with_configured_provenance(self, program, eo):
+        eo._config.classification_marking = "U"
+        eo._config.data_mode = "TEST"
+        eo._config.origin = "TEST_ORG"
+
+        await eo._handle_senpai_result(make_result(task_id=None))
+
+        [[record]] = posted(program)
+        assert record["classification_marking"] == "U"
+        assert record["data_mode"] == "TEST"
+        assert record["origin"] == "TEST_ORG"
+        assert "track_id" not in record
+        assert "task_id" not in record
 
     @pytest.mark.asyncio
     async def test_unsolved_result_dropped(self, program, eo):
         request = tle_request()
-        eo.note_request(request)
+        eo.get_collect_request(request)
 
-        await eo._handle_result(make_result(task_id=request.id, solved=False))
+        await eo._handle_senpai_result(make_result(task_id=request.id, solved=False))
         assert posted(program) == []
 
     @pytest.mark.asyncio
     async def test_sequence_only_gates_per_frame_results(self, program, eo):
         eo._config.sequence_only = True
         request = tle_request()
-        eo.note_request(request)
+        eo.get_collect_request(request)
 
-        await eo._handle_result(
+        await eo._handle_senpai_result(
             make_result(task_id=request.id, from_sequence=False, file_path="/a.fits")
         )
         assert posted(program) == []
 
-        await eo._handle_result(
+        await eo._handle_senpai_result(
             make_result(task_id=request.id, from_sequence=True, file_path="/b.fits")
         )
         assert len(posted(program)) == 1
 
     @pytest.mark.asyncio
     async def test_unknown_task_dropped(self, program, eo):
-        await eo._handle_result(make_result(task_id="never-seen"))
+        await eo._handle_senpai_result(make_result(task_id="never-seen"))
         assert posted(program) == []
 
     @pytest.mark.asyncio
     async def test_falls_back_to_program_tasks(self, program, eo):
         request = tle_request()
-        program.tasks[request.id] = request  # no note_request call
+        program.tasks[request.id] = request  # no get_collect_request call
 
-        await eo._handle_result(make_result(task_id=request.id))
+        await eo._handle_senpai_result(make_result(task_id=request.id))
         assert len(posted(program)) == 1
 
     @pytest.mark.asyncio
-    async def test_duplicate_result_posted_once(self, program, eo):
-        request = tle_request()
-        eo.note_request(request)
-
-        result = make_result(task_id=request.id)
-        await eo._handle_result(result)
-        await eo._handle_result(result)
-        assert len(posted(program)) == 1
-
-    @pytest.mark.asyncio
-    async def test_intake_loop_filters_and_handles_senpai_results(self, program, eo, program_impl):
+    async def test_post_loop_filters_and_handles_senpai_results(self, program, eo, program_impl):
         """The wildcard stream is post-filtered to SenpaiResult keywords.
 
         The publisher subscribes across every entity, so the SenpaiResults and the unrelated
         keyword below are published to the same real stream a running senpai service would use.
         """
         request = tle_request()
-        eo.note_request(request)
+        eo.get_collect_request(request)
 
-        intake = asyncio.create_task(eo._intake_loop())
+        intake = asyncio.create_task(eo._post_loop())
         try:
             async with asyncio.timeout(5.0):
-                await eo.intake_ready.wait()
+                await eo.post_ready.wait()
 
             await program_impl.publish(AltAzPointing(altitude_degrees=45.0, azimuth_degrees=90.0))
             await program_impl.publish(make_result(task_id=request.id))

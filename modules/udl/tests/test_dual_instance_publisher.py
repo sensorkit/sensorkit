@@ -164,7 +164,7 @@ def make_program(
     program.tasks = {collect_request.id: collect_request}
     program.program = program_impl
     program.queue = TaskQueue(program_impl)
-    program._imagery = SkyImageryPublisher(program)
+    program._sky_imagery = SkyImageryPublisher(program)
     return program
 
 

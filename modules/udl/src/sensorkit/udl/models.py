@@ -4,7 +4,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # Re-export SDK types for convenience
 from unifieddatalibrary.types import CollectRequestFull, CollectResponseFull  # noqa: F401
@@ -59,19 +59,10 @@ class UDLEndpointConfig(BaseModel):
         ),
     )
 
-    # Authentication method selector
-    use_certs: bool = Field(
-        default=False,
-        description=(
-            "If True, use cert-based auth (for UDL-compliant endpoints that "
-            "require client certificates). If False, use username/password."
-        ),
-    )
-
-    # Path to .env file for username/password auth (when use_certs=False)
+    # Path to .env file for username/password auth (alternative to certs)
     env_file: str = Field(default=".env", description="Path to .env file containing UDL_USERNAME and UDL_PASSWORD")
 
-    # Cert-based auth (when use_certs=True)
+    # Path to certs-based auth files (alternative to username/password)
     client_cert: str | None = None
     client_key: str | None = None
     client_verify: bool = Field(default=True)
@@ -94,8 +85,8 @@ class UDLAPIConfig(UDLEndpointConfig):
     # Identify the sensor and the polling method
     id_sensor: str = Field(description="The sensor ID, mapping to 'idSensor' and 'origSensorId'.")
     # Poll for CollectRequests based on idSensor *or* origSensorId
-    poll_filter: Literal["id_sensor", "orig_sensor_id"] = Field(
-        default="id_sensor",
+    poll_filter: Literal["idSensor", "origSensorId"] = Field(
+        default="idSensor",
         description=(
             "The UDL key ('idSensor' or 'origSensorId', defaults to 'idSensor') to use for CollectRequest polling."
         ),
@@ -105,6 +96,11 @@ class UDLAPIConfig(UDLEndpointConfig):
 
 class SkyImageryPublishConfig(BaseModel):
     """SkyImagery delivery settings; presence of the block enables the publisher."""
+    # Provenance for frames with no CollectRequest
+    classification_marking: str | None = None
+    data_mode: str | None = None
+    origin: str | None = None
+
     image_type: str = Field(
         default="FITS",
         description=(
@@ -117,9 +113,20 @@ class SkyImageryPublishConfig(BaseModel):
         description="Path to save SkyImagery locally."
     )
 
+    @model_validator(mode="after")
+    def _require_classification_marking_and_data_mode(self):
+        if bool(self.classification_marking) != bool(self.data_mode):
+            raise ValueError("Must set both classification_marking and data_mode for publishing without a CollectRequest")
+        return self
+
 
 class EOObservationPublishConfig(BaseModel):
     """EOObservation delivery settings; presence of the block enables the publisher."""
+    # Provenance for results with no CollectRequest
+    classification_marking: str | None = None
+    data_mode: str | None = None
+    origin: str | None = None
+
     sequence_only: bool = Field(
         default=True,
         description=(
@@ -139,6 +146,12 @@ class EOObservationPublishConfig(BaseModel):
         default=None,
         description="Path to save EOObservations locally."
     )
+
+    @model_validator(mode="after")
+    def _require_classification_marking_and_data_mode(self):
+        if bool(self.classification_marking) != bool(self.data_mode):
+            raise ValueError("Must set both classification_marking and data_mode for publishing without a CollectRequest")
+        return self
 
 
 class PublishConfig(BaseModel):
