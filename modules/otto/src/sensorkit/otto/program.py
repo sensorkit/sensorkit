@@ -708,11 +708,13 @@ class OttoProgram:
                                         )
                                     ),
                                     camera_params=CameraParameterSet(
-                                        filter_name=filter,
                                         integration_time_seconds=exposure,
+                                        frame_count=self.config.collect.num_frames,
+                                        filter_name=filter,
+                                        readout_mode=self.config.collect.readout_mode,
+                                        gain=self.config.collect.gain,
                                         binning_x=binning,
                                         binning_y=binning,
-                                        frame_count=self.config.collect.num_frames,
                                     ),
                                     sidereal_frames=frames,
                                 )
