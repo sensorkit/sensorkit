@@ -24,13 +24,14 @@ from sensorkit.std.instrument import FrameType
 class CameraParameterSet(BaseModel):
     """Camera Parameter Set"""
 
+    frame_type: FrameType = Field(default=FrameType.LIGHT)
     integration_time_seconds: float = Field(...)
     frame_count: int = Field(...)
+    filter_name: Optional[str] = Field(default=None)
+    readout_mode: Optional[int] = Field(default=None)
+    gain: Optional[float] = Field(default=None)
     binning_x: Optional[int] = Field(default=None)
     binning_y: Optional[int] = Field(default=None)
-    gain: Optional[float] = Field(default=None)
-    frame_type: Optional[FrameType] = Field(default=FrameType.LIGHT)
-    filter_name: Optional[str] = Field(default=None)
 
 
 @sk.declare_keyword
