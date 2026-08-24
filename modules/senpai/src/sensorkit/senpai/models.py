@@ -83,6 +83,7 @@ class SenpaiResult(BaseModel):
     # Collect identity passed through from the DataGraph context (present when
     # the deployment maps the corresponding FITS headers), letting consumers
     # correlate results to the tasking that produced the frame.
+    controller_name: str | None = None
     task_id: str | None = None
     frame_num: int | None = None
     frame_count: int | None = None

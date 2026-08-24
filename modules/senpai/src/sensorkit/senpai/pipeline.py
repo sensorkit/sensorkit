@@ -38,6 +38,7 @@ class FrameInput:
     task_id: str | None = None
     frame_num: int | None = None
     frame_count: int | None = None
+    controller_name: str | None = None
 
 
 def _iso_z(dt: datetime) -> str:
@@ -61,6 +62,7 @@ class SenpaiPipeline:
         if senpai_output_dir is not None:
             config.runtime.output_dir = Path(senpai_output_dir)
         self.config = config
+        self._base_output_dir = Path(config.runtime.output_dir)
 
     def process_frames(
         self, inputs: list[FrameInput], from_sequence: bool = False
@@ -93,6 +95,14 @@ class SenpaiPipeline:
             detail = task_id or ""
         logger.info(f"Analyzing {len(inputs)} frame(s)" + (f" ({detail})" if detail else ""))
 
+        # Frames naming a controller get their own subdir under the output dir.
+        # Batches run one at a time, so mutating the shared runtime config is safe.
+        output_dir = self._base_output_dir
+        if inputs and inputs[0].controller_name:
+            output_dir = output_dir / inputs[0].controller_name
+            output_dir.mkdir(parents=True, exist_ok=True)
+        self.config.runtime.output_dir = output_dir
+
         # Run the unified collect pipeline. Time just the analysis so the completion
         # line can report a duration on every path — SENPAI only fills in its own
         # compute_seconds on success, leaving nothing to report when a run fails.
@@ -101,7 +111,7 @@ class SenpaiPipeline:
         elapsed = time.perf_counter() - t0
 
         # Generate annotated plots (WCS overlay, detections, etc.)
-        final_plots(senpai_run, Path(self.config.runtime.output_dir))
+        final_plots(senpai_run, output_dir)
 
         # Map the run's frames (split by track mode) back to their source files.
         frames_by_path: dict[str, tuple] = {}
@@ -167,6 +177,7 @@ class SenpaiPipeline:
                 file_path=inp.file_path,
                 timestamp=timestamp,
                 track_mode="UNKNOWN",
+                controller_name=inp.controller_name,
                 task_id=inp.task_id,
                 frame_num=inp.frame_num,
                 frame_count=inp.frame_count,
@@ -320,6 +331,7 @@ class SenpaiPipeline:
             file_path=inp.file_path,
             timestamp=timestamp,
             track_mode=track_mode,
+            controller_name=inp.controller_name,
             task_id=inp.task_id,
             frame_num=inp.frame_num,
             frame_count=inp.frame_count,

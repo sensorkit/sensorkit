@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """SenpaiResult extraction from SENPAI collect runs."""
 
+import pathlib
 from types import SimpleNamespace
 
 import sensorkit.senpai.pipeline as pipeline_mod
@@ -75,11 +76,20 @@ def make_frame(image, *, detections=(), streak_candidates=(), fit=True, exposure
 
 
 def run_pipeline(
-    monkeypatch, inputs, images, *, sidereal=(), rate=(), from_sequence=False, completed=True
+    monkeypatch,
+    inputs,
+    images,
+    *,
+    sidereal=(),
+    rate=(),
+    from_sequence=False,
+    completed=True,
+    output_dir="/tmp/senpai-test",
 ):
     """Run process_frames with the SENPAI engine calls stubbed out."""
     p = SenpaiPipeline.__new__(SenpaiPipeline)
-    p.config = SimpleNamespace(runtime=SimpleNamespace(output_dir="/tmp/senpai-test"))
+    p.config = SimpleNamespace(runtime=SimpleNamespace(output_dir=output_dir))
+    p._base_output_dir = pathlib.Path(output_dir)
 
     run = SimpleNamespace(
         sidereal_frames=list(sidereal),
@@ -179,6 +189,30 @@ class TestProcessFrames:
         frame = make_frame(images["a.fits"], exposure=None)
         [result] = run_pipeline(monkeypatch, [inp("a.fits")], images, sidereal=[frame])
         assert result.exposure_time_seconds == 3.5
+
+    def test_controller_routes_output_to_subdir(self, monkeypatch, tmp_path):
+        images = {"a.fits": make_image(file_path="a.fits")}
+        [result] = run_pipeline(
+            monkeypatch,
+            [inp("a.fits", controller_name="ctrl-a")],
+            images,
+            sidereal=[make_frame(images["a.fits"])],
+            output_dir=tmp_path,
+        )
+        assert result.controller_name == "ctrl-a"
+        assert (tmp_path / "ctrl-a").is_dir()
+
+    def test_no_controller_keeps_base_output_dir(self, monkeypatch, tmp_path):
+        images = {"a.fits": make_image(file_path="a.fits")}
+        [result] = run_pipeline(
+            monkeypatch,
+            [inp("a.fits")],
+            images,
+            sidereal=[make_frame(images["a.fits"])],
+            output_dir=tmp_path,
+        )
+        assert result.controller_name is None
+        assert list(tmp_path.iterdir()) == []
 
     def test_failed_run_still_returns_results(self, monkeypatch):
         """A collect with no solved frames returns unsolved results without raising."""

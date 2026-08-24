@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from astropy.io import fits
 from loguru import logger
 
 import sensorkit.api as sk
@@ -35,6 +36,18 @@ _STALL_DEFAULT_S = 120.0
 # batch has run is dropped rather than opening a fresh batch that only stalls.
 # Collects are short-lived, so this only has to outlive the redelivery window.
 _DONE_MEMORY = 256
+
+# Calibration frames have no sources to solve or detect.
+_CALIBRATION_FRAME_TYPES = {"dark", "bias", "flat"}
+
+
+def _frame_type(data) -> str | None:
+    """IMAGETYP of a FITS payload, lowercased; None when absent or unreadable."""
+    try:
+        value = fits.getheader(io.BytesIO(data)).get("IMAGETYP")
+    except Exception:
+        return None
+    return str(value).strip().lower() if value is not None else None
 
 
 def _drop_console(lg: logging.Logger) -> None:
@@ -198,14 +211,24 @@ class SenpaiAnalyzer:
                         break
                     context, data = item
                     try:
-                        task_id = context.get("task_id")
                         info = context.get(FileInfo)
+
+                        frame_type = _frame_type(data)
+                        if frame_type in _CALIBRATION_FRAME_TYPES:
+                            logger.debug(
+                                f"skipping {frame_type} frame {info.path if info else ''}"
+                            )
+                            continue
+
+                        controller = context.get("controller_name")
+                        task_id = context.get("task_id")
                         inp = FrameInput(
                             data=data,
                             file_path=str(info.path) if info else "",
                             task_id=str(task_id) if task_id is not None else None,
                             frame_num=context.get("frame_num"),
                             frame_count=context.get("frame_count"),
+                            controller_name=str(controller) if controller is not None else None,
                         )
 
                         if not (self.config.process_sequence and inp.task_id and inp.frame_count):
