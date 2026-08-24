@@ -111,6 +111,7 @@ class SdasimEngine:
         obs_time: str | None = None,
         bin_factor: int = 1,
         defocus_um: float | None = None,
+        frame_type: str = "light",
     ) -> tuple[np.ndarray, dict]:
         """Render one frame at the given pointing, mount rate, and time.
 
@@ -137,6 +138,9 @@ class SdasimEngine:
                 the focuser telemetry. Forwarded to sdasim's optics model when
                 the scene enables it; ignored (with a one-time warning) when
                 the scene has no optics model to consume it.
+            frame_type: Frame type to render ("light", "dark", "bias", "flat").
+                Calibration frames carry no sources; a flat additionally needs
+                `sensor.flat_radiance` in the scene config.
 
         Returns:
             `(image, metadata)` -- a 2D `np.uint16` array and sdasim's render
@@ -157,6 +161,7 @@ class SdasimEngine:
             mount_ra_rate=mount_ra_rate,
             mount_dec_rate=mount_dec_rate,
             defer_read_noise=defer,
+            frame_type=frame_type,
         )
         if obs_time is not None:
             overrides["obs_time"] = obs_time

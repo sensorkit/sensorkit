@@ -70,9 +70,13 @@ def make_camera(**overrides) -> SdasimCamera:
     engine.sensor_width = 64
     engine.sensor_height = 48
     engine.default_point = (0.0, 0.0)
-    # render_frame now returns (image, metadata).
+    # render_frame now returns (image, metadata); sdasim always reports the
+    # frame type it rendered.
     engine.render_frame = MagicMock(
-        return_value=(np.ones((48, 64), dtype=np.uint16), {"num_targets": 3})
+        return_value=(
+            np.ones((48, 64), dtype=np.uint16),
+            {"num_targets": 3, "frame_type": "light"},
+        )
     )
 
     camera._engine = engine
@@ -81,6 +85,7 @@ def make_camera(**overrides) -> SdasimCamera:
     camera._focuser_sub = None
     camera._bin_x = camera._bin_y = 1
     camera._temperature = config.temperature
+    camera._readout_mode = config.readout_mode
     camera._num_targets = None
     camera._mount_ra_rate = 0.0
     camera._mount_dec_rate = 0.0
