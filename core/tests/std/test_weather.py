@@ -56,6 +56,34 @@ def test_to_astropy_builds_altaz_frame():
     assert float(frame.relative_humidity) == pytest.approx(0.85)
 
 
+def test_get_fits_cards():
+    """Populated fields become SKWX* cards; absent fields yield no card."""
+    cards = dict(BasicWeather(temperature=-3.2, wind_speed=8.5).get_fits_cards())
+
+    assert cards == {
+        "SKWXTEMP": (-3.2, "Ambient air temperature [C]"),
+        "SKWXWSPD": (8.5, "Wind speed [m/s]"),
+    }
+
+
+def test_get_fits_cards_all_fields():
+    """Every field maps to a card, and all keywords fit the 8-character FITS limit."""
+    weather = BasicWeather(
+        temperature=12.5,
+        humidity=85.0,
+        pressure=1013.25,
+        cloud_cover=20.0,
+        dew_point=10.1,
+        rain_rate=0.4,
+        wind_speed=8.5,
+        wind_direction=270.0,
+    )
+    cards = dict(weather.get_fits_cards())
+
+    assert len(cards) == 8
+    assert all(len(kw) <= 8 for kw in cards)
+
+
 def test_weather_constraint():
     c = WeatherConstraint(
         provider="dummy",

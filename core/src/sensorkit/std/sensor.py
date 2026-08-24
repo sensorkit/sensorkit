@@ -18,6 +18,7 @@ from sensorkit.std.instrument import Binning, CameraCapture, ConfigureCameraSens
 from sensorkit.std.mount import AxisRates, FollowTarget
 from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover, SetFilter
 from sensorkit.std.traits import Connect, Deinit, Init, Stop
+from sensorkit.std.weather import BasicWeather
 
 
 class Sensor:
@@ -35,6 +36,9 @@ class Sensor:
         self.mirror_cover = impl.use_device(devices.mirror_cover) if devices.mirror_cover else None
         self.filter_wheel = impl.use_device(devices.filter_wheel) if devices.filter_wheel else None
         self.dome = impl.use_device(devices.dome) if devices.dome else None
+        self.weather = impl.use_device(devices.weather,
+            subscribe=[BasicWeather],
+        ) if devices.weather else None
 
     async def init_dome(self):
         """Initialize the dome and open it, if one is configured."""
@@ -241,6 +245,16 @@ class SensorControl:
             )
 
         # Configure camera capture parameters.
+        if task.camera_params.readout_mode is not None:
+            await self.sensor.camera.command(
+                ConfigureCameraSensor(readout_mode=task.camera_params.readout_mode)
+            )
+
+        if task.camera_params.gain is not None:
+            await self.sensor.camera.command(
+                ConfigureCameraSensor(gain=task.camera_params.gain)
+            )
+
         if None not in (task.camera_params.binning_x, task.camera_params.binning_y):
             await self.sensor.camera.command(
                 ConfigureCameraSensor(
@@ -298,6 +312,7 @@ class SensorControl:
             await self.sensor.camera.command(
                 CameraCapture(
                     integration_time=task.camera_params.integration_time_seconds,
+                    frame_type=task.camera_params.frame_type,
                     context=context,
                 )
             )
@@ -398,6 +413,7 @@ class SensorDevices(BaseModel):
     filter_wheel: str | None = None
     mirror_cover: str | None = None
     dome: str | None = None
+    weather: str | None = None
 
 
 class SensorPolicies(BaseModel):
