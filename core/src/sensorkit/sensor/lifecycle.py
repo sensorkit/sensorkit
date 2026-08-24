@@ -24,6 +24,7 @@ from pydantic import BaseModel, BeforeValidator, model_validator
 
 from sensorkit.common.dag import GraphBuilder
 from sensorkit.core.device import DeviceCommand
+from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.selection import AnySelection
 from sensorkit.sensor.topology import Placement
 
