@@ -167,12 +167,20 @@ class TheSkyCamera(TheSkyDevice):
         else:
             logger.debug(f"set camera temperature to {target} C")
 
-    @sk.command_handler
-    async def camera_set_binning(self, cmd: ConfigureCameraSensor):
-        await self.require_connected()
+    async def camera_set_readout_mode(self, cmd: ConfigureCameraSensor):
+        if cmd.readout_mode is None:
+            return
+        logger.warning("TheSky camera does not support setting readout mode; ignoring")
 
+    async def camera_set_gain(self, cmd: ConfigureCameraSensor):
+        if cmd.gain is None:
+            return
+        logger.warning("TheSky camera does not support setting gain; ignoring")
+
+    async def camera_set_binning(self, cmd: ConfigureCameraSensor):
         if cmd.binning is None:
             return
+        await self.require_connected()
         bin_x, bin_y = int(cmd.binning.x), int(cmd.binning.y)
         logger.debug(f"setting camera binning to ({bin_x}, {bin_y})")
         await self.execute(
@@ -201,16 +209,27 @@ class TheSkyCamera(TheSkyDevice):
             logger.debug(f"set camera binning to ({actual_x}, {actual_y})")
 
     @sk.command_handler
+    async def camera_configure_sensor(self, cmd: ConfigureCameraSensor):
+        await self.camera_set_readout_mode(cmd)
+        await self.camera_set_gain(cmd)
+        await self.camera_set_binning(cmd)
+
+    @sk.command_handler
     async def camera_capture(self, cmd: CameraCapture):
         await self.require_connected()
         logger.info(f"Requesting {cmd.integration_time:.1f} sec capture from camera")
         logger.debug("starting camera capture")
 
         # Start the exposure
-        frame_type = 1  # 1=Light, 2=Bias, 3=Dark, 4=Flat Field
+        frame_code = {
+            FrameType.LIGHT: 1,
+            FrameType.BIAS: 2,
+            FrameType.DARK: 3,
+            FrameType.FLAT: 4,
+        }[cmd.frame_type]
         await self.execute(
             f"""
-            ccdsoftCamera.Frame = {frame_type};
+            ccdsoftCamera.Frame = {frame_code};
             ccdsoftCamera.ExposureTime = {cmd.integration_time};
             ccdsoftCamera.TakeImage();
             """
@@ -268,7 +287,7 @@ class TheSkyCamera(TheSkyDevice):
                     date_obs=Time(jd, format="jd", scale="utc").to_datetime(timezone=UTC),
                     exposure_time=cmd.integration_time,
                     instrument=instrume,
-                    image_type=FrameType.LIGHT,
+                    image_type=cmd.frame_type,
                     ccd_temperature=temp,
                 ),
             )

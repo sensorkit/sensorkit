@@ -260,7 +260,6 @@ class AlpacaCamera(AlpacaDevice):
     @sk.command_handler
     async def camera_set_temperature(self, cmd: ConfigureCameraCooler):
         await self.require_connected()
-        logger.debug(f"setting camera temperature to {cmd.setpoint.temperature} °C")
 
         if not self._can_set_ccd_temperature:
             logger.warning("Cannot set CCD temperature")
@@ -268,6 +267,7 @@ class AlpacaCamera(AlpacaDevice):
 
         target = cmd.setpoint.temperature
 
+        logger.debug(f"setting camera temperature to {cmd.setpoint.temperature} °C")
         try:
             await self.put(self.camera, "CoolerOn", cmd.enable)
         except Exception:
@@ -281,12 +281,32 @@ class AlpacaCamera(AlpacaDevice):
         else:
             logger.debug(f"set camera temperature to {target} C")
 
-    @sk.command_handler
-    async def camera_set_binning(self, cmd: ConfigureCameraSensor):
+    async def camera_set_readout_mode(self, cmd: ConfigureCameraSensor):
+        if cmd.readout_mode is None:
+            return
         await self.require_connected()
+        target = cmd.readout_mode
+        logger.debug(f"setting camera readout mode to {target}")
+        await self.put(self.camera, "ReadoutMode", target)
+        readout_mode = await self.get(self.camera, "ReadoutMode", None)
+        if readout_mode != target:
+            logger.warning(f"Requested readout mode {target}, got {readout_mode}")
 
+    async def camera_set_gain(self, cmd: ConfigureCameraSensor):
+        if cmd.gain is None:
+            return
+        await self.require_connected()
+        target = int(cmd.gain)
+        logger.debug(f"setting camera gain to {target}")
+        await self.put(self.camera, "Gain", target)
+        gain = await self.get(self.camera, "Gain", None)
+        if gain != target:
+            logger.warning(f"Requested gain {target}, got {gain}")
+
+    async def camera_set_binning(self, cmd: ConfigureCameraSensor):
         if cmd.binning is None:
             return
+        await self.require_connected()
         bin_x, bin_y = int(cmd.binning.x), int(cmd.binning.y)
         logger.debug(f"setting camera binning to {bin_x}x{bin_y}")
 
@@ -315,6 +335,12 @@ class AlpacaCamera(AlpacaDevice):
         await self.put(self.camera, "NumY", self._camera_y_size // bin_y)
 
         logger.debug(f"set camera binning to ({bin_x}, {bin_y})")
+
+    @sk.command_handler
+    async def camera_configure_sensor(self, cmd: ConfigureCameraSensor):
+        await self.camera_set_readout_mode(cmd)
+        await self.camera_set_gain(cmd)
+        await self.camera_set_binning(cmd)
 
     @sk.command_handler
     async def camera_capture(self, cmd: CameraCapture):
@@ -346,8 +372,9 @@ class AlpacaCamera(AlpacaDevice):
         # Start the exposure
         try:
             date_obs_fallback = datetime.now(UTC)
+            light = cmd.frame_type not in (FrameType.DARK, FrameType.BIAS)
             data: array.array = await asyncio.wait_for(
-                asyncio.to_thread(self._do_capture, exposure_seconds, True, timeout_seconds),
+                asyncio.to_thread(self._do_capture, exposure_seconds, light, timeout_seconds),
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError:
@@ -389,7 +416,7 @@ class AlpacaCamera(AlpacaDevice):
                     else exposure_seconds
                 ),
                 instrument=await self.get(self.camera, "SensorName", ""),
-                image_type=FrameType.LIGHT,
+                image_type=cmd.frame_type,
                 readout_mode=await self.get(self.camera, "ReadoutMode", None),
                 gain=await self.get(self.camera, "Gain", None),
                 offset=await self.get(self.camera, "Offset", None),
