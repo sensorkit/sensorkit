@@ -166,6 +166,13 @@ class PublishConfig(BaseModel):
     )
 
 
+class CollectConfig(BaseModel):
+    filter_name: str | None = None
+    readout_mode: int | None = None
+    gain: float | None = None
+    binning: int | None = None
+
+
 class UDLConfig(BaseModel):
     """Main configuration for UDL program."""
     controller: str
@@ -176,6 +183,7 @@ class UDLConfig(BaseModel):
         description="Polling horizon in seconds.",
     )
     end_time_deadband_s: float = Field(default=0.0, description="Deadband added to task end times in seconds.")
+    collect: CollectConfig = Field(default_factory=CollectConfig)
     publish: PublishConfig = Field(
         default_factory=PublishConfig,
         description="Data delivery: `sky_imagery` and/or `eo_observation` block(s).",

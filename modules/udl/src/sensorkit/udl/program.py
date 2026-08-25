@@ -657,6 +657,11 @@ class UDLProgram:
                 if request.integration_time
                 else 1.0,
                 frame_count=request.num_frames or 1,
+                filter_name=self.config.collect.filter_name,
+                readout_mode=self.config.collect.readout_mode,
+                gain=self.config.collect.gain,
+                binning_x=self.config.collect.binning,
+                binning_y=self.config.collect.binning,
             ),
             sidereal_frames=self._get_sidereal_frames(request),
         )

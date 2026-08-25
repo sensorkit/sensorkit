@@ -17,12 +17,15 @@ from sensorkit.astro.common import TLE, ReferenceFrame
 from sensorkit.astro.coords import Equatorial, Horizontal
 from sensorkit.astro.target import AltAzTarget, ICRSTarget, RateTarget, Target, TLETarget
 from sensorkit.data.filesys import FileNameTemplate
-from sensorkit.std import CameraParameterSet, StandardCollectTask
+from sensorkit.burr.models import CollectConfig
+from sensorkit.std import CameraParameterSet, FrameType, StandardCollectTask
 
 # Produces e.g. `20260424T031530_photometric_standards_110-364_f0.fits`.
 _FILE_NAME_TEMPLATE = (
     'f"{datetime.now(UTC):%Y%m%dT%H%M%S}_{BurrContext.mode}_{BurrContext.targ}_f{frame_num}.fits"'
 )
+
+_SOURCE_FRAME_TYPES = {"twilight_flats": FrameType.FLAT}
 
 
 @sk.declare_keyword
@@ -62,6 +65,7 @@ def build_sk_tasks(
     run: BurrRun,
     config: AppConfig,
     request: obs.ObservationRequest,
+    collect: CollectConfig | None = None,
 ):
     """Translate an ObservationRequest into one or more StandardCollectTask instances.
 
@@ -113,6 +117,16 @@ def build_sk_tasks(
             f"target is not a TLETarget, and request.rates is None"
         )
 
+    collect = collect or CollectConfig()
+    cam_extra = dict(
+        frame_type=_SOURCE_FRAME_TYPES.get(request.source_name, FrameType.LIGHT),
+        filter_name=collect.filter_name,
+        readout_mode=collect.readout_mode,
+        gain=collect.gain,
+        binning_x=collect.binning,
+        binning_y=collect.binning,
+    )
+
     for exp_seconds in request.exposure_seconds:
         # A fresh BurrContext.seq per exposure: every SK task, and thus every
         # frame, fanned out from THIS exposure shares it — e.g. the ICRS
@@ -159,6 +173,7 @@ def build_sk_tasks(
         cam = CameraParameterSet(
             integration_time_seconds=exp_seconds,
             frame_count=frame_count,
+            **cam_extra,
         )
         tasks: list[StandardCollectTask] = []
 
@@ -200,6 +215,7 @@ def build_sk_tasks(
                     camera_params=CameraParameterSet(
                         integration_time_seconds=exp_seconds,
                         frame_count=first_rate,
+                        **cam_extra,
                     ),
                     end_time=end_time,
                 )
@@ -210,6 +226,7 @@ def build_sk_tasks(
                     camera_params=CameraParameterSet(
                         integration_time_seconds=exp_seconds,
                         frame_count=frame_count - first_rate,
+                        **cam_extra,
                     ),
                     end_time=end_time,
                 )
