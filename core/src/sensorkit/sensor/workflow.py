@@ -18,11 +18,13 @@ Omissions are recorded separately from operator-imposed outcomes.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, model_validator
 
-from sensorkit.sensor.topology import DeviceKey, TraitKey
+from sensorkit.core.device import DeviceCommand
+from sensorkit.sensor.topology import DeviceKey, Placement, TraitKey
 
 """Authored request label shared by all acquisitions expanded from it."""
 
@@ -36,6 +38,7 @@ identity; graph node identifiers belong to `sensorkit.common.dag`.
 dependencies.
 """
 
+type Scope = Literal["any", "private", "shared"]
 """Filter routing candidates by their relation to an instrument.
 
 `private` uses the topology's local, sole-reader placements; `shared` uses the
@@ -43,6 +46,7 @@ rest of the chain. `any` accepts both. Ancestor infrastructure remains shared
 even when it has only one reader.
 """
 
+type Subject = Literal["sensor", "instrument"]
 """Choose how participants are grouped and targets are ranked for routing.
 
 `sensor` chooses the shallowest supporting device common to all participants.
@@ -51,12 +55,39 @@ Shared targets are commanded once. `Scope` filters candidates independently.
 """
 
 
+def partition(subject: Subject, participants: tuple[Placement, ...]
+              ) -> tuple[tuple[Placement, ...], ...]:
+    """Group all sensor participants together, or each instrument
+    separately.
+    """
+    match subject:
+        case "sensor":
+            return (participants,)
+        case "instrument":
+            return tuple((p,) for p in participants)
 
 
 
 
 
 
+@dataclass(frozen=True)
+class RoutedCommand:
+    """A command with its target placement and optional explicit timeout.
+
+    Routing chooses the target; lowering resolves the timeout against deadline
+    rules. The timeout is orchestration metadata, not part of the device
+    command.
+    """
+
+    target: Placement
+    command: DeviceCommand
+    timeout_s: float | None = None
+
+    @property
+    def governs(self) -> tuple[Placement, type[DeviceCommand]]:
+        """Return the collect state key: target placement and command type."""
+        return self.target, type(self.command)
 
 
 
