@@ -97,7 +97,7 @@ pwi4 = [
 ]
 sdasim = [
     "numpy>=1.24.0",
-    "sdasim",
+    "sdasim>=0.5.0",
 ]
 sky-transmission = [
     "allclear",
@@ -142,11 +142,17 @@ imports = [
     "import-linter>=2.1",
 ]
 
+docs = [
+    "zensical>=0.0.1",
+]
+
 dev = [
     {include-group = "lint"},
     {include-group = "complexity"},
     {include-group = "imports"},
+    {include-group = "docs"},
     "coverage>=7.8.0",
+    "cryptography>=44.0.0",
     "httpx>=0.28.0",
     "pygtrie>=2.5.0",
     "pytest-asyncio>=0.25.2",
@@ -157,8 +163,38 @@ dev = [
     "pytest>=8.3.4",
     "sensorkit[thesky-simulator]",
     "testcontainers[nats]>=4.9.0",
-    "zensical>=0.0.1",
 ]
+
+# These groups allow the user to opt in to using the pytorch indexes, and,
+# crucially, allows selection of the CPU-only variant.
+torch-cpu = [
+    "torch>=2.6",
+]
+
+torch-cu128 = [
+    "torch>=2.6",
+]
+
+[tool.uv]
+conflicts = [
+    [{ group = "torch-cpu" }, { group = "torch-cu128" }],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", group = "torch-cpu" },
+    { index = "pytorch-cu128", group = "torch-cu128" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [[tool.uv.dependency-metadata]]
 name = "systemd-python"
@@ -172,7 +208,7 @@ indent-width = 4
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "B", "I"]
-ignore = ["E501", "E203", "B027", "B019"]
+ignore = ["E501", "E203", "E731", "B027", "B019"]
 unfixable = ["B"]
 
 [tool.ruff.lint.isort]

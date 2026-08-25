@@ -153,3 +153,47 @@ async def test_stream_forwarder_snapshot(kit, service_context):
             assert any(r.payload and r.payload.get("reading") == 3.14 for r in snapshot)
         finally:
             await forwarder.stop()
+
+
+@pytest.mark.asyncio
+async def test_backlogged_subscriber_is_dropped(kit, service_context):
+    @declare_keyword
+    class ForwarderBacklogKeyword(BaseModel):
+        reading: float
+
+    async with asyncio.timeout(2.0):
+        dev = await service_context.register_device("mydevice")
+
+    # A subscriber that never drains, with only enough room for one record.
+    queue: asyncio.Queue[SKRecord | None] = asyncio.Queue(1)
+    targets = {queue}
+    forwarder = StreamForwarder(kit, targets=targets)
+
+    async with asyncio.TaskGroup() as tg:
+        await forwarder.start(task_group=tg)
+
+        try:
+            async with asyncio.timeout(5.0):
+                while queue in targets:
+                    await dev.publish(ForwarderBacklogKeyword(reading=1.0))
+                    await asyncio.sleep(0.05)
+
+            # The stream ends with the sentinel that wakes a parked consumer, so a
+            # client that stopped reading is released rather than left holding records.
+            last = None
+
+            while not queue.empty():
+                last = queue.get_nowait()
+
+            assert last is None
+        finally:
+            await forwarder.stop()
+
+
+@pytest.mark.asyncio
+async def test_stopping_a_forwarder_that_never_started(kit):
+    """An attach that fails partway still gets detached, so stopping is always allowed."""
+    forwarder = KeyValueForwarder(kit, targets=set())
+
+    await forwarder.stop()
+

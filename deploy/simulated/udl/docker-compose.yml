@@ -1,0 +1,36 @@
+# Mock UDL in a container. The cert/key ride along in ./certs/ (gitignored;
+# see README Setup). Run with your usual SensorKit .env supplying MOCK_UDL_*:
+#
+#   docker compose --env-file /path/to/.env up
+#
+# The MOCK_UDL_* values are passed through from the compose environment; the
+# in-container port is pinned to 9000 (+9010 for the upload listener).
+services:
+  mock-udl:
+    image: sensorkit
+    pull_policy: never
+    build:
+      context: ../../..
+      dockerfile: docker/Dockerfile
+      args:
+        EXTRAS: udl
+    entrypoint: ["python"]
+    command: ["/mock_udl/service.py"]
+    environment:
+      MOCK_UDL_ID_SENSOR: ${MOCK_UDL_ID_SENSOR:-MockSensor}
+      MOCK_UDL_TARGET_TYPE: ${MOCK_UDL_TARGET_TYPE:-tle}
+      MOCK_UDL_UPLOAD_PORT: ${MOCK_UDL_UPLOAD_PORT:-}
+      MOCK_UDL_USERNAME: ${MOCK_UDL_USERNAME:-udl}
+      MOCK_UDL_PASSWORD: ${MOCK_UDL_PASSWORD:-udl}
+      MOCK_UDL_CONTROLLER: ${MOCK_UDL_CONTROLLER:-}
+      MOCK_UDL_LATITUDE: ${MOCK_UDL_LATITUDE:-}
+      MOCK_UDL_LONGITUDE: ${MOCK_UDL_LONGITUDE:-}
+      MOCK_UDL_ALTITUDE_KM: ${MOCK_UDL_ALTITUDE_KM:-}
+      MOCK_UDL_TLES: ${MOCK_UDL_TLES:-}
+      NATS_URL: ${NATS_URL:-}
+    ports:
+      - "9000:9000"
+      - "9010:9010"
+    volumes:
+      - .:/mock_udl:ro
+    restart: unless-stopped

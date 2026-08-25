@@ -6,6 +6,7 @@ import math
 from datetime import UTC, datetime
 
 import pytest
+from unifieddatalibrary.types import CollectRequestFull
 
 from sensorkit.astro.common import AltAzPointing, SitePosition
 from sensorkit.senpai.models import Detection, SenpaiResult
@@ -16,15 +17,9 @@ from sensorkit.udl.models import (
     UDLConfig,
 )
 from sensorkit.udl.program import UDLProgram
-from sensorkit.udl.publishers import (
-    EOObservationPublisher,
-    RequestSnapshot,
-    _add_annual_aberration,
-    build_eo_observations,
-    convert_wcs_observation,
-)
+from sensorkit.udl.publishers import EOObservationPublisher
 
-from .fakes import FakeUDLClient, tle_request
+from .fakes import FakeUDLClient, make_collect_request, tle_request
 
 TIMESTAMP = datetime(2026, 3, 21, 7, 18, 47, 82000, tzinfo=UTC)
 
@@ -69,9 +64,9 @@ def make_result(
 
 
 @pytest.fixture
-def snapshot():
-    return RequestSnapshot(
-        request_id="test-request-001",
+def collect_request():
+    return make_collect_request(
+        id="test-request-001",
         classification_marking="U",
         data_mode="REAL",
         origin="TEST_ORG",
@@ -99,28 +94,40 @@ def site():
     )
 
 
-def build(result, snapshot, api_config, eo_config, site=None):
-    return build_eo_observations(result, snapshot, site=site, api=api_config, config=eo_config)
+def build(result, collect_request, api_config, eo_config, site=None):
+    """Publish through a stub program; returns the posted records ([] when nothing shipped)."""
+    program = UDLProgram()
+    program.config = UDLConfig(
+        controller="controller1",
+        api=api_config,
+        publish=PublishConfig(eo_observation=eo_config),
+    )
+    program._site = site
+    program.upload_client = FakeUDLClient()
+    publisher = EOObservationPublisher(program)
+    asyncio.run(publisher.publish(result, collect_request))
+    batches = program.upload_client.observations.eo_observations.batches
+    return batches[-1] if batches else []
 
 
-class TestConvertWcsObservation:
+class TestToUdlEOObservation:
     """UDL EO conventions: photon-arrival obTime, annual aberration added back."""
 
     def test_ob_time_is_photon_arrival_mid_exposure(self):
         result = make_result(exposure=4.0)
-        ob_time, _, _ = convert_wcs_observation(result, result.detections[0])
+        ob_time, _, _ = EOObservationPublisher._to_udl_eo_observation(result, result.detections[0])
         assert ob_time == "2026-03-21T07:18:49.082000Z"
 
     def test_ob_time_without_exposure_is_frame_timestamp(self):
         result = make_result(exposure=None)
-        ob_time, _, _ = convert_wcs_observation(result, result.detections[0])
+        ob_time, _, _ = EOObservationPublisher._to_udl_eo_observation(result, result.detections[0])
         assert ob_time == "2026-03-21T07:18:47.082000Z"
 
     def test_position_carries_annual_aberration(self):
         # Expected values are astropy's aberration of (210.5, -12.25) at the
         # mid-exposure epoch; the tolerance is the model's known residual.
         result = make_result()
-        _, ra, declination = convert_wcs_observation(result, result.detections[0])
+        _, ra, declination = EOObservationPublisher._to_udl_eo_observation(result, result.detections[0])
         assert (ra, declination) != (210.5, -12.25)
         assert ra == pytest.approx(210.5046, abs=3e-4)
         assert declination == pytest.approx(-12.2516, abs=3e-4)
@@ -134,7 +141,7 @@ class TestAnnualAberration:
 
     @staticmethod
     def offset_arcsec(ra, dec, when):
-        new_ra, new_dec = _add_annual_aberration(ra, dec, when)
+        new_ra, new_dec = EOObservationPublisher._add_annual_aberration(ra, dec, when)
         return math.hypot(
             (new_ra - ra) * math.cos(math.radians(dec)) * 3600.0,
             (new_dec - dec) * 3600.0,
@@ -144,7 +151,7 @@ class TestAnnualAberration:
         # astropy's aberration of (43.35, -13.42) on 2026-04-15 is
         # (43.34481, -13.42237); we agree to 0.06".
         when = datetime(2026, 4, 15, 6, tzinfo=UTC)
-        ra, dec = _add_annual_aberration(43.35, -13.42, when)
+        ra, dec = EOObservationPublisher._add_annual_aberration(43.35, -13.42, when)
         assert ra == pytest.approx(43.3448, abs=3e-4)
         assert dec == pytest.approx(-13.4224, abs=3e-4)
 
@@ -167,54 +174,54 @@ class TestAnnualAberration:
 
     def test_correction_reverses_over_half_a_year(self):
         """Earth's velocity reverses, so the correction does too."""
-        january = _add_annual_aberration(180.0, 0.0, datetime(2026, 1, 4, tzinfo=UTC))
-        july = _add_annual_aberration(180.0, 0.0, datetime(2026, 7, 4, tzinfo=UTC))
+        january = EOObservationPublisher._add_annual_aberration(180.0, 0.0, datetime(2026, 1, 4, tzinfo=UTC))
+        july = EOObservationPublisher._add_annual_aberration(180.0, 0.0, datetime(2026, 7, 4, tzinfo=UTC))
         assert (january[0] - 180.0) * (july[0] - 180.0) < 0
 
 
 class TestBuildEOObservations:
-    def test_required_fields_present(self, snapshot, api_config, eo_config):
-        [record] = build(make_result(), snapshot, api_config, eo_config)
+    def test_required_fields_present(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(), collect_request, api_config, eo_config)
         assert record["classification_marking"] == "U"
         assert record["data_mode"] == "REAL"
         assert record["source"] == "TEST_SOURCE"
         assert "ob_time" in record
 
-    def test_ob_time_is_mid_exposure(self, snapshot, api_config, eo_config):
-        [record] = build(make_result(exposure=4.0), snapshot, api_config, eo_config)
+    def test_ob_time_is_mid_exposure(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(exposure=4.0), collect_request, api_config, eo_config)
         assert record["ob_time"] == "2026-03-21T07:18:49.082000Z"
         assert record["exp_duration"] == 4.0
 
-    def test_ob_time_falls_back_to_timestamp(self, snapshot, api_config, eo_config):
-        [record] = build(make_result(exposure=None), snapshot, api_config, eo_config)
+    def test_ob_time_falls_back_to_timestamp(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(exposure=None), collect_request, api_config, eo_config)
         assert record["ob_time"] == "2026-03-21T07:18:47.082000Z"
         assert "exp_duration" not in record
 
-    def test_rate_mode_posts_points_only(self, snapshot, api_config, eo_config):
+    def test_rate_mode_posts_points_only(self, collect_request, api_config, eo_config):
         result = make_result(track_mode="RATE", kinds=("point", "streak", "streak_candidate"))
-        records = build(result, snapshot, api_config, eo_config)
+        records = build(result, collect_request, api_config, eo_config)
         assert len(records) == 1
 
-    def test_sidereal_mode_posts_confirmed_streaks_only(self, snapshot, api_config, eo_config):
+    def test_sidereal_mode_posts_confirmed_streaks_only(self, collect_request, api_config, eo_config):
         result = make_result(track_mode="SIDEREAL", kinds=("point", "streak", "streak_candidate"))
-        records = build(result, snapshot, api_config, eo_config)
+        records = build(result, collect_request, api_config, eo_config)
         assert len(records) == 1
 
-    def test_unknown_track_mode_posts_nothing(self, snapshot, api_config, eo_config):
-        assert build(make_result(track_mode="UNKNOWN"), snapshot, api_config, eo_config) == []
+    def test_unknown_get_sidereal_frames_posts_nothing(self, collect_request, api_config, eo_config):
+        assert build(make_result(track_mode="UNKNOWN"), collect_request, api_config, eo_config) == []
 
-    def test_detection_without_radec_skipped(self, snapshot, api_config, eo_config):
+    def test_detection_without_radec_skipped(self, collect_request, api_config, eo_config):
         result = make_result(detections=[make_detection(ra=None, dec=None)])
-        assert build(result, snapshot, api_config, eo_config) == []
+        assert build(result, collect_request, api_config, eo_config) == []
 
-    def test_records_are_raw_uncorrelated_tracks(self, snapshot, api_config, eo_config):
-        [record] = build(make_result(), snapshot, api_config, eo_config)
+    def test_records_are_raw_uncorrelated_tracks(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(), collect_request, api_config, eo_config)
         assert record["uct"] is True
         assert "sat_no" not in record
         assert "id_on_orbit" not in record
 
-    def test_identity_and_provenance_fields(self, snapshot, api_config, eo_config):
-        [record] = build(make_result(), snapshot, api_config, eo_config)
+    def test_identity_and_provenance_fields(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(), collect_request, api_config, eo_config)
         # Position is the detection's, plus annual aberration (< 20.5");
         # TestConvertWcsObservation pins the correction itself.
         assert record["ra"] == pytest.approx(210.5, abs=0.006)
@@ -227,41 +234,40 @@ class TestBuildEOObservations:
         assert record["origin"] == "TEST_ORG"
         assert record["descriptor"] == "frame_0001.fits"
 
-    def test_site_fields(self, snapshot, api_config, eo_config, site):
-        [record] = build(make_result(), snapshot, api_config, eo_config, site=site)
+    def test_site_fields(self, collect_request, api_config, eo_config, site):
+        [record] = build(make_result(), collect_request, api_config, eo_config, site=site)
         assert record["senlat"] == 41.9168354
         assert record["senlon"] == -84.0290721
         assert record["senalt"] == 0.05
 
-    def test_no_site_fields_without_site(self, snapshot, api_config, eo_config):
-        [record] = build(make_result(), snapshot, api_config, eo_config, site=None)
+    def test_no_site_fields_without_site(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(), collect_request, api_config, eo_config, site=None)
         assert "senlat" not in record
 
     def test_none_values_stripped(self, api_config, eo_config):
-        snapshot = RequestSnapshot(
-            request_id="r1",
-            classification_marking="U",
-            data_mode=None,
-            origin=None,
-            task_id=None,
-        )
-        [record] = build(make_result(), snapshot, api_config, eo_config)
+        request = make_collect_request(id="r1", origin=None, task_id=None)
+        [record] = build(make_result(), request, api_config, eo_config)
         assert "origin" not in record
-        assert record["data_mode"] == "TEST"  # fallback, as with SkyImagery
+        assert "task_id" not in record
 
-    def test_mag_band_priority(self, snapshot, api_config):
+    def test_schema_violating_record_not_posted(self, api_config, eo_config):
+        # No dataMode and no fallback: schema validation drops the record.
+        request = CollectRequestFull.construct(**{"id": "r1", "classificationMarking": "U"})
+        assert build(make_result(), request, api_config, eo_config) == []
+
+    def test_mag_band_priority(self, collect_request, api_config):
         config = EOObservationPublishConfig(sequence_only=False, mag_bands=["G", "V"])
         det = make_detection(
             calibrated_magnitudes={"V": 12.34},
             magnitude_errs={"V": 0.05},
         )
-        [record] = build(make_result(detections=[det]), snapshot, api_config, config)
+        [record] = build(make_result(detections=[det]), collect_request, api_config, config)
         assert record["mag"] == 12.34
         assert record["mag_unc"] == 0.05
 
-    def test_instrumental_mag_never_posted(self, snapshot, api_config, eo_config):
+    def test_instrumental_mag_never_posted(self, collect_request, api_config, eo_config):
         det = make_detection(instrumental_mag=10.0, calibrated_magnitudes=None)
-        [record] = build(make_result(detections=[det]), snapshot, api_config, eo_config)
+        [record] = build(make_result(detections=[det]), collect_request, api_config, eo_config)
         assert "mag" not in record
 
 
@@ -295,9 +301,9 @@ class TestEOObservationPublisher:
     @pytest.mark.asyncio
     async def test_posts_records_for_tasked_solved_result(self, program, eo):
         request = tle_request()
-        eo.note_request(request)
+        eo.get_collect_request(request)
 
-        await eo._handle_result(make_result(task_id=request.id))
+        await eo._handle_senpai_result(make_result(task_id=request.id))
 
         [[record]] = posted(program)
         assert record["track_id"] == request.id
@@ -305,83 +311,88 @@ class TestEOObservationPublisher:
     @pytest.mark.asyncio
     async def test_batch_carries_all_detections_of_frame(self, program, eo):
         request = tle_request()
-        eo.note_request(request)
+        eo.get_collect_request(request)
 
         result = make_result(
             task_id=request.id,
             detections=[make_detection(ra=1.0), make_detection(ra=2.0)],
         )
-        await eo._handle_result(result)
+        await eo._handle_senpai_result(result)
 
         [batch] = posted(program)
         assert len(batch) == 2
 
     @pytest.mark.asyncio
     async def test_untasked_result_dropped(self, program, eo):
-        await eo._handle_result(make_result(task_id=None))
+        await eo._handle_senpai_result(make_result(task_id=None))
         assert posted(program) == []
+
+    @pytest.mark.asyncio
+    async def test_untasked_result_posted_with_configured_provenance(self, program, eo):
+        eo._config.classification_marking = "U"
+        eo._config.data_mode = "TEST"
+        eo._config.origin = "TEST_ORG"
+
+        await eo._handle_senpai_result(make_result(task_id=None))
+
+        [[record]] = posted(program)
+        assert record["classification_marking"] == "U"
+        assert record["data_mode"] == "TEST"
+        assert record["origin"] == "TEST_ORG"
+        assert "track_id" not in record
+        assert "task_id" not in record
 
     @pytest.mark.asyncio
     async def test_unsolved_result_dropped(self, program, eo):
         request = tle_request()
-        eo.note_request(request)
+        eo.get_collect_request(request)
 
-        await eo._handle_result(make_result(task_id=request.id, solved=False))
+        await eo._handle_senpai_result(make_result(task_id=request.id, solved=False))
         assert posted(program) == []
 
     @pytest.mark.asyncio
     async def test_sequence_only_gates_per_frame_results(self, program, eo):
         eo._config.sequence_only = True
         request = tle_request()
-        eo.note_request(request)
+        eo.get_collect_request(request)
 
-        await eo._handle_result(
+        await eo._handle_senpai_result(
             make_result(task_id=request.id, from_sequence=False, file_path="/a.fits")
         )
         assert posted(program) == []
 
-        await eo._handle_result(
+        await eo._handle_senpai_result(
             make_result(task_id=request.id, from_sequence=True, file_path="/b.fits")
         )
         assert len(posted(program)) == 1
 
     @pytest.mark.asyncio
     async def test_unknown_task_dropped(self, program, eo):
-        await eo._handle_result(make_result(task_id="never-seen"))
+        await eo._handle_senpai_result(make_result(task_id="never-seen"))
         assert posted(program) == []
 
     @pytest.mark.asyncio
     async def test_falls_back_to_program_tasks(self, program, eo):
         request = tle_request()
-        program.tasks[request.id] = request  # no note_request call
+        program.tasks[request.id] = request  # no get_collect_request call
 
-        await eo._handle_result(make_result(task_id=request.id))
+        await eo._handle_senpai_result(make_result(task_id=request.id))
         assert len(posted(program)) == 1
 
     @pytest.mark.asyncio
-    async def test_duplicate_result_posted_once(self, program, eo):
-        request = tle_request()
-        eo.note_request(request)
-
-        result = make_result(task_id=request.id)
-        await eo._handle_result(result)
-        await eo._handle_result(result)
-        assert len(posted(program)) == 1
-
-    @pytest.mark.asyncio
-    async def test_intake_loop_filters_and_handles_senpai_results(self, program, eo, program_impl):
+    async def test_post_loop_filters_and_handles_senpai_results(self, program, eo, program_impl):
         """The wildcard stream is post-filtered to SenpaiResult keywords.
 
         The publisher subscribes across every entity, so the SenpaiResults and the unrelated
         keyword below are published to the same real stream a running senpai service would use.
         """
         request = tle_request()
-        eo.note_request(request)
+        eo.get_collect_request(request)
 
-        intake = asyncio.create_task(eo._intake_loop())
+        intake = asyncio.create_task(eo._post_loop())
         try:
             async with asyncio.timeout(5.0):
-                await eo.intake_ready.wait()
+                await eo.post_ready.wait()
 
             await program_impl.publish(AltAzPointing(altitude_degrees=45.0, azimuth_degrees=90.0))
             await program_impl.publish(make_result(task_id=request.id))

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import socket
 
 import httpx
 import pytest
@@ -461,3 +462,77 @@ async def test_agent_state_no_agent(http):
 async def test_agent_action_no_agent_returns_503(http, path, kwargs):
     resp = await http.post(path, **kwargs)
     assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Server lifecycle
+# ---------------------------------------------------------------------------
+
+def free_port() -> int:
+    """Return a port that is free right now, for the server to bind."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+async def get_when_serving(client: httpx.AsyncClient, path: str) -> httpx.Response:
+    """Poll a path until the server accepts connections, then return the response."""
+    while True:
+        try:
+            return await client.get(path)
+        except httpx.ConnectError:
+            await asyncio.sleep(0.05)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_unwinds_the_running_server(kit):
+    """Shutting down has to let `serve` return on its own.
+
+    The task group exit is the assertion; a server left running makes it hang, so the
+    timeout is what turns that into a failure.
+    """
+    port = free_port()
+    webapi = WebAPI(kit, WebAPIConfig(port=port))
+
+    async with asyncio.timeout(30):
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(webapi.serve(task_group=tg))
+
+            async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+                response = await get_when_serving(client, "/data/snapshot")
+                assert response.status_code == 200
+
+            await webapi.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_before_serve_keeps_the_server_down(kit):
+    """A shutdown that beats the serve task to the loop must stop it from starting."""
+    port = free_port()
+    webapi = WebAPI(kit, WebAPIConfig(port=port))
+
+    async with asyncio.timeout(30):
+        async with asyncio.TaskGroup() as tg:
+            await webapi.shutdown()
+
+            # Stands in for a serve task that is only scheduled after the shutdown; an
+            # unguarded one binds the port and runs until something cancels it.
+            await webapi.serve(task_group=tg)
+
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+        with pytest.raises(httpx.ConnectError):
+            await client.get("/data/snapshot")
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_config_survives_a_key_value_round_trip(kit):
+    config = WebAPIConfig()
+    entity = kit.entity("webapi")
+
+    await entity.kv_put_model(config)
+
+    assert await entity.kv_get_model(WebAPIConfig) == config

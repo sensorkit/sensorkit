@@ -44,6 +44,8 @@ class CollectConfig(BaseModel):
     scan_mode: bool = False
     scan_direction: Literal["eastward", "westward"] | None = None
     filters: List[str] = Field(default_factory=list)
+    readout_mode: int | None = None
+    gain: float | None = None
     exposure_min: int = 1
     exposure_max: int = 10
     exposure_delta: int = 1
@@ -91,7 +93,6 @@ class OttoConfig(BaseModel):
 sk.declare_config_section(
     "otto",
     list[OttoConfig],
-    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
-    model_mapper=iter,
+    id_source="by_subkey",
     service_path="sensorkit.otto.program",
 )

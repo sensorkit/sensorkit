@@ -1434,3 +1434,85 @@ async def test_sensor_control_collect_multiple_frames():
         assert capture_count == 3
     finally:
         await cleanup_service(svc, svc_task, sc)
+
+
+@pytest.mark.asyncio
+async def test_sensor_control_collect_with_readout_mode_and_gain():
+    """Collect sends readout_mode and gain to the camera when specified."""
+    configs: list = []
+    got_readout = asyncio.Event()
+    got_gain = asyncio.Event()
+    capture_called = asyncio.Event()
+
+    mount = declare_device(name="mock-mount")
+    camera = declare_device(name="mock-camera")
+
+    @command_handler(mount)
+    async def handle_init(cmd: Init):
+        pass
+
+    @command_handler(mount)
+    async def handle_follow(cmd: FollowTarget):
+        pass
+
+    @command_handler(mount)
+    async def handle_stop(cmd: Stop):
+        pass
+
+    @command_handler(camera)
+    async def handle_config(cmd: ConfigureCameraSensor):
+        configs.append(cmd)
+        if cmd.readout_mode is not None:
+            got_readout.set()
+        if cmd.gain is not None:
+            got_gain.set()
+
+    @command_handler(camera)
+    async def handle_capture(cmd: CameraCapture):
+        capture_called.set()
+
+    config = SensorConfig(
+        controller_name="test-sensor",
+        devices=SensorDevices(mount="mock-mount", camera="mock-camera"),
+        site_position=_site(),
+    )
+    sc = SensorControl(config=config)
+    svc = Service("test-collect-readout-gain", "0.1.0")
+    svc.add(mount)
+    svc.add(camera)
+    svc.include(sc, name="test-sensor")
+
+    svc_task = await run_service(svc)
+    try:
+        cli = svc.client.controller("test-sensor")
+        await cli.enable()
+        await cli.execute_task(
+            InitTask(task_id=uuid.uuid4(), controller_id="test-sensor")
+        )
+        await asyncio.sleep(0.2)
+
+        _bypass_pointing_monitor(sc)
+
+        task = StandardCollectTask(
+            task_id=uuid.uuid4(),
+            controller_id="test-sensor",
+            target=ICRSTarget(coords=Equatorial(ra=10.0, dec=20.0)),
+            camera_params=CameraParameterSet(
+                integration_time_seconds=0.5,
+                frame_count=1,
+                readout_mode=1,
+                gain=100.0,
+            ),
+            end_time=datetime(2099, 1, 1, tzinfo=timezone.utc),
+        )
+        await cli.execute_task(task)
+
+        async with asyncio.timeout(10.0):
+            await got_readout.wait()
+            await got_gain.wait()
+            await capture_called.wait()
+
+        assert [c.readout_mode for c in configs if c.readout_mode is not None] == [1]
+        assert [c.gain for c in configs if c.gain is not None] == [100.0]
+    finally:
+        await cleanup_service(svc, svc_task, sc)

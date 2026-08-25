@@ -4,7 +4,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # Re-export SDK types for convenience
 from unifieddatalibrary.types import CollectRequestFull, CollectResponseFull  # noqa: F401
@@ -45,13 +45,9 @@ class UDLReferenceFrame(StrEnum):
                 raise ValueError(f"Unsupported reference frame: {self}")
 
 
-# =============================================================================
-# Configuration Models
-# =============================================================================
-
 class UDLEndpointConfig(BaseModel):
     """Connection and auth settings for one UDL-compatible endpoint."""
-    # Base URL (optional - SDK defaults to UDL production)
+    # Base URL (optional; SDK defaults to UDL production)
     base_url: str | None = None
 
     # Timeouts
@@ -59,26 +55,14 @@ class UDLEndpointConfig(BaseModel):
     upload_timeout: float = Field(
         default=300.0,
         description=(
-            "Timeout for SkyImagery uploads in seconds. Imagery can be "
-            "hundreds of MB, so this is more generous than the per-request "
-            "timeout used for the JSON API."
+            "Timeout for SkyImagery uploads in seconds."
         ),
     )
 
-    # Auth method selector
-    use_certs: bool = Field(
-        default=False,
-        description=(
-            "If True, use cert-based auth (for UDL-compliant endpoints that "
-            "require client certificates). If False, use username/password."
-        ),
-    )
-
-    # Path to .env file for username/password auth (when use_certs=False)
-    # Expects UDL_USERNAME and UDL_PASSWORD
+    # Path to .env file for username/password auth (alternative to certs)
     env_file: str = Field(default=".env", description="Path to .env file containing UDL_USERNAME and UDL_PASSWORD")
 
-    # Cert-based auth (when use_certs=True)
+    # Path to certs-based auth files (alternative to username/password)
     client_cert: str | None = None
     client_key: str | None = None
     client_verify: bool = Field(default=True)
@@ -89,31 +73,34 @@ class UDLAPIConfig(UDLEndpointConfig):
     # Optional separate endpoint for SkyImagery uploads, with its own auth
     # settings (e.g. poll UDL with basic auth, upload to a cert-authenticated
     # UDL-compliant endpoint). When None (default), imagery is uploaded to the
-    # primary endpoint (backward compatible).
+    # primary endpoint.
     upload: UDLEndpointConfig | None = Field(
         default=None,
         description=(
-            "Separate endpoint for SkyImagery uploads. Polling and "
-            "CollectResponses always use the primary endpoint."
+            "Separate endpoint for SkyImagery uploads. Polling, CollectResponses, "
+            "and EOObservations use the primary endpoint."
         ),
     )
 
-    # Sensor identification — the CollectRequest poll filter value, and stamped
-    # as both idSensor and origSensorId on CollectResponses (and as idSensor on
-    # SkyImagery)
-    id_sensor: str = Field(description="Sensor ID (poll filter value; maps to idSensor and origSensorId)")
-    poll_filter: Literal["id_sensor", "orig_sensor_id"] = Field(
-        default="id_sensor",
+    # Identify the sensor and the polling method
+    id_sensor: str = Field(description="The sensor ID, mapping to 'idSensor' and 'origSensorId'.")
+    # Poll for CollectRequests based on idSensor *or* origSensorId
+    poll_filter: Literal["idSensor", "origSensorId"] = Field(
+        default="idSensor",
         description=(
-            "Which CollectRequest field the poll matches id_sensor against: "
-            "idSensor (default) or origSensorId."
+            "The UDL key ('idSensor' or 'origSensorId', defaults to 'idSensor') to use for CollectRequest polling."
         ),
     )
-    source: str = Field(description="Data source identifier (e.g. 'DAO')")
+    source: str = Field(description="The UDL data 'source' identifier.")
 
 
 class SkyImageryPublishConfig(BaseModel):
     """SkyImagery delivery settings; presence of the block enables the publisher."""
+    # Provenance for frames with no CollectRequest
+    classification_marking: str | None = None
+    data_mode: str | None = None
+    origin: str | None = None
+
     image_type: str = Field(
         default="FITS",
         description=(
@@ -123,17 +110,23 @@ class SkyImageryPublishConfig(BaseModel):
     )
     save_path: str | None = Field(
         default=None,
-        description="Path to save skyimagery archives locally before upload"
+        description="Path to save SkyImagery locally."
     )
+
+    @model_validator(mode="after")
+    def _require_classification_marking_and_data_mode(self):
+        if bool(self.classification_marking) != bool(self.data_mode):
+            raise ValueError("Must set both classification_marking and data_mode for publishing without a CollectRequest")
+        return self
 
 
 class EOObservationPublishConfig(BaseModel):
-    """EOObservation delivery settings; presence of the block enables the publisher.
+    """EOObservation delivery settings; presence of the block enables the publisher."""
+    # Provenance for results with no CollectRequest
+    classification_marking: str | None = None
+    data_mode: str | None = None
+    origin: str | None = None
 
-    Detections come from the senpai module's published SenpaiResults; only
-    frames correlated to a CollectRequest produce records. Detection-quality
-    thresholds live in SENPAI's own engine config, not here.
-    """
     sequence_only: bool = Field(
         default=True,
         description=(
@@ -151,42 +144,55 @@ class EOObservationPublishConfig(BaseModel):
     )
     save_path: str | None = Field(
         default=None,
-        description="Path to save posted EOObservation JSON locally"
+        description="Path to save EOObservations locally."
     )
+
+    @model_validator(mode="after")
+    def _require_classification_marking_and_data_mode(self):
+        if bool(self.classification_marking) != bool(self.data_mode):
+            raise ValueError("Must set both classification_marking and data_mode for publishing without a CollectRequest")
+        return self
 
 
 class PublishConfig(BaseModel):
-    """Data delivery configuration: which UDL record types to publish."""
-    upload: bool = Field(
-        default=True,
-        description="Master switch; False disables all data delivery without removing the blocks.",
-    )
+    """Which UDL record types to publish. CollectResponses are always published."""
     sky_imagery: SkyImageryPublishConfig | None = Field(
         default=None,
-        description="SkyImagery upload of collected frames. Absent ⇒ disabled.",
+        description="Upload SkyImagery; absent=disabled.",
     )
     eo_observation: EOObservationPublishConfig | None = Field(
         default=None,
-        description="EOObservation posting of senpai detections. Absent ⇒ disabled.",
+        description="Upload EOObservation(s); absent=disabled.).",
     )
+
+
+class CollectConfig(BaseModel):
+    filter_name: str | None = None
+    readout_mode: int | None = None
+    gain: float | None = None
+    binning: int | None = None
 
 
 class UDLConfig(BaseModel):
     """Main configuration for UDL program."""
     controller: str
     api: UDLAPIConfig
-    poll_frequency: float = Field(default=10.0, description="Polling interval in seconds")
-    end_time_deadband_s: float = Field(default=0.0, description="Deadband added to task end times")
+    poll_frequency: float = Field(default=10.0, description="Polling interval in seconds.")
+    poll_horizon: float = Field(
+        default=86400.0,
+        description="Polling horizon in seconds.",
+    )
+    end_time_deadband_s: float = Field(default=0.0, description="Deadband added to task end times in seconds.")
+    collect: CollectConfig = Field(default_factory=CollectConfig)
     publish: PublishConfig = Field(
         default_factory=PublishConfig,
-        description="Data delivery: sky_imagery and/or eo_observation blocks.",
+        description="Data delivery: `sky_imagery` and/or `eo_observation` block(s).",
     )
 
 
 sk.declare_config_section(
     "udl",
     list[UDLConfig],
-    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
-    model_mapper=iter,
+    id_source="by_subkey",
     service_path="sensorkit.udl.service",
 )

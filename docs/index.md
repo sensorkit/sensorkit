@@ -1,4 +1,7 @@
-# SensorKit
+<h1 class="sk-hero">
+  <img src="assets/sensorkit-stacked-light.svg#only-light" alt="SensorKit" width="300">
+  <img src="assets/sensorkit-stacked-dark.svg#only-dark" alt="SensorKit" width="300">
+</h1>
 
 **SensorKit is an open-source control system for autonomous observatories**, built for space domain awareness and time-domain astronomy. It connects your telescope hardware to an automation layer that decides — continuously and safely — when to open the dome, what to observe, and when to shut down, whether that's for a passing satellite, a transient follow-up, or an ordinary night of survey work.
 

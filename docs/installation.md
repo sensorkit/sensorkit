@@ -11,7 +11,7 @@
 pip install sensorkit
 ```
 
-Hardware and feature support ships as optional extras, so you only install what your site uses:
+Hardware and feature support ship as optional extras, so you only install what your site uses:
 
 ```bash
 pip install "sensorkit[alpaca]"          # ASCOM Alpaca devices
@@ -19,25 +19,49 @@ pip install "sensorkit[pwi4]"            # PlaneWave PWI4
 pip install "sensorkit[alpaca,pwi4]"     # both
 ```
 
-| Extra              | Provides                                        |
-|--------------------|-------------------------------------------------|
-| `alpaca`           | ASCOM Alpaca devices                            |
-| `pwi4`             | PlaneWave PWI4 mount, focuser, rotator          |
-| `thesky`           | Software Bisque TheSky/SkyX                     |
-| `node-platform`    | Observable Space Node Platform                  |
-| `indigo`           | INDIGO devices                                  |
-| `nina`             | NINA integration                                |
-| `otto`             | Otto — standalone satellite observation program |
-| `udl`              | Unified Data Library observing program          |
-| `senpai`           | Astrometry and photometry analysis              |
-| `sky-transmission` | All-sky camera analysis                         |
-| `slack`            | Slack notifications                             |
+| Extra              | Provides                                                        |
+|--------------------|-----------------------------------------------------------------|
+| `alpaca`           | ASCOM Alpaca devices                                            |
+| `autoslew`         | ASA Autoslew mounts over Alpaca                                 |
+| `burr`             | Sensor characterization and calibration tasking                 |
+| `indigo`           | INDIGO and INDI devices                                         |
+| `nina`             | N.I.N.A. equipment through the Advanced API plugin              |
+| `node-platform`    | Observable Space Node Platform                                  |
+| `otto`             | Otto, a standalone satellite observation program                |
+| `pwi4`             | PlaneWave PWI4 mount, focuser, rotator, and cover               |
+| `sdasim`           | Synthetic SDA scene renderer that acts as an ordinary camera    |
+| `senpai`           | Astrometry and photometry analysis                              |
+| `sky-transmission` | All-sky camera analysis                                         |
+| `slack`            | Slack notifications                                             |
+| `systemd`          | Debug logging to the systemd journal on Linux                   |
+| `thesky`           | Software Bisque TheSky                                          |
+| `thesky-simulator` | In-process TheSky simulator, no TheSky install needed           |
+| `udl`              | Unified Data Library observing program                          |
 
-If you're working from a clone of the repository instead, [uv](https://docs.astral.sh/uv/) sets up everything at once:
+To work from a clone of the repository instead, [uv](https://docs.astral.sh/uv/) sets up everything at once:
 
 ```bash
+git clone https://github.com/sensorkit/sensorkit.git && cd sensorkit
 uv sync --all-extras
 uv run sensorkit --help
+```
+
+### PyTorch
+
+The `sdasim` extra pulls in PyTorch, which defaults to the CUDA build on Linux (presently around 2.5 GB with its NVIDIA runtime packages).
+
+Using pip, install PyTorch from its CPU index first, and SensorKit will use it:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install "sensorkit[sdasim]"
+```
+
+Using uv, select the CPU build instead with a dependency group:
+
+```bash
+uv sync --all-extras --group torch-cpu     # CPU
+uv sync --all-extras --group torch-cu128   # CUDA, pinned to the cu128 index
 ```
 
 ## Start NATS

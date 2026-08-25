@@ -160,7 +160,8 @@ class HuntsmanDomeConfig(BaseModel):
 sk.declare_config_section(
     "huntsman_dome",
     HuntsmanDomeConfig,
-    entity_mapper=lambda raw: raw.pop("id", "huntsman_dome_service"),
+    id_source="by_key",
+    id_default="huntsman_dome_service",
     service_path=__name__,
 )
 

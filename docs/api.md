@@ -299,10 +299,43 @@ The low-level bus abstraction. Most service code never touches it, but it's publ
 sk.declare_config_section(
     "mysection",
     list[MySectionConfig],
-    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
-    model_mapper=iter,
+    id_source="by_subkey",
     service_path="myorg.myservice",
 )
 ```
 
 Registers a new top-level section for the [unified config file](configuration.md). This is how SensorKit's own modules plug in (`alpaca:`, `automation:`, …), and your packages can do the same: the section's records are validated against your Pydantic model, written to the owning entities' KV namespaces, and — if `service_path` is given — a service is registered automatically for `sensorkit go` to launch.
+
+Every record belongs to an entity, and `id_source` says where the section gets that entity's ID:
+
+| Value | The section is | The ID comes from |
+|-------|----------------|---------------------|
+| `by_subkey` | a list of entries, one entity each | `id_key` in each entry |
+| `by_key` | one entry configuring one entity | `id_key` in the entry |
+| `mapping_key` | a mapping of ID to entry | the mapping's own keys |
+| `default` | one entry for an entity named here | `id_default` |
+
+`id_key` defaults to `id`. `id_default` supplies an ID for when the file does not. Given with `by_key` it makes the key optional, which is how the singleton services work — name your `webapi:` entity if you care what it is called, or leave the key out and get `webapi`:
+
+```python
+sk.declare_config_section("webapi", WebAPIConfig, id_source="by_key", id_default="webapi")
+```
+
+With `default` the ID is fixed at declaration, and the section takes no key at all:
+
+```python
+sk.declare_config_section(
+    "mysection", MySectionConfig, id_source="default", id_default="myservice"
+)
+```
+
+Where an entry configures more than one KV model, pass a `model_mapper` yielding the models and an `id_mapper` yielding the ID each one belongs to. The two are matched pairwise, so they must be the same length. `id_source` still describes the file's layout for the generated JSON Schema.
+
+### `config_json_schema`
+
+```python
+await sk.import_modules()
+schema = sk.config_json_schema()
+```
+
+Returns a JSON Schema for a whole config file: the fixed top-level keys, plus every section registered at the time of the call, including the entity naming key each section declares. Sections come from modules, so import them first. `sensorkit config schema` is the command-line form.

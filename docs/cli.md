@@ -28,6 +28,19 @@ Validate a unified config file and write it to the configuration store. Only cha
 | `-f, --force`     | Write all keys, even unchanged ones                |
 | `-v`              | Verbose: list each entity/key and its status (`-vv` includes values) |
 
+```bash
+sensorkit config schema [-c FILE] [-o FILE]
+```
+
+Generate a JSON Schema for the unified config file, covering the fixed top-level keys and
+every section registered by the modules imported for the run. Written to standard output
+unless `-o` names a file.
+
+| Flag              | Description                                                    |
+|-------------------|----------------------------------------------------------------|
+| `-c FILE`         | Config file naming the modules to describe (default: `$SENSORKIT_CONFIG`, then `./sensorkit.yaml`) |
+| `-o FILE`         | Write the schema to FILE instead of standard output            |
+
 ---
 
 ## `go` — run everything

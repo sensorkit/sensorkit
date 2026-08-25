@@ -40,6 +40,7 @@ class Forwarder(ABC):
     def __init__(self, *, targets: RecordQueueSet):
         self.targets = targets
         self.cache: dict[str, dict[str, SKRecord]] = collections.defaultdict(dict)
+        self.task: asyncio.Task | None = None
 
     async def start(self, *, task_group: asyncio.TaskGroup):
         """Start background monitoring task for this forwarder."""
@@ -47,11 +48,10 @@ class Forwarder(ABC):
         return self.task
 
     async def stop(self):
-        """Stop the background monitoring task.
+        """Stop the background monitoring task, if one is running."""
+        if self.task is None:
+            return
 
-        Raises:
-            AttributeError: if start() was not called before stop()
-        """
         self.task.cancel()
 
         with contextlib.suppress(asyncio.CancelledError):
@@ -73,16 +73,27 @@ class Forwarder(ABC):
                 attr_cache[attr] = update
 
             # Broadcast to all targets.
-            for queue in self.targets:
-                queue.put_nowait(update)
+            for queue in tuple(self.targets):
+                try:
+                    queue.put_nowait(update)
+                except asyncio.QueueFull:
+                    # A subscriber that has stopped draining is cut loose.
+                    logger.warning("dropping a subscriber that is not keeping up")
+                    self.targets.discard(queue)
+
+                    while not queue.empty():
+                        queue.get_nowait()
+
+                    queue.put_nowait(None)
 
     @abstractmethod
     def _monitor(self) -> AsyncIterator[SKRecord]:
         """Yield updates as they are received from the backend."""
 
-    def snapshot(self) -> list[SKRecord]:
-        """Return a list of Update objects representing the current state."""
-        return [update for attrs in self.cache.values() for update in attrs.values()]
+    def snapshot(self, entity_id: str | None = None) -> list[SKRecord]:
+        """Return the cached records, optionally limited to a single entity."""
+        caches = self.cache.values() if entity_id is None else (self.cache.get(entity_id, {}),)
+        return [record for attrs in caches for record in attrs.values()]
 
 
 class KeyValueForwarder(Forwarder):

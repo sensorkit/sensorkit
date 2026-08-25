@@ -113,6 +113,7 @@ class SdasimCamera:
         self._bin_x = self.state.bin_x or self.config.binning
         self._bin_y = self.state.bin_y or self.config.binning
         self._temperature = self.config.temperature
+        self._readout_mode = self.config.readout_mode
         self._num_targets: int | None = None
         self._mount_ra_rate = 0.0
         self._mount_dec_rate = 0.0
@@ -170,7 +171,17 @@ class SdasimCamera:
         self._temperature = cmd.setpoint.temperature
         logger.debug(f"simulated camera setpoint -> {self._temperature} °C")
 
-    @sk.command_handler
+    async def camera_set_readout_mode(self, cmd: ConfigureCameraSensor):
+        if cmd.readout_mode is None:
+            return
+        self._readout_mode = cmd.readout_mode
+        logger.debug(f"set simulated camera readout mode to {self._readout_mode}")
+
+    async def camera_set_gain(self, cmd: ConfigureCameraSensor):
+        if cmd.gain is None:
+            return
+        logger.warning("sdasim camera has no gain model; ignoring gain")
+
     async def camera_set_binning(self, cmd: ConfigureCameraSensor):
         if cmd.binning is None:
             return
@@ -182,6 +193,12 @@ class SdasimCamera:
             bin_y = bin_x
         self._bin_x = self._bin_y = bin_x
         logger.debug(f"set simulated camera binning to {bin_x}x{bin_y}")
+
+    @sk.command_handler
+    async def camera_configure_sensor(self, cmd: ConfigureCameraSensor):
+        await self.camera_set_readout_mode(cmd)
+        await self.camera_set_gain(cmd)
+        await self.camera_set_binning(cmd)
 
     # --- SensorKit telemetry subscriptions --------------------------------
 
@@ -310,6 +327,7 @@ class SdasimCamera:
                 obs_time,
                 bin_factor,
                 self._defocus_um,
+                cmd.frame_type,
             )
             remaining = exposure_seconds - (loop.time() - t0)
             if remaining > 0:
@@ -335,8 +353,8 @@ class SdasimCamera:
                 date_obs=exposure_start,
                 exposure_time=exposure_seconds,
                 instrument=str(sk.device().entity),
-                image_type=FrameType.LIGHT,
-                readout_mode=self.config.readout_mode,
+                image_type=FrameType(meta["frame_type"]),
+                readout_mode=self._readout_mode,
                 ccd_temperature=self._temperature,
                 set_temperature=self._temperature,
             ),

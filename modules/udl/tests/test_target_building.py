@@ -31,7 +31,7 @@ def program():
 class TestBuildTargetTLE:
     def test_tle_target(self, program):
         request = tle_request(sat_no=25544)
-        target = program._build_target(request)
+        target = program._get_target(request)
 
         assert isinstance(target, TLETarget)
         assert target.tle.line0 == "0 25544"
@@ -39,7 +39,7 @@ class TestBuildTargetTLE:
 
     def test_tle_target_no_sat_no(self, program):
         request = tle_request(sat_no=None, orig_object_id="99999")
-        target = program._build_target(request)
+        target = program._get_target(request)
 
         assert isinstance(target, TLETarget)
         assert target.tle.line0 == "0 99999"
@@ -48,7 +48,7 @@ class TestBuildTargetTLE:
 class TestBuildTargetStateVector:
     def test_state_vector_target(self, program):
         request = state_vector_request()
-        target = program._build_target(request)
+        target = program._get_target(request)
 
         assert isinstance(target, StateVectorTarget)
         # Positions converted from km to m
@@ -62,14 +62,14 @@ class TestBuildTargetStateVector:
 
     def test_state_vector_j2000_frame(self, program):
         request = state_vector_request()
-        target = program._build_target(request)
+        target = program._get_target(request)
 
         assert target.frame == ReferenceFrame.GCRF
 
     def test_state_vector_teme_frame(self, program):
         request = state_vector_request()
         request.state_vector.reference_frame = "TEME"
-        target = program._build_target(request)
+        target = program._get_target(request)
 
         assert target.frame == ReferenceFrame.TEME
 
@@ -77,7 +77,7 @@ class TestBuildTargetStateVector:
 class TestBuildTargetRADec:
     def test_radec_target(self, program):
         request = radec_request(ra=180.0, dec=45.0)
-        target = program._build_target(request)
+        target = program._get_target(request)
 
         assert isinstance(target, ICRSTarget)
         assert target.coords.ra == 180.0
@@ -90,13 +90,40 @@ class TestBuildTargetPriority:
         request = tle_request()
         request.ra = 180.0
         request.dec = 45.0
-        target = program._build_target(request)
+        target = program._get_target(request)
 
         assert isinstance(target, TLETarget)
 
     def test_no_target_data(self, program):
         """Returns None when no target data is available."""
         request = make_collect_request()
-        target = program._build_target(request)
+        target = program._get_target(request)
 
         assert target is None
+
+
+class TestTrackMode:
+    """`type` -> sidereal frame indices (0-based). Free-string match, so the
+    same rules serve UDL and UDL-compliant endpoints alike."""
+
+    def test_rate_track_is_all_rate(self, program):
+        assert program._get_sidereal_frames(tle_request(type="RATE TRACK", num_frames=3)) == []
+
+    def test_object_is_all_rate(self, program):
+        assert program._get_sidereal_frames(tle_request(type="OBJECT", num_frames=4)) == []
+
+    def test_compound_type_is_last_frame_only(self, program):
+        # "RATE TRACK SIDEREAL": rate-track with only the final frame sidereal.
+        assert program._get_sidereal_frames(tle_request(type="RATE TRACK SIDEREAL", num_frames=3)) == [2]
+
+    def test_stare_is_all_sidereal(self, program):
+        assert program._get_sidereal_frames(tle_request(type="STARE", num_frames=3)) == [0, 1, 2]
+
+    def test_sidereal_is_all_sidereal(self, program):
+        assert program._get_sidereal_frames(tle_request(type="SIDEREAL", num_frames=2)) == [0, 1]
+
+    def test_match_is_case_insensitive(self, program):
+        assert program._get_sidereal_frames(tle_request(type="rate track sidereal", num_frames=5)) == [4]
+
+    def test_unrecognized_type_defaults_to_rate(self, program):
+        assert program._get_sidereal_frames(tle_request(type="DWELL", num_frames=3)) == []

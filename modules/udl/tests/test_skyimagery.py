@@ -21,7 +21,7 @@ from sensorkit.udl.models import (
 from sensorkit.udl.program import UDLProgram, _PublishProgress
 from sensorkit.udl.publishers import SkyImageryPublisher
 
-from .fakes import FakeUDLClient, tle_request
+from .fakes import FakeUDLClient, FakeUpload, tle_request
 
 SITE = SitePosition(
     latitude_degrees=41.9168354,
@@ -29,8 +29,8 @@ SITE = SitePosition(
     altitude_km=0.05,
 )
 
-# A UDL-compliant host whose imagery filedrop we cannot derive, so uploads go out through the
-# SDK client — where the fake records the ZIP. TestImageryFiledropURL covers the derivable hosts.
+# A UDL-compliant host: uploads raw-POST to {base_url}/filedrop/udl-skyimagery; the fixture
+# stubs the publisher's _upload with a recorder. TestResolveUploadUrl covers URL derivation.
 COMPLIANT_BASE_URL = "https://udl-compliant.example.mil"
 
 
@@ -43,7 +43,7 @@ def frame_context(name="test.fits", **fields):
 
 def uploaded_metadata(program, index=-1):
     """The SkyImagery metadata JSON from an uploaded ZIP, newest by default."""
-    zip_bytes = program.upload_client.sky_imagery.uploads[index]
+    zip_bytes = program._sky_imagery._upload.uploads[index]
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         (name,) = [n for n in zf.namelist() if n.endswith("_skyimagery.json")]
@@ -67,13 +67,22 @@ def program(program_impl):
     p._site = SITE
     p.client = FakeUDLClient()
     p.upload_client = p.client
-    p._imagery = SkyImageryPublisher(p)
+    p._sky_imagery = SkyImageryPublisher(p)
+    p._sky_imagery._upload = FakeUpload()
     return p
 
 
 async def publish_frame(program, request, **context_fields):
-    """Hand one collected frame to the program, as the publish loop does."""
+    """Hand one collected frame to the program, as the publish loop does.
+
+    Provides every context key SkyImageryPublisher.publish requires; tests
+    override via context_fields.
+    """
     program.tasks[request.id] = request
+    context_fields.setdefault("exptime", 4.0)
+    context_fields.setdefault("image_width", 2048)
+    context_fields.setdefault("image_height", 2048)
+    context_fields.setdefault("bits_per_pixel", 16)
     context = frame_context(
         task_id=request.id,
         frame_num=0,
@@ -117,12 +126,13 @@ class TestSkyImageryMetadata:
         assert uploaded_metadata(program)["idSensor"] == "SENSOR-01"
 
     @pytest.mark.asyncio
-    async def test_metadata_omits_orig_ids(self, program):
-        """origSensorId and origObjectId belong on CollectResponses, not SkyImagery (satNo suffices)."""
+    async def test_metadata_sensor_ids(self, program):
+        """idSensor and origSensorId both carry the configured sensor id, as on
+        CollectResponses and EOObservations; origObjectId is not stamped (satNo suffices)."""
         await publish_frame(program, tle_request())
 
         metadata = uploaded_metadata(program)
-        assert "origSensorId" not in metadata
+        assert metadata["origSensorId"] == "SENSOR-01"
         assert "origObjectId" not in metadata
 
     @pytest.mark.asyncio
@@ -199,35 +209,75 @@ class TestSkyImageryMetadata:
         assert metadata["imageSetId"] == request.id
 
 
-class TestImageryFiledropURL:
-    """The SDK's upload_zip() targets the wrong host when base_url is
-    overridden; _imagery_filedrop_url() derives the dedicated imagery subdomain.
+class TestUntaskedFrames:
+    """Frames with no CollectRequest publish only with configured provenance."""
+
+    CONTEXT = dict(
+        task_id="not-a-known-task",
+        frame_num=0,
+        date_obs="2026-03-21T07:18:47.082000",
+        exptime=4.0,
+        image_width=2048,
+        image_height=2048,
+        bits_per_pixel=16,
+        frame_count=1,
+    )
+
+    @pytest.mark.asyncio
+    async def test_untasked_frame_dropped_without_provenance(self, program):
+        await program._handle_frame(frame_context(**self.CONTEXT), b"\x00" * 100)
+        assert program._sky_imagery._upload.uploads == []
+
+    @pytest.mark.asyncio
+    async def test_untasked_frame_uses_configured_provenance(self, program):
+        cfg = program.config.publish.sky_imagery
+        cfg.classification_marking = "U"
+        cfg.data_mode = "TEST"
+        cfg.origin = "TEST_ORG"
+
+        await program._handle_frame(frame_context(**self.CONTEXT), b"\x00" * 100)
+
+        metadata = uploaded_metadata(program)
+        assert metadata["classificationMarking"] == "U"
+        assert metadata["dataMode"] == "TEST"
+        assert metadata["origin"] == "TEST_ORG"
+        assert "idRequest" not in metadata
+        assert "satNo" not in metadata
+
+
+class TestResolveUploadUrl:
+    """UDL proper serves the imagery filedrop on a dedicated subdomain, so the
+    known UDL hosts map there; any other base_url is presumed to serve the
+    UDL-compliant route itself.
     """
+
+    def resolve(self, program):
+        return program._sky_imagery._get_upload_url(program.config.api)
 
     def test_default_base_url_uses_production_imagery(self, program):
         program.config.api.base_url = None
         assert (
-            program._imagery._imagery_filedrop_url()
+            self.resolve(program)
             == "https://imagery.unifieddatalibrary.com/filedrop/udl-skyimagery"
         )
 
     def test_test_base_url_uses_test_imagery(self, program):
         program.config.api.base_url = "https://test.unifieddatalibrary.com"
         assert (
-            program._imagery._imagery_filedrop_url()
+            self.resolve(program)
             == "https://imagery-test.unifieddatalibrary.com/filedrop/udl-skyimagery"
         )
 
     def test_explicit_prod_base_url_uses_production_imagery(self, program):
         program.config.api.base_url = "https://unifieddatalibrary.com/"
         assert (
-            program._imagery._imagery_filedrop_url()
+            self.resolve(program)
             == "https://imagery.unifieddatalibrary.com/filedrop/udl-skyimagery"
         )
 
-    def test_unknown_host_returns_none(self, program):
-        """Unknown hosts (custom UDL-compliant endpoints) → fall back to the SDK."""
-        assert program._imagery._imagery_filedrop_url() is None
+    def test_other_host_carries_the_filedrop_route(self, program):
+        """Custom UDL-compliant endpoints serve the route on their own host."""
+        assert self.resolve(program) == f"{COMPLIANT_BASE_URL}/filedrop/udl-skyimagery"
 
 
 class TestCompletedResponse:
@@ -251,20 +301,27 @@ class TestCompletedResponse:
         """
         request = tle_request(num_frames=num_frames)
         program.tasks[request.id] = request
-        program.upload_client.sky_imagery.fail = upload_fails
+        program._sky_imagery._upload.fail = upload_fails
 
         if stash_window:
-            program._publish_progress[request.id] = _PublishProgress(window=cls.WINDOW)
+            program.state.publish_progress[request.id] = _PublishProgress(window=cls.WINDOW)
 
         return request
 
     @staticmethod
     async def publish_frames(program, request, count):
         for frame_num in range(count):
+            # Distinct per-frame filenames, as FileNameTemplate produces; the
+            # frame consumer dedups repeated deliveries of the same file.
             context = frame_context(
+                name=f"{request.id}_{frame_num}.fits",
                 task_id=request.id,
                 frame_num=frame_num,
                 date_obs="2026-03-21T07:18:47.082000",
+                exptime=4.0,
+                image_width=2048,
+                image_height=2048,
+                bits_per_pixel=16,
             )
             await program._handle_frame(context, b"\x00" * 100)
 
@@ -324,7 +381,7 @@ class TestCompletedResponse:
     async def test_completed_without_imagery_publisher(self, program):
         """With imagery publishing disabled, seeing the full set is completion."""
         request = self.arm(program, num_frames=2)
-        program._imagery = None
+        program._sky_imagery = None
         await self.publish_frames(program, request, 2)
 
         assert program.client.collect_responses.statuses() == [ResponseStatus.COMPLETED.value]
@@ -333,7 +390,7 @@ class TestCompletedResponse:
     async def test_no_completed_without_imagery_until_set_seen(self, program):
         """Imagery disabled: COMPLETED still waits for the full set."""
         request = self.arm(program, num_frames=3)
-        program._imagery = None
+        program._sky_imagery = None
         await self.publish_frames(program, request, 2)
 
         assert program.client.collect_responses.statuses() == []

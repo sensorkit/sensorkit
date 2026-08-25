@@ -28,6 +28,7 @@ from sensorkit.std.optics import (
     SetFilter,
 )
 from sensorkit.std.traits import Connect, Deinit, Init, Stop
+from sensorkit.std.weather import BasicWeather
 
 
 class Sensor:
@@ -65,6 +66,9 @@ class Sensor:
             else None
         )
         self.dome = impl.use_device(devices.dome) if devices.dome else None
+        self.weather = impl.use_device(devices.weather,
+            subscribe=[BasicWeather],
+        ) if devices.weather else None
 
     async def init_dome(self):
         """Initialize the dome and open it, if one is configured."""
@@ -337,6 +341,16 @@ class SensorControl:
             optics_kws.append(Filter(name=task.camera_params.filter_name))
 
         # Configure camera capture parameters.
+        if task.camera_params.readout_mode is not None:
+            await self.sensor.camera.command(
+                ConfigureCameraSensor(readout_mode=task.camera_params.readout_mode)
+            )
+
+        if task.camera_params.gain is not None:
+            await self.sensor.camera.command(
+                ConfigureCameraSensor(gain=task.camera_params.gain)
+            )
+
         if None not in (task.camera_params.binning_x, task.camera_params.binning_y):
             await self.sensor.camera.command(
                 ConfigureCameraSensor(
@@ -398,6 +412,7 @@ class SensorControl:
             await self.sensor.camera.command(
                 CameraCapture(
                     integration_time=task.camera_params.integration_time_seconds,
+                    frame_type=task.camera_params.frame_type,
                     context=context,
                 )
             )
@@ -498,6 +513,7 @@ class SensorDevices(BaseModel):
     filter_wheel: str | None = None
     mirror_cover: str | None = None
     dome: str | None = None
+    weather: str | None = None
 
 
 class SensorPolicies(BaseModel):
@@ -561,8 +577,7 @@ class SensorConfig(BaseModel):
 sk.declare_config_section(
     "sensors",
     list[SensorConfig],
-    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
-    model_mapper=iter,
+    id_source="by_subkey",
     service_path=__name__,
 )
 

@@ -194,6 +194,11 @@ class AlpacaDome(AlpacaDevice):
         if not self._can_set_shutter:
             logger.warning("Cannot set shutter")
             return
+
+        # Protect against a non-idempotent OpenShutter
+        if await self.get(self.dome, "ShutterStatus", None) == _SHUTTER_OPEN:
+            return
+
         logger.debug("opening enclosure")
 
         await self.call(self.dome, "OpenShutter")
@@ -213,6 +218,11 @@ class AlpacaDome(AlpacaDevice):
         if not self._can_set_shutter:
             logger.warning("Cannot set shutter")
             return
+
+        # Protect against a non-idempotent CloseShutter
+        if await self.get(self.dome, "ShutterStatus", None) == _SHUTTER_CLOSED:
+            return
+
         logger.debug("closing enclosure")
 
         await self.call(self.dome, "CloseShutter")

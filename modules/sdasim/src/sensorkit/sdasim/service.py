@@ -19,8 +19,7 @@ from sensorkit.sdasim.camera import SdasimCameraConfig
 sk.declare_config_section(
     "sdasim",
     list[SdasimCameraConfig],
-    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
-    model_mapper=iter,
+    id_source="by_subkey",
     service_path=__name__,
 )
 

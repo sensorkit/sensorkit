@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+import asyncio
+import itertools
 import math
 from datetime import UTC, datetime, timedelta
 
@@ -23,6 +25,7 @@ from sensorkit.astro.target import (
     ObserveWindow,
     StateVectorTarget,
     Target,
+    TargetTrack,
     TLETarget,
     altitude_mask,
     is_observable,
@@ -257,11 +260,20 @@ async def test_adapt_raises_when_unsupported():
 
 
 @pytest.mark.asyncio
-async def test_adapt_requires_observer_for_propagation():
-    """adapt() raises AssertionError when propagation is needed but observer is absent."""
+async def test_adapt_requires_observer_for_observer_relative_frame():
+    """adapt() rejects an observer-relative frame when no observer was given."""
     target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
-    with pytest.raises(AssertionError):
+    with pytest.raises(RuntimeError, match="observer location is required"):
         await target.adapt((EphemerisTarget, ReferenceFrame.CIRF))
+
+
+@pytest.mark.asyncio
+async def test_adapt_allows_geocentric_frame_without_observer():
+    """A geocentric frame needs no observer, so adapt() propagates without one."""
+    target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
+    eph = await target.adapt((EphemerisTarget, ReferenceFrame.GCRF))
+    assert isinstance(eph, EphemerisTarget)
+    assert eph.points
 
 
 @pytest.mark.asyncio
@@ -415,3 +427,187 @@ async def test_adapt_state_vector_to_ephemeris():
     assert result.frame == ReferenceFrame.CIRF
     assert len(result.jds) > 0
     assert len(result.points) == len(result.jds)
+
+
+@pytest.mark.asyncio
+async def test_adapt_to_track_binds_observing_context():
+    """adapt() hands back a track already bound to the requested frame and observer."""
+    target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
+    track = await target.adapt(
+        ICRSTarget,
+        (TargetTrack, ReferenceFrame.CIRF),
+        observer=_OBSERVER,
+    )
+    assert isinstance(track, TargetTrack)
+    assert track.frame == ReferenceFrame.CIRF
+    assert track.observer is _OBSERVER
+
+
+@pytest.mark.asyncio
+async def test_adapt_prefers_track_over_ephemeris():
+    """A consumer accepting both gets the track, which imposes no bound on the dwell."""
+    target = TLETarget(tle=_ISS_TLE)
+    result = await target.adapt(
+        (EphemerisTarget, ReferenceFrame.ICRF),
+        (TargetTrack, ReferenceFrame.ICRF),
+        observer=_OBSERVER,
+    )
+    assert isinstance(result, TargetTrack)
+
+
+@pytest.mark.asyncio
+async def test_adapt_fixed_target_to_track_is_unsupported():
+    """A target with no trajectory reports that it cannot be adapted, not that it is unimplemented."""
+    target = AltAzTarget(coords=Horizontal(az=90.0, alt=45.0))
+    with pytest.raises(RuntimeError, match="Could not adapt"):
+        await target.adapt((TargetTrack, ReferenceFrame.ICRF), observer=_OBSERVER)
+
+
+@pytest.mark.asyncio
+async def test_track_sample_matches_ephemeris_target():
+    """A track samples the same points the equivalent EphemerisTarget is built from."""
+    start = datetime(2025, 1, 15, 9, 32, 0, tzinfo=UTC)
+    window = dict(duration=timedelta(seconds=30), step=timedelta(seconds=10))
+    target = TLETarget(tle=_ISS_TLE)
+
+    track = target.to_track(ReferenceFrame.ICRF, _OBSERVER)
+    jds, points = await track.sample(start, **window)
+    eph = await target.to_ephemeris_target(
+        start_time=start, frame=ReferenceFrame.ICRF, observer=_OBSERVER, **window
+    )
+
+    assert jds == list(eph.jds)
+    assert [(p.ra, p.dec) for p in points] == [(p.ra, p.dec) for p in eph.points]
+
+
+@pytest.mark.asyncio
+async def test_track_stream_yields_successive_windows_covering_the_present():
+    """Each window starts at or before the moment it is produced, and advances in time."""
+    track = TLETarget(tle=_ISS_TLE).to_track(ReferenceFrame.ICRF, _OBSERVER)
+    windows = []
+
+    async for jds, points in track.stream(
+        window=timedelta(seconds=3), step=timedelta(seconds=1), lead=timedelta(seconds=1)
+    ):
+        assert len(points) == len(jds)
+        assert jds[0] <= Time.now().jd
+        windows.append(jds)
+
+        if len(windows) == 2:
+            break
+
+    assert windows[1][0] > windows[0][0]
+
+
+@pytest.mark.asyncio
+async def test_track_stream_windows_leave_no_uncovered_interval():
+    """The next window begins before the samples of the previous one run out.
+
+    A window that is not a whole number of steps ends at its last sample rather than at
+    the full span, and the next window has to be timed against that.
+    """
+    track = TLETarget(tle=_ISS_TLE).to_track(ReferenceFrame.ICRF, _OBSERVER)
+    windows = []
+
+    async for jds, _points in track.stream(
+        window=timedelta(seconds=5), step=timedelta(seconds=2), lead=timedelta(seconds=0.5)
+    ):
+        windows.append(jds)
+
+        if len(windows) == 3:
+            break
+
+    for previous, following in itertools.pairwise(windows):
+        assert following[0] <= previous[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lead", [timedelta(seconds=10), timedelta(seconds=9)])
+async def test_track_stream_rejects_lead_that_outruns_the_window(lead):
+    """A lead leaving no time to consume a window is rejected.
+
+    A lead shorter than the window can still consume all of it, since a window covers
+    its first sample onward and the next one is produced a step early.
+    """
+    track = TLETarget(tle=_ISS_TLE).to_track(ReferenceFrame.ICRF, _OBSERVER)
+    stream = track.stream(window=timedelta(seconds=10), step=timedelta(seconds=1), lead=lead)
+
+    with pytest.raises(ValueError, match="lead must leave at least one step"):
+        await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_track_reuses_a_propagation_within_the_horizon():
+    """Windows inside the horizon are served without propagating again."""
+    target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
+    track = target.to_track(ReferenceFrame.ICRF, _OBSERVER)
+    propagations = 0
+    propagate = track.trajectory.propagate
+
+    async def counted(when):
+        nonlocal propagations
+        propagations += 1
+        return await propagate(when)
+
+    track.trajectory.propagate = counted
+    base = _GEO_SV.t + timedelta(minutes=1)
+
+    for minutes in range(0, 20, 2):
+        await track.sample(base + timedelta(minutes=minutes), timedelta(seconds=10), timedelta(seconds=5))
+
+    assert propagations == 1
+
+    await track.sample(base + timedelta(hours=2), timedelta(seconds=10), timedelta(seconds=5))
+    assert propagations == 2
+
+
+@pytest.mark.asyncio
+async def test_track_retries_after_a_failed_propagation():
+    """A propagation that fails leaves the track able to serve the window on a retry."""
+    target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
+    track = target.to_track(ReferenceFrame.ICRF, _OBSERVER)
+    base = _GEO_SV.t + timedelta(minutes=1)
+    window = dict(duration=timedelta(seconds=10), step=timedelta(seconds=5))
+
+    await track.sample(base, **window)
+
+    propagate = track.trajectory.propagate
+    failing = True
+
+    async def flaky(when):
+        if failing:
+            raise RuntimeError("propagator outage")
+
+        return await propagate(when)
+
+    track.trajectory.propagate = flaky
+
+    with pytest.raises(RuntimeError, match="propagator outage"):
+        await track.sample(base + timedelta(hours=5), **window)
+
+    failing = False
+    jds, points = await track.sample(base + timedelta(hours=2), **window)
+    assert len(points) == len(jds) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_samples_share_one_propagation():
+    """Consumers sampling the same track at once do not each pay for a propagation."""
+    target = StateVectorTarget(frame=ReferenceFrame.GCRF, sv=_GEO_SV)
+    track = target.to_track(ReferenceFrame.ICRF, _OBSERVER)
+    propagations = 0
+    propagate = track.trajectory.propagate
+
+    async def counted(when):
+        nonlocal propagations
+        propagations += 1
+        return await propagate(when)
+
+    track.trajectory.propagate = counted
+    base = _GEO_SV.t + timedelta(minutes=1)
+
+    await asyncio.gather(*[
+        track.sample(base, timedelta(seconds=10), timedelta(seconds=5)) for _ in range(4)
+    ])
+
+    assert propagations == 1

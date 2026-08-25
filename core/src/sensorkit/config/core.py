@@ -11,7 +11,8 @@ from sensorkit.data.graph import DataGraph
 declare_config_section(
     "automation",
     AgentConfig,
-    entity_mapper=lambda raw: raw.pop("id", "agent"),
+    id_source="by_key",
+    id_default="agent",
     service_path=agent_module_name,
 )
 
@@ -32,14 +33,18 @@ class DataFlowConfig(BaseModel):
 declare_config_section(
     "data_flow",
     list[DataFlowConfig],
-    entity_mapper=lambda raw: (elem["entity"] for elem in raw),
+    id_source="by_subkey",
+    id_key="entity",
     model_mapper=lambda obj: (config.producer or config.consumer for config in obj),
 )
 
 
+# Each entity carries a whole mapping of keywords, so this section produces a model per
+# keyword rather than one per entity, repeating the entity ID across them.
 declare_config_section(
     "config",
     dict[str, KeywordDict],
-    entity_mapper=lambda raw: (entity for entity, kwdict in raw.items() for _ in kwdict),
+    id_source="mapping_key",
+    id_mapper=lambda raw: (entity for entity, kwdict in raw.items() for _ in kwdict),
     model_mapper=lambda obj: (model for kwdict in obj.values() for model in kwdict.values()),
 )

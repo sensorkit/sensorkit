@@ -9,7 +9,7 @@ No hardware, no site config — just Docker.
 ## 1. Clone and start the stack
 
 ```bash
-git clone <sensorkit-repo-url>
+git clone https://github.com/sensorkit/sensorkit.git
 cd sensorkit/deploy/simulated
 docker compose up --build
 ```

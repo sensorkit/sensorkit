@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
+import pytest
+from pydantic import ValidationError
+
 from sensorkit.udl.models import (
     EOObservationPublishConfig,
     PublishConfig,
@@ -49,20 +52,18 @@ class TestUDLAPIConfig:
         )
         assert config.id_sensor == "SENSOR-01"
         assert config.source == "TEST_SOURCE"
-        assert config.use_certs is False
+        assert config.client_cert is None
         assert config.timeout == 60.0
 
     def test_cert_auth_config(self):
         config = UDLAPIConfig(
             id_sensor="SENSOR-01",
             source="DAO",
-            use_certs=True,
             client_cert="/path/to/cert.pem",
             client_key="/path/to/key.pem",
             client_verify=False,
             base_url="https://udl-compliant.example.com",
         )
-        assert config.use_certs is True
         assert config.client_cert == "/path/to/cert.pem"
         assert config.base_url == "https://udl-compliant.example.com"
 
@@ -95,7 +96,6 @@ class TestUDLConfig:
         assert config.poll_frequency == 10.0
         assert config.end_time_deadband_s == 0.0
         # Publishers are opt-in: with no blocks, nothing is delivered.
-        assert config.publish.upload is True
         assert config.publish.sky_imagery is None
         assert config.publish.eo_observation is None
 
@@ -112,22 +112,30 @@ class TestPublishConfig:
         assert config.eo_observation.mag_bands == ["G"]
         assert config.eo_observation.save_path is None
 
-    def test_master_switch_default_on(self):
-        assert PublishConfig().upload is True
+
+class TestUntaskedProvenanceConfig:
+    def test_one_without_the_other_rejected(self):
+        for config_type in (SkyImageryPublishConfig, EOObservationPublishConfig):
+            with pytest.raises(ValidationError, match="Must set both"):
+                config_type(classification_marking="U")
+            with pytest.raises(ValidationError, match="Must set both"):
+                config_type(data_mode="TEST")
+
+    def test_both_or_neither_accepted(self):
+        for config_type in (SkyImageryPublishConfig, EOObservationPublishConfig):
+            config_type()
+            config_type(classification_marking="U", data_mode="TEST")
 
 
 class TestPollFilterConfig:
     def test_default_is_id_sensor(self):
         config = UDLAPIConfig(id_sensor="SENSOR-01", source="DAO")
-        assert config.poll_filter == "id_sensor"
+        assert config.poll_filter == "idSensor"
 
     def test_orig_sensor_id_accepted(self):
-        config = UDLAPIConfig(id_sensor="SENSOR-01", source="DAO", poll_filter="orig_sensor_id")
-        assert config.poll_filter == "orig_sensor_id"
+        config = UDLAPIConfig(id_sensor="SENSOR-01", source="DAO", poll_filter="origSensorId")
+        assert config.poll_filter == "origSensorId"
 
     def test_invalid_filter_rejected(self):
-        import pytest
-        from pydantic import ValidationError
-
         with pytest.raises(ValidationError):
             UDLAPIConfig(id_sensor="SENSOR-01", source="DAO", poll_filter="bogus")

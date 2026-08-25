@@ -9,6 +9,7 @@ This page covers the file format, how to load and update configuration, and the 
 A minimal but realistic example:
 
 ```yaml
+# yaml-language-server: $schema=https://sensorkit.github.io/main/config-schema.json
 version: 1
 
 sensorkit:
@@ -42,6 +43,7 @@ pwi4:
 # The sensor controller: devices composed into one instrument
 sensors:
   - id: MySensor
+    controller_name: MySensor
     devices:
       mount: MyMount
       camera: MyCamera
@@ -142,6 +144,23 @@ sensorkit config load sensorkit.yaml -f     # write everything, even unchanged k
 sensorkit go -c sensorkit.yaml -l
 ```
 
+## Editor support
+
+SensorKit publishes a JSON Schema covering the core sections and every built-in module. Reference it from the top of your config file to get completion and inline validation as you edit. In VS Code, with the YAML extension installed:
+
+```yaml
+# yaml-language-server: $schema=https://sensorkit.github.io/main/config-schema.json
+version: 1
+```
+
+Sites running their own plugins can generate a schema that also covers the sections those plugins register:
+
+```bash
+sensorkit config schema -c sensorkit.yaml -o sensorkit.schema.json
+```
+
+`sensorkit config load -n` remains the full check, covering the cross-field rules the models enforce.
+
 ## Data flow
 
 The `data_flow` section defines what happens to data a device produces — most commonly, turning camera frames into FITS files on disk. Each entry attaches a pipeline of operations to an entity:
@@ -207,6 +226,59 @@ webapi:
 ```
 
 This is the integration point for dashboards and remote monitoring.
+
+### Reaching the service
+
+`host` defaults to `127.0.0.1`, so the service answers only on the machine running it. A containerized deployment has to bind every interface, since the port is published from outside the container:
+
+```yaml
+webapi:
+  host: 0.0.0.0
+```
+
+If the web API is exposed on non-loopback interfaces and no authentication is configured, the service will log a warning at startup.
+
+### TLS
+
+```yaml
+webapi:
+  tls:
+    certfile: /etc/sensorkit/tls/server.crt
+    keyfile: /etc/sensorkit/tls/server.key
+    keyfile_password_env: SENSORKIT_TLS_PASSWORD   # optional, for an encrypted key
+    minimum_version: "1.2"                         # or "1.3"
+```
+
+Certificates are read when the service starts, so renewing one takes a restart.
+
+### Authentication
+
+Bearer token auth applies to every endpoint. Set `allow_anonymous_read` to leave `GET` requests, including the event streams, open to a dashboard while still guarding the endpoints that act:
+
+```yaml
+webapi:
+  auth:
+    kind: token
+    token_env: SENSORKIT_API_TOKEN   # or token_file: /etc/sensorkit/api-token
+    allow_anonymous_read: false
+```
+
+Clients present it as `Authorization: Bearer <token>`. Anonymous read does not extend to `/openapi.json`, `/docs`, or `/redoc`.
+
+### Browser access
+
+Cross-origin requests are refused unless the origin is listed. A dashboard served from somewhere other than the API's own origin needs:
+
+```yaml
+webapi:
+  cors:
+    allow_origins:
+      - https://dashboard.example.org
+```
+
+### Limits
+
+`max_stream_clients` (default 32) caps concurrent event-stream subscribers, and `stream_queue_size` (default 4096) bounds each subscriber's backlog. `expose_docs: true` serves the browser documentation pages at `/docs` and `/redoc`, which are off by default. `/openapi.json` is always served to a caller the authentication settings admit.
 
 ## Under the hood: the KV store
 

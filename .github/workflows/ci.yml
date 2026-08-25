@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Main should only go red if the package is broken, so the style checks warn
+  # there instead of failing.
+  SOFT_CHECKS: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -19,8 +24,6 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Main should only go red if the package is broken, so we soften the style checks for pushes to main.
-    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -34,13 +37,13 @@ jobs:
         run: uv sync --locked --only-group lint
 
       - name: Lint sources
+        continue-on-error: ${{ env.SOFT_CHECKS == 'true' }}
         run: uv run --no-sync ruff check
 
   imports:
     name: Import layering
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -59,13 +62,13 @@ jobs:
           uv pip install --no-deps -e .
 
       - name: Check import layering
+        continue-on-error: ${{ env.SOFT_CHECKS == 'true' }}
         run: uv run --no-sync lint-imports
 
   complexity:
     name: Complexity
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -81,6 +84,7 @@ jobs:
         run: uv sync --locked --only-group complexity
 
       - name: Check code complexity
+        continue-on-error: ${{ env.SOFT_CHECKS == 'true' }}
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -117,7 +121,7 @@ jobs:
     env:
       # Device drivers log non-ASCII (degree signs); keep Windows off cp1252.
       PYTHONUTF8: "1"
-      COV: ${{ matrix.os == 'ubuntu-latest' && '--cov --cov-report=xml' || '' }}
+      COV: ${{ matrix.os == 'ubuntu-latest' && '--cov' || '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -128,9 +132,9 @@ jobs:
           cache-suffix: test
 
       - name: Install
-        # The systemd extra is an sdist needing headers the runner lacks, and
-        # journal logging degrades gracefully without it.
-        run: uv sync --locked --all-extras --no-extra systemd --dev
+        # No systemd on the runner; degrades gracefully in code.
+        # CPU torch keeps the CUDA libraries out of the runner cache.
+        run: uv sync --locked --all-extras --no-extra systemd --group torch-cpu --dev
 
       - name: Cache JPL ephemeris
         uses: actions/cache@v6
@@ -163,10 +167,96 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Build coverage reports
+        if: ${{ !cancelled() && matrix.os == 'ubuntu-latest' }}
+        shell: bash
+        run: |
+          # Core sits at the report root so its published URL is unchanged, and
+          # each module gets a subdirectory named for it.
+          mkdir -p coverage-report
+          uv run --no-sync coverage xml --include='core/src/*' -o coverage-report/coverage.xml
+          uv run --no-sync coverage html --include='core/src/*' -d coverage-report --quiet
+
+          {
+            echo "### Coverage"
+            echo
+            echo "| Scope | Line coverage |"
+            echo "| --- | --- |"
+            echo "| core | $(uv run --no-sync coverage report --format=total --include='core/src/*')% |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for path in modules/*/; do
+            name=$(basename "$path")
+            out="coverage-report/$name"
+            mkdir -p "$out"
+
+            # A module scaffolded without sources has nothing to measure.
+            if ! uv run --no-sync coverage xml --include="modules/$name/*" -o "$out/coverage.xml"; then
+              rm -rf "$out"
+              continue
+            fi
+
+            uv run --no-sync coverage html --include="modules/$name/*" -d "$out" --quiet
+
+            total=$(uv run --no-sync coverage report --format=total --include="modules/$name/*")
+            echo "| $name | $total% |" >> "$GITHUB_STEP_SUMMARY"
+          done
+
       - name: Upload coverage
         if: ${{ !cancelled() && matrix.os == 'ubuntu-latest' }}
         uses: actions/upload-artifact@v7
         with:
           name: coverage
-          path: coverage.xml
+          path: coverage-report/
           if-no-files-found: ignore
+
+  pages:
+    name: Docs
+    needs: test
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+          cache-suffix: docs
+
+      - name: Install zensical
+        run: uv sync --locked --only-group docs
+
+      - name: Build docs
+        run: uv run --no-sync zensical build
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: coverage
+          path: coverage-report/
+
+      # Pages replaces the whole site on every deploy, so the report has to be
+      # assembled alongside the docs rather than published on its own.
+      - name: Attach the coverage report
+        run: |
+          mkdir -p site/coverage
+          cp -r coverage-report/. site/coverage/
+
+          # Every report directory carries its own badge, core at the root.
+          find site/coverage -name coverage.xml | while read -r report; do
+            python .github/scripts/coverage_badge.py "$report" "$(dirname "$report")/badge.json"
+          done
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

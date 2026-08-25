@@ -169,6 +169,7 @@ pwi4:
 
 webapi:
   id: WebAPI
+  host: 0.0.0.0
   port: 8000
   serve_data_products:
     - kind: local_fits

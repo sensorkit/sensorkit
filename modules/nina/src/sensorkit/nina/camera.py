@@ -32,7 +32,6 @@ from sensorkit.std import (
     Connected,
     Disconnect,
     ExposureInfo,
-    FrameType,
     Stop,
     TemperatureUnit,
 )
@@ -218,7 +217,25 @@ class NinaCamera(NinaDevice):
         else:
             logger.debug(f"set camera temperature to {target} C")
 
-    @sk.command_handler
+    async def camera_set_readout_mode(self, cmd: ConfigureCameraSensor):
+        if cmd.readout_mode is None:
+            return
+        await self.require_connected()
+        target = cmd.readout_mode
+        logger.debug(f"setting camera readout mode to {target}")
+        await self.client.get("/equipment/camera/set-readout", mode=target)
+
+        info = await self.info("camera")
+        readout_mode = info.get("ReadoutMode")
+        if readout_mode != target:
+            logger.warning(f"Requested readout mode {target}, got {readout_mode}")
+
+    async def camera_set_gain(self, cmd: ConfigureCameraSensor):
+        if cmd.gain is None:
+            return
+        self._gain = int(cmd.gain)
+        logger.debug(f"setting camera gain (at capture) to {self._gain}")
+
     async def camera_set_binning(self, cmd: ConfigureCameraSensor):
         if cmd.binning is None:
             return
@@ -240,6 +257,12 @@ class NinaCamera(NinaDevice):
             logger.debug(f"set camera binning to ({bin_x}, {bin_y})")
 
     @sk.command_handler
+    async def camera_configure_sensor(self, cmd: ConfigureCameraSensor):
+        await self.camera_set_readout_mode(cmd)
+        await self.camera_set_gain(cmd)
+        await self.camera_set_binning(cmd)
+
+    @sk.command_handler
     async def camera_capture(self, cmd: CameraCapture):
         await self.require_connected()
         exposure_seconds = float(cmd.integration_time)
@@ -250,14 +273,17 @@ class NinaCamera(NinaDevice):
 
         # Capture and save raw FITS (NINA saves asynchronously after capture completes)
         exposure_start = datetime.now(UTC)
-        await self.client.get(
-            "/equipment/camera/capture",
+        capture_args = dict(
             duration=exposure_seconds,
-            imageType="LIGHT",
+            imageType=cmd.frame_type.name,
             save=True,
             waitForResult=True,
             omitImage=True,
         )
+        gain = getattr(self, "_gain", None)
+        if gain is not None:
+            capture_args["gain"] = gain
+        await self.client.get("/equipment/camera/capture", **capture_args)
 
         # Poll until the image appears in NINA's history
         async with asyncio.timeout(30.0):
@@ -297,7 +323,7 @@ class NinaCamera(NinaDevice):
                     date_obs=exposure_start,
                     exposure_time=exposure_seconds,
                     instrument=history.get("CameraName", str(sk.device().entity)),
-                    image_type=FrameType.LIGHT,
+                    image_type=cmd.frame_type,
                 ),
             )
 

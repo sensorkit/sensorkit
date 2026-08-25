@@ -6,6 +6,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 import burr.core.config
 from burr.core.config import (
@@ -32,6 +33,7 @@ from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
 from sensorkit.astro.common import SitePosition
+from sensorkit.burr.models import CollectConfig
 from sensorkit.burr.tasks import build_sk_tasks
 
 
@@ -40,7 +42,9 @@ class BurrConfig(BaseModel):
     plotting: PlottingConfig = Field(default_factory=PlottingConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
+    collect: CollectConfig = Field(default_factory=CollectConfig)
     minimum_altitude_degrees: float = 0.0
+    raw_data_root: Path | None = None
 
     async def to_app_config(self, kit: sk.SensorKit):
         self.controller.resolve(kit)
@@ -63,8 +67,7 @@ class BurrConfig(BaseModel):
 sk.declare_config_section(
     "burr",
     list[BurrConfig],
-    entity_mapper=lambda raw: (elem.pop("id") for elem in raw),
-    model_mapper=iter,
+    id_source="by_subkey",
     service_path=__name__,
 )
 
@@ -184,7 +187,9 @@ class BurrProgram:
         config = self.config.schedule
 
         if config.twilight_flats.collect:
-            yield "twilight_flats", FlatFieldManager(self.run)
+            yield "twilight_flats", FlatFieldManager(
+                self.run, sk_data_root=self.config.raw_data_root
+            )
 
         if config.lunar_background.collect:
             yield "lunar_background", LunarBackgroundManager(self.run)
@@ -281,6 +286,7 @@ class BurrProgram:
                     self.run,
                     self.app_config,
                     chosen_request,
+                    collect=self.config.collect,
                 )
             )
         except Exception as e:

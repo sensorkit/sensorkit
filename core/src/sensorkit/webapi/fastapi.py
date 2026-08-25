@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
 import contextlib
-import itertools
-from typing import Any
+from collections.abc import AsyncGenerator
+from typing import Any, Callable, Iterable
 
 import uuid_utils.compat as uuid
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from loguru import logger
@@ -25,6 +25,7 @@ from sensorkit.core.device import DeviceState
 from sensorkit.core.entity import DeviceDetails, EntityInfo
 from sensorkit.core.program import ProgramState
 from sensorkit.webapi.forwarder import (
+    Forwarder,
     KeyValueForwarder,
     ProductForwarder,
     RecordQueueSet,
@@ -33,10 +34,17 @@ from sensorkit.webapi.forwarder import (
 )
 from sensorkit.webapi.preview import PreviewJPEG
 from sensorkit.webapi.schema import add_sensorkit_schema
+from sensorkit.webapi.security import (
+    LOOPBACK_HOSTS,
+    AuthConfig,
+    AuthMiddleware,
+    CORSConfig,
+    NoAuthConfig,
+    SecurityHeadersMiddleware,
+    TLSConfig,
+)
 from sensorkit.webapi.serve import ProductInfo, ServeDataConfig, ServeHandler
 
-# Seconds a product-listing request waits for a handler's initial scan to finish
-# before giving up with a 503. See list_controller_products.
 PRODUCT_LISTING_TIMEOUT = 10.0
 
 
@@ -44,9 +52,15 @@ class WebAPIConfig(BaseModel):
     """Configuration for the WebAPI service."""
 
     port: int = 8000
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     agent: sk.EntityRef = sk.EntityRef("agent")
     serve_data_products: list[ServeDataConfig] = []
+    tls: TLSConfig | None = None
+    auth: AuthConfig = NoAuthConfig()
+    cors: CORSConfig = CORSConfig()
+    expose_docs: bool = False
+    max_stream_clients: int = 32
+    stream_queue_size: int = 4096
 
 
 class AgentOverrideRequest(BaseModel):
@@ -99,6 +113,11 @@ def _error_handler():
         raise HTTPException(status_code=409, detail=str(err)) from err
 
 
+def _snapshot(forwarders: Iterable[Forwarder], entity_id: str | None = None) -> list[SKRecord]:
+    """Return the cached records of the given forwarders, optionally for a single entity."""
+    return [record for forwarder in forwarders for record in forwarder.snapshot(entity_id)]
+
+
 class WebAPI:
     """
     FastAPI-based web service for SensorKit.
@@ -115,6 +134,12 @@ class WebAPI:
         self.stream_forwarder = StreamForwarder(kit, targets=self.client_queues)
         self._serve_handlers: list[ServeHandler] = []
         self._product_forwarders: list[ProductForwarder] = []
+        self.authenticator = config.auth.create_authenticator()
+        self._stopped = asyncio.Event()
+        self._stopped.set()
+
+        ssl_options = config.tls.uvicorn_options() if config.tls else {}
+
         self.app = self._create_fastapi_app()
         self.server = uvicorn.Server(
             uvicorn.Config(
@@ -122,77 +147,159 @@ class WebAPI:
                 host=self.config.host,
                 port=self.config.port,
                 log_level="info",
+                **ssl_options,
             )
         )
 
         # Resolve the configured agent entity reference.
         self.config.agent.resolve(kit)
 
+    @property
+    def forwarders(self) -> tuple[Forwarder, ...]:
+        """Every active forwarder: key-value, stream, and one per data-product handler."""
+        return self.kv_forwarder, self.stream_forwarder, *self._product_forwarders
+
+    async def _check_stream_capacity(self):
+        """Reject a new subscriber once the concurrent stream limit is reached."""
+        if len(self.client_queues) >= self.config.max_stream_clients:
+            raise HTTPException(status_code=503, detail="Too many concurrent stream subscribers")
+
+    async def _stream_records(
+        self,
+        request: Request,
+        sources: Iterable[Forwarder],
+        match: Callable[[SKRecord], bool] = lambda _: True,
+    ) -> AsyncGenerator[ServerSentEvent]:
+        """Yield matching records as SSE: the snapshot of `sources`, then live updates.
+
+        Every forwarder feeds the same client queue, so live updates can only be selected
+        by predicate; `sources` narrows the snapshot alone and `match` must cover both.
+        """
+        request.state.is_sse = True
+        queue: asyncio.Queue[SKRecord | None] = asyncio.Queue(self.config.stream_queue_size)
+        self.client_queues.add(queue)
+
+        try:
+            for record in filter(match, _snapshot(sources)):
+                yield ServerSentEvent(raw_data=record.serialize())
+
+            while True:
+                record = await queue.get()
+
+                if record is None:
+                    break
+
+                try:
+                    if match(record):
+                        yield ServerSentEvent(raw_data=record.serialize())
+                finally:
+                    queue.task_done()
+        except asyncio.CancelledError:
+            host = request.client.host if request.client else "unknown"
+            logger.debug(f"SSE client disconnected: {host}")
+        finally:
+            self.client_queues.discard(queue)
+
+    async def _product_listing(self) -> list[ProductInfo]:
+        """Return every handler's product listing.
+
+        A handler's listing may not be ready immediately. Rather than report an empty
+        listing — which would falsely imply there are no products — we wait up to
+        PRODUCT_LISTING_TIMEOUT and raise 503 if it is still not available.
+        """
+        try:
+            async with asyncio.timeout(PRODUCT_LISTING_TIMEOUT):
+                listings = [await handler.get_listing() for handler in self._serve_handlers]
+        except TimeoutError as err:
+            raise HTTPException(
+                status_code=503,
+                detail="Data product listing not yet available; try again shortly",
+            ) from err
+
+        return [info for listing in listings for info in listing]
+
+    def _product_handler(self, controller_id: str, product_id: str) -> ServeHandler:
+        """Return the handler serving a product, or raise 404 if none does."""
+        for handler in self._serve_handlers:
+            if handler.has_product(controller_id, product_id):
+                return handler
+
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    async def _product_data(self, controller_id: str, product_id: str) -> bytes:
+        """Return a product's raw bytes, or raise 404 if it is not being served.
+
+        A product can leave the handler's listing between the lookup and the read, so
+        the miss is reported the same way an unknown product is.
+        """
+        handler = self._product_handler(controller_id, product_id)
+
+        try:
+            return await handler.get_data(controller_id, product_id)
+        except KeyError as err:
+            raise HTTPException(status_code=404, detail="Product not found") from err
+
+    def _product_metadata(self, controller_id: str, product_id: str) -> dict:
+        """Return a product's cached metadata, or raise 404 if it is not being served."""
+        handler = self._product_handler(controller_id, product_id)
+
+        try:
+            return handler.get_metadata(controller_id, product_id)
+        except KeyError as err:
+            raise HTTPException(status_code=404, detail="Product not found") from err
+
     def _create_fastapi_app(self):
-        app = FastAPI(title="SensorKit Web API")
+        hidden = {"docs_url": None, "redoc_url": None}
+        app = FastAPI(title="SensorKit Web API", **({} if self.config.expose_docs else hidden))
 
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=False,
-            allow_methods=["*"],
-            allow_headers=["*"],
+        # CORS goes last so it answers preflight requests itself, which carry no credentials to
+        # authorize.
+        app.add_middleware(AuthMiddleware, authenticator=self.authenticator)
+        app.add_middleware(SecurityHeadersMiddleware, hsts=self.config.tls is not None)
+        app.add_middleware(CORSMiddleware, **self.config.cors.middleware_options())
+
+        self._create_global_endpoints(app)
+        self._create_entity_endpoints(app)
+        self._create_device_endpoints(app)
+        self._create_controller_endpoints(app)
+        self._create_program_endpoints(app)
+        self._create_agent_endpoints(app)
+        self._finalize_openapi(app)
+
+        return app
+
+    def _finalize_openapi(self, app: FastAPI):
+        """Generate the OpenAPI document and fold in the SensorKit and security schemas."""
+        app.openapi()
+        schema = app.openapi_schema
+        add_sensorkit_schema(schema["components"]["schemas"])
+
+        if scheme := self.authenticator.openapi_scheme():
+            schema["components"]["securitySchemes"] = {"bearerAuth": scheme}
+            schema["security"] = [{"bearerAuth": []}]
+
+    def _create_global_endpoints(self, app: FastAPI):
+        @app.get(
+            "/data/subscribe",
+            tags=["Global"],
+            response_class=EventSourceResponse,
+            dependencies=[Depends(self._check_stream_capacity)],
         )
-
-        # Global
-
-        @app.get("/data/subscribe", tags=["Global"], response_class=EventSourceResponse)
         async def firehose_subscription(request: Request):
             """SSE endpoint for real-time updates."""
-            request.state.is_sse = True
-            queue = asyncio.Queue()
-            initial_updates = itertools.chain(
-                self.kv_forwarder.snapshot(),
-                self.stream_forwarder.snapshot(),
-                *(forwarder.snapshot() for forwarder in self._product_forwarders),
-            )
-            self.client_queues.add(queue)
-
-            try:
-                # Send initial snapshot
-                for upd in initial_updates:
-                    yield ServerSentEvent(raw_data=upd.serialize())
-
-                while True:
-                    upd = await queue.get()
-
-                    if upd is None:
-                        break
-
-                    yield ServerSentEvent(raw_data=upd.serialize())
-                    queue.task_done()
-            finally:
-                self.client_queues.remove(queue)
+            async with contextlib.aclosing(self._stream_records(request, self.forwarders)) as recs:
+                async for event in recs:
+                    yield event
 
         @app.get("/data/snapshot", tags=["Global"])
         async def get_full_system_snapshot() -> list[SKRecord]:
             """Return the all cached data for all entities."""
-            return list(
-                itertools.chain(
-                    self.kv_forwarder.snapshot(),
-                    self.stream_forwarder.snapshot(),
-                    *(forwarder.snapshot() for forwarder in self._product_forwarders),
-                )
-            )
+            return _snapshot(self.forwarders)
 
         @app.get("/data/snapshot/{entity_id}", tags=["Global"])
-        async def get_entity_snapshot(entity_id: str):
+        async def get_entity_snapshot(entity_id: str) -> list[SKRecord]:
             """Return all cached data for a specific entity."""
-            return list(
-                itertools.chain(
-                    self.kv_forwarder.cache.get(entity_id, {}).values(),
-                    self.stream_forwarder.cache.get(entity_id, {}).values(),
-                    *(
-                        forwarder.cache.get(entity_id, {}).values()
-                        for forwarder in self._product_forwarders
-                    ),
-                )
-            )
+            return _snapshot(self.forwarders, entity_id)
 
         @app.get("/entities", tags=["Global"])
         async def get_entity_list() -> list[EntityListing | DeviceListing]:
@@ -210,15 +317,24 @@ class WebAPI:
                     info["name"] = entity
                     info["online"] = "EntityLease" in cache[entity]
 
-                    if info["entity_type"] == "device":
-                        output.append(DeviceListing.model_validate(info))
-                    else:
-                        output.append(EntityListing.model_validate(info))
+                    output.append(
+                        DeviceListing.model_validate(info)
+                        if info["entity_type"] == "device"
+                        else EntityListing.model_validate(info)
+                    )
 
             return output
 
-        # Device
+    def _create_entity_endpoints(self, app: FastAPI):
+        @app.post("/entity/{entity_id}/command", tags=["Entity"])
+        async def run_entity_command(entity_id: str, command: sk.DeviceCommand):
+            """Execute a command on any entity (e.g. an analyzer, not just a device)."""
+            with _error_handler():
+                await self.kit.entity(entity_id).command(command)
 
+            return _status_ok()
+
+    def _create_device_endpoints(self, app: FastAPI):
         @app.get("/device/{device_id}/state", tags=["Device"])
         async def get_device_state(device_id: str) -> DeviceState:
             """Return the current state of a device."""
@@ -233,18 +349,7 @@ class WebAPI:
 
             return _status_ok()
 
-        # Entity
-
-        @app.post("/entity/{entity_id}/command", tags=["Entity"])
-        async def run_entity_command(entity_id: str, command: sk.DeviceCommand):
-            """Execute a command on any entity (e.g. an analyzer, not just a device)."""
-            with _error_handler():
-                await self.kit.entity(entity_id).command(command)
-
-            return _status_ok()
-
-        # Controller
-
+    def _create_controller_endpoints(self, app: FastAPI):
         @app.get("/controller/{controller_id}/state", tags=["Controller"])
         async def get_controller_state(controller_id: str) -> ControllerState:
             """Return the current state of a controller."""
@@ -300,104 +405,64 @@ class WebAPI:
 
         @app.get("/controller/{controller_id}/products", tags=["Controller"])
         async def list_controller_products(controller_id: str) -> list[ProductInfo]:
-            """List data products associated with a controller.
-
-            A handler's listing may not be ready immediately. Rather than report an empty
-            listing — which would falsely imply the controller has no products — we wait
-            up to PRODUCT_LISTING_TIMEOUT and return 503 if it is still not available.
-            """
-            try:
-                async with asyncio.timeout(PRODUCT_LISTING_TIMEOUT):
-                    listings = [await handler.get_listing() for handler in self._serve_handlers]
-            except TimeoutError as err:
-                raise HTTPException(
-                    status_code=503,
-                    detail="Data product listing not yet available; try again shortly",
-                ) from err
-
+            """List data products associated with a controller."""
             return [
                 info
-                for listing in listings
-                for info in listing
+                for info in await self._product_listing()
                 if info.controller_id == controller_id
             ]
 
-        @app.get("/controller/{controller_id}/products/subscribe", tags=["Controller"], response_class=EventSourceResponse)
+        @app.get(
+            "/controller/{controller_id}/products/subscribe",
+            tags=["Controller"],
+            response_class=EventSourceResponse,
+            dependencies=[Depends(self._check_stream_capacity)],
+        )
         async def subscribe_controller_products(request: Request, controller_id: str):
             """SSE stream of product arrivals for a controller, including initial listing."""
-            request.state.is_sse = True
-            queue: asyncio.Queue[SKRecord | None] = asyncio.Queue()
-            initial_records = [
-                record
-                for forwarder in self._product_forwarders
-                for record in forwarder.snapshot()
-                if str(record.subject.entity()) == controller_id
-            ]
-            self.client_queues.add(queue)
 
-            try:
-                for record in initial_records:
-                    yield ServerSentEvent(raw_data=record.serialize())
+            def is_controller_product(record: SKRecord) -> bool:
+                return record.kind == "product" and str(record.subject.entity()) == controller_id
 
-                while True:
-                    record = await queue.get()
+            stream = self._stream_records(request, self._product_forwarders, is_controller_product)
 
-                    if record is None:
-                        break
-
-                    try:
-                        if record.kind == "product" and str(record.subject.entity()) == controller_id:
-                            yield ServerSentEvent(raw_data=record.serialize())
-                    finally:
-                        queue.task_done()
-            except asyncio.CancelledError:
-                host = request.client.host if request.client else "unknown"
-                logger.debug(f"SSE client disconnected: {host}")
-            finally:
-                self.client_queues.remove(queue)
+            async with contextlib.aclosing(stream) as recs:
+                async for event in recs:
+                    yield event
 
         @app.get("/controller/{controller_id}/product/{product_id}/data", tags=["Controller"])
         async def get_controller_product_data(controller_id: str, product_id: str):
             """Return the raw FITS data for a product."""
-            for handler in self._serve_handlers:
-                if handler.has_product(controller_id, product_id):
-                    raw_bytes = await handler.get_data(controller_id, product_id)
-                    return Response(content=raw_bytes, media_type="application/fits")
+            raw_bytes = await self._product_data(controller_id, product_id)
 
-            raise HTTPException(status_code=404, detail="Product not found")
+            return Response(content=raw_bytes, media_type="application/fits")
 
         @app.get("/controller/{controller_id}/product/{product_id}/preview", tags=["Controller"])
         async def get_controller_product_preview(controller_id: str, product_id: str):
             """Return a JPEG preview image generated from the FITS product data."""
-            for handler in self._serve_handlers:
-                if handler.has_product(controller_id, product_id):
-                    data = await handler.get_data(controller_id, product_id)
+            data = await self._product_data(controller_id, product_id)
 
-                    try:
-                        preview = await PreviewJPEG.from_fits(data)
-                    except Exception as err:
-                        raise HTTPException(status_code=422, detail=f"Could not generate preview: {err}") from err
+            try:
+                preview = await PreviewJPEG.from_fits(data)
+            except Exception as err:
+                logger.warning(f"Could not generate preview for {product_id}: {err}")
+                raise HTTPException(
+                    status_code=422, detail="Could not generate preview"
+                ) from err
 
-                    return Response(content=preview.jpeg_bytes, media_type="image/jpeg")
-
-            raise HTTPException(status_code=404, detail="Product not found")
+            return Response(content=preview.jpeg_bytes, media_type="image/jpeg")
 
         @app.get("/controller/{controller_id}/product/{product_id}/metadata", tags=["Controller"])
         async def get_controller_product_metadata(controller_id: str, product_id: str) -> dict:
             """Return the cached metadata for a product as a JSON object."""
-            for handler in self._serve_handlers:
-                if handler.has_product(controller_id, product_id):
-                    metadata = handler.get_metadata(controller_id, product_id)
+            metadata = self._product_metadata(controller_id, product_id)
 
-                    if not metadata.get(ProductInfo):
-                        logger.warning(f"Product {product_id} has no ProductInfo keyword set")
+            if not metadata.get(ProductInfo):
+                logger.warning(f"Product {product_id} has no ProductInfo keyword set")
 
-                    return metadata
+            return metadata
 
-            raise HTTPException(status_code=404, detail="Product not found")
-
-        # Program
-
+    def _create_program_endpoints(self, app: FastAPI):
         @app.get("/program/{program_id}/state", tags=["Program"])
         async def get_program_state(program_id: str) -> ProgramState:
             """Return the current state of a program."""
@@ -454,8 +519,7 @@ class WebAPI:
 
             return _status_ok()
 
-        # Agent
-
+    def _create_agent_endpoints(self, app: FastAPI):
         @app.get("/agent/state", tags=["Agent"])
         async def get_agent_state() -> AgentState:
             """Get the current status of the agent."""
@@ -559,11 +623,6 @@ class WebAPI:
 
             return _status_ok()
 
-        app.openapi()
-        add_sensorkit_schema(app.openapi_schema["components"]["schemas"])
-
-        return app
-
     async def _start_forwarders(self, *, task_group: asyncio.TaskGroup):
         """Start the KV/stream forwarders and any configured data-product handlers.
 
@@ -587,20 +646,67 @@ class WebAPI:
             self._serve_handlers.append(handler)
             self._product_forwarders.append(forwarder)
 
+    def _warn_if_exposed(self):
+        """Warn when the service is reachable off-host without TLS or authentication."""
+        if self.config.host in LOOPBACK_HOSTS:
+            return
+
+        missing = [
+            name
+            for name, present in (
+                ("TLS", self.config.tls is not None),
+                ("authentication", self.authenticator.enabled),
+            )
+            if not present
+        ]
+
+        if missing:
+            logger.warning(
+                f"web API is bound to {self.config.host}:{self.config.port} with no "
+                f"{' and no '.join(missing)}; anyone who can reach it can control this system"
+            )
+
     async def serve(self, *, task_group: asyncio.TaskGroup):
         """Run the FastAPI server."""
-        await self._start_forwarders(task_group=task_group)
-        await self.server.serve()
+        # Already shut down or shutting down.
+        if self.server.should_exit:
+            return
+
+        self._stopped.clear()
+
+        try:
+            await self._start_forwarders(task_group=task_group)
+
+            if self.config.tls is not None:
+                # Loading the config is what builds the SSL context, and also what surfaces
+                # an unreadable or mismatched certificate and key.
+                self.server.config.load()
+
+                if (context := self.server.config.ssl) is not None:
+                    self.config.tls.apply_minimum_version(context)
+
+            self._warn_if_exposed()
+
+            await self.server.serve()
+        finally:
+            self._stopped.set()
 
     async def shutdown(self):
         # Unblock any parked firehose generators so uvicorn's graceful shutdown
         # isn't stuck waiting on a never-ending SSE response. Snapshot the set
         # because each generator removes its own queue on exit.
         for queue in tuple(self.client_queues):
+            if queue.full():
+                # Give up a record to make room for the sentinel.
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    queue.get_nowait()
+
             queue.put_nowait(None)
 
-        if self.server.started:
-            await self.server.shutdown()
+        # Signal a graceful shutdown to Uvicorn. Note that explicitly shutting down the server here
+        # does not cause `serve` to return!
+        self.server.should_exit = True
+        await self._stopped.wait()
 
         for handler in self._serve_handlers:
             await handler.stop_monitor()

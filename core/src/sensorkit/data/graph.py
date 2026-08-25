@@ -248,7 +248,20 @@ def _parse_simple(simple: list[dict[str, Any]]):
     return nodes
 
 
-class DataGraph(BaseModel):
+def _describe_simple_form(schema: dict[str, Any]):
+    """Declare the shorthand accepted in place of a node mapping.
+
+    Args:
+        schema: The generated JSON Schema for the model.
+    """
+    schema["properties"]["simple"] = {
+        "type": "array",
+        "items": {"type": "object"},
+        "description": "Operations to run in order, in place of 'nodes'.",
+    }
+
+
+class DataGraph(BaseModel, json_schema_extra=_describe_simple_form):
     """A graph of operations on data."""
 
     nodes: dict[str, DataOp] = Field(default_factory=dict)

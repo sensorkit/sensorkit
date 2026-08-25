@@ -7,13 +7,16 @@ from .fastapi import WebAPI, WebAPIConfig
 sk.declare_config_section(
     "webapi",
     WebAPIConfig,
-    entity_mapper=lambda raw: raw.pop("id", "webapi"),
+    id_source="by_key",
+    id_default="webapi",
     service_path=__name__,
 )
 
 
 @sk.declare_entity
 class WebAPIService:
+    webapi: WebAPI | None = None
+
     @sk.on_attach
     async def startup(self):
         entity = sk.entity()
@@ -28,7 +31,8 @@ class WebAPIService:
 
     @sk.on_detach
     async def shutdown(self):
-        await self.webapi.shutdown()
+        if self.webapi is not None:
+            await self.webapi.shutdown()
 
 
 @sk.service_entrypoint(version=sk.VERSION)

@@ -3,8 +3,10 @@
 
 import asyncio
 import contextlib
+import io
 
 import pytest
+from astropy.io import fits
 
 import sensorkit.senpai.analyzer as analyzer_mod
 from sensorkit.data.context import Context
@@ -47,11 +49,20 @@ def analyzer(make_analyzer) -> analyzer_mod.SenpaiAnalyzer:
     return make_analyzer()
 
 
-def frame(name="frame.fits", **fields):
+def frame(name="frame.fits", data=b"\x00", **fields):
     """A (context, data) pair as the camera writing into the graph would produce it."""
     context = Context({k: v for k, v in fields.items() if v is not None})
     context.set(FileInfo(path=name))
-    return context, b"\x00"
+    return context, data
+
+
+def fits_bytes(imagetyp):
+    """A minimal FITS payload carrying an IMAGETYP card."""
+    hdu = fits.PrimaryHDU()
+    hdu.header["IMAGETYP"] = imagetyp
+    buf = io.BytesIO()
+    hdu.writeto(buf)
+    return buf.getvalue()
 
 
 def feed(graph, *frames):
@@ -94,14 +105,33 @@ class TestBatching:
         published = await recorder()
 
         async with consuming(analyzer):
-            feed(data_graph, frame(task_id="task-a", frame_num=0, frame_count=3))
+            feed(
+                data_graph,
+                frame(task_id="task-a", frame_num=0, frame_count=3, controller_name="ctrl-a"),
+            )
             await until_runs(pipeline, 1)
             await published.wait_for(SenpaiResult)
 
         inputs, from_sequence = pipeline.runs[0]
         assert len(inputs) == 1
+        assert inputs[0].controller_name == "ctrl-a"
         assert from_sequence is False
         assert len(published.of(SenpaiResult)) == 1
+
+    @pytest.mark.asyncio
+    async def test_calibration_frames_skipped(self, analyzer, pipeline, data_graph):
+        """dark/bias/flat frames never reach the pipeline; lights still do."""
+        async with consuming(analyzer):
+            feed(
+                data_graph,
+                frame(name="d.fits", data=fits_bytes("dark")),
+                frame(name="b.fits", data=fits_bytes("bias")),
+                frame(name="f.fits", data=fits_bytes("flat")),
+                frame(name="l.fits", data=fits_bytes("light")),
+            )
+            await until_runs(pipeline, 1)
+
+        assert [inp.file_path for inputs, _ in pipeline.runs for inp in inputs] == ["l.fits"]
 
     @pytest.mark.asyncio
     async def test_per_frame_without_collect_identity(self, analyzer, pipeline, data_graph):

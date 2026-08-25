@@ -1,0 +1,11 @@
+/* The header background follows the page background, so the logomark has to
+   follow the scheme with it. */
+[data-md-color-scheme="slate"] .md-logo img {
+  content: url("sensorkit-logomark-dark.svg");
+}
+
+/* The wordmark stands in for the page heading on the home page. */
+.sk-hero {
+  margin: 0 0 1.5rem;
+  text-align: center;
+}

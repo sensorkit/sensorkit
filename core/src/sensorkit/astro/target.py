@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import collections
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Literal, override
@@ -46,6 +46,23 @@ if TYPE_CHECKING:
     from sensorkit.std.weather import BasicWeather
 
 
+# Frames built from the site-to-target vector, and so unusable without an observer.
+_OBSERVER_RELATIVE_FRAMES = (
+    ReferenceFrame.ALTAZ,
+    ReferenceFrame.CIRF,
+    ReferenceFrame.ICRF,
+)
+
+# How far past a requested window a track propagates, so that successive windows are
+# usually served without propagating again.
+_PROPAGATION_HORIZON = timedelta(hours=1)
+
+# Window covering consumers that ask adapt() for a materialized EphemerisTarget. A track
+# leaves this choice to the consumer; these apply only where one is not accepted.
+_ADAPTED_EPHEMERIS_DURATION = timedelta(minutes=1)
+_ADAPTED_EPHEMERIS_STEP = timedelta(seconds=2)
+
+
 def _topocentric_cartesian(gcrs: GCRS, location: EarthLocation) -> CartesianRepresentation:
     """Return the site-to-target vector in GCRS axes.
 
@@ -78,11 +95,7 @@ def _output_frame_transform(
     ICRF, CIRF and ALTAZ are observer-relative and are all built from the topocentric
     vector; anything else is a geocentric frame astropy can reach from GCRS on its own.
     """
-    if location is None and frame in (
-        ReferenceFrame.ICRF,
-        ReferenceFrame.CIRF,
-        ReferenceFrame.ALTAZ,
-    ):
+    if location is None and frame in _OBSERVER_RELATIVE_FRAMES:
         raise RuntimeError(f"an observer location is required for {frame}")
 
     match frame:
@@ -141,20 +154,158 @@ def _ephemeris_points(frame: ReferenceFrame, coord: BaseCoordinateFrame) -> list
             ]
 
 
+class TargetTrack:
+    """The unbounded on-sky path of a single propagatable target."""
+
+    def __init__(
+        self,
+        trajectory: Trajectory,
+        frame: ReferenceFrame,
+        *,
+        observer: EarthObserver | Geodetic | None = None,
+        weather: BasicWeather | None = None,
+        propagation_horizon: timedelta = _PROPAGATION_HORIZON,
+    ):
+        """Bind *trajectory* to the frame and observing context it is sampled in.
+
+        Args:
+            trajectory: The path to sample, propagated in GCRS.
+            frame: Reference frame the sampled points are returned in.
+            observer: Site position. Required for observer-relative frames.
+            weather: Ambient conditions, applied as refraction in ALTAZ.
+            propagation_horizon: How far past a requested window to propagate.
+        """
+        self.trajectory = trajectory
+        self.frame = frame
+        self.observer = observer
+        self.weather = weather
+        self.propagation_horizon = propagation_horizon
+        self._propagated: Trajectory | None = None
+        self._propagated_until: datetime | None = None
+        self._propagating = asyncio.Lock()
+
+    async def sample(
+        self,
+        start_time: datetime,
+        duration: timedelta,
+        step: timedelta,
+    ) -> tuple[list[float], list[Coordinates]]:
+        """Sample the track over a window, returning Julian dates and points in `frame`.
+
+        The first sample sits one *step* after *start_time*, and samples run to the last
+        whole *step* within *duration*, which falls short of the full span where the two
+        do not divide evenly.
+        """
+        trajectory = await self._propagate_through(start_time + duration)
+        location = self.observer.to_astropy() if self.observer else None
+        transform_to_output_frame = _output_frame_transform(self.frame, location, self.weather)
+
+        def _sample_series():
+            epochs = [start_time + (i + 1) * step for i in range(duration // step)]
+
+            if not epochs:
+                return [], []
+
+            gcrs = trajectory.sample(epochs)
+            coord = transform_to_output_frame(gcrs)
+            jds = list(gcrs.obstime.jd)
+            points = _ephemeris_points(self.frame, coord)
+            logger.debug(f"sampled track ending at {points[-1]}")
+
+            return jds, points
+
+        return await asyncio.to_thread(_sample_series)
+
+    async def stream(
+        self,
+        *,
+        window: timedelta,
+        step: timedelta,
+        lead: timedelta,
+    ) -> AsyncIterator[tuple[list[float], list[Coordinates]]]:
+        """Yield consecutive windows of the track, indefinitely.
+
+        Each iteration yields the next *window* of samples, then waits until *lead*
+        remains before that window elapses. A consumer therefore always holds samples
+        reaching at least *lead* into the future, and both producing the next window
+        and acting on it have to fit within *lead*.
+
+        Args:
+            window: Time span covered by each batch of samples.
+            step: Interval between samples within a batch.
+            lead: How long before a window elapses to produce the next one.
+
+        Raises:
+            ValueError: If *lead* leaves no time to consume a window.
+        """
+        # A window that is not a whole number of steps is covered only as far as its
+        # last sample, which is what the next window has to be timed against.
+        covered = (window // step) * step
+
+        if lead >= covered - step:
+            raise ValueError("lead must leave at least one step of the window to consume")
+
+        while True:
+            start = datetime.now(UTC) - step
+            yield await self.sample(start, window, step)
+
+            delay = (start + covered - lead - datetime.now(UTC)).total_seconds()
+
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+    async def _propagate_through(self, until: datetime) -> Trajectory:
+        """Return a trajectory propagated at least as far as *until*."""
+        async with self._propagating:
+            if self._propagated is not None and until <= self._propagated_until:
+                return self._propagated
+
+            horizon = until + self.propagation_horizon
+            # Propagate from the original trajectory rather than the last result, which
+            # would accumulate error over a long-running track.
+            propagated = await self.trajectory.propagate(horizon)
+
+            # Record the reach only once it is backed by a result, so a failed
+            # propagation leaves the previous one in place to be retried.
+            self._propagated = propagated
+            self._propagated_until = horizon
+
+            return propagated
+
+
+def _accepted_frame(
+    accepted: type,
+    supported: dict[type, list[ReferenceFrame]],
+    observer: EarthObserver | Geodetic | None,
+) -> ReferenceFrame:
+    """Return the single frame requested for *accepted*, rejecting an unusable request."""
+    frames = supported[accepted]
+
+    if len(frames) != 1:
+        raise RuntimeError(f"exactly one reference frame is required for {accepted.__name__}")
+
+    frame = frames[0]
+
+    if observer is None and frame in _OBSERVER_RELATIVE_FRAMES:
+        raise RuntimeError(f"an observer location is required for {frame}")
+
+    return frame
+
+
 class BaseTarget(BaseModel, ABC):
     """Abstract base for all target types; discriminated on `target_type`."""
     target_type: Literal[None]
 
     async def adapt(
         self,
-        *accepts: type[BaseTarget | Trajectory] | tuple,
+        *accepts: type[BaseTarget | TargetTrack] | tuple,
         observer: EarthObserver | Geodetic | None = None,
         weather: BasicWeather | None = None,
         _catalog: Any = None,
-    ) -> BaseTarget | Trajectory:
+    ) -> BaseTarget | TargetTrack:
         """Convert this target to the best matching type from *accepts*, propagating as needed."""
         mytype = type(self)
-        supported: dict[type[BaseTarget | Trajectory], list[ReferenceFrame]] = collections.defaultdict(list)
+        supported: dict[type[BaseTarget | TargetTrack], list[ReferenceFrame]] = collections.defaultdict(list)
 
         for val in accepts:
             match val:
@@ -173,33 +324,52 @@ class BaseTarget(BaseModel, ABC):
             # TODO: Do catalog lookup.
             raise NotImplementedError("Catalog lookup is not yet supported")
 
-        assert observer is not None, "an observer location is required for trajectory propagation"
+        # Fixed and rate targets have no trajectory and fall through to the error below.
+        trajectory = self.to_trajectory()
 
-        # Prefer a path over a rate stream, if both are supported.
-        if EphemerisTarget in supported:
-            assert len(supported[EphemerisTarget]) == 1
-            frame = supported[EphemerisTarget][0]
+        # Prefer a track over a materialized ephemeris where both are accepted.
+        if trajectory is not None and TargetTrack in supported:
+            frame = _accepted_frame(TargetTrack, supported, observer)
 
-            logger.debug(f"adapting {type(self).__name__} to EphemerisTarget in {supported[EphemerisTarget]}")
+            logger.debug(f"adapting {mytype.__name__} to TargetTrack in {frame}")
+            return TargetTrack(trajectory, frame, observer=observer, weather=weather)
+
+        if trajectory is not None and EphemerisTarget in supported:
+            frame = _accepted_frame(EphemerisTarget, supported, observer)
+
+            logger.debug(f"adapting {mytype.__name__} to EphemerisTarget in {frame}")
             return await self.to_ephemeris_target(
                 start_time=datetime.now(UTC),
-                duration=timedelta(minutes=1),
-                step=timedelta(seconds=2),
+                duration=_ADAPTED_EPHEMERIS_DURATION,
+                step=_ADAPTED_EPHEMERIS_STEP,
                 frame=frame,
                 observer=observer,
                 weather=weather,
             )
 
-        # Generate a rate stream if supported.
-        if Trajectory in supported:
-            logger.debug(f"adapting {type(self).__name__} to Trajectory in {supported[Trajectory]}")
-            return self.to_trajectory()
-
         raise RuntimeError("Could not adapt target to a supported type")
 
-    def to_trajectory(self) -> Trajectory:
-        """Return a Trajectory for this target. Subclasses that support propagation override this."""
-        raise NotImplementedError
+    def to_trajectory(self) -> Trajectory | None:
+        """Return a Trajectory for this target, or None if it cannot be propagated."""
+        return None
+
+    def to_track(
+        self,
+        frame: ReferenceFrame = ReferenceFrame.GCRF,
+        observer: EarthObserver | Geodetic | None = None,
+        weather: BasicWeather | None = None,
+    ) -> TargetTrack:
+        """Return a TargetTrack sampling this target in the given frame.
+
+        Raises:
+            TypeError: If this target cannot be propagated.
+        """
+        trajectory = self.to_trajectory()
+
+        if trajectory is None:
+            raise TypeError(f"{type(self).__name__} cannot be propagated")
+
+        return TargetTrack(trajectory, frame, observer=observer, weather=weather)
 
     async def to_ephemeris_target(
         self,
@@ -209,28 +379,11 @@ class BaseTarget(BaseModel, ABC):
         frame: ReferenceFrame = ReferenceFrame.GCRF,
         observer: EarthObserver | Geodetic | None = None,
         weather: BasicWeather | None = None,
-    ):
+    ) -> EphemerisTarget:
         """Propagate this target into a pre-computed EphemerisTarget over the given time window."""
-        trajectory = await self.to_trajectory().propagate(start_time + duration)
-        location = observer.to_astropy() if observer else None
-        transform_to_output_frame = _output_frame_transform(frame, location, weather)
+        track = self.to_track(frame, observer, weather)
+        jds, points = await track.sample(start_time, duration, step)
 
-        # Build the output by sampling the propagated trajectory.
-        def _sample_series():
-            epochs = [start_time + (i + 1) * step for i in range(duration // step)]
-
-            if not epochs:
-                return [], []
-
-            gcrs = trajectory.sample(epochs)
-            coord = transform_to_output_frame(gcrs)
-            jds = list(gcrs.obstime.jd)
-            points = _ephemeris_points(frame, coord)
-            logger.debug(f"generated EphemerisTarget ending at {points[-1]}")
-
-            return jds, points
-
-        jds, points = await asyncio.to_thread(_sample_series)
         return EphemerisTarget(
             frame=frame,
             jds=jds,

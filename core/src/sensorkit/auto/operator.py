@@ -200,45 +200,62 @@ class ControllerDriver:
             # Determine the target state (operate or standby) and which program to use, if any. If
             # the controller's scheduler has something in mind, its intended state and program are
             # used.
-            if intent := self.scheduler.get_intent(datetime.now(UTC)):
-                state = (
-                    InternalControllerState.OPERATE
-                    if self.config.mode(intent.mode).state == "operate"
-                    else InternalControllerState.STANDBY
-                )
+            intent = self.scheduler.get_intent(datetime.now(UTC))
 
-                if state == InternalControllerState.OPERATE and intent.programs:
+            match intent and self.config.mode(intent.mode).state:
+                case "operate":
+                    state = InternalControllerState.OPERATE
+
                     # Always use the highest-priority program given by the scheduler. Note that
                     # things like offline programs, temporary failure cooldowns, and other program
                     # availability constraints are already accounted for in the schedule. Any
                     # exclusions or re-prioritization here would not be visible in the published
                     # schedule, thus should be avoided. The full listing of candidate programs
                     # exists only for user informational purposes.
-                    program = self.kit.program(intent.programs[0])
-            else:
-                # We are not scheduled to operate, so this must be a forced override scenario.
-                # Presently overrides alone cannot specify STANDBY.
-                state = InternalControllerState.OPERATE
+                    program = self.kit.program(intent.programs[0]) if intent.programs else None
+                case "standby":
+                    state = InternalControllerState.STANDBY
+                case None:
+                    # We are not scheduled to operate, so this must be a forced override scenario.
+                    # Presently overrides alone cannot specify STANDBY.
+                    state = InternalControllerState.OPERATE
+                case _ as it:
+                    logger.error(
+                        f"Invalid demand state {it!r} for mode {intent.mode}; "
+                        "defaulting to SHUTDOWN"
+                    )
+                    state = InternalControllerState.SHUTDOWN
 
-        # Determine the appropriate contexts and set the demand state. The contexts are a dict of
-        # dicts, mapping task types to the combined user configuration that applies for that task
-        # for this controller and program (if any).
+        # Check constraints and determine appropriate contexts, whether we should interrupt. The
+        # contexts are a dict of dicts, mapping task types to the combined user configuration that
+        # applies for that task for this controller and program (if any).
+        constrained = self.constraints.is_constrained()
+        contexts = self._context_maps[None]
+        interrupt = False
+
+        if constrained:
+            if state != InternalControllerState.SHUTDOWN:
+                # Refuse to go up if a constraint is active. This can happen if a constraint goes
+                # high between schedule updates. Note this is not redundant to the wiring of
+                # constraints through the StateElection, since the latter informs multi-controller
+                # dependencies and general observability.
+                state = InternalControllerState.SHUTDOWN
+
+            interrupt = True
+            program = None
 
         if program:
             program_name = str(program.entity)
             program_config = self.config.program_config(program_name)
-            contexts = self._context_maps[program_name]
 
-            # Only interrupt if configured to do so and the controller is in the OPERATE state.
-            # This means lifecycle tasks (e.g. InitTask) will not be interrupted.
-            interrupt = (
-                program_config.interrupt
-                if self.lifecycle.belief_state == InternalControllerState.OPERATE
-                else False
+            # Use the configured contexts and interrupt policy for this program. Program-configured
+            # interrupts only apply in the OPERATE state, as program tasking must not interrupt
+            # lifecycle tasks.
+            contexts = self._context_maps[program_name]
+            interrupt |= (
+                self.lifecycle.belief_state == InternalControllerState.OPERATE
+                and program_config.interrupt
             )
-        else:
-            contexts = self._context_maps[None]
-            interrupt = False
 
         changed = self.lifecycle.set_demand_state(
             state,

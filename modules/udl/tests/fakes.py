@@ -9,6 +9,8 @@ records every call the program makes and serves whatever the test staged.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -149,17 +151,52 @@ class FakeCollectResponses:
 
 @dataclass
 class FakeEOObservations:
-    """The SDK's observations.eo_observations resource; `batches` holds one list per createBulk."""
+    """The SDK's observations.eo_observations resource; `batches` holds one list
+    per unvalidated_publish (the filedrop bulk-drop the module uses)."""
 
     batches: list[list[dict[str, Any]]] = field(default_factory=list)
 
-    async def create_bulk(self, *, body, **kwargs) -> None:
+    async def unvalidated_publish(self, *, body, **kwargs) -> None:
         self.batches.append(body)
 
 
 @dataclass
 class FakeObservations:
     eo_observations: FakeEOObservations = field(default_factory=FakeEOObservations)
+
+
+async def poll_once(program):
+    """Drive the program's poll loop through one pass, then cancel it."""
+    baseline = len(program.client.collect_requests.queries)
+    poller = asyncio.create_task(program._poll_loop())
+    try:
+        async with asyncio.timeout(2.0):
+            while len(program.client.collect_requests.queries) == baseline:
+                await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)  # let the pass finish handling the page
+    finally:
+        poller.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await poller
+
+
+@dataclass
+class FakeUpload:
+    """Stands in for SkyImageryPublisher._upload, recording raw ZIP bytes.
+
+    Same `fail` scripting as FakeSkyImagery: a list of exceptions/Nones for
+    per-upload outcomes, or a single exception to fail every upload.
+    """
+
+    uploads: list[bytes] = field(default_factory=list)
+    fail: Any = None
+
+    async def __call__(self, zip_bytes: bytes) -> None:
+        outcome = self.fail.pop(0) if isinstance(self.fail, list) else self.fail
+        if outcome is not None:
+            raise outcome
+
+        self.uploads.append(zip_bytes)
 
 
 @dataclass

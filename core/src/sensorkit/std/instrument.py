@@ -128,6 +128,7 @@ class ConfigureCameraSensor(sk.DeviceCommand):
     binning: Binning | None = None
     bias: float | None = None
     gain: float | None = None
+    readout_mode: int | None = None
 
 
 class CameraCapture(AcquireData):
@@ -136,10 +137,12 @@ class CameraCapture(AcquireData):
     Attributes:
         action: action type for the command (always "acquire")
         integration_time: exposure time in seconds
+        frame_type: frame type to capture (light, dark, bias, flat)
     """
 
     action: Literal["acquire"] = "acquire"
     integration_time: float
+    frame_type: FrameType = FrameType.LIGHT
 
 
 @sk.declare_keyword

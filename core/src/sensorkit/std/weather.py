@@ -63,6 +63,24 @@ class BasicWeather(BaseModel):
             pressure=self.pressure * u.hPa if self.pressure is not None else None,
         )
 
+    def get_fits_cards(self):
+        if self.temperature is not None:
+            yield "SKWXTEMP", (self.temperature, "Ambient air temperature [C]")
+        if self.humidity is not None:
+            yield "SKWXHUM", (self.humidity, "Relative humidity [%]")
+        if self.pressure is not None:
+            yield "SKWXPRES", (self.pressure, "Barometric pressure [hPa]")
+        if self.cloud_cover is not None:
+            yield "SKWXCLD", (self.cloud_cover, "Cloud cover [%]")
+        if self.dew_point is not None:
+            yield "SKWXDEW", (self.dew_point, "Dew point [C]")
+        if self.rain_rate is not None:
+            yield "SKWXRAIN", (self.rain_rate, "Rain rate [mm/h]")
+        if self.wind_speed is not None:
+            yield "SKWXWSPD", (self.wind_speed, "Wind speed [m/s]")
+        if self.wind_direction is not None:
+            yield "SKWXWDIR", (self.wind_direction, "Wind direction [deg]")
+
 
 WeatherProvider = sk.declare_trait(
     "WeatherProvider",

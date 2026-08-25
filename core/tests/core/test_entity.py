@@ -67,10 +67,29 @@ def test_entity_ref_subclass_serialization():
     json_data = model.model_dump_json()
     restored = Holder.model_validate_json(json_data)
 
-    # Compare by dumped representation to avoid instance identity differences
-    assert restored.model_dump() == data
+    assert restored == model
     assert isinstance(restored.e, EntityRef) and restored.e.name == "e1"
     assert isinstance(restored.d, SubRef) and restored.d.name == "d1"
+
+
+def test_entity_ref_equality(kit):
+    class SubRef(EntityRef):
+        pass
+
+    assert EntityRef("e1") == EntityRef("e1")
+    assert EntityRef("e1") != EntityRef("e2")
+    assert EntityRef() == EntityRef()
+    assert EntityRef("e1") != "e1"
+
+    # The refs name the same entity, so the serialized form cannot tell them apart.
+    assert EntityRef("e1") == SubRef("e1")
+
+    # Resolving caches a client, which says nothing about the entity named.
+    resolved = EntityRef("e1")
+    resolved.resolve(kit)
+    assert resolved == EntityRef("e1")
+
+    assert len({EntityRef("e1"), SubRef("e1"), resolved}) == 1
 
 
 @pytest.mark.asyncio
