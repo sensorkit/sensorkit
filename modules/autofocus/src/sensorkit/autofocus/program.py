@@ -16,6 +16,7 @@ from sensorkit.autofocus.models import AutofocusConfig, VCurveStep
 from sensorkit.autofocus.task_queue import TaskQueue
 from sensorkit.common.time import parse_spec
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
+from sensorkit.std.instrument import FrameType
 from sensorkit.std.optics import FocusPosition
 
 
@@ -271,6 +272,7 @@ class AutofocusProgram:
                 focus_position=position,
                 end_time=end_time,
                 camera_params=CameraParameterSet(
+                    frame_type=FrameType.LIGHT,
                     filter_name=self.config.vcurve.filter_name,
                     integration_time_seconds=exposure,
                     binning_x=binning,
