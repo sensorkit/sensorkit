@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from loguru import logger
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, RootModel, model_validator
 
 import sensorkit.api as sk
 from sensorkit.auto.agent import AgentConfigureRequest, AgentState, agent_configure_request
@@ -326,13 +326,19 @@ class WebAPI:
             return output
 
     def _create_entity_endpoints(self, app: FastAPI):
-        @app.post("/entity/{entity_id}/command", tags=["Entity"])
-        async def run_entity_command(entity_id: str, command: sk.DeviceCommand):
-            """Execute a command on any entity (e.g. an analyzer, not just a device)."""
-            with _error_handler():
-                await self.kit.entity(entity_id).command(command)
+        @app.post("/entity/{entity_id}/request/{name}", tags=["Entity"])
+        async def run_entity_request(entity_id: str, name: str, body: dict[str, Any] | None = None):
+            """Invoke a named request on any entity.
 
-            return _status_ok()
+            The low-level, untyped counterpart to a device command: the entity's own request
+            handlers define what `name` and `body` mean.
+            """
+            with _error_handler():
+                received = await self.kit.entity(entity_id).request(
+                    name, RootModel[dict[str, Any]](body or {})
+                )
+
+            return Response(content=received or b"", media_type="application/json")
 
     def _create_device_endpoints(self, app: FastAPI):
         @app.get("/device/{device_id}/state", tags=["Device"])

@@ -5,7 +5,7 @@ import asyncio
 import contextlib
 import functools
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal, overload
 
 from loguru import logger
 from pydantic import BaseModel, PlainSerializer, PlainValidator, ValidationError
@@ -225,13 +225,27 @@ class EntityClient(EntityBase):
 
         return receive_data()
 
-    async def request[M: BaseModel](self, name: str, data: BaseModel, response_type: type[M]) -> M:
-        """Send a named raw request and return the deserialised response."""
+    @overload
+    async def request[M: BaseModel](
+        self, name: str, data: BaseModel, response_type: type[M]
+    ) -> M: ...
+
+    @overload
+    async def request(
+        self, name: str, data: BaseModel, response_type: None = None
+    ) -> bytes: ...
+
+    async def request(self, name, data, response_type=None):
+        """Send a named raw request and return the deserialised response.
+
+        Omitting `response_type` returns the response bytes undecoded, for callers that do not
+        know the request's models — e.g. the web API forwarding an entity request from a client.
+        """
         received = await self._request.invoke(
             name=name,
             payload=data.model_dump_json().encode(),
         )
-        return response_type.model_validate_json(received)
+        return response_type.model_validate_json(received) if response_type else received
 
     def call[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None](
         self,
