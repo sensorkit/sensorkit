@@ -209,7 +209,7 @@ automation:
         template: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-f{frame_num}.fits"
 ```
 
-Analysis modules extend the same pipeline mechanism — e.g. focus estimation ops (`analyze_focus_stars`, `analyze_focus_fft`) or handing frames to astrometry/photometry services.
+Analysis modules extend the same pipeline mechanism — e.g. handing frames to astrometry/photometry services.
 
 ## Web API
 
