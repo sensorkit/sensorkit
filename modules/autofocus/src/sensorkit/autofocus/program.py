@@ -362,7 +362,7 @@ def _select_vcurve_target(
         import numpy as np
         from astropy.coordinates import AltAz, EarthLocation, Galactic, SkyCoord, get_sun
         from astropy.time import Time
-        from numpy import cos, degrees, radians
+        from numpy import degrees
     except ImportError:
         logger.warning("astropy not available for target selection")
         return None
@@ -396,19 +396,18 @@ def _select_vcurve_target(
         pointing_desc = f"anti-sun fallback, alt~{alt:.0f}°"
         logger.info("Galactic plane too low or too close to the Sun; using anti-sun pointing")
 
-    # Query SSTRC7 around the pointing. SENPAI's reader (`senpai.catalog.sstr7` — the module file
-    # is misnamed upstream) takes RADIANS; rows carry 'ra'/'dec' in radians and 'mv'.
+    # Query SSTRC7 around the pointing (astro-senpai >= 2.8 API, field in degrees); rows carry
+    # 'ra'/'dec' in radians and 'mv'.
     radius = 1.5
-    cosdec = max(float(cos(radians(pointing.dec.deg))), 0.05)
     try:
-        from senpai.catalog.sstr7 import query_by_min_max
+        from senpai.catalog.sstrc7_source import query_by_los_radec_with_rotation
 
-        stars = query_by_min_max(
-            radians(pointing.ra.deg - radius / cosdec),
-            radians(pointing.ra.deg + radius / cosdec),
-            radians(pointing.dec.deg - radius),
-            radians(pointing.dec.deg + radius),
-            catalog_path,
+        stars = query_by_los_radec_with_rotation(
+            y_fov=2 * radius,
+            x_fov=2 * radius,
+            ra=pointing.ra.deg,
+            dec=pointing.dec.deg,
+            rootPath=catalog_path,
             faint_lim=max_magnitude,  # None -> the catalog's faint end
             bright_lim=min_magnitude,
         )

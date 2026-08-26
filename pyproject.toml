@@ -106,7 +106,9 @@ sky-transmission = [
     "matplotlib",
 ]
 senpai = [
-    "astro-senpai>=2.3.1",
+    # 2.8 renamed the processing/catalog modules (senpai.engine.processing.collect,
+    # senpai.catalog.sstrc7_source) and added per-call pipeline_mode.
+    "astro-senpai>=2.8.0",
 ]
 slack = [
     "slack-sdk",

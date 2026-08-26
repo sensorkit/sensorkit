@@ -83,9 +83,10 @@ class AutofocusConfig(BaseModel):
     min_altitude: float = 15  # Minimum target altitude [deg]
     min_solar_elongation: float = 0  # Minimum angular separation from the Sun [deg]; 0 disables
     min_magnitude: float = 2.0  # Reject targets BRIGHTER than this (avoid saturation) [V mag]
-    max_magnitude: float | None = (
-        None  # Optional faint cut [V mag]; None -> the catalog's faint end
-    )
+    # Faint cut [V mag]. We only ever take the BRIGHTEST star in the field, so leaving this
+    # open makes the catalog return the entire faint end for nothing (155k rows vs 243, 0.90s
+    # vs 0.08s measured). None restores the catalog's own faint limit.
+    max_magnitude: float | None = 10.0
     catalog_path: str | None = (
         None  # SSTRC7 catalog dir; REQUIRED for target selection (no fallback)
     )
