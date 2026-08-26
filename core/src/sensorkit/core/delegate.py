@@ -11,8 +11,8 @@ from sensorkit.core.controller import (
     ControllerInterface,
     InternalControllerState,
 )
-from sensorkit.core.device import DeviceInterface
-from sensorkit.core.entity import DeviceCommand, EntityInterface
+from sensorkit.core.device import DeviceCommand, DeviceInterface
+from sensorkit.core.entity import EntityInterface
 from sensorkit.core.executor import TaskFactoryFunc
 from sensorkit.core.program import ProgramInterface
 from sensorkit.core.task import Task

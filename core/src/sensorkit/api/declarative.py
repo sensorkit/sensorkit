@@ -21,7 +21,8 @@ from sensorkit.core.delegate import (
     EntityDelegate,
     ProgramDelegate,
 )
-from sensorkit.core.entity import CommandHandlerCallback, DeviceCommand, DeviceDetails
+from sensorkit.core.device import CommandHandlerCallback, DeviceCommand
+from sensorkit.core.entity import DeviceDetails
 from sensorkit.core.executor import TaskFactoryFunc
 from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.impl.device import DeviceImpl
@@ -213,15 +214,6 @@ class DeclaredEntity[T: EntityImpl = EntityImpl](EntityDelegate):
                 self.impl.on_attach(func)
             case CallbackKind.ENTITY_DEINIT:
                 self.impl.on_detach(func)
-            case CallbackKind.COMMAND_HANDLER:
-                # Any entity can handle commands now, not just devices (EntityImpl owns the
-                # command machinery). A device additionally gates them on its enable state.
-                command_type = introspect_param_type(func)
-
-                if not issubclass(command_type, DeviceCommand):
-                    raise DeclarationError("Command handler parameter has incorrect type")
-
-                self.impl.command_handler(command_type)(func)
 
 
 class DeclaredDevice(DeclaredEntity[DeviceImpl], DeviceDelegate):
@@ -264,6 +256,20 @@ class DeclaredDevice(DeclaredEntity[DeviceImpl], DeviceDelegate):
                 raise DeclarationError(
                     f"Device declares trait '{trait.name}' but {'; '.join(missing)}"
                 )
+
+    @override
+    def register_callback(self, kind: CallbackKind, func: Callable):
+        super().register_callback(kind, func)
+
+        match kind:
+            case CallbackKind.COMMAND_HANDLER:
+                command_type = introspect_param_type(func)
+
+                if not issubclass(command_type, DeviceCommand):
+                    raise DeclarationError("Command handler parameter has incorrect type")
+
+                self.impl.command_handler(command_type)(func)
+
 
 class DeclaredController(DeclaredEntity[ControllerImpl], ControllerDelegate):
     """Represents an eventual controller registration."""

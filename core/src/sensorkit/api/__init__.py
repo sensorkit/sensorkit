@@ -45,15 +45,15 @@ from sensorkit.common.keyword import Keyword, KeywordDict, declare_keyword
 from sensorkit.config import config_json_schema, declare_config_section
 from sensorkit.core.client import SensorKit, ServiceContext, ServiceRecord, ServiceStatus
 from sensorkit.core.controller import ControllerClient, ControllerRef, ControllerState
-from sensorkit.core.device import DeviceClient, DeviceRef
-from sensorkit.core.entity import (
+from sensorkit.core.device import (
     Abort,
     CommandDone,
     CommandStarted,
+    DeviceClient,
     DeviceCommand,
-    EntityClient,
-    EntityRef,
+    DeviceRef,
 )
+from sensorkit.core.entity import EntityClient, EntityRef
 from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.impl.device import DeviceImpl
 from sensorkit.core.impl.entity import EntityImpl

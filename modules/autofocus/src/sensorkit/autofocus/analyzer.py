@@ -20,6 +20,8 @@ from sensorkit.autofocus.models import (
     RunVCurve,
     SetAutofocusEnabled,
     VCurveResult,
+    run_vcurve_request,
+    set_enabled_request,
 )
 from sensorkit.autofocus.pipeline import (
     compute_defocus_sign,
@@ -48,6 +50,14 @@ async def _read_residual(focuser) -> FocusCorrection:
     except Exception as e:
         logger.warning(f"Could not read the standing FocusCorrection; assuming zero ({e})")
         return FocusCorrection()
+
+
+def _log_task_exception(task: asyncio.Task):
+    """Surface a detached task's failure — without this it is swallowed silently."""
+    if task.cancelled():
+        return
+    if exc := task.exception():
+        logger.error(f"Background task failed: {exc!r}")
 
 
 def _is_sidereal(commanded, inferred: str | None) -> bool:
@@ -134,20 +144,29 @@ class AutofocusAnalyzer:
             f"Autofocus analyzer starting {'ENABLED' if self.state.enabled else 'disabled'}"
         )
 
+        # Control surface: entity-level Requests (see models.run_vcurve_request).
+        await self._entity.handle_request(run_vcurve_request, self.run_vcurve)
+        await self._entity.handle_request(set_enabled_request, self.set_autofocus_enabled)
+
         # Subscribe to SENPAI results and process them
         self._tasks.append(asyncio.create_task(self._subscribe_senpai()))
         self._tasks.append(asyncio.create_task(self._processor_loop()))
 
-    @sk.command_handler
     async def run_vcurve(self, cmd: RunVCurve):
-        """Queue a V-curve sweep. Omit ra/dec to auto-select a target."""
+        """Queue a V-curve sweep. Omit ra/dec to auto-select a target.
+
+        Hands off to a task: selecting a target and pushing the per-step tasks outlasts the
+        deadline a request reply has to meet. Outcome is in the log and in VCurveResult — the
+        recalibrate path calls queue_vcurve directly when it needs the answer.
+        """
         target = None
         if cmd.ra is not None and cmd.dec is not None:
             target = ICRSTarget(coords=Equatorial(ra=cmd.ra, dec=cmd.dec))
-        queued = await self.program.queue_vcurve(target=target)
-        logger.info(f"RunVCurve command: {'queued' if queued else 'skipped (sweep in progress)'}")
 
-    @sk.command_handler
+        task = asyncio.create_task(self.program.queue_vcurve(target=target))
+        task.add_done_callback(_log_task_exception)
+        self._tasks.append(task)
+
     async def set_autofocus_enabled(self, cmd: SetAutofocusEnabled):
         """Enable/disable the analyzer's focus corrections (base + filter offset still drive)."""
         await self.set_enabled(cmd.enabled)

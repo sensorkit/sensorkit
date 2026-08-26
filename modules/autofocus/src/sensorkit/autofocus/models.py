@@ -48,17 +48,26 @@ class CorrectionConfig(BaseModel):
     )
 
 
-class RunVCurve(sk.DeviceCommand):
+class RunVCurve(BaseModel):
     """Queue an autofocus V-curve sweep. Omit ra/dec to auto-select a target."""
 
     ra: float | None = None
     dec: float | None = None
 
 
-class SetAutofocusEnabled(sk.DeviceCommand):
+class SetAutofocusEnabled(BaseModel):
     """Enable or disable the analyzer's focus corrections."""
 
     enabled: bool
+
+
+# The analyzer's control surface: entity-level typed Requests (the agent's pattern), registered
+# in entity_init via sk.entity().handle_request — no DeviceCommand machinery involved.
+#
+# Both reply immediately: a simple request must answer inside the backend's NATS deadline (0.5s),
+# so run_vcurve hands the sweep off to a task rather than queueing it inline.
+run_vcurve_request = sk.Request.define("run_vcurve", payload=RunVCurve)
+set_enabled_request = sk.Request.define("set_enabled", payload=SetAutofocusEnabled)
 
 
 class AutofocusConfig(BaseModel):
@@ -138,7 +147,7 @@ class AutofocusState(BaseModel):
 
     # Master switch for the ANALYZER (passive corrections, recalibrate triggers, V-curve folds).
     # Base + filter offset + last residual always drive regardless. Off by default; toggle with
-    # the SetAutofocusEnabled command.
+    # the set_enabled request.
     enabled: bool = False
     vcurve_slope: float | None = None
     vcurve_best_fwhm_pixels: float | None = None
@@ -153,7 +162,7 @@ class AutofocusState(BaseModel):
 sk.declare_config_section(
     "autofocus",
     list[AutofocusConfig],
-    entity_mapper=lambda raw: (elem["entity"] for elem in raw),
-    model_mapper=iter,
+    id_source="by_subkey",
+    id_key="entity",
     service_path="sensorkit.autofocus.program",
 )

@@ -19,7 +19,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sensorkit.core.entity import DeviceCommand, DeviceDetails
+    from sensorkit.core.device import DeviceCommand
+    from sensorkit.core.entity import DeviceDetails
 
 # Global registries, auto-populated by declare_trait() and declare_archetype().
 _trait_registry: set[Trait] = set()

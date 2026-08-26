@@ -7,29 +7,13 @@ from _contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterable, Literal, Self, final, override
 
 from loguru import logger
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter
 
 from sensorkit.backend.base import Entity, KVError, SpecialProperty
 from sensorkit.backend.event import Event
-from sensorkit.backend.request import (
-    CallContext,
-    ExtendedHandlerFunc,
-    HandlerFunc,
-    Request,
-)
+from sensorkit.backend.request import ExtendedHandlerFunc, HandlerFunc, Request
 from sensorkit.common.keyword import Keyword, dump_keyword_json, get_keyword_info
-from sensorkit.core.entity import (
-    CommandDone,
-    CommandHandlerCallback,
-    CommandRequestMessage,
-    CommandResult,
-    CommandStarted,
-    DeviceCommand,
-    EntityBase,
-    EntityInfo,
-    EntityInterface,
-    run_command_request,
-)
+from sensorkit.core.entity import EntityBase, EntityInfo, EntityInterface
 from sensorkit.data.graph import DataGraph
 
 if TYPE_CHECKING:
@@ -57,7 +41,6 @@ class EntityImpl(EntityBase, EntityInterface):
         self._task_group = task_group
         self._attach_hooks: list[Callable] = []
         self._detach_hooks: list[Callable] = []
-        self._handlers: dict[str, CommandHandlerCallback] = {}
 
     async def init_impl(self):
         """Implements initialization of the entity.
@@ -89,60 +72,7 @@ class EntityImpl(EntityBase, EntityInterface):
 
     async def attach_impl(self):
         """Implements "attach". Runs after the user attach hooks."""
-        await self.handle_request(run_command_request, self._command_request)
-
-    def command_handler(self, command_type: type[DeviceCommand]):
-        """Register a handler for the given command type and return the wrapped func."""
-        key = command_type.model_tag()
-
-        def decorator(func: CommandHandlerCallback):
-            self._handlers[key] = func
-            return func
-
-        return decorator
-
-    async def _command_request(
-        self,
-        message: CommandRequestMessage,
-        call: CallContext[None, CommandResult],
-    ):
-        command_id = message.command.command_id
-
-        if command_id not in self._handlers:
-            logger.warning(f"Rejecting unhandled command: {command_id}")
-            call.reject(response=None)
-            return
-
-        call.accept(response=None)
-        handler_func = self._handlers[command_id]
-        success = False
-
-        logger.debug(f"Incoming {command_id} Command: {call.call_id}")
-        await self.emit_event(CommandStarted(command_id=command_id, call_id=call.call_id))
-
-        try:
-            with self.enter_context():
-                task = asyncio.create_task(handler_func(message.command))
-            await call.progress_from_task(task, cadence=6.0, ttl=10.0)
-            success = True
-        except ValidationError:
-            logger.exception(f"Incoming {command_id} Command failed validation")
-            raise
-        except asyncio.CancelledError:
-            logger.exception(f"Execution of {command_id} Command cancelled")
-            raise
-        except Exception:
-            logger.exception(f"Error invoking {command_id} Command handler")
-            raise
-        else:
-            await call.succeed(result=CommandResult(data=task.result()))
-        finally:
-            try:
-                await self.emit_event(
-                    CommandDone(command_id=command_id, call_id=call.call_id, success=success)
-                )
-            except Exception as e:
-                logger.warning(f"Error logging command done event ({type(e).__name__})")
+        pass
 
     def on_detach(self, func: Callable):
         """Register a callback to run when this entity is being detached."""

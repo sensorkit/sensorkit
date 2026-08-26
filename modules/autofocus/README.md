@@ -28,7 +28,7 @@ into the focuser's KV, and the controller applies it at every capture (see
    one per focuser position, centered on the current focus and clamped to the
    focuser's limits. It publishes offers, so the agent schedules the sweep like
    any program (give it a lower `priority` number than science programs so a
-   queued sweep preempts). A sweep is queued on the `RunVCurve` command, on a
+   queued sweep preempts). A sweep is queued on the `run_vcurve` request, on a
    `schedule`, or by the analyzer's recalibrate path.
 2. Every sweep frame carries the sweep ID as the FITS card **`AFID`** and its
    requested SENPAI mode as **`AFMODE`** (see [Pipeline Mode](#pipeline-mode)).
@@ -84,14 +84,19 @@ can report arcsec, or use `detect_solve`, which adds a few more seconds per fram
 standing focus offset. Accepted for fast sweeps; set `pipeline_mode: full` to
 avoid it at the cost of time.
 
-## Commands
+## Requests
 
-Sent to the `Autofocus` entity (`POST /entity/Autofocus/command`):
+The `Autofocus` entity registers two entity-level Requests (the same mechanism
+the agent uses). Invoke them over HTTP with
+`POST /entity/Autofocus/request/{name}`, or from code with
+`kit.entity("Autofocus").request(name, payload)`.
 
-- **`RunVCurve`** `{ra?, dec?}` — queue a sweep; omit coordinates to
-  auto-select a bright target (preferring the galactic plane).
-- **`SetAutofocusEnabled`** `{enabled}` — turn the analyzer's passive corrections on or
-  off.
+- **`run_vcurve`** `{ra?, dec?}` — queue a sweep; omit coordinates to
+  auto-select a bright target (preferring the galactic plane). Returns as soon
+  as the sweep is handed off; watch the log and `VCurveResult` for the outcome.
+- **`set_enabled`** `{enabled}` — turn the analyzer's passive corrections on or
+  off. Read the current state from the `AutofocusState` keyword
+  (`GET /data/snapshot/Autofocus`).
 
 ## Example Config
 

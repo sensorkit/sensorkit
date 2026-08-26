@@ -1,22 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import uuid
 from abc import abstractmethod
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Coroutine, Iterable
+from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
 from pydantic import BaseModel
 
 from sensorkit.backend.event import Event
-from sensorkit.backend.request import Request
-
-# The command vocabulary now lives in core.entity so any entity can receive commands. DeviceCommand
-# and Abort are re-exported here (redundant `as` = intentional re-export) so device authors'
-# existing `from sensorkit.core.device import DeviceCommand` / `Abort` keep working.
-from sensorkit.core.entity import Abort as Abort
+from sensorkit.backend.request import Call, ExtendedResponse, Request
+from sensorkit.common.model import ModelRegistry, RegistryBaseModel
 from sensorkit.core.entity import (
-    CommandHandlerCallback,
-    DeviceCommand,
     DeviceDetails,
     EntityClient,
     EntityInfo,
@@ -28,6 +23,36 @@ from sensorkit.core.trait import Trait, match_archetype, match_traits
 
 if TYPE_CHECKING:
     from sensorkit.core.client import SensorKit
+
+type CommandHandlerCallback = Callable[[DeviceCommand], Coroutine[Any, Any, BaseModel | None]]
+
+
+class DeviceCommand(RegistryBaseModel):
+    """Base Device Command model."""
+    command_id: str = None
+
+    registry: ClassVar[ModelRegistry[DeviceCommand]] = ModelRegistry(discriminator="command_id")
+
+    @classmethod
+    def model_registry(cls):
+        return cls.registry
+
+
+class Abort(DeviceCommand):
+    """Built-in abort command."""
+
+
+class CommandStarted(Event):
+    """Event indicating a Command has been accepted and execution has begun."""
+    command_id: str
+    call_id: uuid.UUID
+
+
+class CommandDone(Event):
+    """Event indicating a Command has finished execution."""
+    command_id: str
+    call_id: uuid.UUID
+    success: bool
 
 
 class DeviceEnableState(Event):
@@ -51,6 +76,23 @@ set_enable_state_request = Request.define(
 )
 
 
+class CommandRequestMessage(BaseModel):
+    """Message model representing a Command execution request."""
+    command: DeviceCommand
+
+
+class CommandResult(BaseModel):
+    """Message model representing a response to a Command execution request."""
+    data: Any
+
+
+run_command_request = Request.define(
+    "command",
+    payload=CommandRequestMessage,
+    result=CommandResult,
+)
+
+
 class DeviceClient(EntityClient):
     """Object that exposes client-side functionality of a Device."""
 
@@ -70,6 +112,13 @@ class DeviceClient(EntityClient):
         return await self.call(
             set_enable_state_request,
             DeviceEnableStateRequest(enable=False)
+        )
+
+    def command(self, command: DeviceCommand) -> Call[ExtendedResponse, CommandResult]:
+        """Send a command to the device and return a Call tracking the result."""
+        return self.call(
+            run_command_request,
+            CommandRequestMessage(command=command),
         )
 
     async def get_details(self) -> DeviceDetails:

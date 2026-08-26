@@ -1142,3 +1142,48 @@ class TestPipelineModeCard:
 
         for key in dict(VCurveStep(session="s", pipeline_mode="detect_solve").get_fits_cards()):
             assert len(key) <= 8, f"{key} exceeds the FITS keyword limit"
+
+
+# ---------------------------------------------------------------------------
+# Test: Control-surface Requests are registered on the entity
+# ---------------------------------------------------------------------------
+
+
+class TestRequestRegistration:
+    """entity_init registers the module's control Requests (the agent pattern)."""
+
+    def test_entity_init_registers_requests(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from sensorkit.autofocus.analyzer import AutofocusAnalyzer
+        from sensorkit.autofocus.models import (
+            AutofocusConfig,
+            FocuserConfig,
+            run_vcurve_request,
+            set_enabled_request,
+        )
+
+        config = AutofocusConfig(
+            entity="test_af",
+            controller="test_ctrl",
+            senpai_entity="senpai_test",
+            focuser=FocuserConfig(entity="focuser", min_position=0, max_position=50000),
+        )
+        analyzer = AutofocusAnalyzer(config, MagicMock())
+        entity = AsyncMock()
+        entity.kv_get_model.side_effect = Exception("no saved state")
+
+        async def run():
+            with patch("sensorkit.autofocus.analyzer.sk.entity", return_value=entity):
+                await analyzer.entity_init()
+            for task in analyzer._tasks:
+                task.cancel()
+            await asyncio.gather(*analyzer._tasks, return_exceptions=True)
+
+        asyncio.run(run())
+
+        registered = [call.args[0] for call in entity.handle_request.await_args_list]
+        assert run_vcurve_request in registered
+        assert set_enabled_request in registered
+        assert len(registered) == 2
