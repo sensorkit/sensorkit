@@ -150,26 +150,6 @@ def build_sk_tasks(
             else:
                 concrete_rates = request.rates.to_concrete_rates(exp_seconds)
 
-        # Target for RATE-mode frames. Called only from the branches that
-        # have RATE frames.
-        # - TLE target → follow the TLE (PWI4 follow_tle)
-        # - otherwise → RateTarget built from request's concrete rates
-        # (to_sk_ratetarget converts AltAz/Lunar to ICRS using site+now)
-        def _rate_target(rates: Rates):
-            if is_tle_target:
-                return sidereal_target  # already SKTLETarget via to_sk_target
-            frame = (
-                ReferenceFrame.CIRF
-                if config.sk.rate_target_frame == "cirf"
-                else ReferenceFrame.ICRF
-            )
-            return _to_sk_ratetarget(
-                request.target,
-                rates,
-                site=config.site,
-                frame=frame,
-            )
-
         cam = CameraParameterSet(
             integration_time_seconds=exp_seconds,
             frame_count=frame_count,
@@ -193,7 +173,9 @@ def build_sk_tasks(
         elif all(m == TrackingMode.RATE for m in modes):
             tasks.append(
                 StandardCollectTask(
-                    target=_rate_target(concrete_rates),
+                    target=_resolve_rate_target(
+                        is_tle_target, sidereal_target, request.target, concrete_rates, config
+                    ),
                     camera_params=cam,
                     end_time=end_time,
                 )
@@ -201,7 +183,9 @@ def build_sk_tasks(
         elif _is_rates_then_nonrate(modes):
             tasks.append(
                 StandardCollectTask(
-                    target=_rate_target(concrete_rates),
+                    target=_resolve_rate_target(
+                        is_tle_target, sidereal_target, request.target, concrete_rates, config
+                    ),
                     camera_params=cam,
                     end_time=end_time,
                     sidereal_frames=[i for i, m in enumerate(modes) if m != TrackingMode.RATE],
@@ -222,7 +206,9 @@ def build_sk_tasks(
             )
             tasks.append(
                 StandardCollectTask(
-                    target=_rate_target(concrete_rates),
+                    target=_resolve_rate_target(
+                        is_tle_target, sidereal_target, request.target, concrete_rates, config
+                    ),
                     camera_params=CameraParameterSet(
                         integration_time_seconds=exp_seconds,
                         frame_count=frame_count - first_rate,
@@ -240,6 +226,26 @@ def build_sk_tasks(
 
         for task in tasks:
             yield task.submit(context=exposure_context, expiry_time=end_time)
+
+
+def _resolve_rate_target(
+    is_tle_target: bool,
+    sidereal_target: Target,
+    burr_target: obs.TargetUnion,
+    rates: Rates | None,
+    config: AppConfig,
+) -> Target:
+    """Target for RATE-mode frames.
+
+    A TLE target follows the TLE itself (PWI4 follow_tle), so it reuses
+    `sidereal_target` (already an SKTLETarget via `to_sk_target`). Otherwise
+    build a `RateTarget` from the request's concrete rates. `to_sk_ratetarget`
+    converts AltAz/Lunar to ICRS using site+now.
+    """
+    if is_tle_target:
+        return sidereal_target
+    frame = ReferenceFrame.CIRF if config.sk.rate_target_frame == "cirf" else ReferenceFrame.ICRF
+    return _to_sk_ratetarget(burr_target, rates, site=config.site, frame=frame)
 
 
 def _to_sk_target(burr_target: obs.Target) -> Target:
