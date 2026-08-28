@@ -6,6 +6,7 @@ import contextlib
 import io
 import logging
 import time
+from collections.abc import Buffer
 from dataclasses import dataclass, field
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -14,6 +15,7 @@ from astropy.io import fits
 from loguru import logger
 
 import sensorkit.api as sk
+from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileInfo
 from sensorkit.senpai import PRE_IMPORT_ROOT_HANDLERS
 from sensorkit.senpai.models import SenpaiConfig
@@ -195,83 +197,15 @@ class SenpaiAnalyzer:
                 if pending is None:
                     pending = asyncio.ensure_future(anext(frames, None))
 
-                timeout = None
-                if self._batches:
-                    deadline = min(
-                        batch.last_added + batch.stall_after_s
-                        for batch in self._batches.values()
-                    )
-                    timeout = max(deadline - time.monotonic(), 0.05)
-                done, _ = await asyncio.wait({pending}, timeout=timeout)
+                done, _ = await asyncio.wait({pending}, timeout=self._batch_wait_timeout())
 
                 if done:
                     item = pending.result()
                     pending = None
                     if item is None:
                         break
-                    context, data = item
                     try:
-                        info = context.get(FileInfo)
-
-                        frame_type = _frame_type(data)
-                        if frame_type in _CALIBRATION_FRAME_TYPES:
-                            logger.debug(
-                                f"skipping {frame_type} frame {info.path if info else ''}"
-                            )
-                            continue
-
-                        controller = context.get("controller_name")
-                        task_id = context.get("task_id")
-                        inp = FrameInput(
-                            data=data,
-                            file_path=str(info.path) if info else "",
-                            task_id=str(task_id) if task_id is not None else None,
-                            frame_num=context.get("frame_num"),
-                            frame_count=context.get("frame_count"),
-                            controller_name=str(controller) if controller is not None else None,
-                        )
-
-                        if not (self.config.process_sequence and inp.task_id and inp.frame_count):
-                            await self._process([inp])
-                        elif inp.task_id in self._done:
-                            # Redelivered after its collect already ran (below).
-                            logger.debug(
-                                f"sequence ({inp.task_id}): ignoring {inp.file_path}, "
-                                f"the collect has already been processed"
-                            )
-                        else:
-                            batch = self._batches.get(inp.task_id)
-                            if batch is None:
-                                try:
-                                    stall_after = float(context.get("exptime")) + _STALL_MARGIN_S
-                                except (TypeError, ValueError):
-                                    stall_after = _STALL_DEFAULT_S
-                                batch = self._batches[inp.task_id] = _Batch(
-                                    expected=int(inp.frame_count),
-                                    stall_after_s=stall_after,
-                                )
-
-                            # One delivery per frame is not guaranteed: a file can be
-                            # announced twice (a Docker bind mount raises `created`
-                            # both when the file appears and when its data lands), and
-                            # the second copy would fill the batch with a frame
-                            # identical to one already in it — same timestamp, so
-                            # SENPAI derives a zero frame gap, an infinite track rate,
-                            # and dies on int(inf). It also completes the batch early,
-                            # before the real frame arrives. Keep the first sighting.
-                            if batch.holds(inp):
-                                logger.debug(
-                                    f"sequence ({inp.task_id}): ignoring duplicate "
-                                    f"delivery of {inp.file_path}"
-                                )
-                            else:
-                                batch.inputs.append(inp)
-                                batch.last_added = time.monotonic()
-
-                                if len(batch.inputs) >= batch.expected:
-                                    del self._batches[inp.task_id]
-                                    self._mark_done(inp.task_id)
-                                    await self._process(batch.inputs, from_sequence=True)
+                        await self._handle_frame(item)
                     except Exception:
                         logger.exception("Frame processing error")
                     continue
@@ -281,28 +215,105 @@ class SenpaiAnalyzer:
                 # merely unread while a long SENPAI run blocked this loop
                 # (frames arriving during processing land above, refreshing
                 # last_added, before this sweep can run). Flush the stalled.
-                now = time.monotonic()
-                stalled = [
-                    task_id
-                    for task_id, batch in self._batches.items()
-                    if now - batch.last_added > batch.stall_after_s
-                ]
-                for task_id in stalled:
-                    batch = self._batches.pop(task_id)
-                    self._mark_done(task_id)
-                    logger.warning(
-                        f"sequence ({task_id}): no new frame in {batch.stall_after_s:.0f}s "
-                        f"({len(batch.inputs)}/{batch.expected} frames); processing partial batch"
-                    )
-                    try:
-                        await self._process(batch.inputs, from_sequence=True)
-                    except Exception:
-                        logger.exception("Frame processing error")
+                await self._flush_stalled_batches()
         except Exception:
             logger.exception("DataGraph consumer failed")
         finally:
             if pending is not None:
                 pending.cancel()
+
+    def _batch_wait_timeout(self) -> float | None:
+        """Seconds until the earliest open batch goes stale, or None with no batches open."""
+        if not self._batches:
+            return None
+        deadline = min(batch.last_added + batch.stall_after_s for batch in self._batches.values())
+        return max(deadline - time.monotonic(), 0.05)
+
+    async def _handle_frame(self, item: tuple[Context, Buffer]) -> None:
+        """Route one DataGraph delivery: process it alone, or fold it into its batch."""
+        context, data = item
+        info = context.get(FileInfo)
+
+        frame_type = _frame_type(data)
+        if frame_type in _CALIBRATION_FRAME_TYPES:
+            logger.debug(f"skipping {frame_type} frame {info.path if info else ''}")
+            return
+
+        controller = context.get("controller_name")
+        task_id = context.get("task_id")
+        inp = FrameInput(
+            data=data,
+            file_path=str(info.path) if info else "",
+            task_id=str(task_id) if task_id is not None else None,
+            frame_num=context.get("frame_num"),
+            frame_count=context.get("frame_count"),
+            controller_name=str(controller) if controller is not None else None,
+        )
+
+        if not (self.config.process_sequence and inp.task_id and inp.frame_count):
+            await self._process([inp])
+        elif inp.task_id in self._done:
+            # Redelivered after its collect already ran (below).
+            logger.debug(
+                f"sequence ({inp.task_id}): ignoring {inp.file_path}, "
+                f"the collect has already been processed"
+            )
+        else:
+            await self._add_to_batch(inp, context)
+
+    async def _add_to_batch(self, inp: FrameInput, context: Context) -> None:
+        """Fold one frame into its open batch, running the batch once it fills."""
+        batch = self._batches.get(inp.task_id)
+        if batch is None:
+            try:
+                stall_after = float(context.get("exptime")) + _STALL_MARGIN_S
+            except (TypeError, ValueError):
+                stall_after = _STALL_DEFAULT_S
+            batch = self._batches[inp.task_id] = _Batch(
+                expected=int(inp.frame_count),
+                stall_after_s=stall_after,
+            )
+
+        # One delivery per frame is not guaranteed: a file can be announced
+        # twice (a Docker bind mount raises `created` both when the file
+        # appears and when its data lands), and the second copy would fill
+        # the batch with a frame identical to one already in it — same
+        # timestamp, so SENPAI derives a zero frame gap, an infinite track
+        # rate, and dies on int(inf). It also completes the batch early,
+        # before the real frame arrives. Keep the first sighting.
+        if batch.holds(inp):
+            logger.debug(
+                f"sequence ({inp.task_id}): ignoring duplicate delivery of {inp.file_path}"
+            )
+            return
+
+        batch.inputs.append(inp)
+        batch.last_added = time.monotonic()
+
+        if len(batch.inputs) >= batch.expected:
+            del self._batches[inp.task_id]
+            self._mark_done(inp.task_id)
+            await self._process(batch.inputs, from_sequence=True)
+
+    async def _flush_stalled_batches(self) -> None:
+        """Process, and evict, every open batch past its stall deadline."""
+        now = time.monotonic()
+        stalled = [
+            task_id
+            for task_id, batch in self._batches.items()
+            if now - batch.last_added > batch.stall_after_s
+        ]
+        for task_id in stalled:
+            batch = self._batches.pop(task_id)
+            self._mark_done(task_id)
+            logger.warning(
+                f"sequence ({task_id}): no new frame in {batch.stall_after_s:.0f}s "
+                f"({len(batch.inputs)}/{batch.expected} frames); processing partial batch"
+            )
+            try:
+                await self._process(batch.inputs, from_sequence=True)
+            except Exception:
+                logger.exception("Frame processing error")
 
     def _mark_done(self, task_id: str) -> None:
         """Remember a finished collect, dropping the oldest to stay bounded."""

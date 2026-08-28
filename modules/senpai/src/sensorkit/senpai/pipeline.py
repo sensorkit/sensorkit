@@ -64,6 +64,15 @@ class SenpaiPipeline:
         self.config = config
         self._base_output_dir = Path(config.runtime.output_dir)
 
+    def _output_dir_for(self, inputs: list[FrameInput]) -> Path:
+        """Output dir for a batch, using a controller-named subdir when the frames name one."""
+        controller_name = inputs[0].controller_name if inputs else None
+        if not controller_name:
+            return self._base_output_dir
+        output_dir = self._base_output_dir / controller_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
     def process_frames(
         self, inputs: list[FrameInput], from_sequence: bool = False
     ) -> list[SenpaiResult]:
@@ -95,12 +104,8 @@ class SenpaiPipeline:
             detail = task_id or ""
         logger.info(f"Analyzing {len(inputs)} frame(s)" + (f" ({detail})" if detail else ""))
 
-        # Frames naming a controller get their own subdir under the output dir.
         # Batches run one at a time, so mutating the shared runtime config is safe.
-        output_dir = self._base_output_dir
-        if inputs and inputs[0].controller_name:
-            output_dir = output_dir / inputs[0].controller_name
-            output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = self._output_dir_for(inputs)
         self.config.runtime.output_dir = output_dir
 
         # Run the unified collect pipeline. Time just the analysis so the completion
