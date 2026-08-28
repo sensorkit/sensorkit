@@ -17,23 +17,36 @@ Omissions are recorded separately from operator-imposed outcomes.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import math
+from collections import Counter
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, model_validator
 
+from sensorkit.common.dag import Graph, GraphBuilder
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceCommand
-from sensorkit.sensor.topology import DeviceKey, Placement, TraitKey
+from sensorkit.sensor.selection import PlacementFacts
+from sensorkit.sensor.topology import (
+    DeviceKey,
+    Placement,
+    TraitKey,
+    format_path,
+)
 
+type RequestId = str
 """Authored request label shared by all acquisitions expanded from it."""
 
+type OperationId = str
 """Readable operation label derived from its origin and target device.
 
 Used in logs and audits. Cleanup and execution track operations by object
 identity; graph node identifiers belong to `sensorkit.common.dag`.
 """
 
+type StepName = str
 """Step identifier unique within one compilation, used to resolve
 dependencies.
 """
@@ -67,8 +80,34 @@ def partition(subject: Subject, participants: tuple[Placement, ...]
             return tuple((p,) for p in participants)
 
 
+@dataclass(frozen=True)
+class Origin:
+    """Authored source, path and explanatory reason used in diagnostics and
+    labels.
+    """
+
+    source: str
+    path: tuple[str | int, ...] = ()
+    reason: str = ""
+
+    def __str__(self) -> str:
+        return "/".join(str(part) for part in (self.source, *self.path))
 
 
+@dataclass(frozen=True)
+class Acquisition:
+    """One frame's request identity, numbering and planned keywords.
+
+    `index` is the request ordinal, continuing across segments and repeated for
+    each instrument during fan-out. `frame_number` is unique per instrument
+    across the collect. The pair (instrument, frame_number) identifies a frame.
+    Keywords travel with the acquisition through packing and compilation.
+    """
+
+    request: RequestId
+    index: int
+    frame_number: int
+    keywords: KeywordDict
 
 
 @dataclass(frozen=True)
@@ -90,12 +129,112 @@ class RoutedCommand:
         return self.target, type(self.command)
 
 
+@dataclass(frozen=True)
+class Dependency:
+    """A named predecessor and the condition required before a step may run.
+
+    `success` requires a successful result; `completion` waits for a terminal
+    result regardless of outcome. A run-wide stop can still prevent dispatch.
+    """
+
+    on: StepName
+    kind: Literal["success", "completion"] = "success"
+
+    @classmethod
+    def completion(cls, names: Iterable[StepName]) -> tuple[Dependency, ...]:
+        """Build completion dependencies for the supplied step names."""
+        return tuple(cls(on=name, kind="completion") for name in names)
 
 
+@dataclass(frozen=True)
+class PlannedStep:
+    """A compiler's command or ordering step before graph construction.
+
+    `name` is unique within the step list; dependencies may name later steps.
+    `command` and `target` must be set together or both absent. With neither,
+    the step becomes an ordering node; `delay_s` can provide an alignment
+    delay.
+
+    `timeout_s` overrides deadline rules. An unset value inherits those rules
+    and may remain unbounded if none match. Resolved numeric deadlines must be
+    finite and positive.
+    """
+
+    name: StepName
+    origin: Origin
+    group: str
+    target: Placement | None = None
+    command: DeviceCommand | None = None
+    deps: tuple[Dependency, ...] = ()
+    optional: bool = False
+    fail_fast: bool = True
+    unsupported: Literal["error", "omit"] = "error"
+    timeout_s: float | None = None
+    acquisition: Acquisition | None = None
+    delay_s: float = 0.0
+
+    @property
+    def label(self) -> str:
+        """Describe the command and target, or the origin of an ordering
+        step.
+        """
+        if self.command is None or self.target is None:
+            return self.origin.reason or self.name
+
+        return (f"{format_command(self.command):<18} {self.target.device} "
+                f"@ {format_path(self.target.path, '<root>')}")
 
 
+@dataclass(frozen=True, eq=False)
+class Operation:
+    """A graph payload containing one command for one placement.
+
+    Operations compare and hash by object identity, allowing execution and
+    cleanup to track separate attempts even when their fields match.
+    `timeout_s` is already resolved; `None` means unbounded. An acquisition
+    marks a command whose header must be populated at dispatch.
+    """
+
+    id: OperationId
+    target: Placement
+    command: DeviceCommand
+    origin: Origin
+    timeout_s: float | None = None
+    acquisition: Acquisition | None = None
+
+    @classmethod
+    def planned(cls, step: PlannedStep,
+                timeout_s: float | None) -> Operation:
+        """Build an operation with an origin-based label and a deep-copied
+        command.
+
+        Copying detaches the caller's command; it does not make exposed nested
+        values immutable. Callers must not mutate compiled workflows.
+
+        Raises:
+            ValueError: The step has no command or target.
+        """
+        if step.command is None or step.target is None:
+            raise ValueError(
+                f"step '{step.name}' has no command, so there is no operation "
+                f"to build")
+
+        return cls(id=f"{step.origin}@{step.target.device}", target=step.target,
+                   command=step.command.model_copy(deep=True),
+                   origin=step.origin, timeout_s=timeout_s,
+                   acquisition=step.acquisition)
 
 
+@dataclass(frozen=True)
+class Omission:
+    """An unsupported step removed during lowering, with its origin and
+    reason.
+    """
+
+    origin: Origin
+    target: Placement
+    command: str
+    reason: str
 
 
 type DeadlineTarget = (
@@ -137,3 +276,292 @@ class DeadlineRule(BaseModel, frozen=True, extra="forbid"):
         rest = {k: v[k] for k in v if k not in _NAMESPACES}
 
         return {**rest, "target": (key, None if key == "any" else v[key])}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@dataclass(frozen=True, eq=False)
+class ExecutableWorkflow:
+    """A compiled graph with cleanup graphs, omissions and capability
+    provenance.
+
+    Preparation is ordinary work in the main graph. Cleanup runs separately
+    after it drains. Provenance describes the facts used to compile the
+    workflow; it is not an identity or replay record.
+
+    Workflows compare by object identity so sessions can track which they
+    issued. Callers must not mutate their graphs, commands or nested metadata.
+    """
+
+    name: str
+    graph: Graph
+    provenance: str = ""
+    cleanup: tuple[Cleanup, ...] = ()
+    omissions: tuple[Omission, ...] = ()
+
+
+def lower(name: str, steps: tuple[PlannedStep, ...], facts: PlacementFacts, *,
+          provenance: str = "", cleanup=(), deadlines=(), rules=()) -> ExecutableWorkflow:
+    if cleanup:
+        raise NotImplementedError("Cleanup lowering is unavailable")
+    graph, _, omissions = _compile(steps, facts, deadlines, rules)
+    workflow = ExecutableWorkflow(name=name, graph=graph,
+                                  provenance=provenance, omissions=omissions)
+    _validated(workflow)
+    return workflow
+
+
+def _compile(steps: tuple[PlannedStep, ...], facts: PlacementFacts,
+             deadlines: tuple[DeadlineRule, ...],
+             rules: tuple[OperatorRule, ...]
+             ) -> tuple[Graph, dict[StepName, Operation], tuple[Omission, ...]]:
+    """Lower one step list into a graph, operation index and omission
+    records.
+    """
+    by_name = _checked(steps)
+    omitted, omissions = _fates(steps, facts)
+    resolved = _resolved(by_name, omitted)
+
+    builder = GraphBuilder()
+    nodes: dict[StepName, int] = {}
+    operations: dict[StepName, Operation] = {}
+
+    for step in steps:
+        if step.name in omitted:
+            continue
+
+        payload = None
+
+        if step.command is not None and step.target is not None:
+            payload = Operation.planned(
+                step, step.timeout_s)
+            operations[step.name] = payload
+
+        on_failure, optional, override = _effects(step, rules, facts)
+        nodes[step.name] = builder.add(
+            step.label, step.group, payload, on_failure=on_failure,
+            optional=optional, delay_s=step.delay_s, override=override)
+
+    # Add edges after allocating all node ids to support forward references.
+    for named, nid in nodes.items():
+        builder.require(nid, (nodes[d.on] for d in resolved[named]
+                              if d.kind == "success"))
+        builder.order(nid, (nodes[d.on] for d in resolved[named]
+                            if d.kind == "completion"))
+
+    return builder.build(), operations, tuple(omissions)
+
+
+def _checked(steps: tuple[PlannedStep, ...]) -> dict[StepName, PlannedStep]:
+    """Index steps after checking names, command-target pairs and
+    dependencies.
+
+    Raises:
+        ValueError: Names repeat, only one of command and target is set, or a
+            dependency names an absent step.
+    """
+    by_name: dict[StepName, PlannedStep] = {}
+
+    for step in steps:
+        if step.name in by_name:
+            raise ValueError(f"two steps are named '{step.name}'")
+
+        if (step.command is None) != (step.target is None):
+            missing = "target" if step.target is None else "command"
+            raise ValueError(
+                f"step '{step.name}' has no {missing}; a command and the "
+                f"placement receiving it are set together or not at all")
+
+        by_name[step.name] = step
+
+    dangling = sorted({d.on for step in steps for d in step.deps}
+                      - set(by_name))
+
+    if dangling:
+        raise ValueError(
+            f"steps depend on names nothing emitted: {', '.join(dangling)}")
+
+    return by_name
+
+
+def _fates(steps: tuple[PlannedStep, ...], facts: PlacementFacts
+           ) -> tuple[frozenset[StepName], list[Omission]]:
+    """Find unsupported steps to omit and record their reasons.
+
+    Ordering steps are always retained.
+
+    Raises:
+        ValueError: An unsupported command has `unsupported="error"`.
+    """
+    omitted: list[StepName] = []
+    omissions: list[Omission] = []
+
+    for step in steps:
+        if step.command is None or step.target is None:
+            continue
+
+        named = step.command.model_tag()
+
+        if named in facts.commands(step.target.device):
+            continue
+
+        reason = f"'{step.target.device}' does not support '{named}'"
+
+        if step.unsupported == "error":
+            raise ValueError(f"step '{step.name}': {reason}")
+
+        omitted.append(step.name)
+        omissions.append(Omission(origin=step.origin, target=step.target,
+                                  command=named, reason=reason))
+
+    return frozenset(omitted), omissions
+
+
+def _resolved(by_name: dict[StepName, PlannedStep],
+              omitted: frozenset[StepName]
+              ) -> dict[StepName, tuple[Dependency, ...]]:
+    """Resolve each step's dependencies through omitted predecessors."""
+    resolved: dict[StepName, tuple[Dependency, ...]] = {}
+
+    for name in by_name:
+        _resolve(name, by_name, omitted, resolved, frozenset())
+
+    return resolved
+
+
+def _resolve(name: StepName, by_name: dict[StepName, PlannedStep],
+             omitted: frozenset[StepName],
+             resolved: dict[StepName, tuple[Dependency, ...]],
+             seen: frozenset[StepName]) -> tuple[Dependency, ...]:
+    """Replace omitted predecessors with their dependencies recursively.
+
+    Inherited dependencies require success only if every link requires it. An
+    omitted predecessor with no dependencies adds no constraint.
+
+    Raises:
+        ValueError: Dependency traversal encounters a cycle through omissions.
+    """
+    if name in resolved:
+        return resolved[name]
+
+    if name in seen:
+        raise ValueError(
+            f"omitted steps depend on each other, through '{name}'")
+
+    here: list[Dependency] = []
+
+    for dep in by_name[name].deps:
+        if dep.on in omitted:
+            here += [Dependency(on=inherited.on,
+                                kind="success" if dep.kind == inherited.kind == "success"
+                                else "completion")
+                     for inherited in _resolve(dep.on, by_name, omitted,
+                                               resolved, seen | {name})]
+        else:
+            here.append(dep)
+
+    resolved[name] = _merged(here)
+
+    return resolved[name]
+
+
+def _merged(deps: list[Dependency]) -> tuple[Dependency, ...]:
+    """Merge duplicate predecessors in first-seen order, retaining success
+    requirements.
+    """
+    kinds: dict[StepName, Literal["success", "completion"]] = {}
+
+    for dep in deps:
+        if kinds.get(dep.on) != "success":
+            kinds[dep.on] = dep.kind
+
+    return tuple(Dependency(on=name, kind=kind)
+                 for name, kind in kinds.items())
+
+
+def _effects(step: PlannedStep, rules, facts):
+    if rules:
+        raise NotImplementedError("Operator overrides are unavailable")
+    return ("stop" if step.fail_fast else "skip"), step.optional, None
+
+
+
+
+def _validated(workflow: ExecutableWorkflow) -> None:
+    """Check operation labels, deadlines and cleanup trigger membership.
+
+    Graph construction already checks cycles. Ordering nodes have no operation.
+
+    Raises:
+        ValueError: Operation labels repeat, a numeric deadline is invalid, or
+            cleanup references an operation outside the main graph.
+    """
+    operations = tuple(_operations(workflow.graph))
+    counted = Counter(op.id for op in operations)
+    dupes = sorted(i for i, n in counted.items() if n > 1)
+
+    if dupes:
+        raise ValueError(f"operations share an id: {', '.join(dupes)}")
+
+    _deadlines_within(operations, "the run")
+    held = set(operations)
+
+    for plan in workflow.cleanup:
+        _bounded(plan)
+        _armed_within(plan, held)
+
+
+def _usable(seconds: float) -> bool:
+    """Test whether a timeout is finite and positive."""
+    return math.isfinite(seconds) and seconds > 0
+
+
+def _deadlines_within(operations: Iterable[Operation], graph: str) -> None:
+    """Validate numeric operation deadlines, allowing `None` for unbounded
+    work.
+
+    Raises:
+        ValueError: A numeric deadline is not finite and positive.
+    """
+    for operation in operations:
+        if operation.timeout_s is not None and not _usable(operation.timeout_s):
+            raise ValueError(
+                f"operation '{operation.id}' in {graph} resolved to a deadline "
+                f"of {operation.timeout_s} seconds")
+
+
+
+
+
+
+def _operations(graph: Graph) -> Iterator[Operation]:
+    """Yield operation payloads, skipping ordering nodes."""
+    for node in graph.nodes:
+        if isinstance(node.payload, Operation):
+            yield node.payload
+
+
+def format_command(command: DeviceCommand) -> str:
+    """Format a command name and its nondefault arguments for logs and
+    audits.
+
+    Serialize nested models as values and exclude the command discriminator.
+    """
+    args = ", ".join(
+        f"{k}={v!r}" for k, v in
+        command.model_dump(mode="json", exclude={"command_id"},
+                           exclude_defaults=True).items())
+
+    return f"{command.model_tag()}({args})" if args else command.model_tag()
