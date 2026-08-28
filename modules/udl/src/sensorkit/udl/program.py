@@ -223,22 +223,18 @@ class UDLProgram:
         self, endpoint: UDLEndpointConfig, username: str | None, password: str | None
     ) -> AsyncUnifieddatalibrary:
         """Create a `udl_sdk` client."""
-        if self._use_certs(endpoint):
-            http_client = httpx.AsyncClient(
-                cert=(endpoint.client_cert, endpoint.client_key),
-                verify=endpoint.client_verify,
-                timeout=endpoint.timeout,
-            )
+        use_certs = self._use_certs(endpoint)
+        http_client = httpx.AsyncClient(
+            verify=endpoint.client_verify,
+            cert=(endpoint.client_cert, endpoint.client_key) if use_certs else None,
+            timeout=endpoint.timeout,
+        )
+
+        if use_certs:
             return AsyncUnifieddatalibrary(
                 http_client=http_client,
                 base_url=endpoint.base_url,
             )
-
-        client_kwargs: dict[str, Any] = {"timeout": endpoint.timeout}
-        if endpoint.base_url:
-            client_kwargs["base_url"] = endpoint.base_url
-        if not endpoint.client_verify:
-            client_kwargs["http_client"] = httpx.AsyncClient(verify=False)
 
         if not (username and password):
             logger.warning(
@@ -247,7 +243,10 @@ class UDLProgram:
             )
 
         return AsyncUnifieddatalibrary(
-            username=username, password=password, **client_kwargs
+            username=username,
+            password=password,
+            http_client=http_client,
+            base_url=endpoint.base_url,
         )
 
     @sk.on_attach
