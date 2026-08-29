@@ -16,8 +16,8 @@ import sensorkit.api as sk
 from sensorkit.astro.common import TLE, ReferenceFrame
 from sensorkit.astro.coords import Equatorial, Horizontal
 from sensorkit.astro.target import AltAzTarget, ICRSTarget, RateTarget, Target, TLETarget
-from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.burr.models import CollectConfig
+from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.std import CameraParameterSet, FrameType, StandardCollectTask
 
 # Produces e.g. `20260424T031530_photometric_standards_110-364_f0.fits`.
