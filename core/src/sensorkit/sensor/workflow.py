@@ -17,6 +17,7 @@ Omissions are recorded separately from operator-imposed outcomes.
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping
@@ -25,10 +26,15 @@ from typing import Literal
 
 from pydantic import BaseModel, model_validator
 
-from sensorkit.common.dag import Graph, GraphBuilder
+from sensorkit.common.dag import (
+    Graph,
+    GraphBuilder,
+    NodeOverride,
+    OnFailure,
+)
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceCommand
-from sensorkit.sensor.selection import PlacementFacts
+from sensorkit.sensor.selection import PlacementFacts, Selection
 from sensorkit.sensor.topology import (
     DeviceKey,
     Placement,
@@ -278,14 +284,123 @@ class DeadlineRule(BaseModel, frozen=True, extra="forbid"):
         return {**rest, "target": (key, None if key == "any" else v[key])}
 
 
+def _named_target(target: DeadlineTarget) -> str:
+    """Format a deadline target for a diagnostic message."""
+    kind, name = target
+
+    return kind if name is None else f"{kind} '{name}'"
 
 
+def resolve_deadline(command: str, target: Placement,
+                     stated: tuple[DeadlineRule, ...], explicit: float | None,
+                     facts: PlacementFacts) -> float | None:
+    """Resolve an operation timeout: explicit value, then rules naming the
+    command, then rules for every command, each by device, trait, any.
+
+    Return `None` if neither an explicit value nor a matching rule exists.
+    Lowering validates the result and stores it on the operation.
+
+    Raises:
+        ValueError: Multiple rules match at the winning specificity.
+    """
+    # Resolve only device, trait and universal targets.
+    if explicit is not None:
+        return explicit
+
+    named = tuple(r for r in stated if r.command == command)
+    every = tuple(r for r in stated if r.command is None)
+    traits = facts.traits(target)
+
+    for rules, rung in itertools.product((named, every),
+                                         ("device", "trait", "any")):
+        if matched := _addressing(rules, rung, target, traits):
+            return _the_rule(matched, command, target).seconds
+
+    return None
 
 
+def _addressing(rules: tuple[DeadlineRule, ...], rung: str, target: Placement,
+                traits: frozenset[TraitKey]) -> tuple[DeadlineRule, ...]:
+    """Return rules at one specificity that match the placement."""
+    match rung:
+        case "device":
+            return tuple(r for r in rules
+                         if r.target == ("device", target.device))
+        case "trait":
+            return tuple(r for r in rules if r.target[0] == "trait"
+                         and r.target[1] in traits)
+
+    return tuple(r for r in rules if r.target[0] == "any")
 
 
+def _the_rule(matched: tuple[DeadlineRule, ...], command: str,
+              target: Placement) -> DeadlineRule:
+    """Require exactly one matching rule at the winning specificity.
+
+    Raises:
+        ValueError: Multiple rules match the placement.
+    """
+    if len(matched) == 1:
+        return matched[0]
+
+    # Multiple traits may match; a device rule can disambiguate their deadlines.
+    named = ", ".join(sorted(_named_target(r.target) for r in matched))
+
+    raise ValueError(
+        f"'{command}' on '{target.device}' is given a deadline by {named}; "
+        f"nothing ranks them, so name the device instead")
 
 
+@dataclass(frozen=True)
+class OperatorRule:
+    """An explained override of selected operations' outcomes or failure
+    policy.
+
+    Set `select`, `commands`, or both; when both are set, both must match. An
+    `outcome` replaces dispatch with a recorded result and cannot be combined
+    with failure-policy changes. Capability omissions are recorded separately.
+    """
+
+    # Explain the operator decision in reports.
+    reason: str
+
+    select: Selection | None = None
+    commands: tuple[str, ...] = ()
+
+    outcome: Literal["ok", "skipped"] | None = None
+    fail_fast: bool | None = None
+    optional: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.select is None and not self.commands:
+            raise ValueError(
+                "an operator rule addresses nothing; set select or commands")
+
+        if (self.outcome, self.fail_fast, self.optional) == (None, None, None):
+            raise ValueError(
+                "an operator rule changes nothing; set outcome, fail_fast or "
+                "optional")
+
+        if self.outcome is not None and not (self.fail_fast is None
+                                             and self.optional is None):
+            raise ValueError(
+                "an operator rule sets an outcome and a failure policy; an "
+                "operation that will not be dispatched cannot fail")
+
+    def matches(self, step: PlannedStep, facts: PlacementFacts) -> bool:
+        """Test the command and placement filters against a planned step.
+
+        Ordering steps never match. Placement selection covers all commands on
+        that placement unless the rule also limits command identifiers.
+        """
+        if step.command is None or step.target is None:
+            return False
+
+        if self.select is not None and not self.select.matches(step.target,
+                                                               facts):
+            return False
+
+        return not self.commands or step.command.model_tag() in self.commands
 
 
 
@@ -346,7 +461,8 @@ def _compile(steps: tuple[PlannedStep, ...], facts: PlacementFacts,
 
         if step.command is not None and step.target is not None:
             payload = Operation.planned(
-                step, step.timeout_s)
+                step, resolve_deadline(step.command.model_tag(), step.target,
+                                       deadlines, step.timeout_s, facts))
             operations[step.name] = payload
 
         on_failure, optional, override = _effects(step, rules, facts)
@@ -491,10 +607,27 @@ def _merged(deps: list[Dependency]) -> tuple[Dependency, ...]:
                  for name, kind in kinds.items())
 
 
-def _effects(step: PlannedStep, rules, facts):
-    if rules:
-        raise NotImplementedError("Operator overrides are unavailable")
-    return ("stop" if step.fail_fast else "skip"), step.optional, None
+def _effects(step: PlannedStep, rules: tuple[OperatorRule, ...],
+             facts: PlacementFacts
+             ) -> tuple[OnFailure, bool, NodeOverride | None]:
+    """Resolve node failure policy and the first matching operator rule.
+
+    Fail-fast maps to `stop`; otherwise failures map to `skip`. Order operator
+    rules by precedence, since only the first match applies.
+    """
+    on_failure: OnFailure = "stop" if step.fail_fast else "skip"
+    rule = next((r for r in rules if r.matches(step, facts)), None)
+
+    if rule is None:
+        return on_failure, step.optional, None
+
+    if rule.fail_fast is not None:
+        on_failure = "stop" if rule.fail_fast else "skip"
+
+    return (on_failure,
+            step.optional if rule.optional is None else rule.optional,
+            NodeOverride(rule.outcome, rule.reason)
+            if rule.outcome is not None else None)
 
 
 

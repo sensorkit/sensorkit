@@ -9,11 +9,15 @@ Node ids follow emission order, and the tests read them that way.
 """
 from __future__ import annotations
 
+import math
+import re
 
 import pytest
 
 from sensorkit.common.dag import DagRunner
-from sensorkit.sensor.workflow import Dependency, Operation, Origin, PlannedStep, lower
+from sensorkit.common.keyword import KeywordDict
+from sensorkit.sensor.selection import HasTag, IsKind
+from sensorkit.sensor.workflow import Acquisition, DeadlineRule, Dependency, Operation, OperatorRule, Origin, PlannedStep, lower, resolve_deadline
 from sensorkit.std.traits import Connect, Deinit, Disconnect, Home, MoveToPark
 
 
@@ -271,6 +275,32 @@ def test_no_node_forgives_a_hard_edge(facts, at):
     assert all(n.on_failure != "continue" for n in workflow.graph.nodes)
 
 
+def test_every_planned_field_reaches_what_it_belongs_on(facts, at):
+    acquisition = Acquisition(request="r", index=0, frame_number=1,
+                              keywords=KeywordDict())
+    planned = PlannedStep(
+        name="a", origin=Origin(source="table", path=("connect", 0)),
+        group="connect", target=at("mount"), command=Home(),
+        deps=(Dependency(on="b", kind="completion"),), optional=True,
+        fail_fast=False, unsupported="omit", timeout_s=12.0,
+        acquisition=acquisition, delay_s=1.5)
+    workflow = built(facts, planned, step("b", at("dome"), Connect()))
+
+    node = workflow.graph.nodes[0]
+    operation = node.payload
+
+    assert node.group == "connect"
+    assert node.optional
+    assert node.on_failure == "skip"
+    assert node.delay_s == 1.5
+    assert workflow.graph.deps[0] == frozenset({1})
+    assert workflow.graph.hard[0] == frozenset()
+    assert operation.target == at("mount")
+    assert operation.origin == planned.origin
+    assert operation.timeout_s == 12.0
+    assert operation.acquisition is acquisition
+    assert operation.id == "table/connect/0@mount"
+    assert "Home" in node.label
 
 
 def test_the_planned_command_is_copied(facts, at):
@@ -290,29 +320,112 @@ def test_the_planned_command_is_copied(facts, at):
 # Operator rules
 
 
+def test_an_operator_rule_is_the_only_source_of_an_override(facts, at):
+    rule = OperatorRule(reason="mount is on a lift", commands=("Home",),
+                        outcome="skipped")
+    workflow = built(facts,
+                     step("a", at("mount"), Home()),
+                     step("b", at("mount"), Connect()), rules=(rule,))
+
+    assert workflow.graph.nodes[0].override.outcome == "skipped"
+    assert workflow.graph.nodes[0].override.reason == "mount is on a lift"
+    assert workflow.graph.nodes[1].override is None
 
 
+def test_an_operator_rule_amends_the_failure_policy(facts, at):
+    rule = OperatorRule(reason="homing is advisory here",
+                        select=HasTag(tag="primary"), optional=True,
+                        fail_fast=False)
+    workflow = built(facts, step("a", at("mount"), Home()), rules=(rule,))
+
+    assert workflow.graph.nodes[0].optional
+    assert workflow.graph.nodes[0].on_failure == "skip"
+    assert workflow.graph.nodes[0].override is None
 
 
+def test_an_operator_rule_reaches_no_ordering_step(facts):
+    rule = OperatorRule(reason="everything selectable", select=IsKind(kind="any"),
+                        outcome="ok")
+    workflow = built(facts, step("align"), rules=(rule,))
+
+    assert workflow.graph.nodes[0].override is None
 
 
+def test_a_rule_answers_its_selection_where_the_step_lands(facts, at):
+    rule = OperatorRule(reason="not the mount", select=HasTag(tag="primary"),
+                        outcome="skipped")
+    workflow = built(facts,
+                     step("a", at("mount"), Connect()),
+                     step("b", at("dome"), Connect()), rules=(rule,))
+
+    assert workflow.graph.nodes[0].override is not None
+    assert workflow.graph.nodes[1].override is None
 
 
+@pytest.mark.parametrize("kwargs,message", [
+    ({}, "addresses nothing"),
+    ({"commands": ("Home",)}, "changes nothing"),
+    ({"commands": ("Home",), "outcome": "ok", "optional": True},
+     "cannot fail"),
+])
+def test_a_rule_must_address_and_change_something(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        OperatorRule(reason="because", **kwargs)
 
 
 # Deadlines
 
 
+def rule_for(command: str, seconds: float, **target) -> DeadlineRule:
+    return DeadlineRule.model_validate({"command": command,
+                                        "seconds": seconds, **target})
 
 
+def test_precedence_is_explicit_then_device_then_trait_then_any(facts, at):
+    stated = (rule_for("Connect", 10.0, any=True),
+              rule_for("Connect", 20.0, trait="MustConnect"),
+              rule_for("Connect", 30.0, device="mount"))
+    mount = at("mount")
+
+    assert resolve_deadline("Connect", mount, stated, 5.0, facts) == 5.0
+    assert resolve_deadline("Connect", mount, stated, None, facts) == 30.0
+    assert resolve_deadline("Connect", mount, stated[:2], None, facts) == 20.0
+    assert resolve_deadline("Connect", mount, stated[:1], None, facts) == 10.0
+    assert resolve_deadline("Connect", mount, (), None, facts) is None
 
 
+def test_a_rule_for_every_command_yields_to_any_rule_naming_it(facts, at):
+    default = DeadlineRule.model_validate({"device": "mount", "seconds": 90.0})
+    named = rule_for("Connect", 10.0, any=True)
+    mount = at("mount")
+
+    assert resolve_deadline("Connect", mount, (default,), None, facts) == 90.0
+    assert resolve_deadline("Home", mount, (default,), None, facts) == 90.0
+    assert resolve_deadline("Connect", mount, (default, named), None,
+                            facts) == 10.0
+    assert resolve_deadline("Connect", at("dome"), (default,), None,
+                            facts) is None
 
 
+def test_a_rule_for_another_command_does_not_answer(facts, at):
+    stated = (rule_for("Home", 30.0, device="mount"),)
+
+    assert resolve_deadline("Connect", at("mount"), stated, None, facts) is None
 
 
+def test_two_trait_rules_matching_one_placement_raise(facts, at):
+    stated = (rule_for("Connect", 20.0, trait="MustConnect"),
+              rule_for("Connect", 40.0, trait="MustEnable"))
+
+    with pytest.raises(ValueError, match="nothing ranks them"):
+        resolve_deadline("Connect", at("dome"), stated, None, facts)
 
 
+def test_the_resolved_deadline_is_on_the_operation(facts, at):
+    workflow = built(facts, step("a", at("mount"), Connect()),
+                     deadlines=(rule_for("Connect", 30.0, device="mount"),))
+
+    assert workflow.graph.nodes[0].payload.timeout_s == 30.0
 
 
 # Cleanup
@@ -335,10 +448,20 @@ def test_the_planned_command_is_copied(facts, at):
 # The compiled workflow holds together
 
 
+UNUSABLE = pytest.mark.parametrize(
+    "seconds", [0.0, -1.0, math.nan, math.inf, -math.inf])
 
 
+def rejects(named: str, seconds: float):
+    """Expect a deadline error naming what carried it and the value."""
+    return pytest.raises(ValueError, match=rf"{re.escape(named)}.* "
+                                           rf"of {re.escape(str(seconds))} s")
 
 
+@UNUSABLE
+def test_an_unusable_deadline_in_the_run_is_rejected(facts, at, seconds):
+    with rejects("operation 'test/a@mount' in the run", seconds):
+        built(facts, step("a", at("mount"), Connect(), timeout_s=seconds))
 
 
 
