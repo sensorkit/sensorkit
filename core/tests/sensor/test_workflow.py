@@ -17,7 +17,18 @@ import pytest
 from sensorkit.common.dag import DagRunner
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.sensor.selection import HasTag, IsKind
-from sensorkit.sensor.workflow import Acquisition, DeadlineRule, Dependency, Operation, OperatorRule, Origin, PlannedStep, lower, resolve_deadline
+from sensorkit.sensor.workflow import (
+    Acquisition,
+    CleanupPlan,
+    DeadlineRule,
+    Dependency,
+    Operation,
+    OperatorRule,
+    Origin,
+    PlannedStep,
+    lower,
+    resolve_deadline,
+)
 from sensorkit.std.traits import Connect, Deinit, Disconnect, Home, MoveToPark
 
 
@@ -431,18 +442,62 @@ def test_the_resolved_deadline_is_on_the_operation(facts, at):
 # Cleanup
 
 
+def plan(*steps: PlannedStep, **kw) -> CleanupPlan:
+    return CleanupPlan(steps=steps, origin=Origin(source="halt"), **kw)
 
 
+def test_a_cleanup_compiles_into_its_own_graph(facts, at):
+    workflow = built(facts, step("a", at("mount"), Connect()),
+                     cleanup=(plan(step("stop", at("mount"), Home()),
+                                   when="failure", timeout_s=9.0),))
+    cleanup = workflow.cleanup[0]
+
+    assert len(cleanup.graph.nodes) == 1
+    assert cleanup.when == "failure"
+    assert cleanup.timeout_s == 9.0
+    assert cleanup.origin.source == "halt"
 
 
+def test_arming_resolves_to_the_operations_the_steps_became(facts, at):
+    workflow = built(facts, step("a", at("mount"), Connect()),
+                     cleanup=(plan(step("stop", at("mount"), Home()),
+                                   armed_by=("a",)),))
+
+    assert workflow.cleanup[0].armed_by == (workflow.graph.nodes[0].payload,)
 
 
+def test_unconditional_and_never_armed_cleanup_stay_apart(facts, at):
+    workflow = built(facts, step("a", at("mount"), Connect()),
+                     cleanup=(plan(step("x", at("mount"), Home())),
+                              plan(step("y", at("mount"), Home()),
+                                   armed_by=())))
+
+    assert workflow.cleanup[0].armed_by is None
+    assert workflow.cleanup[1].armed_by == ()
 
 
+def test_arming_on_a_step_that_omitted_arms_nothing(facts, at):
+    workflow = built(facts, omitted("a", at),
+                     cleanup=(plan(step("stop", at("mount"), Home()),
+                                   armed_by=("a",)),))
+
+    # Not unconditional, and never the omitted step's own dependencies.
+    assert workflow.cleanup[0].armed_by == ()
 
 
+def test_arming_on_a_step_the_run_does_not_hold_raises(facts, at):
+    with pytest.raises(ValueError, match="arms on steps the run does not hold"):
+        built(facts, step("a", at("mount"), Connect()),
+              cleanup=(plan(step("stop", at("mount"), Home()),
+                            armed_by=("ghost",)),))
 
 
+def test_a_cleanup_omission_is_recorded_on_the_workflow(facts, at):
+    workflow = built(facts, step("a", at("mount"), Connect()),
+                     cleanup=(plan(omitted("stop", at)),))
+
+    assert workflow.omissions[0].command == "Disconnect"
+    assert workflow.cleanup[0].graph.nodes == ()
 
 
 # The compiled workflow holds together
@@ -464,14 +519,61 @@ def test_an_unusable_deadline_in_the_run_is_rejected(facts, at, seconds):
         built(facts, step("a", at("mount"), Connect(), timeout_s=seconds))
 
 
+@UNUSABLE
+def test_an_unusable_deadline_in_a_cleanup_is_rejected(facts, at, seconds):
+    with rejects("operation 'test/stop@mount' in cleanup 'halt'", seconds):
+        built(facts, step("a", at("mount"), Connect()),
+              cleanup=(plan(step("stop", at("mount"), Home(),
+                                 timeout_s=seconds)),))
 
 
+@UNUSABLE
+def test_an_unusable_configured_deadline_is_rejected_in_a_cleanup(facts, at,
+                                                                  seconds):
+    # The run's Connect has no rule, so only the cleanup's Home resolves one.
+    with rejects("operation 'test/stop@mount' in cleanup 'halt'", seconds):
+        built(facts, step("a", at("mount"), Connect()),
+              cleanup=(plan(step("stop", at("mount"), Home())),),
+              deadlines=(rule_for("Home", seconds, device="mount"),))
 
 
+@UNUSABLE
+@pytest.mark.parametrize("shape", ["empty", "omitted", "populated"])
+def test_an_unusable_cleanup_bound_is_rejected(facts, at, seconds, shape):
+    match shape:
+        case "empty":
+            steps = ()
+        case "omitted":
+            steps = (omitted("stop", at),)
+        case _:
+            steps = (step("stop", at("mount"), Home()),)
+
+    with rejects("cleanup 'halt' has a total deadline", seconds):
+        built(facts, step("a", at("mount"), Connect()),
+              cleanup=(plan(*steps, timeout_s=seconds),))
 
 
+def test_usable_and_absent_deadlines_are_kept_in_both_graphs(facts, at):
+    workflow = built(facts, step("a", at("mount"), Connect(), timeout_s=0.5),
+                     step("b", at("mount"), Home()),
+                     cleanup=(plan(step("stop", at("mount"), Home(),
+                                        timeout_s=2.0),
+                                   step("off", at("mount"), Connect())),))
+    cleanup = workflow.cleanup[0].graph
+
+    assert [n.payload.timeout_s for n in workflow.graph.nodes] == [0.5, None]
+    assert [n.payload.timeout_s for n in cleanup.nodes] == [2.0, None]
 
 
+def test_a_command_may_be_allowed_longer_than_its_cleanup(facts, at):
+    workflow = built(facts, step("a", at("mount"), Connect()),
+                     cleanup=(plan(step("stop", at("mount"), Home(),
+                                        timeout_s=120.0), timeout_s=5.0),))
+    cleanup = workflow.cleanup[0]
+
+    # Both bounds survive unclamped, since execution enforces each.
+    assert cleanup.timeout_s == 5.0
+    assert cleanup.graph.nodes[0].payload.timeout_s == 120.0
 
 
 def test_provenance_and_name_are_carried(facts, at):

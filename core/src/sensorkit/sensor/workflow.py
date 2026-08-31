@@ -403,8 +403,71 @@ class OperatorRule:
         return not self.commands or step.command.model_tag() in self.commands
 
 
+@dataclass(frozen=True)
+class Cleanup:
+    """A separate graph eligible to run after the main graph drains.
+
+    `when` selects by run outcome. Domain aborts select `cancelled` cleanup;
+    hard cancellation skips all cleanup, including `always`.
+
+    `armed_by` uses operation identity: `None` is always armed, an empty tuple
+    is never armed, and any attempted trigger arms a nonempty tuple. Attempts
+    count even when they fail, since hardware may already have started moving.
+
+    `timeout_s` bounds the whole graph independently of per-operation
+    deadlines. Cleanup is not durable crash recovery; keep it to stopping
+    ongoing work and leave recovery to the agent.
+    """
+
+    graph: Graph
+    when: Literal["always", "failure", "cancelled",
+                  "failure_or_cancelled"]
+    timeout_s: float
+    origin: Origin
+    armed_by: tuple[Operation, ...] | None = None
+
+    def selected(self, failed: bool, aborted: bool) -> bool:
+        """Test whether the run outcome satisfies `when`.
+
+        `failure_or_cancelled` selects on either required failure or domain
+        abort, but still represents one cleanup graph.
+        """
+        match self.when:
+            case "always":
+                return True
+            case "failure":
+                return failed
+            case "cancelled":
+                return aborted
+            case "failure_or_cancelled":
+                return failed or aborted
+
+    def armed(self, attempted: set[Operation]) -> bool:
+        """Test whether cleanup is unconditional or one of its triggers was
+        attempted.
+        """
+        if self.armed_by is None:
+            return True
+
+        return any(operation in attempted for operation in self.armed_by)
 
 
+@dataclass(frozen=True)
+class CleanupPlan:
+    """Planned cleanup steps with outcome, timeout and arming conditions.
+
+    `armed_by` names main-workflow steps until lowering resolves operations.
+    `None` is always armed; an empty tuple is never armed. Omitted triggers do
+    not arm cleanup, and omitting every trigger preserves the empty tuple. The
+    whole-graph timeout must be finite and positive, even for an empty graph.
+    """
+
+    steps: tuple[PlannedStep, ...]
+    origin: Origin
+    when: Literal["always", "failure", "cancelled",
+                  "failure_or_cancelled"] = "always"
+    timeout_s: float = 60.0
+    armed_by: tuple[StepName, ...] | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -428,13 +491,37 @@ class ExecutableWorkflow:
 
 
 def lower(name: str, steps: tuple[PlannedStep, ...], facts: PlacementFacts, *,
-          provenance: str = "", cleanup=(), deadlines=(), rules=()) -> ExecutableWorkflow:
-    if cleanup:
-        raise NotImplementedError("Cleanup lowering is unavailable")
-    graph, _, omissions = _compile(steps, facts, deadlines, rules)
-    workflow = ExecutableWorkflow(name=name, graph=graph,
-                                  provenance=provenance, omissions=omissions)
+          provenance: str = "",
+          cleanup: tuple[CleanupPlan, ...] = (),
+          deadlines: tuple[DeadlineRule, ...] = (),
+          rules: tuple[OperatorRule, ...] = ()) -> ExecutableWorkflow:
+    """Build executable main and cleanup graphs from planned steps.
+
+    Both compilers use this pass for capability omission, deadline resolution,
+    operator rules and failure policy. It contacts no devices.
+
+    Raises:
+        ValueError: Step names or dependencies are invalid, a required command
+            is unsupported, deadlines are invalid, operation labels repeat,
+            cleanup triggers are outside the main graph, or a graph is cyclic.
+    """
+    graph, operations, omissions = _compile(steps, facts, deadlines, rules)
+    plans: list[Cleanup] = []
+    refused = list(omissions)
+
+    for plan in cleanup:
+        teardown, _, unbuilt = _compile(plan.steps, facts, deadlines, rules)
+        refused += unbuilt
+        plans.append(Cleanup(
+            graph=teardown, when=plan.when, timeout_s=plan.timeout_s,
+            origin=plan.origin, armed_by=_arming(plan, steps, operations)))
+
+    workflow = ExecutableWorkflow(
+        name=name, graph=graph, provenance=provenance, cleanup=tuple(plans),
+        omissions=tuple(refused))
+
     _validated(workflow)
+
     return workflow
 
 
@@ -630,6 +717,29 @@ def _effects(step: PlannedStep, rules: tuple[OperatorRule, ...],
             if rule.outcome is not None else None)
 
 
+def _arming(plan: CleanupPlan, steps: tuple[PlannedStep, ...],
+            operations: Mapping[StepName, Operation]
+            ) -> tuple[Operation, ...] | None:
+    """Resolve named cleanup triggers to emitted main-workflow operations.
+
+    Omitted and ordering steps contribute no trigger. An empty result remains
+    never armed; it does not become unconditional or inherit dependencies.
+
+    Raises:
+        ValueError: A trigger names a step outside the main workflow.
+    """
+    if plan.armed_by is None:
+        return None
+
+    unknown = sorted(set(plan.armed_by) - {s.name for s in steps})
+
+    if unknown:
+        raise ValueError(
+            f"cleanup '{plan.origin.source}' arms on steps the run does not "
+            f"hold: {', '.join(unknown)}")
+
+    return tuple(operations[name] for name in plan.armed_by
+                 if name in operations)
 
 
 def _validated(workflow: ExecutableWorkflow) -> None:
@@ -675,8 +785,35 @@ def _deadlines_within(operations: Iterable[Operation], graph: str) -> None:
                 f"of {operation.timeout_s} seconds")
 
 
+def _bounded(plan: Cleanup) -> None:
+    """Validate a cleanup graph's timeout and its operation deadlines
+    separately.
+
+    Raises:
+        ValueError: The total timeout or a numeric operation deadline is
+            invalid.
+    """
+    named = f"cleanup '{plan.origin.source}'"
+
+    if not _usable(plan.timeout_s):
+        raise ValueError(
+            f"{named} has a total deadline of {plan.timeout_s} seconds")
+
+    _deadlines_within(_operations(plan.graph), named)
 
 
+def _armed_within(plan: Cleanup, held: set[Operation]) -> None:
+    """Check that cleanup triggers belong to the main graph.
+
+    Raises:
+        ValueError: A trigger operation is outside the graph.
+    """
+    outside = [op.id for op in plan.armed_by or () if op not in held]
+
+    if outside:
+        raise ValueError(
+            f"cleanup '{plan.origin.source}' arms on operations the run does "
+            f"not hold: {', '.join(outside)}")
 
 
 def _operations(graph: Graph) -> Iterator[Operation]:
