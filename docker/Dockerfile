@@ -59,4 +59,11 @@ FROM python:3.13-slim
 COPY --from=deps    /usr/local /usr/local
 COPY --from=builder /staging   /usr/local
 
+RUN useradd --create-home --uid 1000 sensorkit \
+    && mkdir -p /opt/data \
+    && chown sensorkit:sensorkit /opt/data
+
+USER sensorkit
+WORKDIR /home/sensorkit
+
 ENTRYPOINT ["sensorkit"]

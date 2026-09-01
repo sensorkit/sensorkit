@@ -23,3 +23,8 @@ FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 
 COPY --from=build /app/ASCOM.Alpaca.Simulators/out ./
+
+RUN useradd --create-home --uid 1001 ascom \
+    && chown -R ascom:ascom /app
+
+USER ascom

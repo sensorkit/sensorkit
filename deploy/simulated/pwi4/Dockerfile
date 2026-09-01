@@ -41,14 +41,17 @@ RUN apt-get update \
 EXPOSE 6080/tcp
 EXPOSE 8220/tcp
 
-WORKDIR /root
+RUN useradd --create-home --uid 1001 pwi \
+    && chown -R pwi:pwi $PWI_PATH
+
+USER pwi
+WORKDIR /home/pwi
 
 RUN mkdir -p "PlaneWave Instruments/PWI4"
 
-COPY run-pwi.sh .
-COPY novnc_server .
-COPY ["Settings", "PlaneWave Instruments/PWI4/Settings"]
+COPY --chown=pwi:pwi run-pwi.sh .
+COPY --chown=pwi:pwi novnc_server .
+COPY --chown=pwi:pwi ["Settings", "PlaneWave Instruments/PWI4/Settings"]
 
-RUN chmod +x /root/novnc_server
-RUN chmod +x /root/run-pwi.sh
-CMD ["/root/run-pwi.sh"]
+RUN chmod +x novnc_server run-pwi.sh
+CMD ["/home/pwi/run-pwi.sh"]
