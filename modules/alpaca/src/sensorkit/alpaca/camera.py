@@ -443,8 +443,9 @@ class AlpacaCamera(AlpacaDevice):
                     context.set_value("gps_seqn", gps_meta.get("GPS-SEQN"))
                     context.set_value("gps_lat", gps_meta.get("GPS-LAT"))
                     context.set_value("gps_lon", gps_meta.get("GPS-LON"))
-        except Exception:
-            pass  # Camera doesn't support this endpoint — defaults remain None
+        except Exception as e:
+            # Most often the camera has no such endpoint, so the defaults stand.
+            logger.opt(exception=e).debug(f"{self.device_name} gps metadata read failed")
 
         if not context.get(FileNameTemplate):
             context.set(FileNameTemplate(template=f"{uuid.uuid1()}.fits"))
