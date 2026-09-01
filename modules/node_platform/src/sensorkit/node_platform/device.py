@@ -7,6 +7,7 @@ from typing import Any, ClassVar, Literal
 
 import ourskyai_node_platform_api as osapi
 from dotenv import dotenv_values
+from loguru import logger
 from pydantic import BaseModel
 
 
@@ -106,8 +107,8 @@ class NodePlatformAPI:
     async def close(self) -> None:
         try:
             self._client.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.opt(exception=e).debug("error closing the Node Platform client")
 
 
 class NodePlatformDeviceConfig[T: NodePlatformDevice = NodePlatformDevice](BaseModel):
