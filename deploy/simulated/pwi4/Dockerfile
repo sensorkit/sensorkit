@@ -22,9 +22,11 @@ RUN apt-get update \
 
 ENV PWI_VERSION=4.1.6final
 ENV PWI_PATH=/opt/pwi-$PWI_VERSION
+ARG PWI_SHA256=1f6cfdc55a62a93c4488a5724cdf2cda70ba83f81d5cd2ad507ed782c50d7ae8
 
 RUN mkdir -p $PWI_PATH && \
-    wget http://planewave.com/files/software/PWI4/pwi-$PWI_VERSION.tar.gz && \
+    wget https://planewave.com/files/software/PWI4/pwi-$PWI_VERSION.tar.gz && \
+    echo "$PWI_SHA256  /pwi-$PWI_VERSION.tar.gz" | sha256sum -c - && \
     (cd ${PWI_PATH%/*} && tar xzf /pwi-$PWI_VERSION.tar.gz) && \
     rm /pwi-$PWI_VERSION.tar.gz
 

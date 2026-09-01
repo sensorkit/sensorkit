@@ -1,4 +1,4 @@
-FROM alpine:latest AS base
+FROM alpine:3.24 AS base
 
 ARG package_url="https://github.com/ASCOMInitiative/ASCOM.Alpaca.Simulators/archive/refs/tags/v0.4.0.tar.gz"
 ARG tar_opts="-z"
