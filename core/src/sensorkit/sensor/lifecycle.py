@@ -18,6 +18,7 @@ that should keep going needs completion sequencing and non-fail-fast policy.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, model_validator
@@ -27,6 +28,7 @@ from sensorkit.core.device import DeviceCommand
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.selection import AnySelection
 from sensorkit.sensor.topology import Placement
+from sensorkit.sensor.workflow import DeadlineRule, Dependency, ExecutableWorkflow, OperatorRule, Origin, PlannedStep, StepName, lower
 
 
 def _accept_str_command(v: object) -> object:
@@ -278,8 +280,248 @@ class LifecycleWorkflow(BaseModel, frozen=True, extra="forbid"):
         return deps
 
 
+def compile_lifecycle(workflow: LifecycleWorkflow, sensor: BoundSensor, *,
+                      deadlines: tuple[DeadlineRule, ...] = (),
+                      rules: tuple[OperatorRule, ...] = ()
+                      ) -> ExecutableWorkflow:
+    """Compile a lifecycle table against a bound sensor without device
+    calls.
+
+    The result includes capability provenance and can be inspected before
+    running.
+
+    Raises:
+        ValueError: References or declaration order are invalid, entries
+            overlap or select nothing, joins match no operations, a required
+            command is unsupported, or shared lowering rejects the workflow.
+    """
+    return TableCompiler(workflow, sensor, deadlines=deadlines,
+                         rules=rules).run()
 
 
+class TableCompiler:
+    """Single-use state for expanding a table into planned steps.
+
+    Phases may reference earlier phases; entries may also reference peers in
+    their own phase. Dependencies are accumulated separately, then attached to
+    frozen steps before shared lowering.
+    """
+
+    def __init__(self, table: LifecycleWorkflow, sensor: BoundSensor, *,
+                 deadlines: tuple[DeadlineRule, ...] = (),
+                 rules: tuple[OperatorRule, ...] = ()):
+        self.table = table
+        self.sensor = sensor
+        self.deadlines = deadlines
+        self.rules = rules
+        self.steps: list[PlannedStep] = []
+        self.deps: dict[StepName, list[Dependency]] = {}
+        self.where: dict[StepName, Placement] = {}
+        self.phase_steps: dict[str, list[StepName]] = {}
+        self.phase_after: dict[str, tuple[str, ...]] = {}
+        self.entry_steps: dict[str, list[StepName]] = {}
+        self.entry_phase: dict[str, str] = {}
+        self.emitted = 0
+
+    def run(self) -> ExecutableWorkflow:
+        """Expand phases and cleanup specs, then lower their planned steps."""
+        previous: str | None = None
+
+        for phase in self.table.phases:
+            self._compile_phase(phase, previous)
+            previous = phase.name
+
+        # Compile cleanup after all main-workflow trigger entries are indexed.
+        plans = tuple(self._cleanup(spec) for spec in self.table.cleanup)
+
+        return lower(self.table.name, self._settled(self.steps), self.sensor,
+                     provenance=self.sensor.capabilities.provenance,
+                     cleanup=plans,
+                     deadlines=self.deadlines, rules=self.rules)
+
+    def _compile_phase(self, phase: Phase, previous: str | None) -> None:
+        """Emit a phase and attach inherited and explicit dependencies."""
+        where = f"phase '{phase.name}'"
+        after = self._declare_phase(phase, previous)
+        chosen = self._selected(phase.entries, where)
+        heads: list[tuple[Entry, Placement, StepName]] = []
+
+        for position, entry in enumerate(phase.entries):
+            emitted, entry_heads = self._emit_entry(
+                entry, chosen[position], self._soft_links(entry, after, where),
+                group=phase.name, origin=(phase.name, entry.id or position),
+                stated=phase.fail_fast)
+            self.steps += emitted
+            heads += [(entry, placement, head)
+                      for placement, head in entry_heads]
+            names = [step.name for step in emitted]
+            self.phase_steps[phase.name] += names
+
+            if entry.id is not None:
+                self.entry_steps.setdefault(entry.id, []).extend(names)
+
+        self._resolve_requires(heads, where)
+
+    def _declare_phase(self, phase: Phase,
+                       previous: str | None) -> tuple[str, ...]:
+        """Register a phase and its entry ids before emitting operations.
+
+        Registering peer ids first allows requirements to reference later
+        entries in the same phase.
+
+        Raises:
+            ValueError: Names repeat or `after` references an undeclared phase.
+        """
+        if phase.name in self.phase_steps:
+            raise ValueError(f"duplicate phase name '{phase.name}'")
+
+        after = (phase.after if phase.after is not None
+                 else (previous,) if previous else ())
+        unknown = [name for name in after if name not in self.phase_steps]
+
+        if unknown:
+            raise ValueError(
+                f"phase '{phase.name}': after names unknown or later phase(s) "
+                f"{unknown}; phases may only follow earlier ones")
+
+        self.phase_after[phase.name] = after
+        self.phase_steps[phase.name] = []
+
+        for entry in phase.entries:
+            if entry.id is None:
+                continue
+
+            if entry.id in self.entry_phase:
+                raise ValueError(f"duplicate entry id '{entry.id}'")
+
+            self.entry_phase[entry.id] = phase.name
+
+        return after
+
+    def _selected(self, entries: tuple[Entry, ...],
+                  where: str) -> list[tuple[Placement, ...]]:
+        """Select targets for a group and check that entries do not overlap.
+
+        Check selection before unsupported-command omission.
+
+        Raises:
+            ValueError: An entry selects nothing or entries share a placement.
+        """
+        chosen = [self._targets(entry, where) for entry in entries]
+        reached: dict[Placement, Entry] = {}
+
+        for entry, targets in zip(entries, chosen, strict=True):
+            for placement in targets:
+                held = reached.setdefault(placement, entry)
+
+                if held is not entry:
+                    raise ValueError(
+                        f"{where}: '{placement.device}' is reached by two "
+                        f"entries, {held.describe()} and {entry.describe()}; "
+                        f"narrow one with exclude")
+
+        return chosen
+
+    def _targets(self, entry: Entry, where: str) -> tuple[Placement, ...]:
+        """Return an entry's targets in topology order.
+
+        Raises:
+            ValueError: The entry selects no placement on this sensor.
+        """
+        targets = entry.targets(self.sensor)
+
+        if not targets:
+            raise ValueError(
+                f"{where}: entry selects no device on this sensor "
+                f"({entry.describe()})")
+
+        return targets
+
+    def _soft_links(self, entry, after, where):
+        if entry.require:
+            raise NotImplementedError("Lifecycle joins are unavailable")
+        return list(dict.fromkeys(
+            name for phase in after for name in self._effective_steps(phase)))
+
+
+    def _effective_steps(self, phase: str) -> list[StepName]:
+        """Return a phase's steps, or recursively its predecessors when
+        empty.
+        """
+        names = self.phase_steps[phase]
+
+        if names:
+            return names
+
+        return list(dict.fromkeys(
+            name for followed in self.phase_after[phase]
+            for name in self._effective_steps(followed)))
+
+    def _emit_entry(self, entry: Entry, targets: tuple[Placement, ...],
+                    soft: list[StepName], *, group: str,
+                    origin: tuple[str | int, ...], stated: bool | None
+                    ) -> tuple[list[PlannedStep],
+                               list[tuple[Placement, StepName]]]:
+        """Emit serial commands per placement and return each placement's
+        first step.
+
+        Entry requirements attach to the first step; subsequent steps inherit
+        the wait through their sequence dependencies.
+        """
+        steps: list[PlannedStep] = []
+        heads: list[tuple[Placement, StepName]] = []
+
+        for placement in targets:
+            previous: StepName | None = None
+
+            for index, spec in enumerate(entry.ops):
+                step = self._step(spec, placement, group=group,
+                                  origin=origin + (index,), stated=stated)
+                self.deps[step.name] = (
+                    list(Dependency.completion(soft))
+                    if previous is None else
+                    [Dependency(on=previous, kind=spec.sequence)])
+
+                if previous is None:
+                    heads.append((placement, step.name))
+
+                previous = step.name
+                steps.append(step)
+
+        return steps, heads
+
+    def _step(self, spec: OpSpec, placement: Placement, *, group: str,
+              origin: tuple[str | int, ...],
+              stated: bool | None) -> PlannedStep:
+        """Build a planned command with a unique internal name and resolved
+        failure policy.
+        """
+        self.emitted += 1
+        step = PlannedStep(
+            name=f"{group}/{placement.device}/{self.emitted}",
+            origin=Origin(source=self.table.name, path=origin), group=group,
+            target=placement, command=spec.command, optional=spec.optional,
+            fail_fast=spec.effective_fail_fast(stated, self.table.fail_fast),
+            unsupported=spec.unsupported, timeout_s=spec.timeout_s)
+        self.where[step.name] = placement
+
+        return step
+
+    def _resolve_requires(self, heads, where):
+        if any(entry.require for entry, _, _ in heads):
+            raise NotImplementedError("Lifecycle joins are unavailable")
+
+
+
+    def _cleanup(self, spec):
+        raise NotImplementedError("Lifecycle cleanup is unavailable")
+
+
+
+    def _settled(self, steps: list[PlannedStep]) -> tuple[PlannedStep, ...]:
+        """Copy emitted steps with their accumulated dependencies attached."""
+        return tuple(replace(step, deps=tuple(self.deps[step.name]))
+                     for step in steps)
 
 
 def _unique(names: list[str], what: str) -> None:
