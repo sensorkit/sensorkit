@@ -60,8 +60,8 @@ COPY --from=deps    /usr/local /usr/local
 COPY --from=builder /staging   /usr/local
 
 RUN useradd --create-home --uid 1000 sensorkit \
-    && mkdir -p /opt/data \
-    && chown sensorkit:sensorkit /opt/data
+    && mkdir -p /opt/sk/data \
+    && chown sensorkit:sensorkit /opt/sk/data
 
 USER sensorkit
 WORKDIR /home/sensorkit
