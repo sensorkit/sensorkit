@@ -25,6 +25,15 @@ from sensorkit.sensor.binding import (
     CapabilitySnapshot,
 )
 from sensorkit.sensor.definition import SensorDefinition
+from sensorkit.sensor.lifecycle import (
+    CleanupSpec,
+    Entry,
+    Join,
+    LifecycleWorkflow,
+    OpSpec,
+    Phase,
+    compile_lifecycle,
+)
 from sensorkit.sensor.selection import (
     AnySelection,
     DeviceFacts,

@@ -28,7 +28,17 @@ from sensorkit.core.device import DeviceCommand
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.selection import AnySelection
 from sensorkit.sensor.topology import Placement
-from sensorkit.sensor.workflow import DeadlineRule, Dependency, ExecutableWorkflow, OperatorRule, Origin, PlannedStep, StepName, lower
+from sensorkit.sensor.workflow import (
+    CleanupPlan,
+    DeadlineRule,
+    Dependency,
+    ExecutableWorkflow,
+    OperatorRule,
+    Origin,
+    PlannedStep,
+    StepName,
+    lower,
+)
 
 
 def _accept_str_command(v: object) -> object:
@@ -437,12 +447,38 @@ class TableCompiler:
 
         return targets
 
-    def _soft_links(self, entry, after, where):
-        if entry.require:
-            raise NotImplementedError("Lifecycle joins are unavailable")
-        return list(dict.fromkeys(
-            name for phase in after for name in self._effective_steps(phase)))
+    def _soft_links(self, entry: Entry, after: tuple[str, ...],
+                    where: str) -> list[StepName]:
+        """Collect inherited phase waits that explicit requirements do not
+        replace.
 
+        A requirement on a followed phase, or one of its entries, replaces that
+        phase's blanket completion wait for this entry.
+
+        Raises:
+            ValueError: A requirement names an unknown or later phase or entry.
+        """
+        shadowed = {self._declaring_phase(clause.name, where)
+                    for clause in entry.require} & set(after)
+
+        return list(dict.fromkeys(
+            name for followed in after if followed not in shadowed
+            for name in self._effective_steps(followed)))
+
+    def _declaring_phase(self, target: str, where: str) -> str:
+        """Return a target phase or the phase declaring a target entry.
+
+        Raises:
+            ValueError: The target has not been declared.
+        """
+        if target in self.entry_phase:
+            return self.entry_phase[target]
+
+        if target in self.phase_after:
+            return target
+
+        raise ValueError(
+            f"{where}: require names unknown or later phase/entry '{target}'")
 
     def _effective_steps(self, phase: str) -> list[StepName]:
         """Return a phase's steps, or recursively its predecessors when
@@ -507,16 +543,145 @@ class TableCompiler:
 
         return step
 
-    def _resolve_requires(self, heads, where):
-        if any(entry.require for entry, _, _ in heads):
-            raise NotImplementedError("Lifecycle joins are unavailable")
+    def _resolve_requires(self, heads: list[tuple[Entry, Placement, StepName]],
+                          where: str) -> None:
+        """Resolve entry requirements after emitting the whole phase,
+        including peers.
+        """
+        for entry, placement, head in heads:
+            for clause in entry.require:
+                named = (self.entry_steps.get(clause.name, [])
+                         if clause.name in self.entry_phase
+                         else self._effective_steps(clause.name))
+                self._join(clause, named, placement, head, where)
 
+    def _join(self, clause: Join, named: list[StepName], placement: Placement,
+              head: StepName, where: str) -> None:
+        """Filter a requirement's target steps and attach dependencies to
+        the entry head.
 
+        Raises:
+            ValueError: The target has no steps or the join selects none.
+        """
+        if not named:
+            raise ValueError(
+                f"{where}: require '{clause.name}' matches no step on this "
+                f"sensor")
 
-    def _cleanup(self, spec):
-        raise NotImplementedError("Lifecycle cleanup is unavailable")
+        narrowed = self._narrowed(clause, named, placement)
 
+        # An empty join would remove the inherited phase wait without replacing it.
+        if not narrowed:
+            raise ValueError(
+                f"{where}: require '{clause.name}' with join='{clause.join}' "
+                f"matches no step for '{placement.device}'")
 
+        self.deps[head] += [Dependency(on=name, kind=clause.on)
+                            for name in narrowed]
+
+    def _narrowed(self, clause: Join, named: list[StepName],
+                  placement: Placement) -> list[StepName]:
+        """Filter target steps by the clause's device or path relationship."""
+        match clause.join:
+            case "same-device":
+                return [name for name in named
+                        if self.where[name].device == placement.device]
+            case "same-chain":
+                return [name for name in named
+                        if placement.path[:len(self.where[name].path)] == self.where[name].path]
+
+        return named
+
+    def _cleanup(self, spec: CleanupSpec) -> CleanupPlan:
+        """Compile a cleanup spec with internal dependencies and main-graph
+        triggers.
+
+        No phase-order waits apply inside cleanup.
+
+        Raises:
+            ValueError: Entry ids or references are invalid, entries overlap or
+                select nothing, or a trigger names no main-workflow entry.
+        """
+        where = f"cleanup '{spec.name}'"
+        declared = self._declare_cleanup(spec, where)
+        chosen = self._selected(spec.entries, where)
+        steps: list[PlannedStep] = []
+        heads: list[tuple[Entry, Placement, StepName]] = []
+
+        for position, entry in enumerate(spec.entries):
+            emitted, entry_heads = self._emit_entry(
+                entry, chosen[position], [], group=spec.name,
+                origin=("cleanup", spec.name, entry.id or position),
+                stated=None)
+            steps += emitted
+            heads += [(entry, placement, head)
+                      for placement, head in entry_heads]
+
+            if entry.id is not None:
+                declared[entry.id] += [step.name for step in emitted]
+
+        for entry, placement, head in heads:
+            for clause in entry.require:
+                self._join(clause, declared[clause.name], placement, head,
+                           where)
+
+        return CleanupPlan(
+            steps=self._settled(steps), origin=Origin(source=spec.name),
+            when=spec.when, timeout_s=spec.timeout_s,
+            armed_by=self._arming(spec, where))
+
+    def _declare_cleanup(self, spec: CleanupSpec,
+                         where: str) -> dict[str, list[StepName]]:
+        """Register entry ids and validate requirements within one cleanup
+        spec.
+
+        Raises:
+            ValueError: Ids repeat or requirements reference entries outside
+                the spec.
+        """
+        declared: dict[str, list[StepName]] = {}
+
+        for entry in spec.entries:
+            if entry.id is None:
+                continue
+
+            if entry.id in declared:
+                raise ValueError(f"{where}: duplicate entry id '{entry.id}'")
+
+            declared[entry.id] = []
+
+        outside = sorted({clause.name for entry in spec.entries
+                          for clause in entry.require} - set(declared))
+
+        if outside:
+            raise ValueError(
+                f"{where}: require names entries outside it, "
+                f"{', '.join(outside)}; a cleanup is ordered against itself "
+                f"alone")
+
+        return declared
+
+    def _arming(self, spec: CleanupSpec,
+                where: str) -> tuple[StepName, ...] | None:
+        """Expand main-workflow entry ids into cleanup trigger step names.
+
+        Preserve `None` as unconditional and an empty tuple as never armed.
+
+        Raises:
+            ValueError: A trigger names an entry absent from the main workflow.
+        """
+        if spec.armed_by is None:
+            return None
+
+        unknown = sorted(set(spec.armed_by) - set(self.entry_phase))
+
+        if unknown:
+            raise ValueError(
+                f"{where}: armed_by names entries no phase declares, "
+                f"{', '.join(unknown)}")
+
+        return tuple(name for entry in spec.armed_by
+                     for name in self.entry_steps[entry])
 
     def _settled(self, steps: list[PlannedStep]) -> tuple[PlannedStep, ...]:
         """Copy emitted steps with their accumulated dependencies attached."""
