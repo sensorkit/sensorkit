@@ -30,8 +30,15 @@ from sensorkit.astro.coords import Horizontal
 from sensorkit.astro.target import AltAzTarget
 from sensorkit.core.entity import DeviceDetails
 from sensorkit.sensor.binding import BoundSensor, CapabilitySnapshot
+from sensorkit.sensor.collect import (
+    AcquisitionRequest,
+    CommandRequest,
+    InstrumentRequest,
+)
 from sensorkit.sensor.definition import SensorDefinition
+from sensorkit.sensor.selection import IsRef
 from sensorkit.sensor.topology import Placement, Structure, Topology
+from sensorkit.std.mount import FollowTarget
 
 SENSOR_YAML = Path(__file__).resolve().parent / "sensor.yaml"
 
@@ -115,3 +122,17 @@ def authored(*parts: str) -> SensorDefinition:
 
 def placement(sensor: BoundSensor, device: str) -> Placement:
     return next(p for p in sensor.topology.placements() if p.device == device)
+
+
+def asking(device: str, count: int = 1, **kw) -> InstrumentRequest:
+    """A request for frames from one named instrument."""
+    return InstrumentRequest(
+        id=f"{device}-frames", select=IsRef(device=device),
+        acquisition=AcquisitionRequest(integration_time_s=0.1, count=count),
+        **kw)
+
+
+def pointing(target=TARGET, **kw) -> CommandRequest:
+    """Following a target, commanded for the whole sensor."""
+    return CommandRequest(command=FollowTarget(target=target), subject="sensor",
+                          **kw)
