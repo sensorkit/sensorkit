@@ -36,9 +36,27 @@ from sensorkit.core.device import DeviceCommand
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.selection import Selection
 from sensorkit.sensor.topology import Placement, format_paths
-from sensorkit.sensor.workflow import Acquisition, RequestId, RoutedCommand, Scope, Subject, format_command, partition
+from sensorkit.sensor.workflow import (
+    Acquisition,
+    CleanupPlan,
+    DeadlineRule,
+    Dependency,
+    ExecutableWorkflow,
+    OperatorRule,
+    Origin,
+    PlannedStep,
+    RequestId,
+    RoutedCommand,
+    Scope,
+    StepName,
+    Subject,
+    format_command,
+    lower,
+    partition,
+)
 from sensorkit.std.collect import Collect as CollectKeyword
 from sensorkit.std.instrument import CameraCapture
+from sensorkit.std.optics import SelectPort
 
 
 class PackingConflict(ValueError):
@@ -702,3 +720,287 @@ def _exclusive(participants: tuple[Placement, ...], sensor: BoundSensor,
 def _asked(members: tuple[tuple[InstrumentRequest, RequestEpoch], ...]) -> str:
     """Format unique request ids in a group for diagnostics."""
     return ", ".join(sorted({f"'{member.id}'" for member, _ in members}))
+
+
+def compile_collect(collect: BoundCollect, sensor: BoundSensor, *,
+                    deadlines: tuple[DeadlineRule, ...] = (),
+                    rules: tuple[OperatorRule, ...] = ()
+                    ) -> ExecutableWorkflow:
+    """Compile a bound collect into executable graphs without contacting
+    devices.
+
+    Dependencies follow previously emitted steps. The result includes
+    capability provenance and can be inspected before execution.
+
+    Raises:
+        ValueError: Bound settings or participants conflict, commands are
+            unsupported, or shared lowering rejects the workflow.
+    """
+    return CollectCompiler(collect, sensor, deadlines=deadlines,
+                           rules=rules).run()
+
+
+class CollectCompiler:
+    """Single-use state for deriving collect dependencies and planned steps.
+
+    Track governing settings by placement and command type, latest operations
+    per device, and latest acquisitions per instrument. Shared lowering handles
+    omissions, deadlines, operator rules and graph construction.
+    """
+
+    def __init__(self, collect: BoundCollect, sensor: BoundSensor, *,
+                 deadlines: tuple[DeadlineRule, ...] = (),
+                 rules: tuple[OperatorRule, ...] = ()):
+        self.collect = collect
+        self.sensor = sensor
+        self.topology = sensor.topology
+        self.deadlines = deadlines
+        self.rules = rules
+        self.steps: list[PlannedStep] = []
+        # Governing command and its step, keyed by placement and command type.
+        self.governing: dict[tuple[Placement, type[DeviceCommand]],
+                             tuple[StepName, RoutedCommand]] = {}
+        self.latest: dict[Placement, StepName] = {}
+        self.last_unit: dict[Placement, StepName] = {}
+        self.prepared: list[tuple[Placement, StepName]] = []
+        self.emitted = 0
+
+    def run(self) -> ExecutableWorkflow:
+        """Emit preparation, epochs and cleanup, then lower their planned
+        steps.
+        """
+        for position, routed in enumerate(self.collect.prepare):
+            name = self._setting(routed, "prepare", ("prepare", position))
+            self.prepared.append((routed.target, name))
+
+        for index, epoch in enumerate(self.collect.epochs):
+            self._compile_epoch(epoch, index)
+
+        cleanup = (self._cleanup(),) if self.collect.cleanup else ()
+
+        return lower(self.collect.name, tuple(self.steps), self.sensor,
+                     provenance=self.sensor.capabilities.provenance,
+                     cleanup=cleanup, deadlines=self.deadlines,
+                     rules=self.rules)
+
+    def _compile_epoch(self, epoch: BoundEpoch, index: int) -> None:
+        """Emit changed settings and each instrument's acquisition block."""
+        where = f"epoch {index}"
+        participants = tuple(dict.fromkeys(unit.target for unit in epoch.units))
+        _consistent(epoch, participants, self.sensor, where)
+
+        for routed in (*self._ports(participants), *epoch.settings):
+            if not self._in_force(routed):
+                self._setting(routed, where,
+                              (index, routed.command.model_tag()))
+
+        blocks: dict[Placement, list[PlannedAcquisition]] = {}
+
+        for unit in epoch.units:
+            blocks.setdefault(unit.target, []).append(unit)
+
+        needs = {instrument: self._needs(instrument) for instrument in blocks}
+        aligned, offsets = self._align(epoch, blocks, needs, index)
+
+        for instrument, units in blocks.items():
+            hard, soft = needs[instrument]
+            self._emit_units(units, index, hard,
+                             soft if aligned is None else (*soft, aligned),
+                             offsets[instrument])
+
+    def _ports(self, participants: tuple[Placement, ...]
+               ) -> tuple[RoutedCommand, ...]:
+        """Derive distinct selector-position commands from participant port
+        paths.
+        """
+        states = dict.fromkeys(
+            state for participant in participants
+            for state in self.topology.selector_states(participant))
+
+        return tuple(RoutedCommand(target=selector,
+                                   command=SelectPort(port=port))
+                     for selector, port in states)
+
+    def _in_force(self, routed: RoutedCommand) -> bool:
+        """Test whether an equal command and authored timeout already govern
+        this key.
+
+        Equality elides a new setting but retains the earlier success
+        requirement. It does not request a retry after that earlier setting
+        fails.
+        """
+        held = self.governing.get(routed.governs)
+
+        return held is not None and held[1] == routed
+
+    def _setting(self, routed: RoutedCommand, group: str,
+                 path: tuple[str | int, ...]) -> StepName:
+        """Emit a governing setting after preceding readers and device work
+        complete.
+
+        Completion dependencies serialize the device without requiring prior
+        success.
+        """
+        target = routed.target
+        waits = [self.last_unit[reader]
+                 for reader in self.topology.readers_of(target)
+                 if reader in self.last_unit]
+
+        if target in self.latest:
+            waits.append(self.latest[target])
+
+        step = self._planned(group, path, target=target,
+                             command=routed.command, timeout_s=routed.timeout_s,
+                             deps=Dependency.completion(waits))
+        self.steps.append(step)
+        self.governing[routed.governs] = (step.name, routed)
+        self.latest[target] = step.name
+
+        return step.name
+
+    def _needs(self, instrument: Placement
+               ) -> tuple[tuple[StepName, ...], tuple[StepName, ...]]:
+        """Return required successes and completion waits for an
+        instrument's next block.
+
+        Require governing settings and all preparation on its chain. Follow its
+        last acquisition on completion. Preparation remains required after
+        later settings replace its governing state.
+        """
+        chain = frozenset(self.topology.chain(instrument))
+        hard = [name for (placement, _), (name, _) in self.governing.items()
+                if placement in chain]
+        hard += [name for placement, name in self.prepared
+                 if placement in chain]
+        soft = ((self.last_unit[instrument],) if instrument in self.last_unit
+                else ())
+
+        return tuple(dict.fromkeys(hard)), soft
+
+    def _align(self, epoch: BoundEpoch,
+               blocks: Mapping[Placement, list[PlannedAcquisition]],
+               needs: Mapping[Placement, tuple[tuple[StepName, ...],
+                                               tuple[StepName, ...]]],
+               index: int) -> tuple[StepName | None, dict[Placement, float]]:
+        """Build a common readiness point and offsets for estimated block
+        midpoints.
+
+        Spans sum acquisition estimates, currently integration time only.
+        Readout and transfer overhead are excluded, so actual block midpoints
+        may differ. Start alignment and single-instrument blocks add no common
+        ordering node.
+        """
+        if epoch.align != "midpoint" or len(blocks) <= 1:
+            return None, dict.fromkeys(blocks, 0.0)
+
+        waits = [name for hard, soft in needs.values() for name in (*hard, *soft)]
+        step = self._planned(f"epoch {index}", (index, "align"),
+                             deps=Dependency.completion(dict.fromkeys(waits)),
+                             reason=f"align midpoints of epoch {index}")
+        self.steps.append(step)
+        spans = {instrument: sum(unit.estimated_duration_s for unit in units)
+                 for instrument, units in blocks.items()}
+        longest = max(spans.values())
+
+        return step.name, {instrument: (longest - span) / 2
+                           for instrument, span in spans.items()}
+
+    def _emit_units(self, units: list[PlannedAcquisition], index: int,
+                    hard: tuple[StepName, ...], soft: tuple[StepName, ...],
+                    delay_s: float) -> None:
+        """Emit one instrument's acquisition block with serial completion
+        dependencies.
+
+        Every unit requires successful block settings. A failed capture alone
+        does not skip the next, though fail-fast policy can stop the whole run.
+        """
+        previous: StepName | None = None
+
+        for unit in units:
+            acquisition = unit.acquisition
+            follows = soft if previous is None else (previous,)
+            step = self._planned(
+                f"epoch {index}",
+                (index, acquisition.request, acquisition.frame_number),
+                target=unit.target, command=unit.command,
+                timeout_s=unit.timeout_s, acquisition=acquisition,
+                delay_s=delay_s if previous is None else 0.0,
+                deps=(*(Dependency(on=name) for name in hard),
+                      *Dependency.completion(follows)))
+            self.steps.append(step)
+            previous = step.name
+
+        if previous is not None:
+            self.last_unit[units[0].target] = previous
+
+    def _cleanup(self) -> CleanupPlan:
+        """Plan teardown armed by preparation, or by any command if
+        preparation is absent.
+
+        Ordering steps do not arm it. Commands serialize per device on
+        completion and otherwise run independently. Non-fail-fast policy lets
+        teardown continue after a failed command.
+        """
+        steps: list[PlannedStep] = []
+        latest: dict[Placement, StepName] = {}
+
+        for position, routed in enumerate(self.collect.cleanup):
+            target = routed.target
+            step = self._planned(
+                "cleanup", ("cleanup", position), target=target,
+                command=routed.command, timeout_s=routed.timeout_s,
+                deps=Dependency.completion(
+                    (latest[target],) if target in latest else ()),
+                fail_fast=False)
+            steps.append(step)
+            latest[target] = step.name
+
+        armed_by = (tuple(name for _, name in self.prepared)
+                    if self.collect.prepare else
+                    tuple(step.name for step in self.steps
+                          if step.command is not None))
+
+        return CleanupPlan(
+            steps=tuple(steps),
+            origin=Origin(source=self.collect.name, path=("cleanup",)),
+            when="always", timeout_s=self.collect.cleanup_timeout_s,
+            armed_by=armed_by)
+
+    def _planned(self, group: str, path: tuple[str | int, ...], *,
+                 target: Placement | None = None,
+                 command: DeviceCommand | None = None,
+                 deps: tuple[Dependency, ...] = (),
+                 timeout_s: float | None = None,
+                 acquisition: Acquisition | None = None, delay_s: float = 0.0,
+                 reason: str = "", fail_fast: bool | None = None
+                 ) -> PlannedStep:
+        """Build a uniquely named step, inheriting collect failure policy
+        unless overridden.
+        """
+        self.emitted += 1
+        where = "ordering" if target is None else target.device
+
+        return PlannedStep(
+            name=f"{group}/{where}/{self.emitted}",
+            origin=Origin(source=self.collect.name, path=path, reason=reason),
+            group=group, target=target, command=command, deps=deps,
+            fail_fast=self.collect.fail_fast if fail_fast is None else fail_fast,
+            timeout_s=timeout_s, acquisition=acquisition, delay_s=delay_s)
+
+
+def _consistent(epoch: BoundEpoch, participants: tuple[Placement, ...],
+                sensor: BoundSensor, where: str) -> None:
+    """Check bound-epoch compatibility, including for manually built
+    collects.
+
+    Raises:
+        ValueError: Participants are exclusive, commands or timeouts conflict,
+            or settings override derived selector positions.
+    """
+    _exclusive(participants, sensor, where)
+    held: dict[tuple[Placement, type], tuple[RoutedCommand, str]] = {}
+
+    for routed in epoch.settings:
+        _put(held, routed, "the epoch", where)
+
+    _positioned(held, participants, sensor, where)
