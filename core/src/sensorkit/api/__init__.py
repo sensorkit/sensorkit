@@ -43,6 +43,7 @@ from sensorkit.backend.event import Event, UnknownEvent
 from sensorkit.backend.request import (
     CallContext,
     CallError,
+    HandlerError,
     LongRequest,
     Request,
     declare_long_request,
