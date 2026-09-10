@@ -11,7 +11,7 @@ from pydantic import BaseModel, TypeAdapter
 
 from sensorkit.backend.base import Entity, KVError, SpecialProperty
 from sensorkit.backend.event import Event
-from sensorkit.backend.request import RequestBase, RequestHandlerFunc
+from sensorkit.backend.request import HandlerError, RequestBase, RequestHandlerFunc
 from sensorkit.common.keyword import Keyword, dump_keyword_json, get_keyword_info
 from sensorkit.core.entity import EntityBase, EntityInfo, EntityInterface
 from sensorkit.data.graph import DataGraph
@@ -41,6 +41,7 @@ class EntityImpl(EntityBase, EntityInterface):
         self._task_group = task_group
         self._attach_hooks: list[Callable] = []
         self._detach_hooks: list[Callable] = []
+        self._requests: dict[str, RequestBase] = {}
 
     async def init_impl(self):
         """Implements initialization of the entity.
@@ -156,11 +157,27 @@ class EntityImpl(EntityBase, EntityInterface):
         request: RequestBase[P, R, V],
         func: RequestHandlerFunc[P, R, V],
     ):
-        """Register a handler for the given Request declaration on the backend."""
-        await self._request.handle_request(
-            request.name,
-            request.create_handler(func, self._stream),
-        )
+        """Register a handler for the given Request declaration on the backend.
+
+        Raises:
+            HandlerError: if this entity already serves a request under the same name.
+        """
+        # A request name is only unique within one entity, since it becomes the last token of the
+        # backend subject the handler binds.
+        if request.name in self._requests:
+            raise HandlerError(f"Entity {self.entity} already handles request '{request.name}'")
+
+        callback = request.create_handler(func, self._stream)
+
+        # Claim the name before yielding, so concurrent attach hooks cannot both get past the
+        # check and race to bind the same subject.
+        self._requests[request.name] = request
+
+        try:
+            await self._request.handle_request(request.name, callback)
+        except BaseException:
+            del self._requests[request.name]
+            raise
 
     @override
     async def data_graph(self):
