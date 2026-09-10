@@ -92,17 +92,17 @@ class DeviceImpl(EntityImpl, DeviceInterface):
         # Reject if we aren't ready.
         if not self._state.enable_state.enabled:
             logger.warning(f"Rejecting {command_id} command: Device is disabled")
-            call.reject(response=None)
+            call.reject(reason="Device is disabled")
             return
 
         # Look for a handler for this command ID.
         if command_id not in self._handlers:
             logger.warning(f"Rejecting unhandled command: {command_id}")
-            call.reject(response=None)
+            call.reject(reason=f"Unhandled command {command_id}")
             return
 
         # Accept the command and invoke the configured handler func.
-        call.accept(response=None)
+        call.accept()
         handler_func = self._handlers[command_id]
         success = False
 

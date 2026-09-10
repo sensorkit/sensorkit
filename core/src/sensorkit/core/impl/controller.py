@@ -281,7 +281,10 @@ class ControllerImpl(EntityImpl, ControllerInterface):
     ):
         # Cannot abort if no task is running.
         if not self.task_running():
-            call.reject(response=AbortResponseMessage(aborting=False, task_id=None))
+            call.reject(
+                response=AbortResponseMessage(aborting=False, task_id=None),
+                reason="No task is running",
+            )
             return
 
         aio_task = self._task_asyncio
@@ -289,7 +292,10 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
         # If given, ensure the task_id matches what is running.
         if requested.task_id and task_id != requested.task_id:
-            call.reject(response=AbortResponseMessage(aborting=False, task_id=None))
+            call.reject(
+                response=AbortResponseMessage(aborting=False, task_id=None),
+                reason=f"Running task {task_id} does not match",
+            )
             return
 
         # Send an accept response and update status indicating we are about to abort.
@@ -348,17 +354,17 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
         if not self._state.enable_state.enabled:
             logger.warning(f"Rejecting {task.task_type} task: Controller is disabled")
-            call.reject(response=response)
+            call.reject(response=response, reason="Controller is disabled")
             return
 
         if not msg.interrupt and self.task_running():
             logger.warning(f"Rejecting {task.task_type} task: Task already in progress")
-            call.reject(response=response)
+            call.reject(response=response, reason="Task already in progress")
             return
 
         if type(task) not in self._task_handlers:
             logger.warning(f"Rejecting {task.task_type} task: No handler registered")
-            call.reject(response=response)
+            call.reject(response=response, reason=f"No handler registered for {task.task_type}")
             return
 
         call.accept(response=response)
