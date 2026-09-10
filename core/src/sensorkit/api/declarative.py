@@ -65,15 +65,17 @@ def entity_for_instance(instance):
     return decl.impl if (decl := decl_for_instance(instance)) else None
 
 
+def _unwrap_method(func: Callable):
+    """Return the underlying function of a method, so that a mark can be set on it.
+
+    Function objects are mutable, unlike methods, and are shared across subclass relationships.
+    """
+    return func.__func__ if inspect.ismethod(func) else func
+
+
 def _mark_callback(func: Callable, kind: CallbackKind):
     """Mark a function as an unassociated callback."""
-    if inspect.ismethod(func):
-        # If we're working with a method, we need to unwrap it to get the underlying function. This
-        # is crucial because function objects are mutable (unlike methods) and are shared across
-        # subclass relationships.
-        func = func.__func__
-
-    setattr(func, CALLBACK_MARK_ATTR, kind)
+    setattr(_unwrap_method(func), CALLBACK_MARK_ATTR, kind)
 
 
 def is_callback(func: Callable):
