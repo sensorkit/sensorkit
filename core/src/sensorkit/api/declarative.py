@@ -31,7 +31,6 @@ from sensorkit.core.impl.program import ProgramImpl
 from sensorkit.core.task import Task
 from sensorkit.core.trait import Archetype, Trait
 
-type AnyEntityDecl = DeclaredEntity | DeclaredDevice | DeclaredController | DeclaredProgram
 type InitDeinitCallback = Callable[[], Coroutine[Any, Any, None] | None]
 
 AUTO_ENTITY_ATTR = "__sk_entity__"
@@ -58,7 +57,7 @@ def auto_create_decl(instance):
     return instance
 
 
-def decl_for_instance(instance) -> AnyEntityDecl:
+def decl_for_instance(instance) -> DeclaredEntity[Any] | None:
     return getattr(instance, AUTO_ENTITY_ATTR, None)
 
 
