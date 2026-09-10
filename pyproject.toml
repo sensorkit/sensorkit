@@ -160,6 +160,7 @@ dev = [
     "pytest>=8.3.4",
     "sensorkit[thesky-simulator]",
     "testcontainers[nats]>=4.9.0",
+    "ty>=0.0.80",
 ]
 
 # These groups allow the user to opt in to using the pytorch indexes, and,
@@ -220,6 +221,15 @@ line-ending = "auto"
 [tool.complexipy]
 paths = ["core", "modules"]
 max-complexity-allowed = 15
+
+[tool.ty.src]
+include = ["core/src", "modules"]
+exclude = ["modules/*/tests"]
+
+[tool.ty.rules]
+invalid-argument-type        = "ignore"  # 497
+unresolved-attribute         = "ignore"  # 676
+invalid-type-form            = "ignore"  # 118
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
