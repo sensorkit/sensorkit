@@ -11,7 +11,7 @@ from pydantic import BaseModel, TypeAdapter
 
 from sensorkit.backend.base import Entity, KVError, SpecialProperty
 from sensorkit.backend.event import Event
-from sensorkit.backend.request import ExtendedHandlerFunc, HandlerFunc, Request
+from sensorkit.backend.request import RequestBase, RequestHandlerFunc
 from sensorkit.common.keyword import Keyword, dump_keyword_json, get_keyword_info
 from sensorkit.core.entity import EntityBase, EntityInfo, EntityInterface
 from sensorkit.data.graph import DataGraph
@@ -153,10 +153,10 @@ class EntityImpl(EntityBase, EntityInterface):
     @override
     async def handle_request[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None](
         self,
-        request: Request[P, R, V],
-        func: HandlerFunc[P, R] | ExtendedHandlerFunc[P, R, V],
+        request: RequestBase[P, R, V],
+        func: RequestHandlerFunc[P, R, V],
     ):
-        """Register a handler for the given Request definition on the backend."""
+        """Register a handler for the given Request declaration on the backend."""
         await self._request.handle_request(
             request.name,
             request.create_handler(func, self._stream),

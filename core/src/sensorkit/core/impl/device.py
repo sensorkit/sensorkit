@@ -85,7 +85,7 @@ class DeviceImpl(EntityImpl, DeviceInterface):
     async def _command_request(
         self,
         message: CommandRequestMessage,
-        call: CallContext[None, CommandResult],
+        call: CallContext[CommandResult],
     ):
         command_id = message.command.command_id
 

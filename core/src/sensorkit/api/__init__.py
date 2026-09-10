@@ -40,7 +40,14 @@ from sensorkit.backend.base import (
     Subject,
 )
 from sensorkit.backend.event import Event, UnknownEvent
-from sensorkit.backend.request import CallContext, CallError, ExtendedResponse, Request
+from sensorkit.backend.request import (
+    CallContext,
+    CallError,
+    LongRequest,
+    Request,
+    declare_long_request,
+    declare_request,
+)
 from sensorkit.common.keyword import Keyword, KeywordDict, declare_keyword
 from sensorkit.config import config_json_schema, declare_config_section
 from sensorkit.core.client import SensorKit, ServiceContext, ServiceRecord, ServiceStatus

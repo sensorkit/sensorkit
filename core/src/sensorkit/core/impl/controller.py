@@ -277,7 +277,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
     async def _abort_request(
         self,
         requested: AbortRequestMessage,
-        call: CallContext[AbortResponseMessage, None],
+        call: CallContext[None, AbortResponseMessage],
     ):
         # Cannot abort if no task is running.
         if not self.task_running():
@@ -320,7 +320,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
     async def _execute_request(
         self,
         msg: ExecuteRequestMessage,
-        call: CallContext[ExecuteResponseMessage, TaskExecutionResult],
+        call: CallContext[TaskExecutionResult, ExecuteResponseMessage],
     ):
         task = msg.task
 

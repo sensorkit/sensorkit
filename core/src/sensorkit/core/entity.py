@@ -5,7 +5,7 @@ import asyncio
 import contextlib
 import functools
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal, overload
 
 from loguru import logger
 from pydantic import BaseModel, PlainSerializer, PlainValidator, ValidationError
@@ -14,10 +14,10 @@ from sensorkit.backend.base import Entity
 from sensorkit.backend.event import Event, EventMultiplexer, EventStreamConsumer
 from sensorkit.backend.request import (
     Call,
-    ExtendedCall,
-    ExtendedHandlerFunc,
-    HandlerFunc,
-    Request,
+    LongCall,
+    LongRequest,
+    RequestBase,
+    RequestHandlerFunc,
 )
 from sensorkit.common.aio import AsyncObserver
 from sensorkit.common.keyword import (
@@ -233,11 +233,22 @@ class EntityClient(EntityBase):
         )
         return response_type.model_validate_json(received)
 
-    def call[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None](
+    @overload
+    def call[R: BaseModel | None, V: BaseModel | None](
         self,
-        request: Request[P, R, V],
+        request: RequestBase[None, R, V],
+    ) -> Call[R, V]:
+        """Invoke a request that takes no message."""
+
+    @overload
+    def call[P: BaseModel, R: BaseModel | None, V: BaseModel | None](
+        self,
+        request: RequestBase[P, R, V],
         data: P,
     ) -> Call[R, V]:
+        """Invoke a request, sending it the given message."""
+
+    def call(self, request, data = None) -> Call:
         """Invoke a request."""
         payload = b"" if data is None else data.model_dump_json().encode()
         request_coro = self._request.invoke(
@@ -245,15 +256,16 @@ class EntityClient(EntityBase):
             payload=payload,
         )
 
-        if request.is_extended():
-            return ExtendedCall(
-                request_coro,
-                request.response,
-                request.result,
-                self.get_event_mux(),
-            )
-        else:
-            return Call(request_coro, request.response)
+        match request:
+            case LongRequest():
+                return LongCall(
+                    request_coro,
+                    request.response,
+                    request.result,
+                    self.get_event_mux(),
+                )
+            case _:
+                return Call(request_coro, request.response)
 
 
 class EntityRef[T: EntityClient = EntityClient]:
@@ -373,10 +385,10 @@ class EntityInterface(ABC):
     @abstractmethod
     async def handle_request[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None](
         self,
-        request: Request[P, R, V],
-        func: HandlerFunc[P, R] | ExtendedHandlerFunc[P, R, V],
+        request: RequestBase[P, R, V],
+        func: RequestHandlerFunc[P, R, V],
     ):
-        """Register a handler for the given Request definition."""
+        """Register a handler for the given Request declaration."""
         ...
 
     @abstractmethod

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from sensorkit.backend.event import Event
-    from sensorkit.backend.request import ExtendedHandlerFunc, HandlerFunc, Request
+    from sensorkit.backend.request import RequestBase, RequestHandlerFunc
     from sensorkit.common.keyword import Keyword
     from sensorkit.core.client import SensorKit
     from sensorkit.data.context import Context
@@ -62,8 +62,8 @@ class EntityDelegate(EntityInterface):
     @override
     async def handle_request[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None](
         self,
-        request: Request[P, R, V],
-        func: HandlerFunc[P, R] | ExtendedHandlerFunc[P, R, V],
+        request: RequestBase[P, R, V],
+        func: RequestHandlerFunc[P, R, V],
     ):
         return await self.delegate_target.handle_request(request, func)
 

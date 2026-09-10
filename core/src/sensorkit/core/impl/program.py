@@ -277,7 +277,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
     async def _set_active_state(
         self,
         request: ProgramActiveStateRequest,
-        call: CallContext[None, None],
+        call: CallContext[None],
     ):
         with self.enter_context():
             logger.info(f"Requested to {request.action} the tasking loop")

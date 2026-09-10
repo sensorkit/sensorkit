@@ -198,9 +198,9 @@ class AgentConfigureRequest(BaseModel):
     remove_program_exclusions: set[str] = Field(default_factory=set)
 
 
-agent_configure_request = sk.Request.define(
+agent_configure_request = sk.declare_request(
     "configure",
-    payload=AgentConfigureRequest,
+    message=AgentConfigureRequest,
     response=AgentState,
 )
 

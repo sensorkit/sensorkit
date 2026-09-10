@@ -12,7 +12,7 @@ import uuid_utils.compat as uuid
 from pydantic import BaseModel, Field, model_validator
 
 from sensorkit.backend.event import Event
-from sensorkit.backend.request import Call, ExtendedResponse, Request
+from sensorkit.backend.request import Call, declare_long_request, declare_request
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceClient
 from sensorkit.core.entity import EntityClient, EntityInterface, EntityRef
@@ -159,9 +159,9 @@ class ControllerEnableStateRequest(BaseModel):
     enable: bool
 
 
-set_enable_state_request = Request.define(
+set_enable_state_request = declare_request(
     "set_enable_state",
-    payload=ControllerEnableStateRequest,
+    message=ControllerEnableStateRequest,
 )
 """Set the enable state of a Controller."""
 
@@ -179,7 +179,7 @@ class ExecuteRequestMessage(BaseModel):
     interrupt: bool = False
 
 
-class ExecuteResponseMessage(ExtendedResponse):
+class ExecuteResponseMessage(BaseModel):
     """A response to a task execution request.
 
     Carries the minted `TaskExecution` envelope so the client learns the assigned `task_id` (e.g.
@@ -194,7 +194,7 @@ class AbortRequestMessage(BaseModel):
     """If given, verifies the running task ID matches before aborting."""
 
 
-class AbortResponseMessage(ExtendedResponse):
+class AbortResponseMessage(BaseModel):
     """Response to a Task abort request."""
     aborting: bool
     """True if the abort is underway, False if the abort was rejected."""
@@ -210,16 +210,16 @@ class TaskExecutionResult(BaseModel):
     end_time: datetime
 
 
-execute_task_request = Request.define(
+execute_task_request = declare_long_request(
     name="execute_task",
-    payload=ExecuteRequestMessage,
+    message=ExecuteRequestMessage,
     response=ExecuteResponseMessage,
     result=TaskExecutionResult,
 )
 
-abort_task_request = Request.define(
+abort_task_request = declare_long_request(
     name="abort_task",
-    payload=AbortRequestMessage,
+    message=AbortRequestMessage,
     response=AbortResponseMessage,
 )
 

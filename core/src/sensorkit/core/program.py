@@ -14,7 +14,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 
 from sensorkit.backend.event import Event
-from sensorkit.backend.request import ExtendedResponse, Request
+from sensorkit.backend.request import declare_long_request, declare_request
 from sensorkit.common.aio import AsyncObserver
 from sensorkit.common.keyword import declare_keyword
 from sensorkit.core.entity import EntityClient, EntityInterface, EntityRef
@@ -120,9 +120,9 @@ class ProgramEnableStateRequest(BaseModel):
     controller: str | None
 
 
-set_enable_state_request = Request.define(
+set_enable_state_request = declare_request(
     "set_enable_state",
-    payload=ProgramEnableStateRequest,
+    message=ProgramEnableStateRequest,
 )
 """Control the enable state of a Program."""
 
@@ -137,15 +137,9 @@ class ProgramActiveStateRequest(BaseModel):
         return True if self.action == "start" else False
 
 
-class ProgramActiveStateResult(BaseModel):
-    """Result of a request to change the Program active state."""
-    success: bool
-
-
-set_active_state_request = Request.define(
+set_active_state_request = declare_long_request(
     "set_active_state",
-    payload=ProgramActiveStateRequest,
-    response=ExtendedResponse,
+    message=ProgramActiveStateRequest,
 )
 """Control the active state of a Program."""
 
