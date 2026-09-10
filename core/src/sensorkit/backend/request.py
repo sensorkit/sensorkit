@@ -197,6 +197,9 @@ class LongCall[R: BaseModel | None, V: BaseModel | None](Call[R, V]):
             # Execute the initial request-response communication.
             reply = await self._invoke(timeout, "accepted")
         except (asyncio.CancelledError, Exception) as e:
+            # wait_ready() can fail or be cancelled before _invoke ever awaits
+            # self._coro, in which case it must be closed explicitly here.
+            self._coro.close()
             context.close()
             self._future.set_exception(e)
             raise
