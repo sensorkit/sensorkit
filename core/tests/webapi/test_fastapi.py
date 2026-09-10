@@ -9,12 +9,22 @@ import httpx
 import pytest
 import pytest_asyncio
 import uuid_utils.compat as uuid
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
+from sensorkit.backend.request import CallContext, declare_long_request, declare_request
 from sensorkit.core.device import Abort
 from sensorkit.core.task import CollectTask, InitTask
 from sensorkit.webapi.fastapi import WebAPI, WebAPIConfig
 from sensorkit.webapi.forwarder import SKRecord
+
+
+class EchoMessage(BaseModel):
+    value: str
+
+
+echo_request = declare_request("echo", message=EchoMessage, response=EchoMessage)
+ping_request = declare_request("ping")
+work_request = declare_long_request("work")
 
 
 @pytest_asyncio.fixture
@@ -117,6 +127,95 @@ async def test_get_entities(webapi_setup):
     assert resp.status_code == 200
     names = [e["name"] for e in resp.json()]
     assert "mydevice" in names
+
+
+# ---------------------------------------------------------------------------
+# Entity endpoints
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_entity_request_round_trip(webapi_setup):
+    _, _, dev, _, _, _, client = webapi_setup
+
+    async def handle_echo(msg: EchoMessage) -> EchoMessage:
+        return msg
+
+    await dev.handle_request(echo_request, handle_echo)
+
+    resp = await client.post("/entity/mydevice/request/echo", json={"value": "hello"})
+    assert resp.status_code == 200
+    assert resp.json() == {"value": "hello"}
+
+
+@pytest.mark.asyncio
+async def test_entity_request_without_message_or_response_returns_204(webapi_setup):
+    _, _, dev, _, _, _, client = webapi_setup
+
+    pinged = asyncio.Event()
+
+    async def handle_ping(msg: None) -> None:
+        pinged.set()
+
+    await dev.handle_request(ping_request, handle_ping)
+
+    resp = await client.post("/entity/mydevice/request/ping")
+    assert resp.status_code == 204
+    assert pinged.is_set()
+
+
+@pytest.mark.asyncio
+async def test_entity_request_handler_error_returns_500(webapi_setup):
+    _, _, dev, _, _, _, client = webapi_setup
+
+    async def handle_echo(msg: EchoMessage) -> EchoMessage:
+        raise RuntimeError("disk on fire")
+
+    await dev.handle_request(echo_request, handle_echo)
+
+    resp = await client.post("/entity/mydevice/request/echo", json={"value": "hello"})
+    assert resp.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_entity_request_unknown_name_returns_503(http):
+    resp = await http.post("/entity/mydevice/request/nonexistent")
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_entity_request_long_running_returns_409(webapi_setup):
+    _, _, dev, _, _, _, client = webapi_setup
+
+    async def handle_work(msg: None, call: CallContext[None]):
+        call.accept()
+        await call.succeed(result=None)
+
+    await dev.handle_request(work_request, handle_work)
+
+    resp = await client.post("/entity/mydevice/request/work")
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_entity_request_timeout_returns_504(webapi_setup):
+    _, _, dev, _, _, _, client = webapi_setup
+
+    release = asyncio.Event()
+
+    async def handle_echo(msg: EchoMessage) -> EchoMessage:
+        await release.wait()
+        return msg
+
+    await dev.handle_request(echo_request, handle_echo)
+
+    resp = await client.post(
+        "/entity/mydevice/request/echo",
+        params={"timeout": 0.1},
+        json={"value": "hello"},
+    )
+    assert resp.status_code == 504
+
+    release.set()
 
 
 # ---------------------------------------------------------------------------

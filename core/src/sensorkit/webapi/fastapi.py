@@ -2,15 +2,16 @@
 import asyncio
 import contextlib
 from collections.abc import AsyncGenerator
-from typing import Any, Callable, Iterable
+from typing import Annotated, Any, Callable, Iterable
 
 import uuid_utils.compat as uuid
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from loguru import logger
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, RootModel, model_validator
+from pydantic_core import to_json
 
 import sensorkit.api as sk
 from sensorkit.auto.agent import AgentConfigureRequest, AgentState, agent_configure_request
@@ -20,6 +21,7 @@ from sensorkit.backend.base import (
     RemoteRequestError,
     UnregisteredResponder,
 )
+from sensorkit.backend.request import Call
 from sensorkit.core.controller import ControllerState
 from sensorkit.core.device import DeviceState
 from sensorkit.core.entity import DeviceDetails, EntityInfo
@@ -46,6 +48,7 @@ from sensorkit.webapi.security import (
 from sensorkit.webapi.serve import ProductInfo, ServeDataConfig, ServeHandler
 
 PRODUCT_LISTING_TIMEOUT = 10.0
+ENTITY_REQUEST_TIMEOUT = 5.0
 
 
 class WebAPIConfig(BaseModel):
@@ -61,6 +64,10 @@ class WebAPIConfig(BaseModel):
     expose_docs: bool = False
     max_stream_clients: int = 32
     stream_queue_size: int = 4096
+
+
+class RawPayload(RootModel[Any]):
+    """Request data carried through the web API as unvalidated JSON."""
 
 
 class AgentOverrideRequest(BaseModel):
@@ -261,6 +268,7 @@ class WebAPI:
         app.add_middleware(CORSMiddleware, **self.config.cors.middleware_options())
 
         self._create_global_endpoints(app)
+        self._create_entity_endpoints(app)
         self._create_device_endpoints(app)
         self._create_controller_endpoints(app)
         self._create_program_endpoints(app)
@@ -325,6 +333,35 @@ class WebAPI:
                     )
 
             return output
+
+    def _create_entity_endpoints(self, app: FastAPI):
+        @app.post("/entity/{entity_id}/request/{request_name}", tags=["Entity"])
+        async def call_entity_request(
+            entity_id: str,
+            request_name: str,
+            message: Annotated[dict[str, Any] | None, Body()] = None,
+            timeout: Annotated[float, Query(gt=0)] = ENTITY_REQUEST_TIMEOUT,
+        ):
+            """Call a request on an entity, passing the message and response through as JSON.
+
+            The caller supplies the request message and interprets the response itself. A request
+            that declares no message takes an empty body, and one that responds with nothing
+            answers 204.
+
+            Only simple requests are supported. A long-running request is still started by the
+            entity, but answers 409 once its reply shows the call is long-running.
+            """
+            context = self.kit.backend.request(sk.Entity.at(entity_id))
+            payload = b"" if message is None else to_json(message)
+            call = Call(context.invoke(name=request_name, payload=payload), RawPayload)
+
+            with _error_handler():
+                response = await call.invoke(timeout)
+
+            if response is None:
+                return Response(status_code=204)
+
+            return Response(content=response.model_dump_json(), media_type="application/json")
 
     def _create_device_endpoints(self, app: FastAPI):
         @app.get("/device/{device_id}/state", tags=["Device"])
