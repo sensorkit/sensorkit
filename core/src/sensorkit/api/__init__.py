@@ -25,6 +25,7 @@ from sensorkit.api.declarative import (
     on_detach,
     on_disable,
     on_enable,
+    request_handler,
     task_factory,
     task_handler,
 )

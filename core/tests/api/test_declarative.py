@@ -5,6 +5,7 @@ import uuid
 from typing import Any, Literal, override
 
 import pytest
+from pydantic import BaseModel
 
 from sensorkit.api.declarative import (
     AUTO_ENTITY_ATTR,
@@ -25,8 +26,15 @@ from sensorkit.api.declarative import (
     on_detach,
     on_disable,
     on_enable,
+    request_handler,
     task_factory,
     task_handler,
+)
+from sensorkit.backend.request import (
+    CallContext,
+    HandlerError,
+    declare_long_request,
+    declare_request,
 )
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.impl.controller import ControllerImpl
@@ -436,3 +444,203 @@ async def test_declared_program():
         await cli.disable()
         await disable_done.wait()
         await svc_decl.stop()
+
+
+@pytest.mark.asyncio
+async def test_declared_request_handler(kit, service):
+    """A declared request handler is registered when its entity attaches, and is callable."""
+    class Message(BaseModel):
+        foo: str
+
+    class Response(BaseModel):
+        val: int
+
+    request = declare_request("do_thing", message=Message, response=Response)
+    ent = declare_entity(name="request_entity")
+
+    @request_handler(request, ent)
+    async def handle_thing(msg: Message) -> Response:
+        assert msg.foo == "bar"
+        return Response(val=42)
+
+    service.add(ent)
+
+    async with asyncio.timeout(5.0):
+        await service.start()
+
+        cli = kit.entity("request_entity")
+        response = await cli.call(request, Message(foo="bar"))
+        assert response.val == 42
+
+
+@pytest.mark.asyncio
+async def test_declared_long_request_handler(kit, service):
+    """A declared long-running handler reports its result through the call context."""
+    class Message(BaseModel):
+        foo: str
+
+    class Response(BaseModel):
+        pass
+
+    class Result(BaseModel):
+        val: int
+
+    request = declare_long_request(
+        "do_slow_thing",
+        message=Message,
+        response=Response,
+        result=Result,
+    )
+    ent = declare_entity(name="long_request_entity")
+
+    @request_handler(request, ent)
+    async def handle_slow_thing(msg: Message, call: CallContext[Result, Response]) -> None:
+        call.accept(response=Response())
+        await call.succeed(result=Result(val=7))
+
+    service.add(ent)
+
+    async with asyncio.timeout(5.0):
+        await service.start()
+
+        cli = kit.entity("long_request_entity")
+        result = await cli.call(request, Message(foo="bar"))
+        assert result.val == 7
+
+
+@pytest.mark.asyncio
+async def test_declared_request_handler_on_class(kit, service):
+    """A request handler declared on an entity class infers its types through `self`."""
+    class Message(BaseModel):
+        foo: str
+
+    class Response(BaseModel):
+        pass
+
+    class Result(BaseModel):
+        val: int
+
+    request = declare_long_request("do_thing", message=Message, response=Response, result=Result)
+
+    @declare_entity
+    class TestEntity:
+        @request_handler(request)
+        async def handle_thing(
+            self,
+            params: Message,
+            call: CallContext[Result, Response],
+        ) -> None:
+            call.accept(response=Response())
+            await call.succeed(result=Result(val=len(params.foo)))
+
+    service.include(TestEntity(), name="class_request_entity")
+
+    async with asyncio.timeout(5.0):
+        await service.start()
+
+        cli = kit.entity("class_request_entity")
+        result = await cli.call(request, Message(foo="bar"))
+        assert result.val == 3
+
+
+@pytest.mark.asyncio
+async def test_declared_request_handler_without_message(kit, service):
+    """A request declared with no message is handled by a func that takes no parameters."""
+    class Response(BaseModel):
+        val: int
+
+    request = declare_request("do_thing", response=Response)
+    ent = declare_entity(name="no_message_entity")
+
+    @request_handler(request, ent)
+    async def handle_thing(msg: None) -> Response:
+        return Response(val=42)
+
+    service.add(ent)
+
+    async with asyncio.timeout(5.0):
+        await service.start()
+
+        cli = kit.entity("no_message_entity")
+        response = await cli.call(request)
+        assert response.val == 42
+
+
+@pytest.mark.asyncio
+async def test_declared_long_request_handler_without_message(kit, service):
+    """A long-running request with no message is handled by a func taking only the context."""
+    class Response(BaseModel):
+        pass
+
+    class Result(BaseModel):
+        val: int
+
+    request = declare_long_request("do_slow_thing", response=Response, result=Result)
+    ent = declare_entity(name="no_message_long_entity")
+
+    @request_handler(request, ent)
+    async def handle_slow_thing(msg: None, call: CallContext[Result, Response]) -> None:
+        call.accept(response=Response())
+        await call.succeed(result=Result(val=7))
+
+    service.add(ent)
+
+    async with asyncio.timeout(5.0):
+        await service.start()
+
+        cli = kit.entity("no_message_long_entity")
+        result = await cli.call(request)
+        assert result.val == 7
+
+
+@pytest.mark.asyncio
+async def test_declared_request_handler_from_a_bound_method(kit, service):
+    """A request handler can be declared from a bound method, as the other declarators allow."""
+    class Message(BaseModel):
+        foo: str
+
+    class Response(BaseModel):
+        val: int
+
+    request = declare_request("do_thing", message=Message, response=Response)
+    ent = declare_entity(name="bound_method_entity")
+
+    class Handlers:
+        async def handle_thing(self, msg: Message) -> Response:
+            return Response(val=len(msg.foo))
+
+    request_handler(request, ent)(Handlers().handle_thing)
+    service.add(ent)
+
+    async with asyncio.timeout(5.0):
+        await service.start()
+
+        cli = kit.entity("bound_method_entity")
+        response = await cli.call(request, Message(foo="bar"))
+        assert response.val == 3
+
+
+@pytest.mark.asyncio
+async def test_declared_duplicate_request_handler(service):
+    """An entity cannot serve one request from two handlers."""
+    class Message(BaseModel):
+        foo: str
+
+    class Response(BaseModel):
+        val: int
+
+    request = declare_request("do_thing", message=Message, response=Response)
+    ent = declare_entity(name="duplicate_request_entity")
+
+    @request_handler(request, ent)
+    async def handle_thing(msg: Message) -> Response:
+        return Response(val=1)
+
+    @request_handler(request, ent)
+    async def handle_thing_again(msg: Message) -> Response:
+        return Response(val=2)
+
+    service.add(ent)
+
+    with pytest.raises(HandlerError, match="already handles request"):
+        await service.start()

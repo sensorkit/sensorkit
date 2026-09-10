@@ -7,11 +7,13 @@ import inspect
 import warnings
 from collections.abc import Callable, Coroutine
 from enum import StrEnum, auto
-from typing import Any, final, get_type_hints, override
+from typing import Any, final, get_type_hints, overload, override
 
 from loguru import logger
+from pydantic import BaseModel
 
 from sensorkit.api.bootstrap import connect
+from sensorkit.backend.request import CallContext, LongRequest, Request, RequestBase
 from sensorkit.common.importutil import get_caller_module
 from sensorkit.core.client import SensorKit, ServiceContext
 from sensorkit.core.controller import TaskHandlerCallback
@@ -32,10 +34,19 @@ from sensorkit.core.task import Task
 from sensorkit.core.trait import Archetype, Trait
 
 type InitDeinitCallback = Callable[[], Coroutine[Any, Any, None] | None]
+type SimpleHandler[P: BaseModel | None, R: BaseModel | None] = (
+    Callable[[P], Coroutine[Any, Any, R]]
+    | Callable[[Any, P], Coroutine[Any, Any, R]]
+)
+type LongHandler[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None] = (
+    Callable[[P, CallContext[V, R]], Coroutine[Any, Any, None]]
+    | Callable[[Any, P, CallContext[V, R]], Coroutine[Any, Any, None]]
+)
 
 AUTO_ENTITY_ATTR = "__sk_entity__"
 DECL_MARK_ATTR = "__sk_decl__"
 CALLBACK_MARK_ATTR = "__sk_callback__"
+REQUEST_ATTR = "__sk_request__"
 TRAIT_ANNOTATION_ATTR = "__sk_traits__"
 
 
@@ -76,6 +87,16 @@ def _unwrap_method(func: Callable):
 def _mark_callback(func: Callable, kind: CallbackKind):
     """Mark a function as an unassociated callback."""
     setattr(_unwrap_method(func), CALLBACK_MARK_ATTR, kind)
+
+
+def _mark_request(func: Callable, request: RequestBase):
+    """Record the request a handler was declared for."""
+    setattr(_unwrap_method(func), REQUEST_ATTR, request)
+
+
+def get_request(func: Callable) -> RequestBase:
+    """Return the request a handler was declared for."""
+    return getattr(func, REQUEST_ATTR)
 
 
 def is_callback(func: Callable):
@@ -129,6 +150,7 @@ class CallbackKind(StrEnum):
     ENTITY_DEINIT = auto()
     COMMAND_HANDLER = auto()
     TASK_HANDLER = auto()
+    REQUEST_HANDLER = auto()
     TASK_FACTORY = auto()
     ENABLE = auto()
     DISABLE = auto()
@@ -215,6 +237,9 @@ class DeclaredEntity[T: EntityImpl = EntityImpl](EntityDelegate):
                 self.impl.on_attach(func)
             case CallbackKind.ENTITY_DEINIT:
                 self.impl.on_detach(func)
+            case CallbackKind.REQUEST_HANDLER:
+                request = get_request(func)
+                self.impl.on_attach(functools.partial(self.impl.handle_request, request, func))
 
 
 class DeclaredDevice(DeclaredEntity[DeviceImpl], DeviceDelegate):
@@ -580,6 +605,56 @@ def task_factory(arg: DeclaredEntity | TaskFactoryFunc):
             return functools.partial(_decorator, arg, CallbackKind.TASK_FACTORY)
         case _:
             return _decorator(None, CallbackKind.TASK_FACTORY, arg)
+
+
+@overload
+def request_handler[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None](
+    request: LongRequest[P, R, V],
+    decl: DeclaredEntity | None = None,
+) -> Callable[[LongHandler[P, R, V]], LongHandler[P, R, V]]: ...
+
+
+@overload
+def request_handler[P: BaseModel | None, R: BaseModel | None](
+    request: Request[P, R],
+    decl: DeclaredEntity | None = None,
+) -> Callable[[SimpleHandler[P, R]], SimpleHandler[P, R]]: ...
+
+
+def request_handler(request: RequestBase, decl: DeclaredEntity | None = None):
+    """Declare a handler for the given request.
+
+    The handler takes the request message, and takes a CallContext as well if the request is
+    long-running. A handler that takes no CallContext gives its response type as the return
+    annotation. A request that declares no message types it as None.
+
+        >>> slew_request = declare_long_request("slew", message=SlewMessage)
+        >>>
+        >>> @request_handler(slew_request)
+        ... async def handle_slew(
+        ...     self,
+        ...     params: SlewMessage,
+        ...     call: CallContext[None],
+        ... ):
+        ...     ...
+
+    A type checker verifies the annotations against the request declaration, so annotate every
+    parameter. Nothing checks the handler at runtime until it is called.
+
+    Callers invoke the request through an entity client.
+
+        >>> await kit.entity("mount").call(slew_request, SlewMessage(...))
+
+    Args:
+        request: The request declaration the handler serves.
+        decl: The entity declaration to associate with, when not declaring on a marked class.
+    """
+    return functools.partial(_request_decorator, decl, request)
+
+
+def _request_decorator(decl: DeclaredEntity | None, request: RequestBase, func: Callable):
+    _mark_request(func, request)
+    return _decorator(decl, CallbackKind.REQUEST_HANDLER, func)
 
 
 def on_enable(arg: DeclaredEntity | Callable):
