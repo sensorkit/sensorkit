@@ -111,6 +111,8 @@ def _error_handler():
         raise HTTPException(status_code=503, detail="Backend not available") from err
     except sk.CallError as err:
         raise HTTPException(status_code=409, detail=str(err)) from err
+    except TimeoutError as err:
+        raise HTTPException(status_code=504, detail="Request timed out") from err
 
 
 def _snapshot(forwarders: Iterable[Forwarder], entity_id: str | None = None) -> list[SKRecord]:
