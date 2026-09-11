@@ -10,14 +10,18 @@ teardown releases whatever a case left held and drains the tasks it started.
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 
 import pytest
+import pytest_asyncio
 
+from sensorkit.common.aio import AsyncObserver
 from sensorkit.sensor.binding import BoundSensor, CapabilitySnapshot
 from sensorkit.sensor.definition import SensorDefinition
+from sensorkit.sensor.dispatch import OperationEvent
 from sensorkit.sensor.topology import Placement, Topology
 
-from .common import REPORTED, SENSOR_YAML, snapshot_of
+from .common import REPORTED, SENSOR_YAML, Rig, snapshot_of
 
 
 @pytest.fixture(scope="session")
@@ -53,3 +57,26 @@ def at(topology):
     index = {p.device: p for p in topology.placements()}
 
     return index.__getitem__
+
+
+@pytest_asyncio.fixture
+async def rig(service_context, handles) -> AsyncIterator[Rig]:
+    """Every device `handles` names, served with what it handles."""
+    rig = Rig()
+
+    for name, commands in handles.items():
+        await rig.serve(service_context, name, commands)
+
+    yield rig
+
+    await rig.release()
+
+
+@pytest.fixture
+def clients(kit, rig):
+    return {name: kit.device(name) for name in rig.devices}
+
+
+@pytest.fixture
+def observer() -> AsyncObserver[OperationEvent]:
+    return AsyncObserver[OperationEvent]()
