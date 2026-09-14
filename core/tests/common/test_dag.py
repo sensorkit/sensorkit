@@ -216,14 +216,63 @@ async def test_delay_s_defers_dispatch_after_dependencies_resolve():
 
 # ---- abort vs. cancellation ---------------------------------------------
 
+def weather(exc: BaseException) -> bool:
+    return True
 
 
+def foreign(exc: BaseException) -> bool:
+    return False
 
 
+@pytest.mark.asyncio
+async def test_an_absorbed_cancellation_is_reported_as_an_abort():
+    dispatch, _ = recorder(dwell=0.05)
+    g = graph([n(0), n(1)], deps={1: {0}})
+    task = asyncio.create_task(
+        DagRunner(dispatch).execute(g, absorbed=weather))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    report = await task                          # returns; does not raise
+    assert report.aborted
 
 
+@pytest.mark.asyncio
+async def test_an_absorbed_run_reports_what_its_nodes_did():
+    """The report is the only account of what an aborted run left undone, so
+    it carries node results and not just the outcome."""
+    dispatch, _ = recorder(dwell=0.05)
+    g = graph([n(0), n(1), n(2)], deps={2: {0}})
+    task = asyncio.create_task(
+        DagRunner(dispatch).execute(g, absorbed=weather))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    report = await task
+    assert report.aborted
+    assert {0, 1} <= set(report.results)
+    assert all(r.status == "cancelled" for r in report.results.values())
 
 
+@pytest.mark.asyncio
+async def test_a_declined_cancellation_propagates_after_draining():
+    started = asyncio.Event()
+    finished: list[int] = []
+
+    async def dispatch(node: Node) -> object:
+        started.set()
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            finished.append(node.payload)        # drained, not orphaned
+            raise
+        return None
+
+    task = asyncio.create_task(
+        DagRunner(dispatch).execute(graph([n(0)]), absorbed=foreign))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert finished == [0]
 
 
 @pytest.mark.asyncio
@@ -238,6 +287,9 @@ async def test_a_run_given_no_predicate_propagates_every_cancellation():
 
 # ---- cancellation arriving while the run drains -------------------------
 
+def domain(exc: BaseException) -> bool:
+    """Claims a cancellation the caller sent as an abort, and nothing else."""
+    return str(exc) == "abort"
 
 
 class Holding:
@@ -271,16 +323,112 @@ class Holding:
         return None
 
 
+async def cancelled_twice(first: str, second: str, holding: Holding,
+                          results: dict) -> asyncio.Task:
+    """A run cancelled once, and again while its node is still draining."""
+    task = asyncio.create_task(DagRunner(holding.dispatch).execute(
+        graph([n(0)]), absorbed=domain, results=results))
+
+    async with asyncio.timeout(1.0):
+        await holding.started.wait()
+
+    task.cancel(first)
+
+    async with asyncio.timeout(1.0):
+        await holding.draining.wait()
+
+    task.cancel(second)
+    await asyncio.sleep(0)
+
+    # The drain holds both until its node has ended.
+    assert not task.done()
+
+    holding.release.set()
+
+    async with asyncio.timeout(1.0):
+        await asyncio.wait({task})
+
+    return task
 
 
+@pytest.mark.asyncio
+async def test_a_later_hard_cancellation_propagates_over_an_earlier_abort():
+    holding, results = Holding(), {}
+    task = await cancelled_twice("abort", "shutdown", holding, results)
+
+    with pytest.raises(asyncio.CancelledError, match="shutdown"):
+        task.result()
+
+    assert holding.finished == [0]
+    assert results[0].status == "cancelled"
 
 
+@pytest.mark.asyncio
+async def test_a_later_abort_does_not_downgrade_a_hard_cancellation():
+    holding, results = Holding(), {}
+    task = await cancelled_twice("shutdown", "abort", holding, results)
+
+    with pytest.raises(asyncio.CancelledError, match="shutdown"):
+        task.result()
+
+    assert holding.finished == [0]
 
 
+@pytest.mark.asyncio
+async def test_repeated_aborts_are_still_one_absorbed_run():
+    holding, results = Holding(), {}
+    task = await cancelled_twice("abort", "abort", holding, results)
+    report = task.result()
+
+    assert report.aborted
+    assert report.results is results
+    assert holding.finished == [0]
 
 
+class Intent:
+    """Why the caller is cancelling right now, which it may change at any time."""
+
+    def __init__(self):
+        self.domain = True
+
+    def __call__(self, exc: BaseException) -> bool:
+        return self.domain
 
 
+@pytest.mark.parametrize(("first", "propagated"), [
+    (True, "second"),
+    (False, "first"),
+])
+@pytest.mark.asyncio
+async def test_each_cancellation_is_classified_as_it_arrives(first, propagated):
+    holding, intent = Holding(), Intent()
+    task = asyncio.create_task(DagRunner(holding.dispatch).execute(
+        graph([n(0)]), absorbed=intent))
+
+    async with asyncio.timeout(1.0):
+        await holding.started.wait()
+
+    intent.domain = first
+    task.cancel("first")
+
+    async with asyncio.timeout(1.0):
+        await holding.draining.wait()
+
+    intent.domain = not first
+    task.cancel("second")
+    await asyncio.sleep(0)
+
+    # Settling on a domain abort before the drain ends changes neither answer.
+    intent.domain = True
+    holding.release.set()
+
+    async with asyncio.timeout(1.0):
+        await asyncio.wait({task})
+
+    with pytest.raises(asyncio.CancelledError, match=propagated):
+        task.result()
+
+    assert holding.finished == [0]
 
 
 @pytest.mark.asyncio

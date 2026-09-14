@@ -489,10 +489,10 @@ class RunState:
         return declined
 
 
-def _claims(absorbed, cancellation):
-    if absorbed is not None:
-        raise NotImplementedError("Domain cancellation is unavailable")
-    return False
+def _claims(absorbed: Absorbed | None,
+            cancellation: asyncio.CancelledError) -> bool:
+    """Whether the caller claims a cancellation as its own domain abort."""
+    return absorbed is not None and absorbed(cancellation)
 
 
 class DagRunner:
