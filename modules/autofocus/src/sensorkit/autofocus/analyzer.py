@@ -144,14 +144,11 @@ class AutofocusAnalyzer:
             f"Autofocus analyzer starting {'ENABLED' if self.state.enabled else 'disabled'}"
         )
 
-        # Control surface: entity-level Requests (see models.run_vcurve_request).
-        await self._entity.handle_request(run_vcurve_request, self.run_vcurve)
-        await self._entity.handle_request(set_enabled_request, self.set_autofocus_enabled)
-
         # Subscribe to SENPAI results and process them
         self._tasks.append(asyncio.create_task(self._subscribe_senpai()))
         self._tasks.append(asyncio.create_task(self._processor_loop()))
 
+    @sk.request_handler(run_vcurve_request)
     async def run_vcurve(self, cmd: RunVCurve):
         """Queue a V-curve sweep. Omit ra/dec to auto-select a target.
 
@@ -167,6 +164,7 @@ class AutofocusAnalyzer:
         task.add_done_callback(_log_task_exception)
         self._tasks.append(task)
 
+    @sk.request_handler(set_enabled_request)
     async def set_autofocus_enabled(self, cmd: SetAutofocusEnabled):
         """Enable/disable the analyzer's focus corrections (base + filter offset still drive)."""
         await self.set_enabled(cmd.enabled)

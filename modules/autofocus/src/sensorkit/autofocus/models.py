@@ -66,8 +66,8 @@ class SetAutofocusEnabled(BaseModel):
 #
 # Both reply immediately: a simple request must answer inside the backend's NATS deadline (0.5s),
 # so run_vcurve hands the sweep off to a task rather than queueing it inline.
-run_vcurve_request = sk.Request.define("run_vcurve", payload=RunVCurve)
-set_enabled_request = sk.Request.define("set_enabled", payload=SetAutofocusEnabled)
+run_vcurve_request = sk.declare_request("run_vcurve", message=RunVCurve)
+set_enabled_request = sk.declare_request("set_enabled", message=SetAutofocusEnabled)
 
 
 class AutofocusConfig(BaseModel):
