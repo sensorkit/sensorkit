@@ -148,6 +148,11 @@ def get_registered_traits() -> frozenset[Trait]:
     return frozenset(_trait_registry)
 
 
+def get_trait(name: str) -> Trait | None:
+    """Return the registered trait or archetype with this name, or None."""
+    return next((t for t in _trait_registry if t.name == name), None)
+
+
 def get_registered_archetypes() -> frozenset[Archetype]:
     """Return all registered archetypes."""
     return frozenset(_archetype_registry)
