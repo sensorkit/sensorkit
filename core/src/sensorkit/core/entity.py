@@ -14,10 +14,10 @@ from sensorkit.backend.base import Entity
 from sensorkit.backend.event import Event, EventMultiplexer, EventStreamConsumer
 from sensorkit.backend.request import (
     Call,
-    ExtendedCall,
-    ExtendedHandlerFunc,
-    HandlerFunc,
-    Request,
+    LongCall,
+    LongRequest,
+    RequestBase,
+    RequestHandlerFunc,
 )
 from sensorkit.common.aio import AsyncObserver
 from sensorkit.common.keyword import (
@@ -225,33 +225,30 @@ class EntityClient(EntityBase):
 
         return receive_data()
 
-    @overload
-    async def request[M: BaseModel](
-        self, name: str, data: BaseModel, response_type: type[M]
-    ) -> M: ...
-
-    @overload
-    async def request(
-        self, name: str, data: BaseModel, response_type: None = None
-    ) -> bytes: ...
-
-    async def request(self, name, data, response_type=None):
-        """Send a named raw request and return the deserialised response.
-
-        Omitting `response_type` returns the response bytes undecoded, for callers that do not
-        know the request's models — e.g. the web API forwarding an entity request from a client.
-        """
+    async def request[M: BaseModel](self, name: str, data: BaseModel, response_type: type[M]) -> M:
+        """Send a named raw request and return the deserialised response."""
         received = await self._request.invoke(
             name=name,
             payload=data.model_dump_json().encode(),
         )
-        return response_type.model_validate_json(received) if response_type else received
+        return response_type.model_validate_json(received)
 
-    def call[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None](
+    @overload
+    def call[R: BaseModel | None, V: BaseModel | None](
         self,
-        request: Request[P, R, V],
+        request: RequestBase[None, R, V],
+    ) -> Call[R, V]:
+        """Invoke a request that takes no message."""
+
+    @overload
+    def call[P: BaseModel, R: BaseModel | None, V: BaseModel | None](
+        self,
+        request: RequestBase[P, R, V],
         data: P,
     ) -> Call[R, V]:
+        """Invoke a request, sending it the given message."""
+
+    def call(self, request, data = None) -> Call:
         """Invoke a request."""
         payload = b"" if data is None else data.model_dump_json().encode()
         request_coro = self._request.invoke(
@@ -259,15 +256,16 @@ class EntityClient(EntityBase):
             payload=payload,
         )
 
-        if request.is_extended():
-            return ExtendedCall(
-                request_coro,
-                request.response,
-                request.result,
-                self.get_event_mux(),
-            )
-        else:
-            return Call(request_coro, request.response)
+        match request:
+            case LongRequest():
+                return LongCall(
+                    request_coro,
+                    request.response,
+                    request.result,
+                    self.get_event_mux(),
+                )
+            case _:
+                return Call(request_coro, request.response)
 
 
 class EntityRef[T: EntityClient = EntityClient]:
@@ -387,10 +385,10 @@ class EntityInterface(ABC):
     @abstractmethod
     async def handle_request[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None](
         self,
-        request: Request[P, R, V],
-        func: HandlerFunc[P, R] | ExtendedHandlerFunc[P, R, V],
+        request: RequestBase[P, R, V],
+        func: RequestHandlerFunc[P, R, V],
     ):
-        """Register a handler for the given Request definition."""
+        """Register a handler for the given Request declaration."""
         ...
 
     @abstractmethod

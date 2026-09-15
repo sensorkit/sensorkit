@@ -227,8 +227,8 @@ class TheSkyDome(TheSkyDevice):
                 )
                 try:
                     await self.dome_disconnect(Disconnect())
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.opt(exception=e).debug("dome disconnect failed before reconnect")
                 await self.dome_connect(Connect())
 
     @sk.command_handler

@@ -69,7 +69,7 @@ data_flow:
           include: all
         - op: array_to_fits
         - op: write_file
-          directory: /Temp/SimulatedSensor
+          directory: /opt/sk/data/SimulatedSensor
 
 sensors:
   - id: SimulatedSensor
@@ -173,7 +173,7 @@ webapi:
   port: 8000
   serve_data_products:
     - kind: local_fits
-      root_directory: /Temp/SimulatedSensor
+      root_directory: /opt/sk/data/SimulatedSensor
       controller_id: from_path
 
 config:

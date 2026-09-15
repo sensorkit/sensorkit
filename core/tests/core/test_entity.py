@@ -7,6 +7,7 @@ import pytest
 from pydantic import BaseModel
 
 from sensorkit.backend.event import Event
+from sensorkit.backend.request import HandlerError, declare_request
 from sensorkit.common.keyword import UnknownKeyword, declare_keyword
 from sensorkit.core.entity import EntityRef
 
@@ -199,3 +200,28 @@ async def test_entity_event(kit):
 
         await ent.emit_event(MyEvent(my_key="foobar"))
         await done.wait()
+
+
+@pytest.mark.asyncio
+async def test_entity_duplicate_request_handler(entity_impl):
+    """An entity cannot bind two handlers to one request name."""
+    class Message(BaseModel):
+        foo: str
+
+    class Response(BaseModel):
+        val: int
+
+    request = declare_request("do_thing", message=Message, response=Response)
+    other = declare_request("do_thing", message=Message)
+
+    async def handle_thing(msg: Message) -> Response:
+        return Response(val=1)
+
+    async def handle_other(msg: Message) -> None:
+        pass
+
+    await entity_impl.handle_request(request, handle_thing)
+
+    # The name is what binds the backend subject, so a different declaration still collides.
+    with pytest.raises(HandlerError, match="already handles request"):
+        await entity_impl.handle_request(other, handle_other)

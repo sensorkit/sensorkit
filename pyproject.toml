@@ -106,8 +106,6 @@ sky-transmission = [
     "matplotlib",
 ]
 senpai = [
-    # 2.8 renamed the processing/catalog modules (senpai.engine.processing.collect,
-    # senpai.catalog.sstrc7_source) and added per-call pipeline_mode.
     "astro-senpai>=2.8.0",
 ]
 slack = [
@@ -165,6 +163,7 @@ dev = [
     "pytest>=8.3.4",
     "sensorkit[thesky-simulator]",
     "testcontainers[nats]>=4.9.0",
+    "ty>=0.0.80",
 ]
 
 # These groups allow the user to opt in to using the pytorch indexes, and,
@@ -224,12 +223,16 @@ line-ending = "auto"
 
 [tool.complexipy]
 paths = ["core", "modules"]
-# The check is diff-scoped, so it only ever grades functions a branch touches — which makes it a
-# toll on whoever edits a file next rather than a measure of the file. 15 flagged linear
-# device-sequence handlers (drive the focuser, set the filter, capture N frames) whose only sin is
-# length, and splitting them to score lower just moves the nesting elsewhere. Raised to 25, which
-# still catches genuinely tangled code.
-max-complexity-allowed = 25
+max-complexity-allowed = 15
+
+[tool.ty.src]
+include = ["core/src", "modules"]
+exclude = ["modules/*/tests"]
+
+[tool.ty.rules]
+invalid-argument-type        = "ignore"  # 497
+unresolved-attribute         = "ignore"  # 676
+invalid-type-form            = "ignore"  # 118
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
@@ -260,12 +263,13 @@ type = "layers"
 ignore_imports = [
     "sensorkit.udl.publishers -> sensorkit.senpai.models",
     "sensorkit.autoslew.** -> sensorkit.alpaca.**",
+    "sensorkit.autofocus.analyzer -> sensorkit.senpai.models",
 ]
 layers = [
-    "sensorkit.autofocus",
     """
     sensorkit.alpaca |
     sensorkit.autoslew |
+    sensorkit.autofocus |
     sensorkit.burr |
     sensorkit.indigo |
     sensorkit.nina |

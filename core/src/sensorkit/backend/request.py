@@ -3,26 +3,51 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import uuid
+from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Coroutine, Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Callable, Literal, cast, final, overload, override
+from typing import Any, Callable, Literal, cast, final, override
 
 from loguru import logger
 from pydantic import BaseModel
 
-from sensorkit.backend.base import StreamContext
+from sensorkit.backend.base import RemoteRequestError, StreamContext
 from sensorkit.backend.event import Event, EventMultiplexer
 from sensorkit.common.aio import cleanup_future, scoped_waiter
 
+type ReplyState = Literal["accepted", "rejected", "succeeded", "failed"]
 
-class Call[R: BaseModel, V: BaseModel = R](Awaitable[V]):
+
+class CallReply[R: BaseModel | None = Any](BaseModel):
+    """The direct reply to a call.
+
+    Carries the state of the call alongside the handler's response, so the response model holds
+    only application data. A simple request succeeds or fails in its reply. A long-running request
+    is accepted or rejected in its reply, and reports its outcome on the entity event stream.
+
+    Left unparametrized, the response is kept as plain JSON data.
+    """
+    call_id: uuid.UUID
+    """Identifies the call, and matches the events a long-running call publishes."""
+    state: ReplyState
+    """Where the call stands once the handler has replied."""
+    response: R | None = None
+    """The handler's response, where it gave one."""
+    reason: str | None = None
+    """Why the call was rejected or failed."""
+    details: str | None = None
+    """Diagnostic detail for a failed call, such as the handler's traceback."""
+
+
+class Call[R: BaseModel | None, V: BaseModel | None = R](Awaitable[V]):
     """An invocation of a simple request."""
 
-    def __init__(self, coro: Coroutine[Any, Any, bytes], response_type: type[R]):
+    def __init__(self, coro: Coroutine[Any, Any, bytes], response_type: type[R] | None):
         self._coro = coro
-        self._response_type = response_type
+        self._reply_type: type[CallReply[R]] = CallReply[response_type]
         self._future: asyncio.Future[V] = asyncio.get_running_loop().create_future()
         self._got_response = False
         self.response: R | None = None
@@ -30,24 +55,31 @@ class Call[R: BaseModel, V: BaseModel = R](Awaitable[V]):
         self._future.add_done_callback(cleanup_future)
 
     @final
-    async def _invoke(self, timeout: float) -> R:
-        # Send request and await response.
+    async def _invoke(self, timeout: float, expected: ReplyState) -> CallReply[R]:
+        # Send request and await the reply.
         async with asyncio.timeout(timeout):
             recv = await self._coro
 
-            if self._response_type:
-                self.response = self._response_type.model_validate_json(recv)
+        reply = self._reply_type.model_validate_json(recv)
+        self.response = reply.response
+        self._got_response = True
 
-            self._got_response = True
+        match reply.state:
+            case "failed":
+                raise RemoteRequestError(reply.reason, details=reply.details)
+            case "rejected":
+                raise CallError(f"call rejected: {reply.reason}" if reply.reason else "call rejected")
+            case state if state != expected:
+                raise CallError(f"unexpected {state} reply")
 
-        return self.response
+        return reply
 
     async def invoke(self, timeout: float = 5.0):
-        """Send the request and populate the future with the parsed response."""
+        """Send the request and populate the future with the response."""
         try:
-            response = await self._invoke(timeout)
-            self._future.set_result(response)
-            return response
+            await self._invoke(timeout, "succeeded")
+            self._future.set_result(cast(V, self.response))
+            return self.response
         except BaseException as e:
             self._future.set_exception(e)
             raise
@@ -82,64 +114,71 @@ class Call[R: BaseModel, V: BaseModel = R](Awaitable[V]):
 
 
 type HandlerFunc[P: BaseModel | None, R: BaseModel | None] = Callable[[P], Coroutine[Any, Any, R]]
+"""A simple request handler. A request that declares no message types it as None."""
 
 
-class CallHandler[P: BaseModel | None, R: BaseModel | None]:
-    """Callable that handles incoming simple requests."""
+class CallHandler[P: BaseModel | None]:
+    """Adapts a request handler to the backend's bytes in, bytes out contract.
+
+    Every call gets a reply, including one whose handler raised. A request with no message type
+    passes None, keeping every handler the same arity.
+    """
 
     def __init__(
         self,
-        request: Request[P, R, R],
-        func: HandlerFunc[P, R],
+        message: type[P] | None,
+        run: Callable[..., Awaitable[CallReply]],
     ):
-        self._request = request
-        self._handler_func = func
+        self._message = message
 
-    def _run_handler(self, data: P):
-        return self._handler_func(data)
+        # Simple and long-running requests share this class, differing only in the runner bound.
+        self._run = run
 
     async def __call__(self, payload: bytes) -> bytes:
-        # Parse the input payload.
-        payload_type = self._request.payload
-        data: P = (
-            payload_type.model_validate_json(payload)
-            if self._request.payload is not None
-            else None
-        )
+        call_id = uuid.uuid1()
 
-        # Run the user handler func and get the response object.
-        response = await self._run_handler(data)
+        try:
+            message = self._message.model_validate_json(payload) if self._message else None
+            reply = await self._run(call_id, message)
+        except Exception as e:
+            logger.opt(exception=e).debug(f"Call {call_id} failed in its handler")
+            error = RemoteRequestError.from_exception(e)
 
-        # Serialize the response payload.
-        response_payload = (
-            response.model_dump_json().encode()
-            if response is not None
-            else b""
-        )
+            reply = CallReply(
+                call_id=call_id,
+                state="failed",
+                reason=str(error),
+                details=error.details,
+            )
 
-        return response_payload
+        return reply.model_dump_json().encode()
 
 
-class ExtendedResponse(BaseModel):
-    """A long-running request response."""
-    call_id: uuid.UUID = None
-    call_state: Literal["running", "success", "failure"] = "running"
+async def run_call[R: BaseModel | None](
+    func: HandlerFunc[Any, R],
+    call_id: uuid.UUID,
+    message: BaseModel | None,
+) -> CallReply[R]:
+    """Run a simple handler func and return the reply carrying its response."""
+    return CallReply(call_id=call_id, state="succeeded", response=await func(message))
 
 
-class CallEvent(Event, ExtendedResponse):
+class CallEvent(Event):
     """An event that occurs in the context of a long-running request."""
+    call_id: uuid.UUID
+    call_state: Literal["running", "success", "failure"] = "running"
     good_until: datetime | None
     payload: Any = None
 
 
-class ExtendedCall[R: ExtendedResponse, V: BaseModel](Call[R, V]):
+class LongCall[R: BaseModel | None, V: BaseModel | None](Call[R, V]):
     """A Call extension that supports long-running requests."""
 
     def __init__(
         self,
         coro: Coroutine[Any, Any, bytes],
-        response_type: type[R],
-        result_type: type[V],
+        response_type: type[R] | None,
+        result_type: type[V] | None,
         event_mux: EventMultiplexer,
     ):
         super().__init__(coro, response_type)
@@ -156,25 +195,14 @@ class ExtendedCall[R: ExtendedResponse, V: BaseModel](Call[R, V]):
             await self._event_mux.wait_ready()
 
             # Execute the initial request-response communication.
-            response = await self._invoke(timeout)
+            reply = await self._invoke(timeout, "accepted")
         except (asyncio.CancelledError, Exception) as e:
+            # wait_ready() can fail or be cancelled before _invoke ever awaits
+            # self._coro, in which case it must be closed explicitly here.
+            self._coro.close()
             context.close()
             self._future.set_exception(e)
             raise
-
-        if response.call_state == "failure":
-            # The handler rejected the call. The response is authoritative, so settle here instead
-            # of leaving the caller on the event stream's timeout.
-            try:
-                error = await self._rejection_error(queue, response.call_id)
-            except (asyncio.CancelledError, Exception) as e:
-                context.close()
-                self._future.set_exception(e)
-                raise
-
-            context.close()
-            self._future.set_exception(error)
-            raise error
 
         # Start a background task to receive response progress and end events.
         started = asyncio.Event()
@@ -183,13 +211,13 @@ class ExtendedCall[R: ExtendedResponse, V: BaseModel](Call[R, V]):
             self._await_response_events(
                 context,
                 queue,
-                response.call_id,
+                reply.call_id,
                 started,
                 timeout,
             )
         )
 
-        def extended_call_done(t: asyncio.Task):
+        def long_call_done(t: asyncio.Task):
             # Note we must check the task exception even if the future is already done to avoid
             # leaks and warnings.
             if t.cancelled():
@@ -200,7 +228,7 @@ class ExtendedCall[R: ExtendedResponse, V: BaseModel](Call[R, V]):
             elif not self._future.done():
                 self._future.set_result(t.result())
 
-        self._task.add_done_callback(extended_call_done)
+        self._task.add_done_callback(long_call_done)
 
         # Wait until the first event is received or the task ends for some reason, whichever
         # comes first.
@@ -210,42 +238,7 @@ class ExtendedCall[R: ExtendedResponse, V: BaseModel](Call[R, V]):
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
-        return response
-
-    async def _rejection_error(
-        self,
-        queue: asyncio.Queue[Event],
-        response_id: uuid.UUID,
-        timeout: float = 1.0,
-    ) -> CallError:
-        """Return the error for a rejected call, carrying the handler's reason where available.
-
-        The reason travels on the failure event rather than the response, and the event stream may
-        be a different transport than the request that just delivered the rejection. The event is
-        published ahead of that response, so it is normally waiting in the queue already; if it
-        does not arrive within timeout seconds, the rejection still stands and is reported without
-        a reason.
-
-        Args:
-            queue: The call's registered CallEvent queue.
-            response_id: The call id to match events against.
-            timeout: How long to wait for the failure event before giving up on the reason.
-        """
-        try:
-            async with asyncio.timeout(timeout):
-                while True:
-                    event = await queue.get()
-                    queue.task_done()
-
-                    if not isinstance(event, CallEvent) or event.call_id != response_id:
-                        continue
-
-                    # Rejecting leaves the response done, so a handler is free to emit progress
-                    # before its failure event. The reason rides on the latter.
-                    if event.call_state == "failure":
-                        return CallError(f"response failed: {event.payload}")
-        except TimeoutError:
-            return CallError("call rejected")
+        return self.response
 
     async def _await_response_events(
         self,
@@ -286,87 +279,82 @@ class ExtendedCall[R: ExtendedResponse, V: BaseModel](Call[R, V]):
         raise RuntimeError
 
 
-type ExtendedHandlerFunc[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None] = (
-    Callable[
-        [P, CallContext[R, V]],
-        Coroutine[Any, Any, None]
-    ]
+type LongHandlerFunc[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None] = (
+    Callable[[P, CallContext[V, R]], Coroutine[Any, Any, None]]
 )
+"""A long-running request handler."""
+
+type RequestHandlerFunc[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None] = (
+    HandlerFunc[P, R] | LongHandlerFunc[P, R, V]
+)
+"""Any handler shape a request may be declared with."""
 
 
-class CallContext[R: ExtendedResponse | None, V: BaseModel | None]:
-    """Context for an incoming extended request currently being handled."""
+class CallContext[V: BaseModel | None, R: BaseModel | None = None]:
+    """Context for an incoming long-running request currently being handled."""
 
     def __init__(self, call_id: uuid.UUID, stream: StreamContext):
         self.call_id = call_id
         self._stream = stream
-        self.response = asyncio.get_running_loop().create_future()
+        self.reply: asyncio.Future[CallReply[R]] = asyncio.get_running_loop().create_future()
         self.finalized = False
 
-    def accept(self, *, response: R):
-        """Mark the call as accepted and set the initial response, allowing progress events to follow."""
-        if self.response.done():
-            raise CallHandlerResponseError(responded=True)
+    @property
+    def responded(self) -> bool:
+        """Whether the handler has accepted or rejected the call."""
+        return self.reply.done()
 
-        if response is None:
-            response = ExtendedResponse()
+    def accept(self, *, response: R | None = None):
+        """Accept the call and send the initial response, allowing progress events to follow."""
+        self._respond(CallReply(call_id=self.call_id, state="accepted", response=response))
 
-        response.call_id = self.call_id
-        response.call_state = "running"
-        self.response.set_result(response)
+    def reject(self, *, response: R | None = None, reason: str | None = None):
+        """Reject the call, ending it without further events.
 
-    def reject(self, *, response: R):
-        """Reject the call immediately, returning a failure response without further events."""
-        if self.response.done():
-            raise CallHandlerResponseError(responded=True)
+        Args:
+            response: The initial response, for a caller that needs it despite the rejection.
+            reason: Why the call was rejected.
+        """
+        self._respond(
+            CallReply(call_id=self.call_id, state="rejected", response=response, reason=reason)
+        )
+        self.finalized = True
 
-        if response is None:
-            response = ExtendedResponse()
+    def _respond(self, reply: CallReply[R]):
+        if self.responded:
+            raise HandlerResponseError(responded=True)
 
-        response.call_id = self.call_id
-        response.call_state = "failure"
-        self.response.set_result(response)
+        self.reply.set_result(reply)
 
-    async def progress(self, ttl: float, payload: Any = None):
+    async def progress(self, ttl: float):
         """Emit a progress event, extending the caller's deadline by ttl seconds."""
-        if not self.response.done():
-            raise CallHandlerResponseError(responded=False)
+        if not self.responded:
+            raise HandlerResponseError(responded=False)
 
         await self._call_event(
             CallEvent(
                 call_id=self.call_id,
                 call_state="running",
                 good_until=datetime.now(UTC) + timedelta(seconds=ttl),
-                payload=payload,
             )
         )
 
-    async def progress_from_task(
-        self,
-        task: asyncio.Task,
-        *,
-        cadence: float,
-        ttl: float,
-        payload_func: Callable[[], Any] | None = None,
-    ):
+    async def progress_from_task(self, task: asyncio.Task, *, cadence: float, ttl: float):
         """Emit progress events at the given cadence until task completes, then await the task."""
         done = None
         fs = [task]
 
         while not done:
-            await self.progress(ttl, payload_func() if payload_func else None)
+            await self.progress(ttl)
             done, _ = await asyncio.wait(fs, timeout=cadence)
 
         # Raise if the task raised.
         await task
 
     async def succeed(self, *, result: V):
-        """Emit a success event carrying the final result, completing the extended call."""
-        if not self.response.done():
-            raise CallHandlerResponseError(responded=False)
-
-        if self.response.result().call_state == "failure":
-            raise CallHandlerError("Cannot send success result for rejected call")
+        """Emit a success event carrying the final result, completing the long-running call."""
+        if not self.responded:
+            raise HandlerResponseError(responded=False)
 
         await self._call_event(
             CallEvent(
@@ -378,197 +366,239 @@ class CallContext[R: ExtendedResponse | None, V: BaseModel | None]:
             finalize=True,
         )
 
-    async def fail(self, payload: Any = None):
-        """Emit a failure event, completing the extended call in a failed state."""
-        if not self.response.done():
-            raise CallHandlerResponseError(responded=False)
+    async def fail(self, reason: str | None = None):
+        """Emit a failure event, completing the long-running call in a failed state."""
+        if not self.responded:
+            raise HandlerResponseError(responded=False)
 
         await self._call_event(
             CallEvent(
                 call_id=self.call_id,
                 call_state="failure",
                 good_until=None,
-                payload=payload,
+                payload=reason,
             ),
             finalize=True,
         )
 
     async def _call_event(self, event: CallEvent, finalize: bool = False):
         if self.finalized:
-            raise CallHandlerError("Call has already been finalized")
+            raise HandlerError("Call has already been finalized")
 
         self.finalized = finalize
 
         await self._stream.publish_event(event.model_dump_json().encode())
 
 
-class ExtendedCallHandler[P: BaseModel | None, R: ExtendedResponse, V: BaseModel](
-    CallHandler[P, R]
-):
-    """Callable that handles incoming long-running requests."""
+_pending_failures: set[asyncio.Task] = set()
+"""Failure tasks for abandoned calls, held so the event loop cannot collect them early."""
 
-    def __init__(
-        self,
-        request: Request[P, R, V],
-        func: ExtendedHandlerFunc[P, R, V],
-        stream: StreamContext,
-    ):
-        super().__init__(request, func)  # noqa
-        self._handler_func = func
-        self._stream = stream
 
-    @override
-    async def _run_handler(self, data: P):
-        # Create the call context object and run the call handler func.
-        context = CallContext(uuid.uuid1(), self._stream)
-        handler_task = asyncio.create_task(self._handler_func(data, context))
+def _failure_task_done(task: asyncio.Task):
+    if not task.cancelled() and (error := task.exception()):
+        logger.debug(f"Could not fail abandoned call: {error}")
 
-        # Handle the initial response and error paths.
-        await asyncio.wait(
-            [
-                handler_task,
-                context.response,
-            ],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+    _pending_failures.discard(task)
 
-        if handler_task.done():
-            # The handler func exited already. If it raised, fail.
-            if e := handler_task.exception():
-                if not context.finalized:
-                    await context.fail(str(e))
 
-                logger.warning(f"Exception in call handler: {e}")
-                raise e
+# TODO: Fold finalization into the handler coroutine so this callback and its detached task go
+#       away. That also closes the race where a task the handler spawned finalizes between the
+#       check here and the failure task running. The handler task still needs an owner after
+#       that, so teardown can fail in flight calls rather than drop them, and a handler that is
+#       cancelled after accepting stops leaving its caller to time out on the event stream.
+def _fail_abandoned_call(context: CallContext[Any, Any], handler_task: asyncio.Task):
+    """Fail a call whose handler exited without finalizing it.
 
-        if not context.response.done():
-            # The handler func did not call `accept` or `reject`.
-            await context.fail()
-            raise CallHandlerResponseError(responded=False)
+    The handler task's exception is always retrieved, even when the call is already settled,
+    so that asyncio does not report it as never retrieved.
+    """
+    if handler_task.cancelled():
+        return
 
-        # Get the initial response object.
-        response = context.response.result()
-        response.call_id = context.call_id
+    error = handler_task.exception()
 
-        if response.call_state == "failure":
-            # The handler rejected the request. Make sure a fail event is sent.
-            if not context.finalized:
-                await context.fail("Request rejected")
+    if context.finalized:
+        if error is not None:
+            logger.debug(f"Exception raised after call was finalized: {error}")
 
-        # Ensure exceptions raised in the handler are propagated.
-        def call_handler_done(_):
-            if not context.finalized and not handler_task.cancelled():
-                payload = None
+        return
 
-                if e := handler_task.exception():
-                    payload = str(e)
+    reason = None if error is None else str(error)
+    suffix = "" if reason is None else f" with error {reason}"
 
-                logger.debug(f"failing unfinalized call handler {e}")
-                _t = asyncio.create_task(context.fail(payload))
+    logger.debug(f"Failing unfinalized call handler{suffix}")
+    task = asyncio.create_task(context.fail(reason))
 
-        handler_task.add_done_callback(call_handler_done)
-        return response
+    _pending_failures.add(task)
+    task.add_done_callback(_failure_task_done)
+
+
+async def run_long_call[R: BaseModel | None, V: BaseModel | None](
+    func: LongHandlerFunc[Any, R, V],
+    stream: StreamContext,
+    call_id: uuid.UUID,
+    message: BaseModel | None,
+) -> CallReply[R]:
+    """Run a long-running handler func and return the reply for the caller.
+
+    The handler keeps running after this returns, publishing progress and end events to the
+    entity event stream until the call is finalized.
+
+    Raises:
+        HandlerResponseError: if the handler returned without accepting or rejecting.
+    """
+    # Create the call context object and run the call handler func.
+    context: CallContext[V, R] = CallContext(call_id, stream)
+    handler_task = asyncio.create_task(func(message, context))
+
+    # Wait for the handler to reply or exit, whichever comes first.
+    await asyncio.wait(
+        [
+            handler_task,
+            context.reply,
+        ],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    if not context.responded:
+        # The handler exited without accepting or rejecting. The caller has no call id to follow
+        # events by, so the error goes back on the reply. A cancelled handler has no exception of
+        # its own to report.
+        if not handler_task.cancelled() and (error := handler_task.exception()):
+            raise error
+
+        raise HandlerResponseError(responded=False)
+
+    # Once the handler has replied, anything that ends the call is reported on the event stream,
+    # including the handler exiting without finalizing it.
+    handler_task.add_done_callback(functools.partial(_fail_abandoned_call, context))
+    return context.reply.result()
 
 
 class CallError(Exception):
-    """Raised when a call method fails."""
+    """Raised to a caller when a call is rejected or fails."""
 
 
-class CallHandlerError(CallError):
-    """Raised when a call method is called in an invalid state."""
+class HandlerError(Exception):
+    """Raised when a request handler is declared or used in an invalid state."""
 
 
-class CallHandlerResponseError(CallHandlerError):
+class HandlerResponseError(HandlerError):
     def __init__(self, *, responded: bool):
         self.responded = responded
         problem = "has already called" if responded else "did not call"
         super().__init__(f"Call handler {problem} `accept` or `reject`")
 
 
-@dataclass
-class Request[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None]:
+@dataclass(frozen=True, eq=False)
+class RequestBase[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None](ABC):
     """A declaration of a callable request.
 
-    If the response type is `ExtendedResponse` or a subclass of it, the request is considered
-    "extended".
+    Use `declare_request` or `declare_long_request` to build one, rather than constructing it
+    directly.
     """
     name: str
     """The name of the request."""
-    payload: type[P]
+    message: type[P] | None
     """The type expected to be sent in the request call."""
-    response: type[R]
-    """The type expected to be received in the initial call response."""
-    result: type[V]
-    """The type of the payload of the success ResponseEvent in an extended request.
-    Always equal to the response type for simple requests."""
+    response: type[R] | None
+    """The type expected to be received in the call reply."""
+    result: type[V] | None
+    """The type a caller receives once the call completes."""
 
-    def is_extended(self):
-        """Return True if this is a long-running request using ExtendedResponse."""
-        return self.response and issubclass(self.response, ExtendedResponse)
-
+    @abstractmethod
     def create_handler(
         self,
-        func: HandlerFunc[P, R] | ExtendedHandlerFunc[P, R, V],
+        func: RequestHandlerFunc[P, R, V],
         stream: StreamContext | None = None,
-    ) -> CallHandler[P, R]:
-        """Construct the appropriate CallHandler or ExtendedCallHandler for this request."""
-        if self.is_extended():
-            return ExtendedCallHandler(self, func, stream)
-        else:
-            return CallHandler(self, func)
+    ) -> CallHandler[P]:
+        """Build the backend callback for this request.
 
-    @classmethod
-    @overload
-    def define[R: ExtendedResponse, P: BaseModel | None = None](
-        cls,
-        name: str,
-        *,
-        payload: type[P] | None = None,
-        response: type[R],
-    ) -> Request[P, R, None]:
-        """Define a long-running request that uses the entity event stream to track progress."""
+        Args:
+            func: The handler to run for each incoming call.
+            stream: The entity event stream, required for a long-running request.
+        """
 
-    @classmethod
-    @overload
-    def define[V: BaseModel, R: ExtendedResponse = ExtendedResponse, P: BaseModel | None = None](
-        cls,
-        name: str,
-        *,
-        payload: type[P] | None = None,
-        response: type[R] = ExtendedResponse,
-        result: type[V],
-    ) -> Request[P, R, V]:
-        """Define a long-running request that uses the entity event stream to track progress."""
 
-    @classmethod
-    @overload
-    def define[R: BaseModel | None = None, P: BaseModel | None = None](
-        cls,
-        name: str,
-        *,
-        payload: type[P] | None = None,
-        response: type[R] | None = None,
-    ) -> Request[P, R, R]:
-        """Define a simple request that requires an immediate response."""
+class Request[P: BaseModel | None, R: BaseModel | None](RequestBase[P, R, R]):
+    """A request that its handler answers immediately, with a response that is the whole result."""
 
-    @classmethod
-    def define(
-        cls,
-        name: str,
-        payload = None,
-        response = None,
-        result = None,
-    ):
-        if response and issubclass(response, ExtendedResponse):
-            # This is an extended request. No checks or defaults are needed in this case.
-            return cls(name, payload, response, result)
-        elif result:
-            # Here a result type is given but no response type. In this case, having a result means
-            # this is an extended request, so we default to the bare ExtendedResponse type.
-            if response is not None:
-                raise TypeError("simple request cannot have a result type")
+    @override
+    def create_handler(
+        self,
+        func: RequestHandlerFunc[P, R, R],
+        stream: StreamContext | None = None,
+    ) -> CallHandler[P]:
+        return CallHandler(self.message, functools.partial(run_call, func))
 
-            return cls(name, payload, ExtendedResponse, result)
-        else:
-            # Simple requests always treat their response as the result.
-            return cls(name, payload, response, result or response)
+
+class LongRequest[P: BaseModel | None, R: BaseModel | None, V: BaseModel | None](
+    RequestBase[P, R, V]
+):
+    """A request that keeps running after its handler replies, reporting its result as an event."""
+
+    @override
+    def create_handler(
+        self,
+        func: RequestHandlerFunc[P, R, V],
+        stream: StreamContext | None = None,
+    ) -> CallHandler[P]:
+        """Build the backend callback for this request.
+
+        Args:
+            func: The handler to run for each incoming call.
+            stream: The entity event stream the handler reports on.
+
+        Raises:
+            HandlerError: if no event stream is given.
+        """
+        if stream is None:
+            raise HandlerError("Long-running request requires an event stream")
+
+        return CallHandler(self.message, functools.partial(run_long_call, func, stream))
+
+
+def declare_request[R: BaseModel | None = None, P: BaseModel | None = None](
+    name: str,
+    *,
+    message: type[P] | None = None,
+    response: type[R] | None = None,
+) -> Request[P, R]:
+    """Declare a request that its handler answers immediately.
+
+    The response is the whole result, so a caller awaiting the call receives it directly. Omit
+    the message for a request that carries no arguments, and the response for one that reports
+    nothing back.
+
+    Args:
+        name: The request name, unique among the requests served by one entity.
+        message: The type sent by the caller.
+        response: The type returned by the handler.
+    """
+    return Request(name, message, response, response)
+
+
+def declare_long_request[
+    V: BaseModel | None = None,
+    R: BaseModel | None = None,
+    P: BaseModel | None = None,
+](
+    name: str,
+    *,
+    message: type[P] | None = None,
+    response: type[R] | None = None,
+    result: type[V] | None = None,
+) -> LongRequest[P, R, V]:
+    """Declare a request that keeps running after it replies.
+
+    The handler accepts or rejects the call immediately, then reports progress and its final
+    result on the entity event stream. A caller awaiting the call receives the result, while
+    the response carries whatever the handler needs to report up front.
+
+    Args:
+        name: The request name, unique among the requests served by one entity.
+        message: The type sent by the caller.
+        response: The type the handler replies with when it accepts or rejects the call.
+        result: The type carried by the success event, for a request that reports one.
+    """
+    return LongRequest(name, message, response, result)

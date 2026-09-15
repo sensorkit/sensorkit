@@ -76,6 +76,13 @@ class AlpacaDevice:
         return method
 
     async def get(self, device: Device, attr: str, default: Any = None) -> Any:
+        """Read a device property, falling back to a default.
+
+        Properties the device does not implement resolve to the default quietly.
+        Any other read failure resolves to the default as well, but is logged,
+        since a substituted value can otherwise reach recorded metadata unnoticed.
+        """
+
         from alpaca.exceptions import NotImplementedException
 
         def _read():
@@ -83,7 +90,10 @@ class AlpacaDevice:
                 return getattr(device, attr)
             except NotImplementedException:
                 return default
-            except Exception:
+            except Exception as e:
+                logger.opt(exception=e).warning(
+                    f"{self.device_name} read of {attr} failed, using {default}"
+                )
                 return default
 
         return await asyncio.to_thread(_read)

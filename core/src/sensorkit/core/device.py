@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar
 from pydantic import BaseModel
 
 from sensorkit.backend.event import Event
-from sensorkit.backend.request import Call, ExtendedResponse, Request
+from sensorkit.backend.request import Call, declare_long_request, declare_request
 from sensorkit.common.model import ModelRegistry, RegistryBaseModel
 from sensorkit.core.entity import (
     DeviceDetails,
@@ -70,9 +70,9 @@ class DeviceEnableStateRequest(BaseModel):
     enable: bool
 
 
-set_enable_state_request = Request.define(
+set_enable_state_request = declare_request(
     "set_enable_state",
-    payload=DeviceEnableStateRequest,
+    message=DeviceEnableStateRequest,
 )
 
 
@@ -86,9 +86,9 @@ class CommandResult(BaseModel):
     data: Any
 
 
-run_command_request = Request.define(
+run_command_request = declare_long_request(
     "command",
-    payload=CommandRequestMessage,
+    message=CommandRequestMessage,
     result=CommandResult,
 )
 
@@ -114,7 +114,7 @@ class DeviceClient(EntityClient):
             DeviceEnableStateRequest(enable=False)
         )
 
-    def command(self, command: DeviceCommand) -> Call[ExtendedResponse, CommandResult]:
+    def command(self, command: DeviceCommand) -> Call[None, CommandResult]:
         """Send a command to the device and return a Call tracking the result."""
         return self.call(
             run_command_request,

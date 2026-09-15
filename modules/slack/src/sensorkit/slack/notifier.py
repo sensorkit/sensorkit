@@ -491,8 +491,8 @@ class SlackNotifier:
                         last_error=self._last_error,
                     )
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.opt(exception=e).debug("failed to publish notifier status")
 
 
 def _parse_raw_json(raw: bytes) -> dict | None:

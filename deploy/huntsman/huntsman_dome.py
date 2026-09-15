@@ -597,8 +597,8 @@ class HuntsmanDome:
                 )
                 try:
                     await self.dome_disconnect(Disconnect())
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.opt(exception=e).debug("dome disconnect failed before reconnect")
                 await self.dome_connect(Connect())
 
     # ── Status loop plumbing ──

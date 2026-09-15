@@ -96,28 +96,50 @@ async def wrap_autocenter_loop(
     a cable wrap limit during long tracking sessions.
     """
 
+    stalled = False
+
     while True:
         try:
-            st = await client.status()
+            await recenter_wrap(client, deadband_deg)
 
-            pos = client.get_float(st, "mount.axis0.position_degs")
-            min_mech = client.get_float(st, "mount.axis0.min_mech_position_degs")
-            max_mech = client.get_float(st, "mount.axis0.max_mech_position_degs")
-            current_min = client.get_float(st, "mount.axis0_wrap_range_min_degs")
-
-            desired_min = pos - 180.0
-            desired_min = max(desired_min, min_mech)
-            desired_min = min(desired_min, max_mech - 360.0)
-
-            if abs(desired_min - current_min) >= deadband_deg:
-                await client.request(
-                    "/mount/set_axis0_wrap_range_min",
-                    params={"degs": desired_min},
+            if stalled:
+                stalled = False
+                logger.info("wrap autocenter recovered")
+        except Exception as e:
+            # Report the onset of a run of failures only, so a sustained outage
+            # does not repeat every interval.
+            if not stalled:
+                stalled = True
+                logger.opt(exception=e).warning(
+                    "wrap autocenter stalled; the mount can reach a cable wrap limit"
                 )
-        except Exception:
-            pass
 
         await asyncio.sleep(interval)
+
+
+async def recenter_wrap(client: PWI4Client, deadband_deg: float):
+    """Move the axis0 wrap range so the current position sits near its center.
+
+    The move is skipped when the range is already centered to within
+    deadband_deg.
+    """
+
+    st = await client.status()
+
+    pos = client.get_float(st, "mount.axis0.position_degs")
+    min_mech = client.get_float(st, "mount.axis0.min_mech_position_degs")
+    max_mech = client.get_float(st, "mount.axis0.max_mech_position_degs")
+    current_min = client.get_float(st, "mount.axis0_wrap_range_min_degs")
+
+    desired_min = pos - 180.0
+    desired_min = max(desired_min, min_mech)
+    desired_min = min(desired_min, max_mech - 360.0)
+
+    if abs(desired_min - current_min) >= deadband_deg:
+        await client.request(
+            "/mount/set_axis0_wrap_range_min",
+            params={"degs": desired_min},
+        )
 
 
 def altaz_rates_to_radec_rates(

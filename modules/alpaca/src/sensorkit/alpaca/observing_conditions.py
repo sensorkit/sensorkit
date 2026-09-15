@@ -8,6 +8,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
+from alpaca.exceptions import NotImplementedException
 from alpaca.observingconditions import ObservingConditions
 from sensorkit.alpaca.device import (
     AlpacaDevice,
@@ -101,6 +102,18 @@ class AlpacaObservingConditions(AlpacaDevice):
         except Exception:
             return None
 
+    async def _refresh(self):
+        """Force a hardware refresh, tolerating devices that do not offer one."""
+
+        try:
+            await asyncio.to_thread(self.oc.Refresh)
+        except NotImplementedException:
+            pass
+        except Exception as e:
+            logger.opt(exception=e).warning(
+                "observing conditions refresh failed, readings may be stale"
+            )
+
     async def status_publish(self):
         connected = await self.get(self.oc, "Connected", False)
         self.device_connected = connected
@@ -109,11 +122,7 @@ class AlpacaObservingConditions(AlpacaDevice):
         await device.publish(Connected(is_connected=connected))
 
         if connected:
-            # Force a hardware refresh if supported
-            try:
-                await asyncio.to_thread(self.oc.Refresh)
-            except Exception:
-                pass
+            await self._refresh()
 
             # BasicWeather sensors
             weather = BasicWeather(

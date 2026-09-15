@@ -156,6 +156,19 @@ sensorkit service ls
 
 Lists every registered service and whether it is currently online.
 
+### Data directory ownership
+
+The container image runs as the unprivileged user `sensorkit`, uid 1000.
+A bind-mounted data directory keeps its ownership from the host,
+so give the host directory to that uid before the first run:
+
+```bash
+sudo chown -R 1000:1000 /opt/sk/data
+```
+
+Without this the services start normally and then fail on the first frame write.
+A named volume needs no such step, since it inherits the ownership from the image.
+
 ## Environment variables
 
 | Variable            | Purpose                                                              | Default                  |

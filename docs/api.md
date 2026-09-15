@@ -286,7 +286,7 @@ The low-level bus abstraction. Most service code never touches it, but it's publ
 - `Entity`, `Subject` — addressable names on the bus.
 - `KVEntry`, `KVError`, `RevisionError` — KV records and failures (`RevisionError` signals an optimistic-concurrency conflict).
 - `Event`, `UnknownEvent` — event stream base types.
-- `Request`, `CallContext`, `CallError`, `ExtendedResponse` — the typed request/response layer used by commands and tasks.
+- `Request`, `LongRequest`, `CallContext`, `CallError`, `HandlerError`, `declare_request`, `declare_long_request` — the typed request/response layer used by commands and tasks.
 - `SpecialProperty` — reserved subject tokens used internally.
 
 ---

@@ -39,22 +39,7 @@ automation:
 
 ## How it fits together
 
-```
-Observing programs           The agent              Sensor controller
-(what to observe)    (when it's safe & useful)     (how to observe it)
-        │                        │                          │
-        ▼                        ▼                          ▼
-  ┌───────────┐   offers   ┌───────────┐    tasks     ┌───────────┐
-  │  Program  │───────────▶│   Agent   │─────────────▶│  Sensor   │
-  └───────────┘            └───────────┘              └───────────┘
-                                 ▲                          │ commands
-                        weather, │ safety           ┌───────┼──────┐
-                                 │                  ▼       ▼      ▼
-                           ┌───────────┐          Mount  Camera  Dome ...
-                           │  Devices  │          (device services)
-                           └───────────┘
-                  All communication over NATS JetStream
-```
+<img src="assets/sensorkit-architecture.svg" alt="SensorKit architecture">
 
 - **Devices** wrap hardware drivers and expose commands and telemetry on the bus.
 - The **sensor controller** coordinates a mount, camera, dome, and friends into one logical instrument, with configurable init/shutdown sequencing and pointing-safety policies.

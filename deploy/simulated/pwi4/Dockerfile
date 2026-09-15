@@ -22,9 +22,11 @@ RUN apt-get update \
 
 ENV PWI_VERSION=4.1.6final
 ENV PWI_PATH=/opt/pwi-$PWI_VERSION
+ARG PWI_SHA256=1f6cfdc55a62a93c4488a5724cdf2cda70ba83f81d5cd2ad507ed782c50d7ae8
 
 RUN mkdir -p $PWI_PATH && \
-    wget http://planewave.com/files/software/PWI4/pwi-$PWI_VERSION.tar.gz && \
+    wget https://planewave.com/files/software/PWI4/pwi-$PWI_VERSION.tar.gz && \
+    echo "$PWI_SHA256  /pwi-$PWI_VERSION.tar.gz" | sha256sum -c - && \
     (cd ${PWI_PATH%/*} && tar xzf /pwi-$PWI_VERSION.tar.gz) && \
     rm /pwi-$PWI_VERSION.tar.gz
 
@@ -39,14 +41,17 @@ RUN apt-get update \
 EXPOSE 6080/tcp
 EXPOSE 8220/tcp
 
-WORKDIR /root
+RUN useradd --create-home --uid 1001 pwi \
+    && chown -R pwi:pwi $PWI_PATH
+
+USER pwi
+WORKDIR /home/pwi
 
 RUN mkdir -p "PlaneWave Instruments/PWI4"
 
-COPY run-pwi.sh .
-COPY novnc_server .
-COPY ["Settings", "PlaneWave Instruments/PWI4/Settings"]
+COPY --chown=pwi:pwi run-pwi.sh .
+COPY --chown=pwi:pwi novnc_server .
+COPY --chown=pwi:pwi ["Settings", "PlaneWave Instruments/PWI4/Settings"]
 
-RUN chmod +x /root/novnc_server
-RUN chmod +x /root/run-pwi.sh
-CMD ["/root/run-pwi.sh"]
+RUN chmod +x novnc_server run-pwi.sh
+CMD ["/home/pwi/run-pwi.sh"]

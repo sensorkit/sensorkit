@@ -277,7 +277,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
     async def _set_active_state(
         self,
         request: ProgramActiveStateRequest,
-        call: CallContext[None, None],
+        call: CallContext[None],
     ):
         with self.enter_context():
             logger.info(f"Requested to {request.action} the tasking loop")
@@ -285,7 +285,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
         if request.action == "start":
             # Cannot activate tasking if we aren't enabled with a target Controller configured.
             if not self._state.enable_state.enabled or not self._state.enable_state.controller:
-                call.reject(response=None)
+                call.reject(reason="Program is not enabled with a controller")
                 return
 
             if (
@@ -293,10 +293,10 @@ class ProgramImpl(EntityImpl, ProgramInterface):
                 and request.contexts != self._state.active_state.contexts
             ):
                 # Don't support restart-with-different-context in a single request.
-                call.reject(response=None)
+                call.reject(reason="Program is already active with different contexts")
                 return
 
-        call.accept(response=None)
+        call.accept()
 
         if request.active_state() == self._state.active_state.active:
             # We are already in the requested state, so claim success.

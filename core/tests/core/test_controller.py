@@ -152,7 +152,6 @@ async def test_controller_abort(kit):
         abort_call = cli.abort_task()
         abort_response = await abort_call.invoke()
 
-        assert abort_response.call_state == "running"
         assert abort_response.aborting
         assert abort_response.task_id == task_id
 
