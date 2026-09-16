@@ -41,6 +41,16 @@ from sensorkit.sensor.collect import (
     pack,
 )
 from sensorkit.sensor.definition import SensorDefinition
+from sensorkit.sensor.dispatch import (
+    AttemptRecorder,
+    DeviceContexts,
+    Dispatcher,
+    Interruption,
+    InterruptionOutcome,
+    InterruptionRecorder,
+    OperationEvent,
+    OperationOutcome,
+)
 from sensorkit.sensor.lifecycle import (
     CleanupSpec,
     Entry,

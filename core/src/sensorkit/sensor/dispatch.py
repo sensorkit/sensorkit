@@ -29,7 +29,8 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.common.aio import AsyncObserver
 from sensorkit.common.dag import Node
-from sensorkit.core.device import Abort, DeviceClient
+from sensorkit.core.device import Abort, DeviceClient, DeviceCommand
+from sensorkit.data.context import merge_contexts
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.topology import DeviceKey
 from sensorkit.sensor.workflow import Operation
@@ -105,8 +106,93 @@ class Dispatcher:
         self.base = base
         self.events = events
 
+    async def perform(self, operation: Operation, node: Node,
+                      attempt: AttemptRecorder,
+                      interrupted: InterruptionRecorder) -> object:
+        """Send an operation under its resolved timeout and drain its call
+        task.
 
+        Record the attempt before sending. A dropped call triggers Abort; its
+        outcome goes to `interrupted` without replacing the operation's
+        failure. Held caller cancellation takes precedence over a timeout after
+        local teardown completes.
 
+        Args:
+            operation: Planned command, target and timeout.
+            node: Graph node included in operation events.
+            attempt: Callback recording that dispatch is starting.
+            interrupted: Callback storing an Abort outcome, if attempted.
+
+        Returns:
+            The device command's result.
+
+        Raises:
+            TimeoutError: The command exceeds its timeout or the transport
+                times out.
+            LookupError: No client exists for the target; nothing is sent.
+            asyncio.CancelledError: Cancellation propagates after local tasks
+                drain.
+            Exception: A command or header-building error propagates.
+        """
+        device = operation.target.device
+        client = self.clients.get(device)
+
+        if client is None:
+            raise LookupError(f"no client for device '{device}'")
+
+        command = self.outgoing(operation)
+
+        async def send() -> object:
+            return await client.command(command)
+
+        attempt(operation)
+        self.notify(OperationEvent(operation, node, "begin"))
+        sending = asyncio.create_task(send())
+        expired, cancelled = await _owned(sending, operation.timeout_s,
+                                          interruptible=True)
+
+        # Handle Abort outside the command wait to avoid recursive interruption.
+        if _dropped(sending):
+            try:
+                await self.abort(device, interrupted)
+            except asyncio.CancelledError as e:
+                cancelled = cancelled or e
+
+        return self._concluded(operation, node, sending, expired, cancelled)
+
+    def outgoing(self, operation: Operation) -> DeviceCommand:
+        """Return the command to send, adding a fresh header for an
+        acquisition.
+
+        Acquisition commands are deep-copied; ordinary commands are returned
+        unchanged.
+        """
+        if operation.acquisition is None:
+            return operation.command
+
+        # Give each acquisition its own context without modifying the planned command.
+        return operation.command.model_copy(
+            deep=True, update={"context": self.header(operation)})
+
+    def header(self, operation: Operation) -> sk.Context:
+        """Build a fresh acquisition context with sources in precedence
+        order.
+
+        Merge base context, device contexts from root to instrument, then
+        planned acquisition keywords. Deeper publishers override earlier ones;
+        planned keywords take final precedence.
+
+        Raises:
+            KeyError: The target is not an instrument in this topology.
+        """
+        # Frame numbering is already included in planned acquisition keywords.
+        reported = self.contexts() if self.contexts is not None else {}
+        chain = self.sensor.topology.chain(operation.target)
+        planned = (operation.acquisition.keywords
+                   if operation.acquisition is not None else None)
+
+        return merge_contexts(
+            self.base, *(reported.get(p.device) for p in chain), planned)
 
     async def abort(self, device: DeviceKey,
                     record: InterruptionRecorder) -> Interruption:
@@ -191,6 +277,41 @@ class Dispatcher:
         except Exception as e:
             logger.warning(f"{where}: an operation subscriber failed ({e!r})")
 
+    def _concluded(self, operation: Operation, node: Node,
+                   sending: asyncio.Task, expired: bool,
+                   cancelled: asyncio.CancelledError | None) -> object:
+        """Emit the call's terminal event, then return its result or
+        propagate failure.
+
+        A held caller cancellation takes precedence even if the call ended
+        otherwise.
+        """
+        match sending.cancelled(), expired:
+            case True, True if cancelled is None:
+                error: BaseException | None = TimeoutError(
+                    f"'{operation.id}' did not finish within "
+                    f"{operation.timeout_s}s")
+            case True, _:
+                error = cancelled or asyncio.CancelledError()
+            case _:
+                error = sending.exception()
+
+        match error:
+            case None:
+                self.notify(OperationEvent(operation, node, "ok",
+                                           sending.result()))
+            case asyncio.CancelledError():
+                self.notify(OperationEvent(operation, node, "cancelled"))
+            case _:
+                self.notify(OperationEvent(operation, node, "failed", error))
+
+        if cancelled is not None:
+            raise cancelled
+
+        if error is not None:
+            raise error
+
+        return sending.result()
 
 
 async def _owned(task: asyncio.Task, seconds: float | None, *,

@@ -18,10 +18,14 @@ import pytest
 import pytest_asyncio
 
 from sensorkit.backend.request import CallError
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import Abort
+from sensorkit.data.context import Context
 from sensorkit.sensor import dispatch
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.dispatch import Dispatcher, Interruption
+from sensorkit.sensor.workflow import Acquisition, Operation, Origin
+from sensorkit.std.instrument import CameraCapture
 from sensorkit.std.traits import Stop
 
 from .common import REPORTED, snapshot_of
@@ -261,9 +265,81 @@ async def test_cancellation_during_an_unanswered_abort_leaves_nothing_running(
 # Headers
 
 
+def named(**values) -> KeywordDict:
+    keywords = KeywordDict()
+
+    for key, value in values.items():
+        keywords.set_value(key, value)
+
+    return keywords
 
 
+def acquiring(at, keywords: KeywordDict) -> Operation:
+    """One acquisition on the science camera, planned with these keywords."""
+    return Operation(
+        id="t/frame@cam-sci", target=at("cam-sci"),
+        command=CameraCapture(integration_time=1.0, context=None),
+        origin=Origin(source="t"),
+        acquisition=Acquisition(request="r", index=0, frame_number=7,
+                                keywords=keywords))
 
 
+REPORTED_CONTEXTS = {
+    "mount": named(site="mount", pointing="mount", optics="mount"),
+    "wheel": named(optics="wheel", sensor="wheel"),
+    "cam-sci": named(sensor="cam-sci", frame="cam-sci"),
+    "cam-guide": named(guide="cam-guide"),
+}
 """What each device reports, where the deepest publisher is the camera and the
 guide camera is on another chain."""
+
+
+def test_a_header_layers_base_then_chain_then_planned(facts, at):
+    base = named(site="base", observer="base")
+    planned = named(frame="planned")
+    header = Dispatcher(facts, {}, contexts=lambda: REPORTED_CONTEXTS,
+                        base=base).header(acquiring(at, planned))
+
+    # Root first, so the deepest publisher wins, and nothing reported displaces
+    # what was planned. The guide camera is off the chain.
+    assert dict(header) == {"site": "mount", "observer": "base",
+                            "pointing": "mount", "optics": "wheel",
+                            "sensor": "cam-sci", "frame": "planned"}
+
+
+def test_every_header_is_new_and_leaves_its_sources_alone(facts, at):
+    base = named(observer="base")
+    planned = named(frame="planned")
+    operation = acquiring(at, planned)
+    dispatcher = Dispatcher(facts, {}, contexts=lambda: REPORTED_CONTEXTS,
+                            base=base)
+    first, second = dispatcher.header(operation), dispatcher.header(operation)
+    first.set_value("frame", "changed by a handler")
+
+    assert isinstance(first, Context)
+    assert first is not second
+    assert second["frame"] == "planned"
+    assert dict(planned) == {"frame": "planned"}
+    assert dict(base) == {"observer": "base"}
+    assert dict(REPORTED_CONTEXTS["cam-sci"]) == {"sensor": "cam-sci",
+                                                  "frame": "cam-sci"}
+
+
+def test_an_acquisition_is_sent_as_a_copy_carrying_its_header(facts, at):
+    operation = acquiring(at, named(frame="planned"))
+    dispatcher = Dispatcher(facts, {})
+    planned = operation.command.model_copy(deep=True)
+    first, second = dispatcher.outgoing(operation), dispatcher.outgoing(operation)
+
+    assert first is not operation.command
+    assert first.context is not second.context
+    assert dict(first.context) == {"frame": "planned"}
+    assert operation.command == planned
+    assert operation.command.context is None
+
+
+def test_other_work_is_sent_as_planned(facts, at):
+    operation = Operation(id="t/stop@mount", target=at("mount"),
+                          command=Stop(), origin=Origin(source="t"))
+
+    assert Dispatcher(facts, {}).outgoing(operation) is operation.command
