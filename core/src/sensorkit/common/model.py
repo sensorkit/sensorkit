@@ -20,10 +20,8 @@ from pydantic import (
     BaseModel,
     GetCoreSchemaHandler,
     ModelWrapValidatorHandler,
-    SerializerFunctionWrapHandler,
     TypeAdapter,
     ValidationInfo,
-    WrapSerializer,
     WrapValidator,
 )
 from pydantic_core import PydanticUndefined
@@ -364,12 +362,6 @@ class RegistryDiscriminator:
         # defined in multiple namespaces.
         return self.registry.validate(data, info=info)
 
-    def _serialize(self, data: Any, handler: SerializerFunctionWrapHandler):
-        if isinstance(data, BaseModel):
-            return data.model_dump()
-
-        return handler(data)
-
     def __get_pydantic_core_schema__(
         self,
         source_type: Any,
@@ -379,7 +371,6 @@ class RegistryDiscriminator:
             Annotated[
                 source_type,
                 WrapValidator(self._validate),
-                WrapSerializer(self._serialize),
             ]
         )
 
