@@ -61,25 +61,18 @@ from sensorkit.std.optics import (
     Filters,
     FocusPosition,
     OpenMirrorCover,
+    SelectPort,
     SetFilter,
     StandardFilterChanger,
     StandardFocuser,
     StandardMirrorCover,
+    StandardSelector,
 )
 from sensorkit.std.safety import (
     BasicSafety,
     SafetyConstraint,
     SafetyProvider,
     StandardSafety,
-)
-from sensorkit.std.sensor import (
-    Capabilities,
-    Sensor,
-    SensorConfig,
-    SensorControl,
-    SensorDevices,
-    SensorPolicies,
-    sensor_control_service,
 )
 from sensorkit.std.traits import (
     Connect,
@@ -106,4 +99,14 @@ from sensorkit.std.weather import (
     WeatherConstraint,
     WeatherFieldEvaluator,
     WeatherProvider,
+)
+
+from sensorkit.std.sensor import (
+    Capabilities,
+    Sensor,
+    SensorConfig,
+    SensorControl,
+    SensorDevices,
+    SensorPolicies,
+    sensor_control_service,
 )

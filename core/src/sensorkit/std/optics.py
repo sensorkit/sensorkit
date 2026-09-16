@@ -53,6 +53,23 @@ StandardFocuser = sk.declare_archetype(
 """A device that can adjust a focus position."""
 
 
+class SelectPort(sk.DeviceCommand):
+    """Route the beam to one of a selector's ports.
+
+    The port is named as the structure names it, since a port's name is the value
+    commanded to reach it.
+    """
+
+    port: str
+
+
+StandardSelector = sk.declare_archetype(
+    "selector",
+    required_commands=(SelectPort,),
+)
+"""A pick-off mirror, fold mirror or fiber selector that routes a beam."""
+
+
 class OpenMirrorCover(sk.DeviceCommand):
     """Command to open the mirror cover."""
 
