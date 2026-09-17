@@ -51,6 +51,15 @@ from sensorkit.sensor.dispatch import (
     OperationEvent,
     OperationOutcome,
 )
+from sensorkit.sensor.execution import (
+    AbortPredicate,
+    CleanupReport,
+    ExecutionState,
+    WorkflowError,
+    WorkflowExecutor,
+    WorkflowOutcome,
+    WorkflowReport,
+)
 from sensorkit.sensor.lifecycle import (
     CleanupSpec,
     Entry,

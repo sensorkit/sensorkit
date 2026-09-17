@@ -19,6 +19,7 @@ from sensorkit.common.aio import AsyncObserver
 from sensorkit.sensor.binding import BoundSensor, CapabilitySnapshot
 from sensorkit.sensor.definition import SensorDefinition
 from sensorkit.sensor.dispatch import OperationEvent
+from sensorkit.sensor.execution import WorkflowExecutor
 from sensorkit.sensor.topology import Placement, Topology
 
 from .common import REPORTED, SENSOR_YAML, Rig, snapshot_of
@@ -80,3 +81,8 @@ def clients(kit, rig):
 @pytest.fixture
 def observer() -> AsyncObserver[OperationEvent]:
     return AsyncObserver[OperationEvent]()
+
+
+@pytest.fixture
+def executor(sensor, clients, observer) -> WorkflowExecutor:
+    return WorkflowExecutor(sensor, clients, events=observer)
