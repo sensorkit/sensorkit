@@ -218,6 +218,10 @@ class GraphBuilder:
         once the rest of a phase has been built."""
         self._hard[nid] |= set(deps)
 
+    def order(self, nid: int, deps: Iterable[int]) -> None:
+        """Add soft edges to an already-added node, for ordering only known once
+        the rest of a phase has been built."""
+        self._soft[nid] |= set(deps)
 
     def build(self) -> Graph:
         graph = Graph(

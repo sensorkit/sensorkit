@@ -45,6 +45,16 @@ def test_require_adds_hard_edges_after_the_fact():
     assert graph.deps[b] == frozenset({a})       # already there, not doubled
 
 
+def test_order_adds_soft_edges_after_the_fact():
+    """A dependency may name a step emitted later, so edges are applied once
+    every node has an id."""
+    g = GraphBuilder()
+    a = g.add("a", "grp", None)
+    b = g.add("b", "grp", None)
+    g.order(b, {a})
+    graph = g.build()
+    assert graph.deps[b] == frozenset({a})
+    assert graph.hard[b] == frozenset()          # ordering never skips
 
 
 def test_node_attributes_pass_through():

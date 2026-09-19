@@ -372,6 +372,6 @@ def _acyclic(deps: dict[tuple[str, str], set[tuple[str, str]]]) -> None:
            for kind, name in sorted(deps)}
 
     for node, following in deps.items():
-        builder.require(ids[node], (ids[f] for f in following))
+        builder.order(ids[node], (ids[f] for f in following))
 
     builder.build()
