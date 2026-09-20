@@ -15,6 +15,8 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from sensorkit.core.device import DeviceCommand
+from sensorkit.sensor.binding import BoundSensor
+from sensorkit.sensor.definition import SensorDefinition
 from sensorkit.sensor.lifecycle import (
     CleanupSpec,
     Entry,
@@ -23,10 +25,21 @@ from sensorkit.sensor.lifecycle import (
     Phase,
 )
 from sensorkit.sensor.selection import IsKind, Supports
-from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
-from sensorkit.std.mount import FollowTarget
-from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
-from sensorkit.std.traits import Connect, Deinit, Init, Stop
+from sensorkit.sensor.workflow import DeadlineRule
+from sensorkit.std.enclosure import (
+    CloseEnclosure,
+    OpenEnclosure,
+    StandardEnclosure,
+)
+from sensorkit.std.instrument import ConfigureCameraSensor
+from sensorkit.std.mount import FollowTarget, StandardMount
+from sensorkit.std.optics import (
+    ChangeFocusPosition,
+    CloseMirrorCover,
+    OpenMirrorCover,
+    SetFilter,
+)
+from sensorkit.std.traits import Connect, Deinit, Home, Init, Stop
 
 
 class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
@@ -120,6 +133,42 @@ class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
         return (init, init.model_copy(update={"name": "standby"}),
                 self._shutdown_table(), recover)
 
+    def deadlines(self) -> tuple[DeadlineRule, ...]:
+        """Generate command deadlines for any device, and a default for every
+        other command.
+
+        Commands whose limit differs by device kind are scoped to a trait, so
+        a device failing that trait takes the default. Explicit operation
+        timeouts and device rules can override these.
+        """
+        scoped = (
+            (StandardEnclosure.name, Init, self.dome_init_timeout),
+            (StandardEnclosure.name, Deinit, self.dome_deinit_timeout),
+            (StandardMount.name, Init, self.mount_init_timeout),
+            (StandardMount.name, Home, self.mount_home_timeout),
+            (StandardMount.name, Deinit, self.mount_deinit_timeout),
+        )
+        unscoped = (
+            (OpenEnclosure, self.dome_open_close_timeout),
+            (CloseEnclosure, self.dome_open_close_timeout),
+            (OpenMirrorCover, self.mirror_cover_open_close_timeout),
+            (CloseMirrorCover, self.mirror_cover_open_close_timeout),
+            (FollowTarget, self.follow_target_timeout),
+            (SetFilter, self.filter_change_timeout),
+            (ConfigureCameraSensor, self.camera_configure_timeout),
+            (ChangeFocusPosition, self.focus_change_timeout),
+            (Stop, self.stop_timeout),
+        )
+
+        return (
+            *(DeadlineRule(target=("trait", trait), command=command.model_tag(),
+                           seconds=seconds)
+              for trait, command, seconds in scoped),
+            *(DeadlineRule(target=("any", None), command=command.model_tag(),
+                           seconds=seconds)
+              for command, seconds in unscoped),
+            DeadlineRule(target=("any", None), seconds=self.default_timeout),
+        )
 
     def _init_table(self) -> LifecycleWorkflow:
         # A dome lacking Init must still open and close.
@@ -206,12 +255,81 @@ class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
             ))
 
 
+def compose_deadlines(definition: SensorDefinition,
+                      generated: tuple[DeadlineRule, ...]
+                      ) -> SensorDefinition:
+    """Copy a definition with generated rules appended unless an authored
+    rule replaces them.
+
+    Replacement uses the target and command pair. No device facts are required.
+    """
+    authored = {(rule.target, rule.command) for rule in definition.deadlines}
+    kept = tuple(rule for rule in generated
+                 if (rule.target, rule.command) not in authored)
+
+    return definition.model_copy(
+        update={"deadlines": definition.deadlines + kept})
 
 
+def compose_tables(definition: SensorDefinition,
+                   generated: tuple[LifecycleWorkflow, ...],
+                   sensor: BoundSensor) -> tuple[LifecycleWorkflow, ...]:
+    """Return authored tables followed by unmatched generated tables pruned
+    to the sensor.
+
+    Authored tables replace generated ones by name and are never pruned. In
+    generated tables, remove empty entries but retain phases and their
+    ordering. Prune cleanup entries and trigger ids; drop cleanup with no
+    entries or with every formerly nonempty trigger removed. Preserve
+    unconditional arming.
+
+    Raises:
+        ValueError: The definition with composed tables fails validation.
+    """
+    authored = {table.name for table in definition.tables}
+    tables = definition.tables + tuple(
+        _pruned(table, sensor) for table in generated
+        if table.name not in authored)
+
+    definition.model_copy(update={"tables": tables}).check()
+
+    return tables
 
 
+def _pruned(table: LifecycleWorkflow,
+            sensor: BoundSensor) -> LifecycleWorkflow:
+    """Copy a generated table without empty selections, retaining its
+    phases.
+    """
+    phases = tuple(
+        phase.model_copy(update={"entries": tuple(
+            entry for entry in phase.entries if entry.targets(sensor))})
+        for phase in table.phases)
+    kept = {entry.id for phase in phases for entry in phase.entries}
+    cleanup = tuple(
+        spec for spec in (_pruned_cleanup(spec, kept, sensor)
+                          for spec in table.cleanup)
+        if spec is not None)
+
+    return table.model_copy(update={"phases": phases, "cleanup": cleanup})
 
 
+def _pruned_cleanup(spec: CleanupSpec, kept: set[str | None],
+                    sensor: BoundSensor) -> CleanupSpec | None:
+    """Prune cleanup entries and trigger ids, or return `None` when
+    unusable.
+
+    Drop specs with no remaining entries or with all formerly nonempty triggers
+    removed. Preserve `None` and explicitly empty arming tuples.
+    """
+    entries = tuple(entry for entry in spec.entries if entry.targets(sensor))
+    armed_by = (None if spec.armed_by is None
+                else tuple(name for name in spec.armed_by if name in kept))
+
+    if not entries or (spec.armed_by and not armed_by):
+        return None
+
+    return spec.model_copy(update={"entries": entries, "armed_by": armed_by})
 
 
 def _ops(*commands: type[DeviceCommand], **spec) -> tuple[OpSpec, ...]:

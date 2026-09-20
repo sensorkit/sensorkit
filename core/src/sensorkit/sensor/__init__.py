@@ -69,6 +69,11 @@ from sensorkit.sensor.lifecycle import (
     Phase,
     compile_lifecycle,
 )
+from sensorkit.sensor.policies import (
+    SensorPolicies,
+    compose_deadlines,
+    compose_tables,
+)
 from sensorkit.sensor.selection import (
     AnySelection,
     DeviceFacts,
