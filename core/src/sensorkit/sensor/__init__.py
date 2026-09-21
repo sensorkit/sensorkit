@@ -24,6 +24,7 @@ from sensorkit.sensor.binding import (
     BoundSensor,
     CapabilitySnapshot,
 )
+from sensorkit.sensor.client import Sensor
 from sensorkit.sensor.collect import (
     AcquisitionRequest,
     BoundCollect,
