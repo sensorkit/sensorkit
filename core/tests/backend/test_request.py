@@ -427,6 +427,44 @@ async def test_long_requests_matched_by_call_id(kit):
         assert (await first).val == 1
 
 
+@pytest.mark.asyncio
+async def test_long_request_abandoned_by_its_caller(kit):
+    """A caller that stops waiting leaves nothing of the call running on its side."""
+    async with asyncio.timeout(1.0):
+        sc = await kit.register_service("testservice", "0.1.0")
+
+    request = declare_long_request(name="foo", result=Result)
+    handlers: set[asyncio.Task] = set()
+
+    async def foo_req(msg: None, call: CallContext[Result]):
+        handlers.add(asyncio.current_task())
+        call.accept()
+
+        # Progress keeps the call alive for longer than this test waits.
+        await call.progress(10.0)
+        await asyncio.Event().wait()
+
+    await sc.handle_request(request, foo_req)
+    cli = kit.entity(sc.entity)
+
+    # The event stream starts on first use and outlives any one call.
+    await cli.get_event_mux().wait_ready()
+    before = asyncio.all_tasks()
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.2):
+            await cli.call(request)
+
+    # Ending the handler sends no further call events, so anything still waiting afterward is
+    # waiting on the caller's side.
+    for handler in handlers:
+        handler.cancel()
+
+    if leftover := asyncio.all_tasks() - before:
+        _, pending = await asyncio.wait(leftover, timeout=1.0)
+        assert not pending
+
+
 def test_long_request_requires_an_event_stream():
     """A long-running request cannot be served without a stream to publish its events on."""
     request = declare_long_request(name="foo", response=Response)

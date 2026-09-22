@@ -184,6 +184,24 @@ class LongCall[R: BaseModel | None, V: BaseModel | None](Call[R, V]):
         super().__init__(coro, response_type)
         self._result_type = result_type
         self._event_mux = event_mux
+        self._task: asyncio.Task[V] | None = None
+
+    @override
+    async def run_to_completion(self) -> V:
+        """Invoke the call if not already sent, then await and return the final result.
+
+        Leaves no local work running on any exit, including cancellation. The request itself is
+        not retracted, so a handler that accepted it keeps running it.
+        """
+        try:
+            return await super().run_to_completion()
+        finally:
+            # Cancelling the caller cancels the future but not the event task, which would keep its
+            # queue until the peer's lease lapses. A second cancellation during this wait leaves
+            # the task already cancelled, so it still ends on its next step.
+            if self._task is not None and not self._task.done():
+                self._task.cancel()
+                await asyncio.wait({self._task})
 
     @override
     async def invoke(self, timeout: float = 10.0):
