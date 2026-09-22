@@ -175,6 +175,24 @@ class TestCollectedResponseActualTimes:
         assert sent["actual_end_time"] == "2026-03-21T07:19:12.000000Z"
 
 
+class TestUnbuildableTask:
+    @pytest.mark.asyncio
+    async def test_invalid_task_parameters_fail(self, program):
+        program.config.collect = CollectConfig(binning_from_extra="binning")
+        request = tle_request(binning="wide")
+        await program.queue.push_task(request)
+
+        gen = program.generate()
+        assert await gen.asend(None) is None
+
+        with pytest.raises(StopAsyncIteration):
+            await gen.asend(None)
+
+        assert len(program.queue) == 0
+        assert request.id in program.state.resolved_collect_requests
+        assert program.client.collect_responses.statuses() == ["FAILED"]
+
+
 class TestEnvVarFallback:
     def test_env_file_default(self, config):
         assert config.api.env_file == ".env"

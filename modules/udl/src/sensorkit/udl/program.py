@@ -649,22 +649,35 @@ class UDLProgram:
         )
 
         binning_x, binning_y = self._binning(request)
-        task = StandardCollectTask(
-            target=target,
-            end_time=end_time,
-            camera_params=CameraParameterSet(
-                integration_time_seconds=(request.integration_time / 1000.0)
-                if request.integration_time
-                else 1.0,
-                frame_count=request.num_frames or 1,
-                filter_name=self.config.collect.filter_name,
-                readout_mode=self.config.collect.readout_mode,
-                gain=self.config.collect.gain,
-                binning_x=binning_x,
-                binning_y=binning_y,
-            ),
-            sidereal_frames=self._get_sidereal_frames(request),
-        )
+
+        try:
+            task = StandardCollectTask(
+                target=target,
+                end_time=end_time,
+                camera_params=CameraParameterSet(
+                    integration_time_seconds=(request.integration_time / 1000.0)
+                    if request.integration_time
+                    else 1.0,
+                    frame_count=request.num_frames or 1,
+                    filter_name=self.config.collect.filter_name,
+                    readout_mode=self.config.collect.readout_mode,
+                    gain=self.config.collect.gain,
+                    binning_x=binning_x,
+                    binning_y=binning_y,
+                ),
+                sidereal_frames=self._get_sidereal_frames(request),
+            )
+        except ValidationError as e:
+            # FIXME: build the task on receipt instead, so an invalid request is
+            #  REJECTED before it is ACCEPTED rather than FAILED here. The target
+            #  branch above still sends REJECTED after ACCEPTED.
+            logger.warning(f"Task ({request.id}): Could not build collect task, failing: {e}")
+            await self._send_response(
+                request, ResponseStatus.FAILED, notes="Request does not fit a collect task"
+            )
+            await self.queue.remove_task(request.id)
+            yield None
+            return
 
         logger.info(f"Executing {request.id} with end_time={task.end_time}")
 
