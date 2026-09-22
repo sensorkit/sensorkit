@@ -12,7 +12,7 @@ from unifieddatalibrary.types import CollectRequestFull
 
 from sensorkit.core.controller import TaskExecutionResult
 from sensorkit.core.task import TaskExecution
-from sensorkit.udl.models import ResponseStatus, UDLAPIConfig, UDLConfig
+from sensorkit.udl.models import CollectConfig, ResponseStatus, UDLAPIConfig, UDLConfig
 from sensorkit.udl.program import UDLProgram, UDLState
 from sensorkit.udl.task_queue import TaskQueue
 
@@ -44,6 +44,19 @@ def program(config, program_impl):
 def responses(program):
     """Every CollectResponse the program posted, oldest first."""
     return program.client.collect_responses.created
+
+
+async def minted_camera_params(program, request):
+    """Camera params of the task the factory mints for one queued request."""
+    await program.queue.push_task(request)
+    gen = program.generate()
+
+    try:
+        minted = await gen.asend(None)
+    finally:
+        await gen.aclose()
+
+    return minted.task.camera_params
 
 
 class TestHandleCollectRequest:
@@ -206,3 +219,59 @@ class TestPollFilter:
 
         assert "polled-1" in program.tasks
         assert program.client.collect_responses.statuses() == ["ACCEPTED"]
+
+
+class TestNonstandardBinning:
+    """Binning a tasker attaches to a CollectRequest outside the UDL schema."""
+
+    def test_pair_parses_from_a_config_list(self):
+        collect = CollectConfig.model_validate(
+            {"binning_from_extra": ["binningHoriz", "binningVert"]}
+        )
+
+        assert collect.binning_from_extra == ("binningHoriz", "binningVert")
+
+    @pytest.mark.asyncio
+    async def test_configured_binning_used_by_default(self, program):
+        program.config.collect = CollectConfig(binning=1)
+
+        params = await minted_camera_params(program, tle_request(binningHoriz=2, binningVert=3))
+
+        assert (params.binning_x, params.binning_y) == (1, 1)
+
+    @pytest.mark.asyncio
+    async def test_one_name_binds_both_axes(self, program):
+        program.config.collect = CollectConfig(binning=1, binning_from_extra="binning")
+
+        params = await minted_camera_params(program, tle_request(binning=2))
+
+        assert (params.binning_x, params.binning_y) == (2, 2)
+
+    @pytest.mark.asyncio
+    async def test_a_pair_names_each_axis(self, program):
+        program.config.collect = CollectConfig(
+            binning=1, binning_from_extra=("binningHoriz", "binningVert")
+        )
+
+        params = await minted_camera_params(program, tle_request(binningHoriz=2, binningVert=3))
+
+        assert (params.binning_x, params.binning_y) == (2, 3)
+
+    @pytest.mark.asyncio
+    async def test_configured_binning_when_request_omits(self, program):
+        program.config.collect = CollectConfig(
+            binning=1, binning_from_extra=("binningHoriz", "binningVert")
+        )
+
+        params = await minted_camera_params(program, tle_request())
+
+        assert (params.binning_x, params.binning_y) == (1, 1)
+
+    @pytest.mark.asyncio
+    async def test_members_survive_request_handling(self, program):
+        """Members outside the schema ride through the validation the program applies."""
+        await program._handle_collect_request(tle_request(binningHoriz=2, binningVert=3))
+
+        queued = await program.queue.peek_task()
+        assert queued.model_extra.get("binningHoriz") == 2
+        assert queued.model_extra.get("binningVert") == 3

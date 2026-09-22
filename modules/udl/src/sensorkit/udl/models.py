@@ -171,6 +171,14 @@ class CollectConfig(BaseModel):
     readout_mode: int | None = None
     gain: float | None = None
     binning: int | None = None
+    binning_from_extra: str | tuple[str, str] | None = Field(
+        default=None,
+        description=(
+            "Name of the CollectRequest member carrying binning, for taskers that send one "
+            "outside the UDL schema. A pair names the horizontal and vertical members when "
+            "binning is not square. A request without the member uses `binning`. Unset disables it."
+        ),
+    )
 
 
 class UDLConfig(BaseModel):

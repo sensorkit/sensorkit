@@ -648,6 +648,7 @@ class UDLProgram:
             else datetime.now(UTC) + timedelta(seconds=self.config.end_time_deadband_s)
         )
 
+        binning_x, binning_y = self._binning(request)
         task = StandardCollectTask(
             target=target,
             end_time=end_time,
@@ -659,8 +660,8 @@ class UDLProgram:
                 filter_name=self.config.collect.filter_name,
                 readout_mode=self.config.collect.readout_mode,
                 gain=self.config.collect.gain,
-                binning_x=self.config.collect.binning,
-                binning_y=self.config.collect.binning,
+                binning_x=binning_x,
+                binning_y=binning_y,
             ),
             sidereal_frames=self._get_sidereal_frames(request),
         )
@@ -725,6 +726,21 @@ class UDLProgram:
                     self.state.publish_progress.pop(rid, None),
                 ),
             )
+
+    def _binning(self, request: CollectRequestFull) -> tuple[int | None, int | None]:
+        """Binning per axis, taken from the named request member(s) when configured."""
+        binning = self.config.collect.binning
+
+        match self.config.collect.binning_from_extra:
+            case None:
+                return binning, binning
+            case str() as key:
+                x_key = key
+                y_key = key
+            case (x_key, y_key):
+                pass
+
+        return request.model_extra.get(x_key) or binning, request.model_extra.get(y_key) or binning
 
     def _get_sidereal_frames(self, request: CollectRequestFull) -> list[int]:
         """Sidereal frame indices for StandardCollectTask."""
