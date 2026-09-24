@@ -13,12 +13,15 @@ rendered as supplied rather than revalidated.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
+from pydantic_core import to_jsonable_python
 
+from sensorkit.common.dag import Graph, Node, OnFailure
 from sensorkit.sensor.definition import SensorDefinition
 from sensorkit.sensor.lifecycle import (
     CleanupSpec,
@@ -41,8 +44,26 @@ from sensorkit.sensor.selection import (
     Selection,
     Supports,
 )
-from sensorkit.sensor.topology import Component, Device, Selector, Structure, Topology, Unit
-from sensorkit.sensor.workflow import DeadlineRule, DeadlineTarget, Origin, format_command
+from sensorkit.sensor.topology import (
+    Component,
+    Device,
+    Selector,
+    Structure,
+    Topology,
+    Unit,
+    format_path,
+)
+from sensorkit.sensor.workflow import (
+    Acquisition,
+    Cleanup,
+    DeadlineRule,
+    DeadlineTarget,
+    ExecutableWorkflow,
+    Omission,
+    Operation,
+    Origin,
+    format_command,
+)
 
 
 class When(StrEnum):
@@ -117,6 +138,44 @@ def audit_definition(definition: SensorDefinition) -> AuditReport:
     return AuditReport(findings=findings, description="\n".join(lines))
 
 
+def audit_workflow(workflow: ExecutableWorkflow) -> AuditReport:
+    """Describe stored graphs, policies, metadata and cleanup in a compiled
+    workflow.
+
+    Include dependency kinds, target placements, deadlines, delays, acquisition
+    keywords, omissions, outcome overrides, cleanup triggers and provenance.
+    Findings are empty because this renders the artifact without revalidation.
+
+    Outcome overrides retain operator reasons. Rules changing only failure
+    policy or optionality appear as effective policy; lowering does not retain
+    their reasons.
+    """
+    lines = [
+        f"workflow '{workflow.name}', as compiled",
+        *_provenance(workflow.provenance),
+        "",
+        *_graph("run", workflow.graph),
+        "",
+        *_omitted(workflow.omissions),
+        "",
+        *_overridden(workflow),
+    ]
+
+    for cleanup in workflow.cleanup:
+        lines += ["", *_cleanup(cleanup)]
+
+    lines += [
+        "",
+        "Reading this audit",
+        "  A command completing means the device answered, not that it reached "
+        "the requested state.",
+        "  An acknowledged Abort does not show that the hardware stopped.",
+        "  A completed acquisition does not show that its data product was "
+        "written or delivered downstream.",
+        "  Hard cancellation, such as process teardown, runs no cleanup.",
+    ]
+
+    return AuditReport(findings=(), description="\n".join(lines))
 
 
 # TODO: Support concrete offline previews from saved capability snapshots,
@@ -479,3 +538,172 @@ def _armed_by_entries(armed_by: tuple[str, ...] | None) -> str:
             return "never armed, so it never runs"
 
     return f"armed once any operation of {_quoted(armed_by)} is attempted"
+
+
+def _provenance(provenance: str) -> Iterator[str]:
+    """Describe compilation facts and their limits as evidence of current
+    hardware state.
+    """
+    yield f"compiled against {provenance or 'facts of unrecorded provenance'}"
+    yield ("  Provenance says when the facts were assembled and which devices "
+           "they cover. It does not show that the hardware is unchanged now.")
+
+
+def _name(node: Node) -> str:
+    """Use an operation label or ordering-node description in dependency
+    references.
+    """
+    if isinstance(node.payload, Operation):
+        return node.payload.id
+
+    return f"ordering '{node.label}'"
+
+
+def _graph(title: str, graph: Graph) -> Iterator[str]:
+    """Describe graph nodes in topological order, including their
+    dependencies.
+    """
+    names = {node.id: _name(node) for node in graph.nodes}
+    by_id = {node.id: node for node in graph.nodes}
+    operations = sum(isinstance(n.payload, Operation) for n in graph.nodes)
+
+    yield (f"{title}, {_count(operations, 'operation')} and "
+           f"{_count(len(graph.nodes) - operations, 'ordering node')}")
+
+    for nid in graph.topo_order():
+        yield from _node(by_id[nid], graph, names)
+
+
+def _count(count: int, noun: str) -> str:
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+def _node(node: Node, graph: Graph, names: dict[int, str]) -> Iterator[str]:
+    """Describe a node's payload, policy, delays, overrides and
+    dependencies.
+    """
+    yield f"  {names[node.id]}, in '{node.group}'"
+
+    match node.payload:
+        case Operation() as operation:
+            yield f"      {node.label}"
+            yield ("      no deadline" if operation.timeout_s is None
+                   else f"      deadline {_seconds(operation.timeout_s)}")
+
+            if operation.acquisition is not None:
+                yield from _acquisition(operation.acquisition)
+        case _:
+            yield "      sends nothing, and resolves once what it waits on has"
+
+    yield f"      on failure, {_on_failure(node.on_failure)}"
+
+    if node.optional:
+        yield "      optional, so a failure degrades the run without failing it"
+
+    if node.override is not None:
+        yield (f"      overridden, recorded {node.override.outcome} without "
+               f"dispatching, because {node.override.reason}")
+
+    if node.delay_s:
+        yield (f"      starts {_seconds(node.delay_s)} after what it waits on "
+               f"has resolved")
+
+    yield from _edges(node, graph, names)
+
+
+def _on_failure(on_failure: OnFailure) -> str:
+    match on_failure:
+        case "stop":
+            return "stops dispatching anything further in its graph, fail-fast"
+        case "skip":
+            return "skips whatever needs its success, not fail-fast"
+
+    return "lets whatever needs its success run anyway"
+
+
+def _edges(node: Node, graph: Graph, names: dict[int, str]) -> Iterator[str]:
+    """Describe incoming success and completion edges in predecessor-id
+    order.
+    """
+    deps = sorted(graph.deps[node.id])
+
+    if not deps:
+        yield "      waits on nothing"
+
+    for dep in deps:
+        kind = ("needs the success of" if dep in graph.hard[node.id]
+                else "waits for the completion of")
+        yield f"      {kind} {names[dep]}"
+
+
+def _acquisition(acquisition: Acquisition) -> Iterator[str]:
+    """Describe frame identity, planned keywords and dispatch-time header
+    sampling.
+    """
+    yield (f"      acquisition of request '{acquisition.request}', "
+           f"index {acquisition.index}, frame {acquisition.frame_number}")
+
+    if acquisition.keywords:
+        yield "      planned keywords, as requested rather than as achieved"
+
+    for key in sorted(acquisition.keywords):
+        value = to_jsonable_python(acquisition.keywords[key], fallback=repr)
+        yield f"        {key} = {json.dumps(value, sort_keys=True)}"
+
+    yield ("      header sampled at dispatch, so the command above is planned "
+           "and is not the header-bearing command sent")
+
+
+def _omitted(omissions: tuple[Omission, ...]) -> Iterator[str]:
+    """Describe capability omissions separately from operator overrides."""
+    if not omissions:
+        yield "nothing omitted at compile"
+        return
+
+    yield ("omitted at compile where the device lacks the command, by "
+           "capability and not by an operator")
+
+    for omission in omissions:
+        where = format_path(omission.target.path, "<root>")
+        yield (f"  {omission.command} on {omission.target.device} @ {where}, "
+               f"from {omission.origin}, because {omission.reason}")
+
+    yield "  What waited on an omitted operation waits on what it waited on."
+
+
+def _overridden(workflow: ExecutableWorkflow) -> Iterator[str]:
+    """Describe recorded outcome overrides and reasons across main and
+    cleanup graphs.
+    """
+    graphs = (workflow.graph, *(c.graph for c in workflow.cleanup))
+    overridden = [(_name(node), override) for graph in graphs
+                  for node in graph.nodes
+                  if (override := node.override) is not None]
+
+    if not overridden:
+        yield "no operator overrides"
+        return
+
+    yield "operator overrides, each recorded without dispatching"
+
+    for name, override in overridden:
+        yield f"  {name}, {override.outcome}, because {override.reason}"
+
+
+def _cleanup(cleanup: Cleanup) -> Iterator[str]:
+    """Describe a compiled cleanup's eligibility, arming, timeout and graph."""
+    yield (f"cleanup '{cleanup.origin}', runs {When[cleanup.when]} "
+           f"once the run has drained")
+    yield (f"  total deadline {_seconds(cleanup.timeout_s)}, beside each "
+           f"command's own")
+
+    match cleanup.armed_by:
+        case None:
+            yield "  armed unconditionally"
+        case ():
+            yield "  never armed, so it will not run"
+        case operations:
+            yield "  armed once any of these is attempted"
+            yield from (f"    {operation.id}" for operation in operations)
+
+    yield from _graph("  its graph", cleanup.graph)

@@ -16,7 +16,7 @@ import textwrap
 import pytest
 import yaml
 
-from sensorkit.sensor.audit import AuditReport, audit_definition
+from sensorkit.sensor.audit import AuditReport, audit_definition, audit_workflow
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.collect import (
     AcquisitionRequest,
@@ -28,14 +28,19 @@ from sensorkit.sensor.collect import (
     pack,
 )
 from sensorkit.sensor.definition import SensorDefinition
-from sensorkit.sensor.lifecycle import LifecycleWorkflow
+from sensorkit.sensor.lifecycle import LifecycleWorkflow, compile_lifecycle
 from sensorkit.sensor.selection import IsRef
 from sensorkit.sensor.topology import Device, Structure, Unit
-from sensorkit.sensor.workflow import DeadlineRule, ExecutableWorkflow
+from sensorkit.sensor.workflow import (
+    DeadlineRule,
+    ExecutableWorkflow,
+    Operation,
+    OperatorRule,
+)
 from sensorkit.std.collect import CameraParameterSet, Collect
 from sensorkit.std.traits import Stop
 
-from .common import REPORTED, TARGET, pointing, snapshot_of
+from .common import REPORTED, TARGET, operation, pointing, snapshot_of
 
 
 def table(text: str, name: str = "t", fail_fast: bool = True
@@ -66,6 +71,9 @@ def block(report: AuditReport, header: str) -> list[str]:
     return held
 
 
+def node(report: AuditReport, name: str) -> list[str]:
+    """The lines an audit says about one node, by the name it gives it."""
+    return block(report, f"{name}, in ")
 
 
 def statuses(report: AuditReport) -> dict[tuple, str]:
@@ -277,6 +285,33 @@ def test_cleanup_declarations_show_eligibility_and_arming(definition):
 # The compiled workflow
 
 
+def test_success_and_completion_read_apart_where_levels_look_alike(facts):
+    workflow = compile_lifecycle(table("""
+        phases:
+          - name: connect
+            entries:
+              - select: {device: mount}
+                ops: Connect
+                id: connect-mount
+          - name: home
+            entries:
+              - select: {device: mount}
+                ops: Home
+                require: connect-mount
+              - select: {device: dome}
+                ops: Connect
+        """), facts)
+    home = operation(workflow, "Home", "mount")
+    dome = operation(workflow, "Connect", "dome")
+    ids = {n.payload: n.id for n in workflow.graph.nodes}
+    report = audit_workflow(workflow)
+
+    # One predecessor each, so both sit on one level.
+    assert workflow.graph.deps[ids[home]] == workflow.graph.deps[ids[dome]]
+    assert ("      needs the success of t/connect/connect-mount/0@mount"
+            in node(report, home.id))
+    assert ("      waits for the completion of t/connect/connect-mount/0@mount"
+            in node(report, dome.id))
 
 
 @pytest.fixture(scope="module")
@@ -320,3 +355,174 @@ def darks(collecting) -> ExecutableWorkflow:
 
     return compile_collect(pack(intent, collecting), collecting,
                            deadlines=deadlines)
+
+
+def frames(workflow: ExecutableWorkflow, device: str) -> list[Operation]:
+    return [n.payload for n in workflow.graph.nodes
+            if isinstance(n.payload, Operation)
+            and n.payload.target.device == device
+            and n.payload.acquisition is not None]
+
+
+def test_deadlines_policy_delays_and_ordering_nodes(darks):
+    report = audit_workflow(darks)
+    align = block(report, "ordering 'align midpoints")
+    first, second = frames(darks, "cam-guide")
+    light = frames(darks, "cam-acq")[0]
+
+    # An ordering node carries no payload, and the audit says so.
+    assert "      sends nothing, and resolves once what it waits on has" in (
+        align)
+    assert "      deadline 30 s" in node(report, first.id)
+    assert "      deadline 9 s" in node(report, light.id)
+    assert ("      on failure, stops dispatching anything further in its "
+            "graph, fail-fast") in node(report, first.id)
+    # The shorter block starts late, so both midpoints coincide.
+    assert "      starts 3 s after what it waits on has resolved" in node(
+        report, light.id)
+    assert not any("starts" in line for line in node(report, first.id))
+    assert not any("starts" in line for line in node(report, second.id))
+    assert ("      waits for the completion of ordering 'align midpoints of "
+            "epoch 0'") in node(report, light.id)
+
+
+def test_operations_that_read_alike_are_told_apart_by_origin(darks):
+    report = audit_workflow(darks)
+    prepared, opening = [n for n in darks.graph.nodes
+                         if isinstance(n.payload, Operation)
+                         and n.payload.target.device == "mount"]
+
+    assert prepared.label == opening.label
+    assert prepared.payload.id != opening.payload.id
+    assert "      deadline 120 s" in node(report, prepared.payload.id)
+    assert "      no deadline" in node(report, opening.payload.id)
+
+
+def test_acquisitions_show_frames_keywords_and_when_the_header_is_taken(darks):
+    report = audit_workflow(darks)
+
+    for index, frame in enumerate(frames(darks, "cam-guide")):
+        said = node(report, frame.id)
+        number = frame.acquisition.frame_number
+
+        assert (f"      acquisition of request 'darks', index {index}, frame "
+                f"{number}") in said
+        assert any('"target_id": "dark"' in line for line in said)
+        assert any(f'"frame_number": {number}' in line for line in said)
+        assert ("      header sampled at dispatch, so the command above is "
+                "planned and is not the header-bearing command sent") in said
+
+
+def test_omissions_and_overrides_read_apart(facts, definition):
+    rule = OperatorRule(reason="mount is down", select=IsRef(device="mount"),
+                        commands=("Home",), outcome="skipped")
+    workflow = compile_lifecycle(definition.tables[0], facts,
+                                 deadlines=definition.deadlines, rules=(rule,))
+    report = audit_workflow(workflow)
+    omitted = block(report, "omitted at compile")
+    overrides = block(report, "operator overrides")
+    home = operation(workflow, "Home", "mount")
+
+    assert any(line.startswith("  Init on cam-acq @ ota/guide/cam-acq, from "
+                               "bring-up/initialize/init-instruments/0")
+               and "'cam-acq' does not support 'Init'" in line
+               for line in omitted)
+    assert not any("cam-acq" in line for line in overrides)
+    assert overrides[1:] == [f"  {home.id}, skipped, because mount is down"]
+    assert not any(home.id in line for line in omitted)
+    assert ("      overridden, recorded skipped without dispatching, because "
+            "mount is down") in node(report, home.id)
+
+
+ARMING = """
+    phases:
+      - name: connect
+        entries:
+          - select: {device: mount}
+            ops: Connect
+            id: connect-mount
+          - select: {device: cam-acq}
+            ops: {command: Init, unsupported: omit}
+            id: init-acq
+    cleanup:
+      - name: unconditional
+        entries: [{select: {device: mount}, ops: Stop}]
+      - name: never
+        when: cancelled
+        armed_by: []
+        entries: [{select: {device: mount}, ops: Stop}]
+      - name: triggered
+        when: failure_or_cancelled
+        timeout_s: 20.0
+        armed_by: [connect-mount]
+        entries: [{select: {device: mount}, ops: Stop}]
+      - name: lost-trigger
+        when: failure
+        armed_by: [init-acq]
+        entries: [{select: {device: mount}, ops: Stop}]
+    """
+
+
+def test_cleanup_eligibility_and_every_arming_state(facts):
+    workflow = compile_lifecycle(table(ARMING), facts)
+    report = audit_workflow(workflow)
+    connect = operation(workflow, "Connect", "mount")
+    never = block(report, "cleanup 'never'")
+    triggered = block(report, "cleanup 'triggered'")
+
+    assert "runs however the run ended" in block(
+        report, "cleanup 'unconditional'")[0]
+    assert "  armed unconditionally" in block(report,
+                                              "cleanup 'unconditional'")
+    assert "runs after a domain abort" in never[0]
+    assert "  never armed, so it will not run" in never
+    assert "a domain abort or both, and once where both hold" in triggered[0]
+    assert "  total deadline 20 s, beside each command's own" in triggered
+    assert triggered[2:4] == ["  armed once any of these is attempted",
+                              f"    {connect.id}"]
+    # Every named trigger omitted at compile, and the cleanup stays unarmed.
+    assert "  never armed, so it will not run" in block(
+        report, "cleanup 'lost-trigger'")
+
+
+def test_provenance_reaches_both_families(facts, definition, darks):
+    lifecycle = compile_lifecycle(definition.tables[1], facts)
+
+    for workflow in (lifecycle, darks):
+        lines = audit_workflow(workflow).description.splitlines()
+
+        assert lines[1] == f"compiled against {workflow.provenance}"
+        assert "taken 2026-01-01" in lines[1]
+        assert "not show that the hardware is unchanged now" in lines[2]
+
+
+def carried(payload: Operation | None) -> tuple | None:
+    """What one node's payload holds, as values to compare."""
+    if payload is None:
+        return None
+
+    acquisition = payload.acquisition
+    keywords = None if acquisition is None else dict(acquisition.keywords)
+
+    return payload.command.model_dump(), payload.timeout_s, keywords
+
+
+def seen(workflow: ExecutableWorkflow) -> tuple[list, list]:
+    """Everything a workflow's graphs hold, as values to compare."""
+    graphs = (workflow.graph, *(c.graph for c in workflow.cleanup))
+    nodes = [(n.label, n.on_failure, n.optional, n.delay_s, n.override,
+              carried(n.payload))
+             for graph in graphs for n in graph.nodes]
+
+    return nodes, [(g.deps, g.hard) for g in graphs]
+
+
+def test_audits_are_deterministic_and_leave_their_inputs_alone(definition,
+                                                               darks):
+    authored = definition.model_dump()
+    compiled = seen(darks)
+
+    assert audit_definition(definition) == audit_definition(definition)
+    assert audit_workflow(darks) == audit_workflow(darks)
+    assert definition.model_dump() == authored
+    assert seen(darks) == compiled

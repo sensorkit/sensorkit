@@ -19,6 +19,12 @@ intents for the same compilers.
 configuration section as a controller.
 """
 
+from sensorkit.sensor.audit import (
+    AuditReport,
+    Finding,
+    audit_definition,
+    audit_workflow,
+)
 from sensorkit.sensor.binding import (
     BindingReport,
     BoundSensor,

@@ -16,3 +16,11 @@ MODULES = (
 @pytest.mark.parametrize("name", MODULES)
 def test_every_module_imports(name):
     importlib.import_module(f"sensorkit.sensor.{name}")
+
+
+def test_the_package_exports_what_it_declares():
+    import sensorkit.sensor as sensor
+
+    assert sensor.Topology is not None
+    assert sensor.Selection is not None
+    assert sensor.SensorDefinition is not None
