@@ -6,7 +6,41 @@ import pytest_asyncio
 from pydantic import BaseModel
 
 from sensorkit.common.keyword import KeywordDict, declare_keyword
-from sensorkit.data.context import Context, ContextSubscription
+from sensorkit.data.context import Context, ContextSubscription, merge_contexts
+
+# --- Ordered merge ----------------------------------------------------------------
+
+
+def named(**values) -> KeywordDict:
+    merged = KeywordDict()
+
+    for key, value in values.items():
+        merged.set_value(key, value)
+
+    return merged
+
+
+def test_merge_contexts_lets_a_later_context_win():
+    base, root, leaf = named(a=0, b=0), named(b=1, c=1), named(c=2)
+
+    merged = merge_contexts(base, None, root, leaf)
+
+    assert dict(merged) == {"a": 0, "b": 1, "c": 2}
+    assert isinstance(merged, Context)
+    assert merged is not base
+    assert dict(base) == {"a": 0, "b": 0}
+    assert dict(root) == {"b": 1, "c": 1}
+
+
+def test_merge_contexts_builds_a_new_context_each_time():
+    base = named(a=0)
+    first, second = merge_contexts(base), merge_contexts(base)
+    first.set_value("a", 1)
+
+    assert first is not second
+    assert second["a"] == 0
+    assert base["a"] == 0
+
 
 # --- Composite keyword expansion --------------------------------------------------------
 

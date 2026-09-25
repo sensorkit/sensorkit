@@ -202,6 +202,28 @@ class Context(KeywordDict):
         return value
 
 
+def merge_contexts(*contexts: KeywordDict | None) -> Context:
+    """A fresh context holding each given one in turn.
+
+    A later one wins where two set the same keyword, so contexts listed root
+    first along a chain of devices leave the deepest publisher's value. None is
+    passed over. Nothing given is modified, and none of them is the result.
+
+    Args:
+        *contexts: What to merge, lowest precedence first.
+
+    Returns:
+        A new context.
+    """
+    merged = Context()
+
+    for context in contexts:
+        if context is not None:
+            merged.update(context)
+
+    return merged
+
+
 class ContextSubscription:
     """Subscribe to device keyword updates and produce Context snapshots.
 
