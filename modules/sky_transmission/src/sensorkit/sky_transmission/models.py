@@ -58,6 +58,23 @@ sk.declare_config_section(
 )
 
 
+class CapabilityDevices(BaseModel):
+    """The devices named by a sensor controller's capability record."""
+
+    mount: str | None = None
+
+
+class Capabilities(BaseModel):
+    """A sensor controller's capability record, read for the mount it controls.
+
+    Other fields a record carries are ignored.
+    """
+
+    # Controllers publish this record to their KV under the class name, and it is
+    # looked up the same way, so renaming the class breaks the lookup.
+    devices: CapabilityDevices
+
+
 @dataclass
 class FrameState:
     """Shared mutable state between the analyzer and the image server.
