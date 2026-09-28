@@ -97,7 +97,7 @@ Each top-level section is handled by the component that owns it — `sensors` by
 | Section      | Owner                                | Purpose                                                             |
 |--------------|--------------------------------------|---------------------------------------------------------------------|
 | `sensorkit`  | bootstrap                            | Global settings: `imports` (modules to load), `backend`             |
-| `sensors`    | [sensor controller](sensor.md)       | Device composition, site position, operating policies              |
+| `sensors`    | [sensor controller](sensor.md)       | Device composition, site position, operating policies (pending)    |
 | `automation` | [agent](agent.md)                    | Modes, constraints, scheduling                                     |
 | `data_flow`  | data pipeline (below)                | Per-device data processing graphs                                  |
 | `webapi`     | web API service                      | HTTP API port and served data products                             |

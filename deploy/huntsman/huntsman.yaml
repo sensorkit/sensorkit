@@ -6,7 +6,7 @@ sensorkit:
     - sensorkit.indigo.service
     - sensorkit.thesky.service
     - /opt/sk/huntsman_dome.py        # custom Musca dome controller module (SensorKit plugin)
-    - sensorkit.std.sensor
+    - sensorkit.sensor
     - sensorkit.burr.program
     - sensorkit.otto.program
     - sensorkit.auto.agent

@@ -100,13 +100,3 @@ from sensorkit.std.weather import (
     WeatherFieldEvaluator,
     WeatherProvider,
 )
-
-from sensorkit.std.sensor import (
-    Capabilities,
-    Sensor,
-    SensorConfig,
-    SensorControl,
-    SensorDevices,
-    SensorPolicies,
-    sensor_control_service,
-)

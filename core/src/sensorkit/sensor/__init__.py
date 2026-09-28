@@ -67,6 +67,7 @@ from sensorkit.sensor.execution import (
     WorkflowOutcome,
     WorkflowReport,
 )
+from sensorkit.sensor.impl import SensorConfig, SensorController, sensor_service
 from sensorkit.sensor.lifecycle import (
     CleanupSpec,
     Entry,

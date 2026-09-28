@@ -1,36 +1,53 @@
 # Sensor controller
 
-The sensor controller (`sensorkit.std.sensor`) turns a collection of devices into one logical instrument. It owns a mount and camera — plus, optionally, a dome, focuser, rotator, filter wheel, and mirror cover — and knows how to bring them up, point them, collect frames, and shut them down in the right order.
+The sensor controller turns a collection of devices into one logical instrument. It owns a mount and camera — plus, optionally, a dome, focuser, rotator, filter wheel, and mirror cover — and knows how to bring them up, point them, collect frames, and shut them down in the right order.
 
 You rarely command devices individually during operations; you send *tasks* to the controller, and it sequences the hardware.
 
+Scripts can use `Sensor.connect(definition, sensorkit)` to bind device capabilities,
+then plan and execute lifecycle or collect workflows.
+The controller service uses the same interface and generates lifecycle tables
+and deadline rules from site policies.
+
 ## Configuration
-
-!!! note "A new standard sensor is in the works"
-
-    A new **multi-instrument** standard sensor implementation is in development. It will replace much of the configuration described in this section, so treat the `sensors:` schema below as current-release detail rather than a long-term contract.
 
 Declare each sensor in the `sensors` section of the unified config:
 
 ```yaml
 sensors:
-  - id: MySensor                # entity/service name
-    controller_name: MySensor
+  - id: MySensor
+    model:
+      name: MySensor
+      components:
+        - device: MyMount
+        - device: MyDome
+        - device: MyCover
+        - unit: science
+          components:
+            - device: MyWheel
+            - device: MyFocuser
+            - device: MyCamera
+              instrument: true
+    policies: {}
 
-    devices:
-      mount: MyMount            # required
-      camera: MyCamera          # required
-      dome: MyDome              # optional
-      filter_wheel: MyWheel     # optional
-      focuser: MyFocuser        # optional
-      rotator: MyRotator        # optional
-      mirror_cover: MyCover     # optional
-
-    site_position:
-      latitude_degrees: 34.0522   # positive north
-      longitude_degrees: -118.2437  # positive east
+config:
+  MySensor:
+    SitePosition:
+      latitude_degrees: 34.0522
+      longitude_degrees: -118.2437
       altitude_km: 0.086
+```
 
+Each `device` names an entity declared in a [device service](devices.md).
+Root devices belong to every instrument's chain.
+Units group devices belonging to a branch; mark each collection target with
+`instrument: true`.
+For several cameras, declare separate units with their cameras and any local
+filter wheels or focusers.
+
+Configure policy overrides within the sensor's `policies` block:
+
+```yaml
     policies:
       mount_init_timeout: 30.0
       mount_home_timeout: 300.0
@@ -39,12 +56,9 @@ sensors:
       concurrent_dome_and_mount_init: false
       concurrent_dome_and_mount_deinit: false
       concurrent_mount_and_mirror_cover_init: false
-      minimum_target_altitude_degrees: 20.0
-      sun_separation_degrees: 45.0
-      moon_separation_degrees: 5.0
 ```
 
-Each value under `devices` is the entity name of a device declared in a [device service](devices.md). The `site_position` drives sunrise/sunset calculation, target altitude checks, orbit propagation, and FITS metadata.
+`SitePosition` supplies the location included in each frame's metadata.
 
 ### Policies
 
@@ -54,16 +68,22 @@ All policies are optional; timeouts show their defaults.
 |-------------------------------------------|---------|--------------------------------------------------|
 | `mount_init_timeout`                      | 30.0    | Seconds allowed for mount power-up/axis enable   |
 | `mount_home_timeout`                      | 300.0   | Seconds allowed for the homing sequence          |
+| `mount_deinit_timeout`                    | 60.0    | Seconds allowed for mount deinitialization       |
+| `stop_timeout`                            | 30.0    | Seconds allowed to stop a device                 |
+| `follow_target_timeout`                   | 300.0   | Seconds allowed to slew to and track a target    |
+| `filter_change_timeout`                   | 30.0    | Seconds allowed to change the filter             |
+| `camera_configure_timeout`                | 30.0    | Seconds allowed to configure a camera sensor     |
+| `focus_change_timeout`                    | 30.0    | Seconds allowed to move the focuser              |
+| `default_timeout`                         | 300.0   | Seconds allowed for any other command            |
 | `dome_open_close_timeout`                 | 120.0   | Seconds allowed for dome open/close              |
 | `mirror_cover_open_close_timeout`         | 60.0    | Seconds allowed for the mirror cover             |
 | `concurrent_dome_and_mount_init`          | false   | Open dome while the mount initializes            |
 | `concurrent_dome_and_mount_deinit`        | false   | Close dome while the mount deinitializes         |
 | `concurrent_mount_and_mirror_cover_init`  | false   | Open mirror cover during mount init              |
-| `minimum_target_altitude_degrees`         | off     | Refuse to track targets below this altitude      |
-| `sun_separation_degrees`                  | off     | Refuse targets within this angle of the Sun      |
-| `moon_separation_degrees`                 | off     | Refuse targets within this angle of the Moon     |
 
-The pointing-safety policies are enforced per frame during collection, so a satellite pass that drifts too close to the Sun is cut off mid-task, not just checked at the start.
+Unknown policy fields are rejected.
+Altitude and Sun/Moon admission limits belong in tasking and automation;
+the sensor's policies control sequencing and command deadlines.
 
 ## Tasks
 
@@ -71,13 +91,19 @@ The controller responds to tasks — from the agent during autonomous operation,
 
 | Task         | What happens                                                                    |
 |--------------|----------------------------------------------------------------------------------|
-| **Init**     | Connect devices, initialize and home the mount, open the mirror cover and dome  |
+| **Init**     | Initialize the dome and mount, open the dome and mirror cover                  |
 | **Standby**  | Bring the sensor to a warm, ready-to-observe state                              |
 | **Collect**  | Slew/track a target, set filter and binning, capture frames, stop the mount     |
 | **Recover**  | Reconnect all devices and stop any in-progress motion after a fault             |
 | **Shutdown** | Close the mirror cover, deinitialize the mount, close the dome                  |
 
-During a collect, the controller adapts the target to what the mount supports (e.g. propagating a TLE into an ephemeris or rate stream), and before each frame it snapshots live pointing and task state into the frame's *context* — which is how downstream FITS files get accurate per-frame metadata (see [Configuration → Data flow](configuration.md#data-flow)).
+During a collect, the controller commands the target and camera settings.
+Before each frame, it samples subscribed device keywords from that instrument's
+chain into a fresh context, together with task context, site position and numbered
+`Collect` metadata.
+Requested parameters remain separate from reported device values.
+Downstream FITS files use this context for per-frame metadata
+(see [Configuration → Data flow](configuration.md#data-flow)).
 
 ## Manual operation
 

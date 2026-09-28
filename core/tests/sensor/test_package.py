@@ -8,7 +8,7 @@ import pytest
 
 MODULES = (
     "audit", "binding", "client", "collect", "definition", "dispatch",
-    "execution", "lifecycle", "policies", "selection",
+    "execution", "impl", "lifecycle", "policies", "selection",
     "standard_task", "topology", "workflow",
 )
 
@@ -24,3 +24,4 @@ def test_the_package_exports_what_it_declares():
     assert sensor.Topology is not None
     assert sensor.Selection is not None
     assert sensor.SensorDefinition is not None
+

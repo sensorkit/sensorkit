@@ -8,7 +8,7 @@ sensorkit:
     - /opt/sk/dao_camera.py
     - sensorkit.alpaca.service
     - sensorkit.node_platform.service
-    - sensorkit.std.sensor
+    - sensorkit.sensor
     - sensorkit.burr.program
     - sensorkit.otto.program
     - sensorkit.udl.service

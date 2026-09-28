@@ -65,7 +65,7 @@ services:
   controller:
     image: sensorkit
     pull_policy: never
-    command: service run Huntsman sensorkit.std.sensor
+    command: service run Huntsman sensorkit.sensor
     environment:
       <<: *common-env
     volumes:
