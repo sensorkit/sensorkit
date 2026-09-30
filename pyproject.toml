@@ -253,14 +253,18 @@ root_packages = ["sensorkit"]
 exclude_type_checking_imports = true
 
 [[tool.importlinter.contracts]]
-name = "SensorKit layers are intact"
+name = "sensorkit subpackage layering"
 type = "layers"
-# The udl EO publisher consumes senpai's published SenpaiResult keyword; the
-# models module is pydantic-only (no astro-senpai import).
 ignore_imports = [
+    # SenpaiResult
     "sensorkit.udl.publishers -> sensorkit.senpai.models",
-    "sensorkit.sensor.impl -> sensorkit.std.**",
+    # Autoslew devices are specialized Alpaca devices
     "sensorkit.autoslew.** -> sensorkit.alpaca.**",
+    # Sensor translation layer uses standards
+    "sensorkit.sensor.policies -> sensorkit.std.**",
+    "sensorkit.sensor.standard_task -> sensorkit.std.**",
+    "sensorkit.sensor.collect -> sensorkit.std.**",
+    "sensorkit.sensor.impl -> sensorkit.std.**",
 ]
 layers = [
     """
@@ -283,11 +287,27 @@ layers = [
     "sensorkit.webapi",
     "sensorkit.std",
     "sensorkit.auto",
+    "sensorkit.sensor",
     "sensorkit.astro",
     "sensorkit.api",
     "sensorkit.core : sensorkit.data",
     "sensorkit.backend",
     "sensorkit.common",
+]
+
+[[tool.importlinter.contracts]]
+name = "sensorkit.sensor module layering"
+type = "layers"
+containers = ["sensorkit.sensor"]
+layers = [
+    "client",
+    "audit | policies | standard_task",
+    "definition | execution",
+    "collect | dispatch | lifecycle",
+    "binding",
+    "workflow",
+    "selection",
+    "topology",
 ]
 
 [tool.hatch.metadata]
