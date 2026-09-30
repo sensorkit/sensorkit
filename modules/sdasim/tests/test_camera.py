@@ -227,6 +227,18 @@ class TestCapture:
         assert context.get(FileNameTemplate)
 
     @pytest.mark.asyncio
+    async def test_reported_binning_includes_scene_binning(self, device_impl, data_graph):
+        camera = make_camera(scene_binning=2)
+        camera._bin_x = camera._bin_y = 3
+        await camera.camera_capture(CameraCapture(integration_time=0.0, context=Context()))
+
+        async with asyncio.timeout(2.0):
+            context, _ = await anext(data_graph.app_sink().consume())
+
+        assert context.get(ImageInfo).binning == (6, 6)
+        assert camera._engine.render_frame.call_args.args[6] == 3  # render bins by 3 only
+
+    @pytest.mark.asyncio
     async def test_capture_requires_connected(self, device_impl):
         camera = make_camera()
         camera.device_connected = False

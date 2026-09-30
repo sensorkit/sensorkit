@@ -345,10 +345,14 @@ class SdasimCamera:
 
         image_bytes = await asyncio.to_thread(np.ascontiguousarray(image).tobytes)
 
+        # Report the total binning from native pixels: the scene's own binning
+        # times the binning applied to this capture.
+        total_bin = max(1, int(self.config.scene_binning)) * bin_factor
+
         # Build the data context consumed by the DataGraph (array_to_fits, etc.).
         context = cmd.context
         context.set(
-            ImageInfo(array=ArrayInfo.from_array(image), binning=(bin_factor, bin_factor)),
+            ImageInfo(array=ArrayInfo.from_array(image), binning=(total_bin, total_bin)),
             ExposureInfo(
                 date_obs=exposure_start,
                 exposure_time=exposure_seconds,
@@ -428,6 +432,7 @@ class SdasimCameraConfig(BaseModel):
     device: str = "cpu"  # torch device for sdasim ("cpu", "cuda", "mps", "auto")
     temperature: float = -10.0  # simulated cooler setpoint (°C)
     binning: int = 1  # default symmetric binning factor
+    scene_binning: int = 1  # binning already applied to the scene YAML's sensor dimensions
     readout_mode: int = 0  # reported as FITS READOUTM (single simulated mode)
     status_frequency: float = 1.0  # telemetry publish cadence (seconds)
 
