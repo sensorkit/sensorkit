@@ -17,7 +17,6 @@ class TestSdasimCameraConfig:
         assert config.rotator_entity is None
         assert config.device == "cpu"
         assert config.temperature == -10.0
-        assert config.binning == 1
         assert config.status_frequency == 1.0
 
     def test_sdasim_config_required(self):
@@ -47,7 +46,6 @@ class TestSdasimSection:
                 "sdasim_config": "scene.yaml",
                 "mount_entity": "OmniSimTelescope",
                 "rotator_entity": "OmniSimRotator",
-                "binning": 2,
             },
             {
                 "id": "sdasimCameraPWI4",
@@ -61,7 +59,6 @@ class TestSdasimSection:
         parsed = TypeAdapter(list[SdasimCameraConfig]).validate_python(raw)
         assert parsed[0].mount_entity == "OmniSimTelescope"
         assert parsed[0].rotator_entity == "OmniSimRotator"
-        assert parsed[0].binning == 2
         assert parsed[1].mount_entity == "PWI4Telescope"
         assert parsed[1].rotator_entity is None
 

@@ -111,8 +111,8 @@ class SdasimCamera:
         self._mount_sub: ContextSubscription | None = None
         self._rotator_sub: ContextSubscription | None = None
         self._focuser_sub: ContextSubscription | None = None
-        self._bin_x = self.state.bin_x or self.config.binning
-        self._bin_y = self.state.bin_y or self.config.binning
+        self._bin_x = self.state.bin_x
+        self._bin_y = self.state.bin_y
         self._temperature = self.config.temperature
         self._readout_mode = self.config.readout_mode
         self._num_targets: int | None = None
@@ -429,7 +429,6 @@ class SdasimCameraConfig(BaseModel):
     device: str = "cpu"  # torch device for sdasim ("cpu", "cuda", "mps", "auto")
     seed: int | None = None  # sdasim RNG seed; None gives independent noise per Scene
     temperature: float = -10.0  # simulated cooler setpoint (°C)
-    binning: int = 1  # default symmetric binning factor
     readout_mode: int = 0  # reported as FITS READOUTM (single simulated mode)
     status_frequency: float = 1.0  # telemetry publish cadence (seconds)
 

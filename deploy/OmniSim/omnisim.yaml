@@ -248,7 +248,6 @@ sdasim:
     rotator_entity: OmniSimRotator
     device: cpu
     temperature: -10.0
-    binning: 2
     status_frequency: 1.0
 
 slack:
