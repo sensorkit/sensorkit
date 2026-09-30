@@ -106,6 +106,7 @@ class SdasimCamera:
         self._engine = SdasimEngine(
             self.config.sdasim_config,
             device=self.config.device,
+            seed=self.config.seed,
         )
         self._mount_sub: ContextSubscription | None = None
         self._rotator_sub: ContextSubscription | None = None
@@ -426,6 +427,7 @@ class SdasimCameraConfig(BaseModel):
     microns_per_step: float = 1.0  # focuser mechanism scale: steps -> microns of focal shift
     best_focus_position: float = 0.0  # focuser position (steps) at best focus
     device: str = "cpu"  # torch device for sdasim ("cpu", "cuda", "mps", "auto")
+    seed: int | None = None  # sdasim RNG seed; None gives independent noise per Scene
     temperature: float = -10.0  # simulated cooler setpoint (°C)
     binning: int = 1  # default symmetric binning factor
     readout_mode: int = 0  # reported as FITS READOUTM (single simulated mode)

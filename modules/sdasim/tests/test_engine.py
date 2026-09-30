@@ -132,6 +132,15 @@ class TestRealRender:
         assert meta["point_ra"] == 10.0
         assert meta["point_dec"] == 20.0
 
+    def test_seed_makes_render_reproducible(self, scene_yaml):
+        pytest.importorskip("sdasim")
+        images = []
+        for _ in range(2):
+            engine = SdasimEngine(scene_yaml, device="cpu", seed=7)
+            engine.initialize()
+            images.append(engine.render_frame(0.5, 10.0, 20.0)[0])
+        np.testing.assert_array_equal(images[0], images[1])
+
     def test_render_binned_ccd(self, scene_yaml):
         pytest.importorskip("sdasim")
         engine = SdasimEngine(scene_yaml, device="cpu")

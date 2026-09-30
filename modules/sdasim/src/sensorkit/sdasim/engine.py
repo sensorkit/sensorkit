@@ -34,9 +34,11 @@ class SdasimEngine:
         self,
         sdasim_config_path: str,
         device: str = "cpu",
+        seed: int | None = None,
     ):
         self._sdasim_config_path = sdasim_config_path
         self._device = device
+        self._seed = seed
         self._base_config = None
         self._scene = None
         self._scene_exposure: float | None = None
@@ -218,7 +220,7 @@ class SdasimEngine:
         cfg.sensor.num_frames = 1
         cfg.stars.ra = point_ra
         cfg.stars.dec = point_dec
-        cfg.seed = None
+        cfg.seed = self._seed
 
         self._scene = sdasim.Scene(cfg)
         self._scene_exposure = exposure
