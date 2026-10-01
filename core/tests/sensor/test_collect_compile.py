@@ -104,7 +104,7 @@ def bench() -> BoundSensor:
 def ported(topology) -> BoundSensor:
     """`sensor.yaml` with a pickoff that can be positioned and cameras that
     can capture."""
-    sensor, _ = BoundSensor.bind(topology, details_of(adding(
+    sensor = BoundSensor.bind(topology, details_of(adding(
         POSITIONED, cam_sci=("CameraCapture",), cam_guide=("CameraCapture",),
         cam_acq=("CameraCapture",))))
 
@@ -730,7 +730,7 @@ def test_the_workflow_takes_the_collect_name(bench):
 
 def test_a_command_the_device_cannot_perform_is_a_compile_error(topology):
     # Nothing reported here can capture.
-    sensor, _ = BoundSensor.bind(topology, details_of(POSITIONED))
+    sensor = BoundSensor.bind(topology, details_of(POSITIONED))
 
     with pytest.raises(ValueError, match="does not support 'CameraCapture'"):
         compiled(sensor, RequestEpoch(units=(asking("a", "cam-acq"),)))

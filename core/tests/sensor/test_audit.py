@@ -346,7 +346,7 @@ def test_success_and_completion_read_apart_where_levels_look_alike(facts):
 def collecting(topology) -> BoundSensor:
     """`sensor.yaml` with a mount that tracks, a pickoff that can be
     positioned, and two guide-port cameras that capture."""
-    sensor, _ = BoundSensor.bind(topology, details_of({
+    sensor = BoundSensor.bind(topology, details_of({
         **REPORTED,
         "mount": (REPORTED["mount"][0] + ("FollowTarget",), ()),
         "pickoff": (REPORTED["pickoff"][0] + ("SelectPort",), ()),

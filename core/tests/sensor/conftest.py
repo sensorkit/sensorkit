@@ -43,7 +43,7 @@ def details() -> dict[str, DeviceDetails]:
 
 @pytest.fixture(scope="session")
 def facts(topology, details) -> BoundSensor:
-    sensor, _ = BoundSensor.bind(topology, details)
+    sensor = BoundSensor.bind(topology, details)
 
     return sensor
 

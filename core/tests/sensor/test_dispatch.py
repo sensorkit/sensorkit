@@ -80,7 +80,7 @@ async def before(kit, mount) -> set[asyncio.Task]:
 
 def dispatcher(kit, topology, commands: tuple[str, ...]) -> Dispatcher:
     """A dispatcher whose mount reports these commands."""
-    sensor, _ = BoundSensor.bind(
+    sensor = BoundSensor.bind(
         topology, details_of({**REPORTED, "mount": (commands, ())}))
 
     return Dispatcher(sensor, {"mount": kit.device("mount")})

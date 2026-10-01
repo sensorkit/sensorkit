@@ -12,8 +12,7 @@ merging duplicate targets. Scope and selection filters narrow the candidates.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Literal
 
 from sensorkit.common.keyword import KeywordDict
@@ -38,17 +37,6 @@ from sensorkit.sensor.workflow import (
     Subject,
     partition,
 )
-
-
-@dataclass(frozen=True)
-class BindingReport:
-    """Trait descriptions from a successful binding, one per placement.
-
-    Missing reports and unmet assertions raise instead of producing a report.
-    Unsupported workflow commands are handled later, during compilation.
-    """
-
-    established: tuple[str, ...] = ()
 
 
 class BoundSensor:
@@ -82,14 +70,12 @@ class BoundSensor:
         }
 
     @classmethod
-    def bind(
-        cls, topology: Topology, details: Mapping[DeviceKey, DeviceDetails]
-    ) -> tuple[BoundSensor, BindingReport]:
-        """Check device reports and trait assertions, then return a sensor
-        and report.
+    def bind(cls, topology: Topology, details: Mapping[DeviceKey, DeviceDetails]) -> BoundSensor:
+        """Check device reports and trait assertions, then return a sensor.
 
         Trait matching uses the same capability predicates as device
-        declarations.
+        declarations. Unsupported workflow commands are found later, during
+        compilation.
 
         Raises:
             ValueError: A configured device has no report, or an authored trait
@@ -113,7 +99,7 @@ class BoundSensor:
         if unmet:
             raise ValueError("declared traits were not established: " + ", ".join(unmet))
 
-        return sensor, BindingReport(established=tuple(sensor._established()))
+        return sensor
 
     def supported_commands(self, device: DeviceKey) -> frozenset[str]:
         """Return reported command identifiers, or an empty set for an
@@ -264,17 +250,6 @@ class BoundSensor:
             )
 
         return winners[0]
-
-    def _established(self) -> Iterator[str]:
-        """Describe established traits for each placement in traversal
-        order.
-        """
-        for placement in self.topology.placements():
-            traits = sorted(self.traits(placement))
-            yield (
-                f"'{placement.device}' at '{format_path(placement.path, '<root>')}' satisfies "
-                f"{', '.join(traits) or 'no trait'}"
-            )
 
     def _reachable(self, participants: tuple[Placement, ...]) -> tuple[Placement, ...]:
         """Combine participant chains, retaining each placement on its first

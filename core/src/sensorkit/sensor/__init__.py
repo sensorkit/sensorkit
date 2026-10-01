@@ -26,7 +26,6 @@ from sensorkit.sensor.audit import (
     audit_workflow,
 )
 from sensorkit.sensor.binding import (
-    BindingReport,
     BoundSensor,
 )
 from sensorkit.sensor.client import Sensor

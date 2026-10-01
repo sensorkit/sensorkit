@@ -107,7 +107,7 @@ def sensor_of(structure: str | Structure, reported: Reported) -> BoundSensor:
             structure = Structure.model_validate(
                 yaml.safe_load(textwrap.dedent(structure)))
 
-    sensor, _ = BoundSensor.bind(Topology(structure), details_of(reported))
+    sensor = BoundSensor.bind(Topology(structure), details_of(reported))
 
     return sensor
 

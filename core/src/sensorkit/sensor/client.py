@@ -112,7 +112,7 @@ class Sensor:
             reported[key] = info.details
 
         # Binding reports every configured device missing from the reports.
-        sensor, _ = BoundSensor.bind(topology, reported)
+        sensor = BoundSensor.bind(topology, reported)
         executor = WorkflowExecutor(sensor, clients, events=AsyncObserver[OperationEvent]())
 
         return cls(definition, sensor, executor)

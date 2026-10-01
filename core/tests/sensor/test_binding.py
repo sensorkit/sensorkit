@@ -62,16 +62,6 @@ def test_kind_and_instrument_come_from_the_record(facts, at):
     assert facts.instrument(at("cam-sci"))
 
 
-def test_the_report_lists_what_each_placement_established(topology, details):
-    _, report = BoundSensor.bind(topology, details)
-
-    assert len(report.established) == len(topology.placements())
-    assert report.established[0].startswith("'mount' at '<root>'")
-    assert "MustConnect" in report.established[0]
-    assert report.established[-1] == "'cam-acq' at 'ota/guide/cam-acq' " \
-                                     "satisfies no trait"
-
-
 # Refusing to bind
 
 
