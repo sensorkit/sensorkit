@@ -35,7 +35,7 @@ from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceCommand
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.selection import Selection
-from sensorkit.sensor.topology import Placement, format_paths
+from sensorkit.sensor.topology import DeviceKey, Placement, format_paths
 from sensorkit.sensor.workflow import (
     Acquisition,
     CleanupPlan,
@@ -68,10 +68,10 @@ class PackingConflict(ValueError):
 
 
 class SettingUnsatisfiable(ValueError):
-    """No supporting command is available to establish a requested setting.
+    """A requested setting lacks command support or fails a target requirement.
 
-    This tests command availability, not whether hardware can achieve the
-    value.
+    Checks use reported capabilities and planning facts. They do not verify
+    that hardware can achieve the requested value.
     """
 
 
@@ -104,6 +104,11 @@ class CommandRequest:
     and `device` narrow the targets. Requests can configure an epoch,
     individual instruments, preparation or cleanup.
 
+    Every predicate in `requires` must match every routed target. Requirements
+    are checked after routing and do not affect target selection. Predicates in
+    `prefers` contribute to instrument ranking for each routed target they
+    match. Only instrument settings may specify preferences.
+
     Collect settings must be absolute, with one state per command type. Restate
     all required fields in partial-update commands; compilation does not merge
     them. Requests merged on one target must agree on both command and timeout.
@@ -115,19 +120,22 @@ class CommandRequest:
     scope: Scope = "any"
     device: str | None = None
     timeout_s: float | None = None
+    requires: tuple[Selection, ...] = ()
+    prefers: tuple[Selection, ...] = ()
 
     def resolve(
         self, participants: tuple[Placement, ...], sensor: BoundSensor
     ) -> tuple[RoutedCommand, ...]:
-        """Route this command for the participants and attach its authored
-        timeout.
+        """Route this command, check target requirements and attach its
+        authored timeout.
 
         Different requests colliding on a shared device are checked during
         packing. Explicit device references skip the support precheck to retain
         routing errors.
 
         Raises:
-            SettingUnsatisfiable: A participant group has no supporting device.
+            SettingUnsatisfiable: A participant group has no supporting device,
+                or a routed target fails a requirement.
             ValueError: Routing is ambiguous, filters remove all candidates, or
                 a named device is unreachable or unsupported.
         """
@@ -155,6 +163,22 @@ class CommandRequest:
             scope=self.scope,
             device=self.device,
         )
+        unmet = next(
+            (
+                (r.target, requirement)
+                for r in routed
+                for requirement in self.requires
+                if not requirement.matches(r.target, sensor)
+            ),
+            None,
+        )
+
+        if unmet is not None:
+            target, requirement = unmet
+            raise SettingUnsatisfiable(
+                f"'{target.device}' takes '{named}' for {format_paths(participants)} but "
+                f"does not satisfy {requirement.model_dump_json(by_alias=True)}"
+            )
 
         return tuple(replace(r, timeout_s=self.timeout_s) for r in routed)
 
@@ -167,7 +191,8 @@ class CommandRequest:
         Raises:
             PackingConflict: Combined routing fails although each participant
                 routes successfully alone.
-            SettingUnsatisfiable: A participant group has no supporting device.
+            SettingUnsatisfiable: A participant group has no supporting device,
+                or a routed target fails a requirement.
             ValueError: Routing fails for an individual participant.
         """
         try:
@@ -196,8 +221,9 @@ class InstrumentRequest:
     metadata.
 
     `select` filters instrument placements. `requires` filters their chains;
-    `prefers` ranks eligible chains without excluding them. Settings must route
-    successfully for the chosen instruments.
+    `prefers` ranks eligible chains without excluding them. Each setting must
+    route successfully and satisfy its target requirements. Chain preferences
+    and setting target preferences contribute to the same ranking.
 
     `collect` carries the standard task's target and requested camera parameters.
     Expansion fills its per-instrument frame number. Device keywords are sampled
@@ -363,22 +389,38 @@ commands.
 type Members = tuple[tuple[InstrumentRequest, RequestEpoch], ...]
 
 
-def pack(intent: CollectIntent, sensor: BoundSensor) -> BoundCollect:
+def pack(
+    intent: CollectIntent,
+    sensor: BoundSensor,
+    *,
+    device_keywords: Mapping[DeviceKey, KeywordDict] | None = None,
+) -> BoundCollect:
     """Choose instruments, route commands and split incompatible
     configuration epochs.
 
-    Rank assignment options by preferences, then integration-time load,
-    choosing the first that fits the current child epoch. Otherwise open a new
-    child. Charge each assignment group's full duration when first placed.
-    Preserve authored epoch boundaries, order, settings and per-child
-    alignment.
+    Rank assignment options by the number of satisfied chain and target
+    preferences, then by lowest accumulated integration time. Choose the first
+    option that fits the current child epoch, or open a new child. Charge each
+    assignment group's full duration when first placed. Preserve authored
+    epoch boundaries, order, settings and per-child alignment.
+
+    Selections use only the supplied `device_keywords`, including when the
+    sensor already carries keywords. Omitted devices and keywords are treated
+    as absent; omitting the mapping treats all device keywords as absent.
 
     Raises:
-        SettingUnsatisfiable: No eligible instrument can route a required
-            setting.
-        ValueError: Requests or assignments are invalid, routing fails, or a
-            request cannot fit even by itself. `PackingConflict` is a subclass.
+        SettingUnsatisfiable: A required setting has no supporting device,
+            or a routed target fails a requirement.
+        ValueError: Requests or assignments are invalid, target preferences
+            appear outside instrument settings, routing fails, or a request
+            cannot fit even by itself. `PackingConflict` is a subclass.
     """
+    _unranked(intent)
+    sensor = BoundSensor(
+        sensor.topology,
+        sensor.details,
+        device_keywords={} if device_keywords is None else device_keywords,
+    )
     groups = _grouped(intent)
     chosen: dict[tuple[bool, str], tuple[Placement, ...]] = {}
     load: dict[Placement, float] = {}
@@ -625,7 +667,8 @@ def _options(
     """Rank an assignment group's eligible instrument sets.
 
     Fan-out has one option containing every eligible instrument. Single-target
-    options rank by preference count, then accumulated integration-time load.
+    options rank by most satisfied preferences, then lowest accumulated
+    integration time.
     """
     eligible = _eligible(members, sensor, where)
     first, _ = members[0]
@@ -646,7 +689,8 @@ def _eligible(members: Members, sensor: BoundSensor, where: str) -> tuple[Placem
     assignment.
 
     Raises:
-        SettingUnsatisfiable: No admitted instrument can route all settings.
+        SettingUnsatisfiable: No admitted instrument can establish all
+            settings.
         ValueError: No instrument meets selection and requirements, or routing
             fails structurally on an admitted instrument.
     """
@@ -686,7 +730,8 @@ def _establishes(
     Packing checks compatibility with other participants separately.
 
     Raises:
-        SettingUnsatisfiable: A setting has no supporting device on this chain.
+        SettingUnsatisfiable: A setting has no supporting device on this chain,
+            or its target fails a requirement.
         ValueError: Routing fails structurally.
     """
     for member, epoch in members:
@@ -711,14 +756,47 @@ def _preferred(
     placement: Placement,
     sensor: BoundSensor,
 ) -> int:
-    """Count satisfied chain preferences across every segment of an
+    """Count satisfied chain and target preferences across every segment of an
     assignment group.
+
+    Each matching target preference contributes one point per routed target
+    of its setting. Eligibility checks have already validated these routes.
     """
     chain = sensor.topology.chain(placement)
-
-    return sum(
+    chained = sum(
         preference.reaches(chain, sensor) for member, _ in members for preference in member.prefers
     )
+    targeted = sum(
+        preference.matches(routed.target, sensor)
+        for member, _ in members
+        for setting in member.settings
+        if setting.prefers
+        for routed in setting.resolve((placement,), sensor)
+        for preference in setting.prefers
+    )
+
+    return chained + targeted
+
+
+def _unranked(intent: CollectIntent) -> None:
+    """Reject target preferences on epoch, preparation and cleanup settings.
+
+    Raises:
+        ValueError: An epoch, preparation or cleanup setting has target
+            preferences.
+    """
+    placed = (
+        *((f"epoch {index}", epoch.settings) for index, epoch in enumerate(intent.epochs)),
+        ("preparation", intent.prepare),
+        ("cleanup", intent.cleanup),
+    )
+    misplaced = [where for where, settings in placed if any(s.prefers for s in settings)]
+
+    if misplaced:
+        raise ValueError(
+            f"{', '.join(misplaced)}: target preferences rank instruments, so only "
+            f"instrument settings may carry them"
+        )
 
 
 def _grouped(

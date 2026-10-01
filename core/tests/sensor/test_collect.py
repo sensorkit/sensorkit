@@ -38,7 +38,15 @@ from sensorkit.std.instrument import Binning, ConfigureCameraSensor
 from sensorkit.std.optics import SetFilter
 from sensorkit.std.traits import Home
 
-from .common import REPORTED, TARGET, details_of, sensor_of
+from .common import (
+    REPORTED,
+    TARGET,
+    UNREPORTED,
+    details_of,
+    filters,
+    holding,
+    sensor_of,
+)
 
 
 def asking(id: str, count: int = 1, seconds: float = 1.0, **kw
@@ -763,5 +771,202 @@ def test_a_malformed_epoch_setting_raises_rather_than_passing_over(
     with pytest.raises(ValueError, match=match) as raised:
         pack(intent_of(RequestEpoch(settings=(setting,),
                                     units=(asking("a"),))), sensor)
+
+    assert not isinstance(raised.value, SettingUnsatisfiable)
+
+
+# Target requirements and preferences
+
+
+@pytest.fixture(scope="module")
+def wheels() -> BoundSensor:
+    """Cameras behind stacked, unreported and known filter wheels, plus a
+    camera without a wheel.
+    """
+    return sensor_of("""
+        name: wheels
+        components:
+          - unit: stacked
+            components:
+              - device: wheel-up
+              - unit: inner
+                components:
+                  - device: wheel-down
+                  - device: cam-s
+                    instrument: true
+          - unit: unknown
+            components:
+              - device: wheel-u
+              - device: cam-u
+                instrument: true
+          - unit: lacks
+            components:
+              - device: wheel-r
+              - device: cam-r
+                instrument: true
+          - unit: holds
+            components:
+              - device: wheel-g
+              - device: cam-g
+                instrument: true
+          - device: cam-bare
+            instrument: true
+        """, {
+        **{wheel: (("SetFilter",), ("Filters",))
+           for wheel in ("wheel-up", "wheel-down", "wheel-u", "wheel-r", "wheel-g")},
+        **{camera: (("Connect",), ())
+           for camera in ("cam-s", "cam-u", "cam-r", "cam-g", "cam-bare")},
+    })
+
+
+KEYWORDS = {
+    "wheel-up": filters("g"),
+    "wheel-down": filters("r"),
+    "wheel-r": filters("r"),
+    "wheel-g": filters("g", "r"),
+}
+"""Reported filter lists for planning. `wheel-u` has no report."""
+
+
+def requiring(name: str, **kw) -> CommandRequest:
+    """Require the named filter or an absent or empty filter list."""
+    return CommandRequest(command=SetFilter(filter=name),
+                          requires=(AnyOf(any_of=(holding(name), UNREPORTED)),), **kw)
+
+
+def wanting(name: str, **kw) -> CommandRequest:
+    """Prefer a wheel that reports the named filter among eligible wheels."""
+    return requiring(name, prefers=(holding(name),), **kw)
+
+
+def test_fan_out_takes_every_wheel_that_may_hold_the_filter(wheels):
+    collect = pack(
+        intent_of(RequestEpoch(units=(
+            asking("a", distribute="each", settings=(wanting("g"),)),))),
+        wheels, device_keywords=KEYWORDS)
+
+    # Accept the unreported wheel and the wheel that holds g. Reject branches
+    # whose routed wheel lacks g, and the branch without a wheel.
+    assert taken(collect) == [["cam-u", "cam-g"]]
+    assert settings_of(collect) == [["wheel-u", "wheel-g"]]
+
+
+def test_a_known_holder_outranks_an_unknown_wheel_with_less_load(wheels):
+    def plan(setting: CommandRequest) -> BoundCollect:
+        return pack(
+            intent_of(
+                RequestEpoch(units=(asking("warm", count=4, select=IsRef(device="cam-g")),)),
+                RequestEpoch(units=(asking("a", settings=(setting,)),))),
+            wheels, device_keywords=KEYWORDS)
+
+    assert taken(plan(wanting("g")))[1] == ["cam-g"]
+    assert taken(plan(requiring("g")))[1] == ["cam-u"]
+
+
+def test_a_wheel_known_to_lack_the_filter_fails_planning(wheels):
+    with pytest.raises(SettingUnsatisfiable, match="'wheel-r' takes 'SetFilter'"):
+        pack(intent_of(RequestEpoch(units=(
+            asking("a", select=IsRef(device="cam-r"), settings=(wanting("g"),)),))),
+            wheels, device_keywords=KEYWORDS)
+
+
+def test_the_routed_wheel_answers_not_one_upstream(wheels):
+    # The upstream wheel holds g. Requirements apply to the deeper routed wheel.
+    with pytest.raises(SettingUnsatisfiable, match="'wheel-down' takes 'SetFilter'"):
+        pack(intent_of(RequestEpoch(units=(
+            asking("a", select=IsRef(device="cam-s"), settings=(wanting("g"),)),))),
+            wheels, device_keywords=KEYWORDS)
+
+    collect = pack(intent_of(RequestEpoch(units=(
+        asking("a", select=AnyOf(any_of=(IsRef(device="cam-s"), IsRef(device="cam-u"))),
+               settings=(wanting("g"),)),))),
+        wheels, device_keywords=KEYWORDS)
+
+    assert taken(collect) == [["cam-u"]]
+
+
+def test_a_routing_selection_reads_the_planning_keywords(wheels):
+    collect = pack(intent_of(RequestEpoch(units=(
+        asking("a", select=IsRef(device="cam-s"),
+               settings=(CommandRequest(command=SetFilter(filter="g"),
+                                        select=holding("g")),)),))),
+        wheels, device_keywords=KEYWORDS)
+
+    assert settings_of(collect) == [["wheel-up"]]
+
+
+def test_without_device_keywords_every_wheel_is_unknown(wheels):
+    collect = pack(
+        intent_of(RequestEpoch(units=(
+            asking("a", distribute="each", settings=(wanting("g"),)),))),
+        wheels)
+
+    assert taken(collect) == [["cam-s", "cam-u", "cam-r", "cam-g"]]
+
+
+def test_a_group_takes_wheels_that_may_hold_every_segment_filter(wheels):
+    collect = pack(
+        intent_of(
+            RequestEpoch(units=(asking("a", assignment="whole", settings=(wanting("g"),)),)),
+            RequestEpoch(units=(asking("a", assignment="whole", settings=(wanting("r"),)),))),
+        wheels, device_keywords={**KEYWORDS, "wheel-g": filters("g")})
+
+    # Neither reported wheel holds both filters. Only the unreported wheel
+    # qualifies for both segments.
+    assert taken(collect) == [["cam-u"], ["cam-u"]]
+
+
+def test_an_epoch_requirement_decides_eligibility(wheels):
+    collect = pack(
+        intent_of(RequestEpoch(
+            settings=(requiring("g"),),
+            units=(asking("a", select=AnyOf(any_of=(IsRef(device="cam-r"),
+                                                    IsRef(device="cam-g")))),))),
+        wheels, device_keywords=KEYWORDS)
+
+    assert taken(collect) == [["cam-g"]]
+    assert settings_of(collect) == [["wheel-g"]]
+
+
+@pytest.mark.parametrize("phase", ["prepare", "cleanup"])
+def test_a_preparation_or_cleanup_requirement_holds_on_every_participant(wheels, phase):
+    def plan(camera: str) -> BoundCollect:
+        return pack(
+            intent_of(RequestEpoch(units=(asking("a", select=IsRef(device=camera)),)),
+                      **{phase: (requiring("g"),)}),
+            wheels, device_keywords=KEYWORDS)
+
+    assert [r.target.device for r in getattr(plan("cam-g"), phase)] == ["wheel-g"]
+
+    with pytest.raises(SettingUnsatisfiable, match="'wheel-r' takes 'SetFilter'"):
+        plan("cam-r")
+
+
+@pytest.mark.parametrize("phase", ["epoch", "prepare", "cleanup"])
+def test_a_target_preference_outside_instrument_settings_is_rejected(wheels, phase):
+    units = (asking("a"),)
+    intent = (intent_of(RequestEpoch(settings=(wanting("g"),), units=units))
+              if phase == "epoch" else
+              intent_of(RequestEpoch(units=units), **{phase: (wanting("g"),)}))
+
+    with pytest.raises(ValueError, match="only instrument settings may carry them"):
+        pack(intent, wheels, device_keywords=KEYWORDS)
+
+
+def test_a_requirement_leaves_an_ambiguous_route_ambiguous():
+    sensor = sensor_of("""
+        name: tied
+        components:
+          - device: wheel-a
+          - device: wheel-b
+          - device: cam
+            instrument: true
+        """, {"wheel-a": (("SetFilter",), ("Filters",)),
+              "wheel-b": (("SetFilter",), ("Filters",)),
+              "cam": (("Connect",), ())})
+
+    with pytest.raises(ValueError, match="at the same position") as raised:
+        pack(intent_of(RequestEpoch(units=(asking("a", settings=(wanting("g"),)),))),
+             sensor, device_keywords={"wheel-a": filters("g")})
 
     assert not isinstance(raised.value, SettingUnsatisfiable)

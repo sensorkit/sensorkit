@@ -27,13 +27,14 @@ from sensorkit.sensor.selection import (
     SelectionError,
     Supports,
 )
-from sensorkit.std.optics import Filter, Filters
+from sensorkit.std.optics import Filters
 from sensorkit.std.traits import Connect, Enabled, MustConnect, MustEnable
+
+from .common import filters, holding
 
 PARSE = TypeAdapter(AnySelection).validate_python
 
-HOLDS_G = KeywordMatch(keyword="Filters", field="filters.name", predicate=p.contains("g"))
-"""A wheel reports a filter named g."""
+HOLDS_G = holding("g")
 
 UNKNOWN = KeywordMatch(keyword="Filters", field="filters", predicate=p.exists(False))
 """A wheel reports no filters, or none at all."""
@@ -42,10 +43,6 @@ UNKNOWN = KeywordMatch(keyword="Filters", field="filters", predicate=p.exists(Fa
 def holding(facts: BoundSensor, keywords: Mapping[str, KeywordDict]) -> BoundSensor:
     """The same sensor, with keywords copied from its devices."""
     return BoundSensor(facts.topology, facts.details, device_keywords=keywords)
-
-
-def filters(*names: str) -> KeywordDict:
-    return KeywordDict(Filters(filters=[Filter(name=name) for name in names]))
 
 
 def test_a_bare_string_is_a_trait_name():

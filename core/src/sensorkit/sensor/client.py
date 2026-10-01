@@ -13,10 +13,12 @@ against the bound sensor. Standard-task translation is also optional.
 from __future__ import annotations
 
 import weakref
+from collections.abc import Mapping
 
 import sensorkit.api as sk
 from sensorkit.backend.base import KeyNotFound
 from sensorkit.common.aio import AsyncObserver
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.entity import DeviceDetails, EntityInfo
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.collect import CollectIntent, compile_collect, pack
@@ -29,6 +31,7 @@ from sensorkit.sensor.execution import (
     WorkflowReport,
 )
 from sensorkit.sensor.lifecycle import LifecycleWorkflow, compile_lifecycle
+from sensorkit.sensor.topology import DeviceKey
 from sensorkit.sensor.workflow import ExecutableWorkflow, OperatorRule
 
 
@@ -135,18 +138,24 @@ class Sensor:
         )
 
     def plan_collect(
-        self, intent: CollectIntent, *, rules: tuple[OperatorRule, ...] = ()
+        self,
+        intent: CollectIntent,
+        *,
+        rules: tuple[OperatorRule, ...] = (),
+        device_keywords: Mapping[DeviceKey, KeywordDict] | None = None,
     ) -> ExecutableWorkflow:
         """Pack, compile and issue a collect intent using this definition's
         deadlines.
 
-        Optional operator rules come from the caller. Planning chooses all
-        hardware before any commands are sent.
+        Caller-supplied rules apply to the compiled workflow. Selections use
+        `device_keywords` for planning. Omitted devices and keywords are treated
+        as absent; omitting the mapping treats all device keywords as absent.
+        Planning chooses all hardware before any commands are sent.
 
         Raises:
             ValueError: The intent cannot pack or compile against this sensor.
         """
-        bound = pack(intent, self._sensor)
+        bound = pack(intent, self._sensor, device_keywords=device_keywords)
 
         return self._issue(
             compile_collect(bound, self._sensor, deadlines=self._definition.deadlines, rules=rules)

@@ -24,17 +24,20 @@ from sensorkit.sensor.definition import SensorDefinition
 from sensorkit.sensor.dispatch import Interruption
 from sensorkit.sensor.execution import ExecutionState, WorkflowError
 from sensorkit.sensor.lifecycle import LifecycleWorkflow, compile_lifecycle
-from sensorkit.sensor.selection import IsRef
+from sensorkit.sensor.selection import AnyOf, IsRef
 from sensorkit.sensor.workflow import OperatorRule
 from sensorkit.std.optics import SetFilter
 
 from .common import (
     BENCH,
+    UNREPORTED,
     abort_only,
     asking,
     authored,
     ended,
+    filters,
     finished,
+    holding,
     operation,
     placement,
     ran,
@@ -259,6 +262,21 @@ async def test_planning_errors_arrive_before_any_command(session, rig):
     with pytest.raises(SettingUnsatisfiable):
         session.plan_collect(frames(settings=(
             CommandRequest(command=SetFilter(filter="r")),)))
+
+    assert rig.log == []
+
+
+@pytest.mark.asyncio
+async def test_collect_planning_reads_the_device_keywords_it_is_given(session, rig):
+    setting = CommandRequest(command=SetFilter(filter="g"),
+                             requires=(AnyOf(any_of=(holding("g"), UNREPORTED)),))
+    intent = frames("cam-w", settings=(setting,))
+
+    # The requirement accepts an absent filter list.
+    session.plan_collect(intent)
+
+    with pytest.raises(SettingUnsatisfiable, match="'wheel-w' takes 'SetFilter'"):
+        session.plan_collect(intent, device_keywords={"wheel-w": filters("r")})
 
     assert rig.log == []
 

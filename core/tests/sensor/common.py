@@ -26,10 +26,12 @@ from pathlib import Path
 
 import yaml
 
+import sensorkit.common.predicate as p
 import sensorkit.std.traits  # noqa: F401  registers the command vocabulary
 from sensorkit.astro.coords import Horizontal
 from sensorkit.astro.target import AltAzTarget
 from sensorkit.common.dag import RunReport
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.entity import DeviceDetails
 from sensorkit.sensor.binding import BoundSensor
@@ -39,10 +41,11 @@ from sensorkit.sensor.collect import (
     InstrumentRequest,
 )
 from sensorkit.sensor.definition import SensorDefinition
-from sensorkit.sensor.selection import IsRef
+from sensorkit.sensor.selection import IsRef, KeywordMatch
 from sensorkit.sensor.topology import Placement, Structure, Topology
 from sensorkit.sensor.workflow import Cleanup, ExecutableWorkflow, Operation
 from sensorkit.std.mount import FollowTarget
+from sensorkit.std.optics import Filter, Filters
 
 SENSOR_YAML = Path(__file__).resolve().parent / "sensor.yaml"
 
@@ -98,6 +101,20 @@ def details_of(reported: Reported) -> dict[str, DeviceDetails]:
     return {device: DeviceDetails(supported_commands=frozenset(commands),
                                   published_keywords=frozenset(keywords))
             for device, (commands, keywords) in reported.items()}
+
+
+def filters(*names: str) -> KeywordDict:
+    """Build planning keywords for a wheel with the named filters."""
+    return KeywordDict(Filters(filters=[Filter(name=name) for name in names]))
+
+
+def holding(name: str) -> KeywordMatch:
+    """Match a wheel whose reported filter list contains the name."""
+    return KeywordMatch(keyword=Filters, field="filters.name", predicate=p.contains(name))
+
+
+UNREPORTED = KeywordMatch(keyword=Filters, field="filters", predicate=p.exists(False))
+"""Match an absent or empty filter list."""
 
 
 def sensor_of(structure: str | Structure, reported: Reported) -> BoundSensor:
