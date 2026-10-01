@@ -19,7 +19,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import Annotated, Literal, Protocol
+from enum import StrEnum
+from typing import Annotated, ClassVar, Literal, Protocol
 
 from pydantic import (
     BaseModel,
@@ -106,12 +107,32 @@ def _keyword_key(v: object) -> object:
     return info.key
 
 
+class SelectionType(StrEnum):
+    """Authored key that identifies each selection type.
+
+    A mapping naming several keys takes the first in definition order.
+    """
+
+    trait = "trait"
+    tag = "tag"
+    device = "device"
+    kind = "kind"
+    instrument = "instrument"
+    supports = "supports"
+    publishes = "publishes"
+    all_of = "all_of"
+    any_of = "any_of"
+    negated = "not"
+
+
 class Selection(BaseModel, ABC, frozen=True, extra="forbid"):
     """A predicate over one placement or an instrument chain.
 
     Compositions apply their members to the same placement in `matches`, and
     independently to the whole chain in `reaches`.
     """
+
+    type: ClassVar[SelectionType]
 
     @abstractmethod
     def matches(self, placement: Placement, facts: PlacementFacts | None = None) -> bool:
@@ -155,6 +176,7 @@ class HasTrait(Selection):
     assertions.
     """
 
+    type = SelectionType.trait
     trait: TraitKey
 
     @model_validator(mode="before")
@@ -171,6 +193,7 @@ class HasTrait(Selection):
 class HasTag(Selection):
     """Match a grouping tag declared on the device or selector record."""
 
+    type = SelectionType.tag
     tag: TagKey
 
     def matches(self, placement, facts=None):
@@ -182,6 +205,7 @@ class HasTag(Selection):
 class IsRef(Selection):
     """Match a device key; no facts provider is required."""
 
+    type = SelectionType.device
     device: DeviceKey
 
     def matches(self, placement, facts=None):
@@ -195,6 +219,7 @@ type KindQuery = Literal["device", "instrument", "selector", "any"]
 class IsKind(Selection):
     """Match the record kind, or every placement when `kind` is `any`."""
 
+    type = SelectionType.kind
     kind: KindQuery
 
     def matches(self, placement, facts=None):
@@ -209,6 +234,7 @@ class IsInstrument(Selection):
     `instrument: false` selects placements that are not collection targets.
     """
 
+    type = SelectionType.instrument
     instrument: bool = True
 
     def matches(self, placement, facts=None):
@@ -223,6 +249,7 @@ class Supports(Selection):
     A command class may be supplied in place of its identifier.
     """
 
+    type = SelectionType.supports
     supports: Annotated[str, BeforeValidator(_command_tag)]
 
     def matches(self, placement, facts=None):
@@ -237,6 +264,7 @@ class Publishes(Selection):
     A declared keyword class may be supplied in place of its identifier.
     """
 
+    type = SelectionType.publishes
     publishes: Annotated[str, BeforeValidator(_keyword_key)]
 
     def matches(self, placement, facts=None):
@@ -251,6 +279,7 @@ class AllOf(Selection):
     On a chain, different placements may satisfy different members.
     """
 
+    type = SelectionType.all_of
     all_of: tuple[AnySelection, ...] = Field(min_length=1)
 
     @classmethod
@@ -288,6 +317,7 @@ class AllOf(Selection):
 class AnyOf(Selection):
     """Require at least one member to match the placement or chain."""
 
+    type = SelectionType.any_of
     any_of: tuple[AnySelection, ...] = Field(min_length=1)
 
     def matches(self, placement, facts=None):
@@ -297,12 +327,11 @@ class AnyOf(Selection):
         return any(s.reaches(chain, facts) for s in self.any_of)
 
 
-class Not(Selection):
+class Not(Selection, populate_by_name=True):
     """Negate a member at the placement or whole-chain level."""
 
+    type = SelectionType.negated
     negated: AnySelection = Field(alias="not")
-
-    model_config = {"populate_by_name": True, "frozen": True, "extra": "forbid"}
 
     def matches(self, placement, facts=None):
         return not self.negated.matches(placement, facts)
@@ -311,67 +340,31 @@ class Not(Selection):
         return not self.negated.reaches(chain, facts)
 
 
-def _selection_kind(v: object) -> str | None:
+def _selection_type(v: object) -> SelectionType | None:
     """Identify a selection from its model, mapping key or trait shorthand."""
     match v:
         case str():
-            return "trait"
-        case HasTrait():
-            return "trait"
-        case HasTag():
-            return "tag"
-        case IsRef():
-            return "device"
-        case IsKind():
-            return "kind"
-        case IsInstrument():
-            return "instrument"
-        case Supports():
-            return "supports"
-        case Publishes():
-            return "publishes"
-        case AllOf():
-            return "all_of"
-        case AnyOf():
-            return "any_of"
-        case Not():
-            return "not"
+            return SelectionType.trait
+        case Selection():
+            return v.type
         case Mapping():
-            return next(
-                (
-                    k
-                    for k in (
-                        "trait",
-                        "tag",
-                        "device",
-                        "kind",
-                        "instrument",
-                        "supports",
-                        "publishes",
-                        "all_of",
-                        "any_of",
-                        "not",
-                    )
-                    if k in v
-                ),
-                None,
-            )
+            return next((k for k in SelectionType if k in v), None)
 
     return None
 
 
 type AnySelection = Annotated[
-    Annotated[HasTrait, Tag("trait")]
-    | Annotated[HasTag, Tag("tag")]
-    | Annotated[IsRef, Tag("device")]
-    | Annotated[IsKind, Tag("kind")]
-    | Annotated[IsInstrument, Tag("instrument")]
-    | Annotated[Supports, Tag("supports")]
-    | Annotated[Publishes, Tag("publishes")]
-    | Annotated[AllOf, Tag("all_of")]
-    | Annotated[AnyOf, Tag("any_of")]
-    | Annotated[Not, Tag("not")],
-    Discriminator(_selection_kind),
+    Annotated[HasTrait, Tag(HasTrait.type)]
+    | Annotated[HasTag, Tag(HasTag.type)]
+    | Annotated[IsRef, Tag(IsRef.type)]
+    | Annotated[IsKind, Tag(IsKind.type)]
+    | Annotated[IsInstrument, Tag(IsInstrument.type)]
+    | Annotated[Supports, Tag(Supports.type)]
+    | Annotated[Publishes, Tag(Publishes.type)]
+    | Annotated[AllOf, Tag(AllOf.type)]
+    | Annotated[AnyOf, Tag(AnyOf.type)]
+    | Annotated[Not, Tag(Not.type)],
+    Discriminator(_selection_type),
 ]
 
 # Resolve recursive annotations now that `AnySelection` is defined.
