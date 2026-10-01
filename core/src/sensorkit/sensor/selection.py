@@ -63,8 +63,7 @@ class PlacementFacts(DeviceFacts, Protocol):
     def tags(self, placement: Placement) -> frozenset[TagKey]:
         """Return the tags declared on the placement record."""
 
-    def kind(self, placement: Placement) -> Literal["device", "instrument",
-                                                    "selector"]:
+    def kind(self, placement: Placement) -> Literal["device", "instrument", "selector"]:
         """Return the record kind: device, instrument or selector."""
 
     def instrument(self, placement: Placement) -> bool:
@@ -82,8 +81,7 @@ def _known(facts: PlacementFacts | None, question: str) -> PlacementFacts:
         SelectionError: No facts were supplied.
     """
     if facts is None:
-        raise SelectionError(
-            f"'{question}' is answered from PlacementFacts, and none was given")
+        raise SelectionError(f"'{question}' is answered from PlacementFacts, and none was given")
 
     return facts
 
@@ -116,8 +114,7 @@ class Selection(BaseModel, ABC, frozen=True, extra="forbid"):
     """
 
     @abstractmethod
-    def matches(self, placement: Placement,
-                facts: PlacementFacts | None = None) -> bool:
+    def matches(self, placement: Placement, facts: PlacementFacts | None = None) -> bool:
         """Test whether one placement satisfies this predicate.
 
         Raises:
@@ -126,8 +123,9 @@ class Selection(BaseModel, ABC, frozen=True, extra="forbid"):
         """
         ...
 
-    def matching(self, placements: tuple[Placement, ...],
-                 facts: PlacementFacts | None = None) -> tuple[Placement, ...]:
+    def matching(
+        self, placements: tuple[Placement, ...], facts: PlacementFacts | None = None
+    ) -> tuple[Placement, ...]:
         """Return matching placements in the supplied order.
 
         Callers supply the search set, such as a whole sensor or a
@@ -135,13 +133,13 @@ class Selection(BaseModel, ABC, frozen=True, extra="forbid"):
         """
         return tuple(p for p in placements if self.matches(p, facts))
 
-    def refs(self, placements: tuple[Placement, ...],
-             facts: PlacementFacts | None = None) -> tuple[DeviceKey, ...]:
+    def refs(
+        self, placements: tuple[Placement, ...], facts: PlacementFacts | None = None
+    ) -> tuple[DeviceKey, ...]:
         """Return matching device keys in the supplied placement order."""
         return tuple(p.device for p in self.matching(placements, facts))
 
-    def reaches(self, chain: tuple[Placement, ...],
-                facts: PlacementFacts | None = None) -> bool:
+    def reaches(self, chain: tuple[Placement, ...], facts: PlacementFacts | None = None) -> bool:
         """Test whether the chain satisfies this predicate.
 
         Simple predicates match if any placement does. Compositions evaluate
@@ -266,15 +264,17 @@ class AllOf(Selection):
             ValueError: The trait requires no commands or keywords.
         """
         members: list[AnySelection] = [
-            Supports(supports=command)
-            for command in sorted(trait.effective_command_ids())]
-        members += [Publishes(publishes=keyword)
-                    for keyword in sorted(trait.effective_keyword_ids())]
+            Supports(supports=command) for command in sorted(trait.effective_command_ids())
+        ]
+        members += [
+            Publishes(publishes=keyword) for keyword in sorted(trait.effective_keyword_ids())
+        ]
 
         if not members:
             raise ValueError(
                 f"trait '{trait.name}' requires no command or keyword, so "
-                f"there is nothing to ask a device for")
+                f"there is nothing to ask a device for"
+            )
 
         return cls(all_of=tuple(members))
 
@@ -337,9 +337,25 @@ def _selection_kind(v: object) -> str | None:
         case Not():
             return "not"
         case Mapping():
-            return next((k for k in ("trait", "tag", "device", "kind", "instrument",
-                                     "supports", "publishes", "all_of", "any_of", "not")
-                         if k in v), None)
+            return next(
+                (
+                    k
+                    for k in (
+                        "trait",
+                        "tag",
+                        "device",
+                        "kind",
+                        "instrument",
+                        "supports",
+                        "publishes",
+                        "all_of",
+                        "any_of",
+                        "not",
+                    )
+                    if k in v
+                ),
+                None,
+            )
 
     return None
 

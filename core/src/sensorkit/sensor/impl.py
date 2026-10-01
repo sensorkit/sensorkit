@@ -58,8 +58,9 @@ class SensorController:
         config = await controller.kv_get_model(SensorConfig)
         self.site = await controller.kv_get_model(SitePosition)
 
-        definition = compose_deadlines(SensorDefinition(sensor=config.model),
-                                       config.policies.deadlines())
+        definition = compose_deadlines(
+            SensorDefinition(sensor=config.model), config.policies.deadlines()
+        )
         self.sensor = await Sensor.connect(definition, controller.sensorkit())
 
         # Tables compose after binding so generated entries are pruned to the
@@ -67,8 +68,8 @@ class SensorController:
         bound = self.sensor.sensor
         self.tables: Mapping[str, LifecycleWorkflow] = {
             table.name: table
-            for table in compose_tables(definition, config.policies.tables(),
-                                        bound)}
+            for table in compose_tables(definition, config.policies.tables(), bound)
+        }
 
         # Subscriptions start after attach; each device supplies whichever
         # header keywords it reports publishing.
@@ -76,15 +77,23 @@ class SensorController:
         self.devices = tuple(placement.device for placement in placements)
 
         for placement in placements:
-            controller.use_device(placement.device, subscribe=[
-                keyword for name in sorted(bound.keywords(placement.device))
-                if (keyword := get_keyword_type(name)) is not None])
+            controller.use_device(
+                placement.device,
+                subscribe=[
+                    keyword
+                    for name in sorted(bound.keywords(placement.device))
+                    if (keyword := get_keyword_type(name)) is not None
+                ],
+            )
 
         # Compat only, for UI code not yet reading ControllerInfo and
         # SensorConfig.
-        await controller.kv_put_model(Capabilities(
-            tasks=controller.entity_info().details.supported_tasks,
-            devices=SensorDevices.infer(bound)))
+        await controller.kv_put_model(
+            Capabilities(
+                tasks=controller.entity_info().details.supported_tasks,
+                devices=SensorDevices.infer(bound),
+            )
+        )
 
     @sk.on_detach
     async def on_detach(self):
@@ -97,12 +106,15 @@ class SensorController:
         """
         controller = sk.controller()
 
-        return {key: controller.get_device(key).subscription.snapshot()
-                for key in self.devices}
+        return {key: controller.get_device(key).subscription.snapshot() for key in self.devices}
 
-    async def execute(self, workflow: ExecutableWorkflow, *,
-                      contexts: DeviceContexts | None = None,
-                      base: sk.Context | None = None) -> WorkflowReport:
+    async def execute(
+        self,
+        workflow: ExecutableWorkflow,
+        *,
+        contexts: DeviceContexts | None = None,
+        base: sk.Context | None = None,
+    ) -> WorkflowReport:
         """Execute a workflow, treating cancellation as a domain abort unless
         the service is stopping.
 
@@ -112,8 +124,8 @@ class SensorController:
                 ends, or the service is stopping.
         """
         report = await self.sensor.execute(
-            workflow, contexts=contexts, base=base,
-            in_domain=lambda _: not self.stopping)
+            workflow, contexts=contexts, base=base, in_domain=lambda _: not self.stopping
+        )
 
         # Core records a task as aborted only if the handler is cancelled.
         if report.outcome == "aborted":
@@ -134,8 +146,9 @@ class SensorController:
         except WorkflowError:
             # Failed lifecycle commands may leave hardware running after responding.
             dispatcher = Dispatcher(self.sensor.sensor, self.sensor.executor.clients)
-            await asyncio.gather(*(dispatcher.abort(device, lambda _: None)
-                                   for device in self.devices))
+            await asyncio.gather(
+                *(dispatcher.abort(device, lambda _: None) for device in self.devices)
+            )
             raise
 
     @sk.task_handler
@@ -194,13 +207,13 @@ class SensorDevices(BaseModel):
         placements = topology.placements()
         cameras = topology.instruments()
 
-        def supporting(command: type[sk.DeviceCommand],
-                       choices: tuple[Placement, ...]) -> DeviceKey | None:
+        def supporting(
+            command: type[sk.DeviceCommand], choices: tuple[Placement, ...]
+        ) -> DeviceKey | None:
             return next(iter(Supports(supports=command).refs(choices, sensor)), None)
 
         def paired(command: type[sk.DeviceCommand]) -> list[str]:
-            keys = [supporting(command, topology.chain(camera)) or ""
-                    for camera in cameras]
+            keys = [supporting(command, topology.chain(camera)) or "" for camera in cameras]
 
             return keys if any(keys) else []
 
@@ -211,7 +224,8 @@ class SensorDevices(BaseModel):
             rotator=supporting(ChangeRotatorPosition, placements),
             filter_wheel=paired(SetFilter),
             mirror_cover=supporting(CloseMirrorCover, placements),
-            dome=supporting(CloseEnclosure, placements))
+            dome=supporting(CloseEnclosure, placements),
+        )
 
 
 class Capabilities(BaseModel):

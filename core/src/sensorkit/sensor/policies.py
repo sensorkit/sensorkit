@@ -122,16 +122,15 @@ class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
         every = IsKind(kind="any")
         # Complete reconnect attempts before stopping motion.
         recover = LifecycleWorkflow(
-            name="recover", fail_fast=False,
+            name="recover",
+            fail_fast=False,
             phases=(
-                Phase(name="reconnect", entries=(
-                    Entry(select=every, ops=_ops(Connect)),)),
-                Phase(name="halt", entries=(
-                    Entry(select=every, ops=_ops(Stop)),)),
-            ))
+                Phase(name="reconnect", entries=(Entry(select=every, ops=_ops(Connect)),)),
+                Phase(name="halt", entries=(Entry(select=every, ops=_ops(Stop)),)),
+            ),
+        )
 
-        return (init, init.model_copy(update={"name": "standby"}),
-                self._shutdown_table(), recover)
+        return (init, init.model_copy(update={"name": "standby"}), self._shutdown_table(), recover)
 
     def deadlines(self) -> tuple[DeadlineRule, ...]:
         """Generate command deadlines for any device, and a default for every
@@ -161,12 +160,14 @@ class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
         )
 
         return (
-            *(DeadlineRule(target=("trait", trait), command=command.model_tag(),
-                           seconds=seconds)
-              for trait, command, seconds in scoped),
-            *(DeadlineRule(target=("any", None), command=command.model_tag(),
-                           seconds=seconds)
-              for command, seconds in unscoped),
+            *(
+                DeadlineRule(target=("trait", trait), command=command.model_tag(), seconds=seconds)
+                for trait, command, seconds in scoped
+            ),
+            *(
+                DeadlineRule(target=("any", None), command=command.model_tag(), seconds=seconds)
+                for command, seconds in unscoped
+            ),
             DeadlineRule(target=("any", None), seconds=self.default_timeout),
         )
 
@@ -177,45 +178,76 @@ class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
         # Separate phases permit overlap without duplicate targets in a phase.
         if self.concurrent_dome_init_open:
             dome = (
-                Phase(name="enclosure-init", after=(), entries=(
-                    Entry(select=enclosure, ops=_ops(Init), id="init-enclosure"),)),
-                Phase(name="enclosure-open", after=(), entries=(
-                    Entry(select=enclosure, ops=_ops(OpenEnclosure), id="open-enclosure"),)),
+                Phase(
+                    name="enclosure-init",
+                    after=(),
+                    entries=(Entry(select=enclosure, ops=_ops(Init), id="init-enclosure"),),
+                ),
+                Phase(
+                    name="enclosure-open",
+                    after=(),
+                    entries=(
+                        Entry(select=enclosure, ops=_ops(OpenEnclosure), id="open-enclosure"),
+                    ),
+                ),
             )
         else:
-            dome = (Phase(name="enclosure", entries=(
-                Entry(select=enclosure, ops=_ops(Init, OpenEnclosure),
-                      id="init-open-enclosure"),)),)
+            dome = (
+                Phase(
+                    name="enclosure",
+                    entries=(
+                        Entry(
+                            select=enclosure,
+                            ops=_ops(Init, OpenEnclosure),
+                            id="init-open-enclosure",
+                        ),
+                    ),
+                ),
+            )
 
         opened = tuple(phase.name for phase in dome)
         mount_after = () if self.concurrent_dome_and_mount_init else opened
 
         # Cover opening either shares mount prerequisites or waits for dome and mount.
-        optics_after = (mount_after
-                        if self.concurrent_mount_and_mirror_cover_init
-                        else (*opened, "mount"))
+        optics_after = (
+            mount_after if self.concurrent_mount_and_mirror_cover_init else (*opened, "mount")
+        )
 
         phases = (
             *dome,
-            Phase(name="mount", after=mount_after, entries=(
-                Entry(select=Supports(supports=FollowTarget), ops=_ops(Init),
-                      id="init-mount"),)),
-            Phase(name="optics", after=optics_after, entries=(
-                Entry(select=Supports(supports=CloseMirrorCover), ops=_ops(OpenMirrorCover),
-                      id="open-mirror-cover"),)),
+            Phase(
+                name="mount",
+                after=mount_after,
+                entries=(
+                    Entry(select=Supports(supports=FollowTarget), ops=_ops(Init), id="init-mount"),
+                ),
+            ),
+            Phase(
+                name="optics",
+                after=optics_after,
+                entries=(
+                    Entry(
+                        select=Supports(supports=CloseMirrorCover),
+                        ops=_ops(OpenMirrorCover),
+                        id="open-mirror-cover",
+                    ),
+                ),
+            ),
         )
 
         # Any attempted bring-up command arms one halt on failure or domain abort.
         halt = CleanupSpec(
-            name="halt", entries=(Entry(
-                select=IsKind(kind="any"),
-                ops=_ops(Stop, optional=True, fail_fast=False)),),
+            name="halt",
+            entries=(
+                Entry(select=IsKind(kind="any"), ops=_ops(Stop, optional=True, fail_fast=False)),
+            ),
             when="failure_or_cancelled",
-            armed_by=tuple(entry.id for phase in phases
-                           for entry in phase.entries if entry.id is not None))
+            armed_by=tuple(
+                entry.id for phase in phases for entry in phase.entries if entry.id is not None
+            ),
+        )
 
-        return LifecycleWorkflow(name="init", phases=phases, fail_fast=True,
-                                 cleanup=(halt,))
+        return LifecycleWorkflow(name="init", phases=phases, fail_fast=True, cleanup=(halt,))
 
     def _shutdown_table(self) -> LifecycleWorkflow:
         enclosure = Supports(supports=CloseEnclosure)
@@ -224,56 +256,81 @@ class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
         # Continue after failed closure with completion sequencing and no fail-fast.
         if self.concurrent_dome_deinit_close:
             closing = (
-                Phase(name="enclosure-close", after=("halt",), entries=(
-                    Entry(select=enclosure, ops=_ops(CloseEnclosure)),)),
-                Phase(name="enclosure-deinit", after=("halt",), entries=(
-                    Entry(select=enclosure, ops=_ops(Deinit)),)),
+                Phase(
+                    name="enclosure-close",
+                    after=("halt",),
+                    entries=(Entry(select=enclosure, ops=_ops(CloseEnclosure)),),
+                ),
+                Phase(
+                    name="enclosure-deinit",
+                    after=("halt",),
+                    entries=(Entry(select=enclosure, ops=_ops(Deinit)),),
+                ),
             )
         else:
-            closing = (Phase(name="enclosure", after=("halt",), entries=(
-                Entry(select=enclosure, ops=(
-                    *_ops(CloseEnclosure),
-                    *_ops(Deinit,
-                          sequence="completion" if always else "success"),
-                )),)),)
+            closing = (
+                Phase(
+                    name="enclosure",
+                    after=("halt",),
+                    entries=(
+                        Entry(
+                            select=enclosure,
+                            ops=(
+                                *_ops(CloseEnclosure),
+                                *_ops(Deinit, sequence="completion" if always else "success"),
+                            ),
+                        ),
+                    ),
+                ),
+            )
 
         return LifecycleWorkflow(
-            name="shutdown", fail_fast=not always,
+            name="shutdown",
+            fail_fast=not always,
             phases=(
-                Phase(name="optics", entries=(
-                    Entry(select=Supports(supports=CloseMirrorCover), ops=_ops(CloseMirrorCover)),)),
-                Phase(name="mount", after=("optics",), entries=(
-                    Entry(select=Supports(supports=FollowTarget), ops=_ops(Deinit)),)),
+                Phase(
+                    name="optics",
+                    entries=(
+                        Entry(
+                            select=Supports(supports=CloseMirrorCover), ops=_ops(CloseMirrorCover)
+                        ),
+                    ),
+                ),
+                Phase(
+                    name="mount",
+                    after=("optics",),
+                    entries=(Entry(select=Supports(supports=FollowTarget), ops=_ops(Deinit)),),
+                ),
                 # Attempt enclosure Stop before closure; failure must not block closing.
-                Phase(name="halt",
-                      after=(("optics",)
-                             if self.concurrent_dome_and_mount_deinit
-                             else ("mount",)),
-                      entries=(Entry(select=enclosure, ops=_ops(Stop, optional=True,
-                                                               fail_fast=False)),)),
+                Phase(
+                    name="halt",
+                    after=(("optics",) if self.concurrent_dome_and_mount_deinit else ("mount",)),
+                    entries=(
+                        Entry(select=enclosure, ops=_ops(Stop, optional=True, fail_fast=False)),
+                    ),
+                ),
                 *closing,
-            ))
+            ),
+        )
 
 
-def compose_deadlines(definition: SensorDefinition,
-                      generated: tuple[DeadlineRule, ...]
-                      ) -> SensorDefinition:
+def compose_deadlines(
+    definition: SensorDefinition, generated: tuple[DeadlineRule, ...]
+) -> SensorDefinition:
     """Copy a definition with generated rules appended unless an authored
     rule replaces them.
 
     Replacement uses the target and command pair. No device facts are required.
     """
     authored = {(rule.target, rule.command) for rule in definition.deadlines}
-    kept = tuple(rule for rule in generated
-                 if (rule.target, rule.command) not in authored)
+    kept = tuple(rule for rule in generated if (rule.target, rule.command) not in authored)
 
-    return definition.model_copy(
-        update={"deadlines": definition.deadlines + kept})
+    return definition.model_copy(update={"deadlines": definition.deadlines + kept})
 
 
-def compose_tables(definition: SensorDefinition,
-                   generated: tuple[LifecycleWorkflow, ...],
-                   sensor: BoundSensor) -> tuple[LifecycleWorkflow, ...]:
+def compose_tables(
+    definition: SensorDefinition, generated: tuple[LifecycleWorkflow, ...], sensor: BoundSensor
+) -> tuple[LifecycleWorkflow, ...]:
     """Return authored tables followed by unmatched generated tables pruned
     to the sensor.
 
@@ -288,34 +345,37 @@ def compose_tables(definition: SensorDefinition,
     """
     authored = {table.name for table in definition.tables}
     tables = definition.tables + tuple(
-        _pruned(table, sensor) for table in generated
-        if table.name not in authored)
+        _pruned(table, sensor) for table in generated if table.name not in authored
+    )
 
     definition.model_copy(update={"tables": tables}).check()
 
     return tables
 
 
-def _pruned(table: LifecycleWorkflow,
-            sensor: BoundSensor) -> LifecycleWorkflow:
+def _pruned(table: LifecycleWorkflow, sensor: BoundSensor) -> LifecycleWorkflow:
     """Copy a generated table without empty selections, retaining its
     phases.
     """
     phases = tuple(
-        phase.model_copy(update={"entries": tuple(
-            entry for entry in phase.entries if entry.targets(sensor))})
-        for phase in table.phases)
+        phase.model_copy(
+            update={"entries": tuple(entry for entry in phase.entries if entry.targets(sensor))}
+        )
+        for phase in table.phases
+    )
     kept = {entry.id for phase in phases for entry in phase.entries}
     cleanup = tuple(
-        spec for spec in (_pruned_cleanup(spec, kept, sensor)
-                          for spec in table.cleanup)
-        if spec is not None)
+        spec
+        for spec in (_pruned_cleanup(spec, kept, sensor) for spec in table.cleanup)
+        if spec is not None
+    )
 
     return table.model_copy(update={"phases": phases, "cleanup": cleanup})
 
 
-def _pruned_cleanup(spec: CleanupSpec, kept: set[str | None],
-                    sensor: BoundSensor) -> CleanupSpec | None:
+def _pruned_cleanup(
+    spec: CleanupSpec, kept: set[str | None], sensor: BoundSensor
+) -> CleanupSpec | None:
     """Prune cleanup entries and trigger ids, or return `None` when
     unusable.
 
@@ -323,8 +383,9 @@ def _pruned_cleanup(spec: CleanupSpec, kept: set[str | None],
     removed. Preserve `None` and explicitly empty arming tuples.
     """
     entries = tuple(entry for entry in spec.entries if entry.targets(sensor))
-    armed_by = (None if spec.armed_by is None
-                else tuple(name for name in spec.armed_by if name in kept))
+    armed_by = (
+        None if spec.armed_by is None else tuple(name for name in spec.armed_by if name in kept)
+    )
 
     if not entries or (spec.armed_by and not armed_by):
         return None
@@ -336,5 +397,4 @@ def _ops(*commands: type[DeviceCommand], **spec) -> tuple[OpSpec, ...]:
     """Build default-argument commands omitted when the target lacks
     support.
     """
-    return tuple(OpSpec(command=command(), unsupported="omit", **spec)
-                 for command in commands)
+    return tuple(OpSpec(command=command(), unsupported="omit", **spec) for command in commands)

@@ -74,8 +74,9 @@ Shared targets are commanded once. `Scope` filters candidates independently.
 """
 
 
-def partition(subject: Subject, participants: tuple[Placement, ...]
-              ) -> tuple[tuple[Placement, ...], ...]:
+def partition(
+    subject: Subject, participants: tuple[Placement, ...]
+) -> tuple[tuple[Placement, ...], ...]:
     """Group all sensor participants together, or each instrument
     separately.
     """
@@ -187,8 +188,10 @@ class PlannedStep:
         if self.command is None or self.target is None:
             return self.origin.reason or self.name
 
-        return (f"{format_command(self.command):<18} {self.target.device} "
-                f"@ {format_path(self.target.path, '<root>')}")
+        return (
+            f"{format_command(self.command):<18} {self.target.device} "
+            f"@ {format_path(self.target.path, '<root>')}"
+        )
 
 
 @dataclass(frozen=True, eq=False)
@@ -209,8 +212,7 @@ class Operation:
     acquisition: Acquisition | None = None
 
     @classmethod
-    def planned(cls, step: PlannedStep,
-                timeout_s: float | None) -> Operation:
+    def planned(cls, step: PlannedStep, timeout_s: float | None) -> Operation:
         """Build an operation with an origin-based label and a deep-copied
         command.
 
@@ -222,13 +224,17 @@ class Operation:
         """
         if step.command is None or step.target is None:
             raise ValueError(
-                f"step '{step.name}' has no command, so there is no operation "
-                f"to build")
+                f"step '{step.name}' has no command, so there is no operation to build"
+            )
 
-        return cls(id=f"{step.origin}@{step.target.device}", target=step.target,
-                   command=step.command.model_copy(deep=True),
-                   origin=step.origin, timeout_s=timeout_s,
-                   acquisition=step.acquisition)
+        return cls(
+            id=f"{step.origin}@{step.target.device}",
+            target=step.target,
+            command=step.command.model_copy(deep=True),
+            origin=step.origin,
+            timeout_s=timeout_s,
+            acquisition=step.acquisition,
+        )
 
 
 @dataclass(frozen=True)
@@ -275,8 +281,7 @@ class DeadlineRule(BaseModel, frozen=True, extra="forbid"):
         named = [k for k in _NAMESPACES if k in v]
 
         if len(named) != 1:
-            raise ValueError(
-                f"a deadline rule names exactly one of {', '.join(_NAMESPACES)}")
+            raise ValueError(f"a deadline rule names exactly one of {', '.join(_NAMESPACES)}")
 
         key = named[0]
         rest = {k: v[k] for k in v if k not in _NAMESPACES}
@@ -291,9 +296,13 @@ def _named_target(target: DeadlineTarget) -> str:
     return kind if name is None else f"{kind} '{name}'"
 
 
-def resolve_deadline(command: str, target: Placement,
-                     stated: tuple[DeadlineRule, ...], explicit: float | None,
-                     facts: PlacementFacts) -> float | None:
+def resolve_deadline(
+    command: str,
+    target: Placement,
+    stated: tuple[DeadlineRule, ...],
+    explicit: float | None,
+    facts: PlacementFacts,
+) -> float | None:
     """Resolve an operation timeout: explicit value, then rules naming the
     command, then rules for every command, each by device, trait, any.
 
@@ -311,30 +320,27 @@ def resolve_deadline(command: str, target: Placement,
     every = tuple(r for r in stated if r.command is None)
     traits = facts.traits(target)
 
-    for rules, rung in itertools.product((named, every),
-                                         ("device", "trait", "any")):
+    for rules, rung in itertools.product((named, every), ("device", "trait", "any")):
         if matched := _addressing(rules, rung, target, traits):
             return _the_rule(matched, command, target).seconds
 
     return None
 
 
-def _addressing(rules: tuple[DeadlineRule, ...], rung: str, target: Placement,
-                traits: frozenset[TraitKey]) -> tuple[DeadlineRule, ...]:
+def _addressing(
+    rules: tuple[DeadlineRule, ...], rung: str, target: Placement, traits: frozenset[TraitKey]
+) -> tuple[DeadlineRule, ...]:
     """Return rules at one specificity that match the placement."""
     match rung:
         case "device":
-            return tuple(r for r in rules
-                         if r.target == ("device", target.device))
+            return tuple(r for r in rules if r.target == ("device", target.device))
         case "trait":
-            return tuple(r for r in rules if r.target[0] == "trait"
-                         and r.target[1] in traits)
+            return tuple(r for r in rules if r.target[0] == "trait" and r.target[1] in traits)
 
     return tuple(r for r in rules if r.target[0] == "any")
 
 
-def _the_rule(matched: tuple[DeadlineRule, ...], command: str,
-              target: Placement) -> DeadlineRule:
+def _the_rule(matched: tuple[DeadlineRule, ...], command: str, target: Placement) -> DeadlineRule:
     """Require exactly one matching rule at the winning specificity.
 
     Raises:
@@ -348,7 +354,8 @@ def _the_rule(matched: tuple[DeadlineRule, ...], command: str,
 
     raise ValueError(
         f"'{command}' on '{target.device}' is given a deadline by {named}; "
-        f"nothing ranks them, so name the device instead")
+        f"nothing ranks them, so name the device instead"
+    )
 
 
 @dataclass(frozen=True)
@@ -373,19 +380,18 @@ class OperatorRule:
 
     def __post_init__(self) -> None:
         if self.select is None and not self.commands:
-            raise ValueError(
-                "an operator rule addresses nothing; set select or commands")
+            raise ValueError("an operator rule addresses nothing; set select or commands")
 
         if (self.outcome, self.fail_fast, self.optional) == (None, None, None):
             raise ValueError(
-                "an operator rule changes nothing; set outcome, fail_fast or "
-                "optional")
+                "an operator rule changes nothing; set outcome, fail_fast or optional"
+            )
 
-        if self.outcome is not None and not (self.fail_fast is None
-                                             and self.optional is None):
+        if self.outcome is not None and not (self.fail_fast is None and self.optional is None):
             raise ValueError(
                 "an operator rule sets an outcome and a failure policy; an "
-                "operation that will not be dispatched cannot fail")
+                "operation that will not be dispatched cannot fail"
+            )
 
     def matches(self, step: PlannedStep, facts: PlacementFacts) -> bool:
         """Test the command and placement filters against a planned step.
@@ -396,8 +402,7 @@ class OperatorRule:
         if step.command is None or step.target is None:
             return False
 
-        if self.select is not None and not self.select.matches(step.target,
-                                                               facts):
+        if self.select is not None and not self.select.matches(step.target, facts):
             return False
 
         return not self.commands or step.command.model_tag() in self.commands
@@ -420,8 +425,7 @@ class Cleanup:
     """
 
     graph: Graph
-    when: Literal["always", "failure", "cancelled",
-                  "failure_or_cancelled"]
+    when: Literal["always", "failure", "cancelled", "failure_or_cancelled"]
     timeout_s: float
     origin: Origin
     armed_by: tuple[Operation, ...] | None = None
@@ -464,8 +468,7 @@ class CleanupPlan:
 
     steps: tuple[PlannedStep, ...]
     origin: Origin
-    when: Literal["always", "failure", "cancelled",
-                  "failure_or_cancelled"] = "always"
+    when: Literal["always", "failure", "cancelled", "failure_or_cancelled"] = "always"
     timeout_s: float = 60.0
     armed_by: tuple[StepName, ...] | None = None
 
@@ -490,11 +493,16 @@ class ExecutableWorkflow:
     omissions: tuple[Omission, ...] = ()
 
 
-def lower(name: str, steps: tuple[PlannedStep, ...], facts: PlacementFacts, *,
-          provenance: str = "",
-          cleanup: tuple[CleanupPlan, ...] = (),
-          deadlines: tuple[DeadlineRule, ...] = (),
-          rules: tuple[OperatorRule, ...] = ()) -> ExecutableWorkflow:
+def lower(
+    name: str,
+    steps: tuple[PlannedStep, ...],
+    facts: PlacementFacts,
+    *,
+    provenance: str = "",
+    cleanup: tuple[CleanupPlan, ...] = (),
+    deadlines: tuple[DeadlineRule, ...] = (),
+    rules: tuple[OperatorRule, ...] = (),
+) -> ExecutableWorkflow:
     """Build executable main and cleanup graphs from planned steps.
 
     Both compilers use this pass for capability omission, deadline resolution,
@@ -512,23 +520,35 @@ def lower(name: str, steps: tuple[PlannedStep, ...], facts: PlacementFacts, *,
     for plan in cleanup:
         teardown, _, unbuilt = _compile(plan.steps, facts, deadlines, rules)
         refused += unbuilt
-        plans.append(Cleanup(
-            graph=teardown, when=plan.when, timeout_s=plan.timeout_s,
-            origin=plan.origin, armed_by=_arming(plan, steps, operations)))
+        plans.append(
+            Cleanup(
+                graph=teardown,
+                when=plan.when,
+                timeout_s=plan.timeout_s,
+                origin=plan.origin,
+                armed_by=_arming(plan, steps, operations),
+            )
+        )
 
     workflow = ExecutableWorkflow(
-        name=name, graph=graph, provenance=provenance, cleanup=tuple(plans),
-        omissions=tuple(refused))
+        name=name,
+        graph=graph,
+        provenance=provenance,
+        cleanup=tuple(plans),
+        omissions=tuple(refused),
+    )
 
     _validated(workflow)
 
     return workflow
 
 
-def _compile(steps: tuple[PlannedStep, ...], facts: PlacementFacts,
-             deadlines: tuple[DeadlineRule, ...],
-             rules: tuple[OperatorRule, ...]
-             ) -> tuple[Graph, dict[StepName, Operation], tuple[Omission, ...]]:
+def _compile(
+    steps: tuple[PlannedStep, ...],
+    facts: PlacementFacts,
+    deadlines: tuple[DeadlineRule, ...],
+    rules: tuple[OperatorRule, ...],
+) -> tuple[Graph, dict[StepName, Operation], tuple[Omission, ...]]:
     """Lower one step list into a graph, operation index and omission
     records.
     """
@@ -548,21 +568,28 @@ def _compile(steps: tuple[PlannedStep, ...], facts: PlacementFacts,
 
         if step.command is not None and step.target is not None:
             payload = Operation.planned(
-                step, resolve_deadline(step.command.model_tag(), step.target,
-                                       deadlines, step.timeout_s, facts))
+                step,
+                resolve_deadline(
+                    step.command.model_tag(), step.target, deadlines, step.timeout_s, facts
+                ),
+            )
             operations[step.name] = payload
 
         on_failure, optional, override = _effects(step, rules, facts)
         nodes[step.name] = builder.add(
-            step.label, step.group, payload, on_failure=on_failure,
-            optional=optional, delay_s=step.delay_s, override=override)
+            step.label,
+            step.group,
+            payload,
+            on_failure=on_failure,
+            optional=optional,
+            delay_s=step.delay_s,
+            override=override,
+        )
 
     # Add edges after allocating all node ids to support forward references.
     for named, nid in nodes.items():
-        builder.require(nid, (nodes[d.on] for d in resolved[named]
-                              if d.kind == "success"))
-        builder.order(nid, (nodes[d.on] for d in resolved[named]
-                            if d.kind == "completion"))
+        builder.require(nid, (nodes[d.on] for d in resolved[named] if d.kind == "success"))
+        builder.order(nid, (nodes[d.on] for d in resolved[named] if d.kind == "completion"))
 
     return builder.build(), operations, tuple(omissions)
 
@@ -585,22 +612,22 @@ def _checked(steps: tuple[PlannedStep, ...]) -> dict[StepName, PlannedStep]:
             missing = "target" if step.target is None else "command"
             raise ValueError(
                 f"step '{step.name}' has no {missing}; a command and the "
-                f"placement receiving it are set together or not at all")
+                f"placement receiving it are set together or not at all"
+            )
 
         by_name[step.name] = step
 
-    dangling = sorted({d.on for step in steps for d in step.deps}
-                      - set(by_name))
+    dangling = sorted({d.on for step in steps for d in step.deps} - set(by_name))
 
     if dangling:
-        raise ValueError(
-            f"steps depend on names nothing emitted: {', '.join(dangling)}")
+        raise ValueError(f"steps depend on names nothing emitted: {', '.join(dangling)}")
 
     return by_name
 
 
-def _fates(steps: tuple[PlannedStep, ...], facts: PlacementFacts
-           ) -> tuple[frozenset[StepName], list[Omission]]:
+def _fates(
+    steps: tuple[PlannedStep, ...], facts: PlacementFacts
+) -> tuple[frozenset[StepName], list[Omission]]:
     """Find unsupported steps to omit and record their reasons.
 
     Ordering steps are always retained.
@@ -626,15 +653,16 @@ def _fates(steps: tuple[PlannedStep, ...], facts: PlacementFacts
             raise ValueError(f"step '{step.name}': {reason}")
 
         omitted.append(step.name)
-        omissions.append(Omission(origin=step.origin, target=step.target,
-                                  command=named, reason=reason))
+        omissions.append(
+            Omission(origin=step.origin, target=step.target, command=named, reason=reason)
+        )
 
     return frozenset(omitted), omissions
 
 
-def _resolved(by_name: dict[StepName, PlannedStep],
-              omitted: frozenset[StepName]
-              ) -> dict[StepName, tuple[Dependency, ...]]:
+def _resolved(
+    by_name: dict[StepName, PlannedStep], omitted: frozenset[StepName]
+) -> dict[StepName, tuple[Dependency, ...]]:
     """Resolve each step's dependencies through omitted predecessors."""
     resolved: dict[StepName, tuple[Dependency, ...]] = {}
 
@@ -644,10 +672,13 @@ def _resolved(by_name: dict[StepName, PlannedStep],
     return resolved
 
 
-def _resolve(name: StepName, by_name: dict[StepName, PlannedStep],
-             omitted: frozenset[StepName],
-             resolved: dict[StepName, tuple[Dependency, ...]],
-             seen: frozenset[StepName]) -> tuple[Dependency, ...]:
+def _resolve(
+    name: StepName,
+    by_name: dict[StepName, PlannedStep],
+    omitted: frozenset[StepName],
+    resolved: dict[StepName, tuple[Dependency, ...]],
+    seen: frozenset[StepName],
+) -> tuple[Dependency, ...]:
     """Replace omitted predecessors with their dependencies recursively.
 
     Inherited dependencies require success only if every link requires it. An
@@ -660,18 +691,19 @@ def _resolve(name: StepName, by_name: dict[StepName, PlannedStep],
         return resolved[name]
 
     if name in seen:
-        raise ValueError(
-            f"omitted steps depend on each other, through '{name}'")
+        raise ValueError(f"omitted steps depend on each other, through '{name}'")
 
     here: list[Dependency] = []
 
     for dep in by_name[name].deps:
         if dep.on in omitted:
-            here += [Dependency(on=inherited.on,
-                                kind="success" if dep.kind == inherited.kind == "success"
-                                else "completion")
-                     for inherited in _resolve(dep.on, by_name, omitted,
-                                               resolved, seen | {name})]
+            here += [
+                Dependency(
+                    on=inherited.on,
+                    kind="success" if dep.kind == inherited.kind == "success" else "completion",
+                )
+                for inherited in _resolve(dep.on, by_name, omitted, resolved, seen | {name})
+            ]
         else:
             here.append(dep)
 
@@ -690,13 +722,12 @@ def _merged(deps: list[Dependency]) -> tuple[Dependency, ...]:
         if kinds.get(dep.on) != "success":
             kinds[dep.on] = dep.kind
 
-    return tuple(Dependency(on=name, kind=kind)
-                 for name, kind in kinds.items())
+    return tuple(Dependency(on=name, kind=kind) for name, kind in kinds.items())
 
 
-def _effects(step: PlannedStep, rules: tuple[OperatorRule, ...],
-             facts: PlacementFacts
-             ) -> tuple[OnFailure, bool, NodeOverride | None]:
+def _effects(
+    step: PlannedStep, rules: tuple[OperatorRule, ...], facts: PlacementFacts
+) -> tuple[OnFailure, bool, NodeOverride | None]:
     """Resolve node failure policy and the first matching operator rule.
 
     Fail-fast maps to `stop`; otherwise failures map to `skip`. Order operator
@@ -711,15 +742,16 @@ def _effects(step: PlannedStep, rules: tuple[OperatorRule, ...],
     if rule.fail_fast is not None:
         on_failure = "stop" if rule.fail_fast else "skip"
 
-    return (on_failure,
-            step.optional if rule.optional is None else rule.optional,
-            NodeOverride(rule.outcome, rule.reason)
-            if rule.outcome is not None else None)
+    return (
+        on_failure,
+        step.optional if rule.optional is None else rule.optional,
+        NodeOverride(rule.outcome, rule.reason) if rule.outcome is not None else None,
+    )
 
 
-def _arming(plan: CleanupPlan, steps: tuple[PlannedStep, ...],
-            operations: Mapping[StepName, Operation]
-            ) -> tuple[Operation, ...] | None:
+def _arming(
+    plan: CleanupPlan, steps: tuple[PlannedStep, ...], operations: Mapping[StepName, Operation]
+) -> tuple[Operation, ...] | None:
     """Resolve named cleanup triggers to emitted main-workflow operations.
 
     Omitted and ordering steps contribute no trigger. An empty result remains
@@ -736,10 +768,10 @@ def _arming(plan: CleanupPlan, steps: tuple[PlannedStep, ...],
     if unknown:
         raise ValueError(
             f"cleanup '{plan.origin.source}' arms on steps the run does not "
-            f"hold: {', '.join(unknown)}")
+            f"hold: {', '.join(unknown)}"
+        )
 
-    return tuple(operations[name] for name in plan.armed_by
-                 if name in operations)
+    return tuple(operations[name] for name in plan.armed_by if name in operations)
 
 
 def _validated(workflow: ExecutableWorkflow) -> None:
@@ -782,7 +814,8 @@ def _deadlines_within(operations: Iterable[Operation], graph: str) -> None:
         if operation.timeout_s is not None and not _usable(operation.timeout_s):
             raise ValueError(
                 f"operation '{operation.id}' in {graph} resolved to a deadline "
-                f"of {operation.timeout_s} seconds")
+                f"of {operation.timeout_s} seconds"
+            )
 
 
 def _bounded(plan: Cleanup) -> None:
@@ -796,8 +829,7 @@ def _bounded(plan: Cleanup) -> None:
     named = f"cleanup '{plan.origin.source}'"
 
     if not _usable(plan.timeout_s):
-        raise ValueError(
-            f"{named} has a total deadline of {plan.timeout_s} seconds")
+        raise ValueError(f"{named} has a total deadline of {plan.timeout_s} seconds")
 
     _deadlines_within(_operations(plan.graph), named)
 
@@ -813,7 +845,8 @@ def _armed_within(plan: Cleanup, held: set[Operation]) -> None:
     if outside:
         raise ValueError(
             f"cleanup '{plan.origin.source}' arms on operations the run does "
-            f"not hold: {', '.join(outside)}")
+            f"not hold: {', '.join(outside)}"
+        )
 
 
 def _operations(graph: Graph) -> Iterator[Operation]:
@@ -830,8 +863,10 @@ def format_command(command: DeviceCommand) -> str:
     Serialize nested models as values and exclude the command discriminator.
     """
     args = ", ".join(
-        f"{k}={v!r}" for k, v in
-        command.model_dump(mode="json", exclude={"command_id"},
-                           exclude_defaults=True).items())
+        f"{k}={v!r}"
+        for k, v in command.model_dump(
+            mode="json", exclude={"command_id"}, exclude_defaults=True
+        ).items()
+    )
 
     return f"{command.model_tag()}({args})" if args else command.model_tag()

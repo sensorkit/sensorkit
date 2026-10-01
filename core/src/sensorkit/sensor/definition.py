@@ -34,15 +34,12 @@ class SensorDefinition(BaseModel, frozen=True, extra="forbid"):
     @model_validator(mode="before")
     @classmethod
     def _name_tables_from_keys(cls, v: object) -> object:
-        if not isinstance(v, Mapping) or not isinstance(v.get("tables"),
-                                                        Mapping):
+        if not isinstance(v, Mapping) or not isinstance(v.get("tables"), Mapping):
             return v
 
-        named = [{**t, "name": k} if isinstance(t, Mapping) else t
-                 for k, t in v["tables"].items()]
+        named = [{**t, "name": k} if isinstance(t, Mapping) else t for k, t in v["tables"].items()]
 
         return {**v, "tables": named}
-
 
     @classmethod
     def from_yaml(cls, text: str) -> SensorDefinition:
@@ -102,11 +99,15 @@ class SensorDefinition(BaseModel, frozen=True, extra="forbid"):
             ValueError: A rule targets a device absent from the topology.
         """
         placed = {placement.device for placement in topology.placements()}
-        unknown = sorted({rule.target[1] for rule in self.deadlines
-                          if rule.target[0] == "device"
-                          and rule.target[1] not in placed})
+        unknown = sorted(
+            {
+                rule.target[1]
+                for rule in self.deadlines
+                if rule.target[0] == "device" and rule.target[1] not in placed
+            }
+        )
 
         if unknown:
             raise ValueError(
-                f"deadline rules target devices the structure does not hold: "
-                f"{', '.join(unknown)}")
+                f"deadline rules target devices the structure does not hold: {', '.join(unknown)}"
+            )

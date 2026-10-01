@@ -113,8 +113,9 @@ class ExecutionState:
                 unchanged.
         """
         if self._used:
-            raise ValueError(f"{workflow.name}: an ExecutionState records one "
-                             f"run, and this one already has")
+            raise ValueError(
+                f"{workflow.name}: an ExecutionState records one run, and this one already has"
+            )
 
         self._used = True
         self.run = RunReport(workflow.name, workflow.graph, {})
@@ -123,6 +124,7 @@ class ExecutionState:
 
     def interrupted(self, operation: Operation) -> InterruptionRecorder:
         """Return a callback that stores this operation's Abort outcome."""
+
         def record(interruption: Interruption) -> None:
             self.interruptions[operation] = interruption
 
@@ -143,8 +145,7 @@ class WorkflowReport:
     run: RunReport
     cleanup: tuple[CleanupReport, ...] = ()
     attempted: frozenset[Operation] = frozenset()
-    interruptions: Mapping[Operation, Interruption] = field(
-        default_factory=dict)
+    interruptions: Mapping[Operation, Interruption] = field(default_factory=dict)
     outcome: WorkflowOutcome = "completed"
     reason: str | None = None
     provenance: str = ""
@@ -173,11 +174,11 @@ class WorkflowError(Exception):
 
         for done in report.cleanup:
             if done.failed:
-                expiry = (f"exceeded its {done.cleanup.timeout_s}s deadline"
-                          if done.expired else None)
+                expiry = (
+                    f"exceeded its {done.cleanup.timeout_s}s deadline" if done.expired else None
+                )
                 causes = [*([expiry] if expiry else []), *_causes(done.run)]
-                sections.append(f"in cleanup '{done.cleanup.origin}', "
-                                f"{'; '.join(causes)}")
+                sections.append(f"in cleanup '{done.cleanup.origin}', {'; '.join(causes)}")
 
         return cls(f"{report.name}: {'. '.join(sections)}", report)
 
@@ -190,18 +191,26 @@ class WorkflowExecutor:
     one at a time and checks workflow issuance.
     """
 
-    def __init__(self, sensor: BoundSensor,
-                 clients: Mapping[DeviceKey, DeviceClient], *,
-                 events: AsyncObserver[OperationEvent] | None = None):
+    def __init__(
+        self,
+        sensor: BoundSensor,
+        clients: Mapping[DeviceKey, DeviceClient],
+        *,
+        events: AsyncObserver[OperationEvent] | None = None,
+    ):
         self.sensor = sensor
         self.clients = clients
         self.events = events
 
-    async def execute(self, workflow: ExecutableWorkflow, *,
-                      contexts: DeviceContexts | None = None,
-                      base: sk.Context | None = None,
-                      in_domain: AbortPredicate | None = None,
-                      state: ExecutionState | None = None) -> WorkflowReport:
+    async def execute(
+        self,
+        workflow: ExecutableWorkflow,
+        *,
+        contexts: DeviceContexts | None = None,
+        base: sk.Context | None = None,
+        in_domain: AbortPredicate | None = None,
+        state: ExecutionState | None = None,
+    ) -> WorkflowReport:
         """Run a compiled workflow, drain calls and attempt eligible
         cleanup.
 
@@ -230,8 +239,9 @@ class WorkflowExecutor:
 
         # Reserve state before yielding so concurrent reuse cannot pass.
         results = state.begin(workflow)
-        dispatcher = Dispatcher(self.sensor, self.clients, contexts=contexts,
-                                base=base, events=self.events)
+        dispatcher = Dispatcher(
+            self.sensor, self.clients, contexts=contexts, base=base, events=self.events
+        )
         runner = DagRunner(_dispatching(dispatcher, state))
         reasons: list[str] = []
 
@@ -243,24 +253,25 @@ class WorkflowExecutor:
             return True
 
         state.run = await runner.execute(
-            workflow.graph, name=workflow.name, absorbed=claimed,
-            results=results)
+            workflow.graph, name=workflow.name, absorbed=claimed, results=results
+        )
         log_summary(state.run)
 
-        ended = await _cleaned_up(workflow.cleanup, state.run, state, runner,
-                                  claimed)
+        ended = await _cleaned_up(workflow.cleanup, state.run, state, runner, claimed)
         aborted = state.run.aborted or ended
         report = WorkflowReport(
-            name=workflow.name, run=state.run, cleanup=tuple(state.cleanup),
+            name=workflow.name,
+            run=state.run,
+            cleanup=tuple(state.cleanup),
             attempted=frozenset(state.attempted),
             interruptions=dict(state.interruptions),
             outcome="aborted" if aborted else "completed",
             reason=reasons[0] if aborted and reasons else None,
-            provenance=workflow.provenance)
+            provenance=workflow.provenance,
+        )
 
         # Domain abort preserves established main failures but returns cleanup outcomes.
-        if state.run.failures or (
-                not aborted and any(c.failed for c in report.cleanup)):
+        if state.run.failures or (not aborted and any(c.failed for c in report.cleanup)):
             raise WorkflowError.from_report(report)
 
         return report
@@ -270,21 +281,26 @@ def _dispatching(dispatcher: Dispatcher, state: ExecutionState) -> Dispatch:
     """Build node dispatch that records operations and resolves ordering
     nodes locally.
     """
+
     async def dispatch(node: Node) -> object:
         match node.payload:
             case Operation() as operation:
                 return await dispatcher.perform(
-                    operation, node, state.attempted.add,
-                    state.interrupted(operation))
+                    operation, node, state.attempted.add, state.interrupted(operation)
+                )
             case _:
                 return None
 
     return dispatch
 
 
-async def _cleaned_up(cleanups: tuple[Cleanup, ...], run: RunReport,
-                      state: ExecutionState, runner: DagRunner,
-                      claimed: Callable[[BaseException], bool]) -> bool:
+async def _cleaned_up(
+    cleanups: tuple[Cleanup, ...],
+    run: RunReport,
+    state: ExecutionState,
+    runner: DagRunner,
+    claimed: Callable[[BaseException], bool],
+) -> bool:
     """Run eligible, armed cleanup graphs sequentially until cancellation.
 
     Select by the drained main run's outcome and recorded attempts.
@@ -299,8 +315,7 @@ async def _cleaned_up(cleanups: tuple[Cleanup, ...], run: RunReport,
     failed = bool(run.failures)
 
     for cleanup in cleanups:
-        if not (cleanup.selected(failed, run.aborted)
-                and cleanup.armed(state.attempted)):
+        if not (cleanup.selected(failed, run.aborted) and cleanup.armed(state.attempted)):
             continue
 
         done, cancelled, declined = await _bounded(cleanup, runner, claimed)
@@ -316,9 +331,9 @@ async def _cleaned_up(cleanups: tuple[Cleanup, ...], run: RunReport,
     return False
 
 
-async def _bounded(cleanup: Cleanup, runner: DagRunner,
-                   claimed: Callable[[BaseException], bool]
-                   ) -> tuple[CleanupReport, bool, asyncio.CancelledError | None]:
+async def _bounded(
+    cleanup: Cleanup, runner: DagRunner, claimed: Callable[[BaseException], bool]
+) -> tuple[CleanupReport, bool, asyncio.CancelledError | None]:
     """Own one cleanup task through timeout, cancellation and final drain.
 
     Classify caller cancellations until one is declined. Forward cancellations
@@ -332,8 +347,9 @@ async def _bounded(cleanup: Cleanup, runner: DagRunner,
     """
     name = str(cleanup.origin)
     results: dict[int, NodeResult] = {}
-    running = asyncio.create_task(runner.execute(
-        cleanup.graph, name=name, absorbed=lambda _: True, results=results))
+    running = asyncio.create_task(
+        runner.execute(cleanup.graph, name=name, absorbed=lambda _: True, results=results)
+    )
     loop = asyncio.get_running_loop()
     expiry = loop.time() + cleanup.timeout_s
     expired = cancelled = False
@@ -343,8 +359,7 @@ async def _bounded(cleanup: Cleanup, runner: DagRunner,
         bounded = not (expired or cancelled)
 
         try:
-            await asyncio.wait(
-                {running}, timeout=expiry - loop.time() if bounded else None)
+            await asyncio.wait({running}, timeout=expiry - loop.time() if bounded else None)
         except asyncio.CancelledError as e:
             cancelled = True
 
@@ -359,8 +374,11 @@ async def _bounded(cleanup: Cleanup, runner: DagRunner,
             running.cancel()
 
     # Synthesize a report if cancellation prevented the graph task from starting.
-    run = (RunReport(name, cleanup.graph, results, aborted=True)
-           if running.cancelled() else running.result())
+    run = (
+        RunReport(name, cleanup.graph, results, aborted=True)
+        if running.cancelled()
+        else running.result()
+    )
 
     return CleanupReport(cleanup, run, expired), cancelled, declined
 

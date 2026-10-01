@@ -71,8 +71,7 @@ class Device(BaseModel, frozen=True, extra="forbid"):
 
     def placement(self, path: StructurePath) -> Placement:
         """Return the placement at `path`, appending the key for an instrument."""
-        return Placement(self.device,
-                         path + (self.device,) if self.instrument else path)
+        return Placement(self.device, path + (self.device,) if self.instrument else path)
 
 
 class Unit(BaseModel, frozen=True, extra="forbid"):
@@ -121,8 +120,7 @@ def _record_kind(v: object) -> str | None:
         case Selector():
             return "selector"
         case Mapping():
-            return next((k for k in ("device", "unit", "selector") if k in v),
-                        None)
+            return next((k for k in ("device", "unit", "selector") if k in v), None)
 
     return None
 
@@ -252,8 +250,7 @@ class Topology:
         """
         return self._private[instrument]
 
-    def selector_states(self, instrument: Placement
-                        ) -> tuple[tuple[Placement, str], ...]:
+    def selector_states(self, instrument: Placement) -> tuple[tuple[Placement, str], ...]:
         """Return selector placements and required port names, from root to leaf.
 
         Raises:
@@ -261,8 +258,7 @@ class Topology:
         """
         return self._ports[instrument]
 
-    def mutually_exclusive(self, a: Placement,
-                           b: Placement) -> Placement | None:
+    def mutually_exclusive(self, a: Placement, b: Placement) -> Placement | None:
         """Return the first selector requiring different ports for the instruments.
 
         Return `None` if both instruments can be reached at once.
@@ -278,9 +274,13 @@ class Topology:
 
         return None
 
-    def _visit(self, components: tuple[Component, ...], path: StructurePath,
-               above: tuple[Placement, ...],
-               selected: tuple[tuple[Placement, str], ...]) -> None:
+    def _visit(
+        self,
+        components: tuple[Component, ...],
+        path: StructurePath,
+        above: tuple[Placement, ...],
+        selected: tuple[tuple[Placement, str], ...],
+    ) -> None:
         """Index a component list, then descend into its units and selector ports.
 
         Add the level's non-instrument devices and selectors to every chain
@@ -301,18 +301,22 @@ class Topology:
         for node in components:
             match node:
                 case Unit():
-                    self._visit(node.components, path + (node.unit,), here,
-                                selected)
+                    self._visit(node.components, path + (node.unit,), here, selected)
                 case Selector():
                     placement = Placement(node.selector, path)
                     self._records[placement] = node
 
                     for port in node.ports:
-                        self._visit(port.components, path + (port.name,), here,
-                                    selected + ((placement, port.name),))
+                        self._visit(
+                            port.components,
+                            path + (port.name,),
+                            here,
+                            selected + ((placement, port.name),),
+                        )
 
-    def _scan(self, components: tuple[Component, ...],
-              path: StructurePath) -> tuple[Placement, ...]:
+    def _scan(
+        self, components: tuple[Component, ...], path: StructurePath
+    ) -> tuple[Placement, ...]:
         """Validate this level and return its shared placements in authored order.
 
         Non-instrument devices and selectors are shared by the level's
@@ -349,8 +353,7 @@ class Topology:
 
         if dupes:
             where = format_path(path, "<root>")
-            raise ValueError(
-                f"positions named twice under '{where}': {', '.join(dupes)}")
+            raise ValueError(f"positions named twice under '{where}': {', '.join(dupes)}")
 
         return tuple(shared)
 
@@ -366,11 +369,13 @@ class Topology:
             raise ValueError(
                 f"device '{device}' is placed twice, at "
                 f"'{format_path(held.path, '<root>')}' and "
-                f"'{format_path(placement.path, '<root>')}'")
+                f"'{format_path(placement.path, '<root>')}'"
+            )
 
         self._placed[device] = placement
 
     def _owned(self, placement: Placement, instrument: Placement) -> bool:
         """Test whether a chain placement is local and has only this reader."""
-        return (placement.path in (instrument.path[:-1], instrument.path)
-                and self._readers[placement] == (instrument,))
+        local = placement.path in (instrument.path[:-1], instrument.path)
+
+        return local and self._readers[placement] == (instrument,)

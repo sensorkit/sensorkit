@@ -72,8 +72,9 @@ class When(StrEnum):
     always = "however the run ended"
     failure = "after a required failure"
     cancelled = "after a domain abort"
-    failure_or_cancelled = ("after a required failure, a domain abort or "
-                            "both, and once where both hold")
+    failure_or_cancelled = (
+        "after a required failure, a domain abort or both, and once where both hold"
+    )
 
 
 @dataclass(frozen=True)
@@ -110,14 +111,16 @@ def audit_definition(definition: SensorDefinition) -> AuditReport:
     errors in Python-built definitions and checks individual parts separately.
     """
     topology, structure = _structure_checked(definition.sensor)
-    checked = (structure, *(_table_checked(t) for t in definition.tables),
-               *_deadlines_checked(definition, topology))
+    checked = (
+        structure,
+        *(_table_checked(t) for t in definition.tables),
+        *_deadlines_checked(definition, topology),
+    )
     findings = (
         *checked,
         *_document_checked(definition, checked),
         *_asserted(topology),
-        *(finding for table in definition.tables
-          for finding in _entries_deferred(table)),
+        *(finding for table in definition.tables for finding in _entries_deferred(table)),
         *_deadlines_deferred(definition.deadlines),
     )
 
@@ -182,8 +185,7 @@ def audit_workflow(workflow: ExecutableWorkflow) -> AuditReport:
 # showing their source and age.
 
 
-def _structure_checked(structure: Structure
-                       ) -> tuple[Topology | None, Finding]:
+def _structure_checked(structure: Structure) -> tuple[Topology | None, Finding]:
     """Try building topology and return it with a structural validation
     finding.
     """
@@ -195,8 +197,10 @@ def _structure_checked(structure: Structure
         return None, Finding("invalid", str(e), origin)
 
     return topology, Finding(
-        "valid", f"structure '{structure.name}' places every device once and "
-        f"names every position once", origin)
+        "valid",
+        f"structure '{structure.name}' places every device once and names every position once",
+        origin,
+    )
 
 
 def _table_checked(table: LifecycleWorkflow) -> Finding:
@@ -209,19 +213,17 @@ def _table_checked(table: LifecycleWorkflow) -> Finding:
         return Finding("invalid", str(e), origin)
 
     return Finding(
-        "valid", f"table '{table.name}' names resolve and nothing it orders "
-        f"is circular", origin)
+        "valid", f"table '{table.name}' names resolve and nothing it orders is circular", origin
+    )
 
 
-def _deadlines_checked(definition: SensorDefinition,
-                       topology: Topology | None) -> list[Finding]:
+def _deadlines_checked(definition: SensorDefinition, topology: Topology | None) -> list[Finding]:
     """Report device-target membership when a valid topology is available.
 
     Invalid structure is reported elsewhere; non-device rules need no
     membership check.
     """
-    if topology is None or not any(r.target[0] == "device"
-                                   for r in definition.deadlines):
+    if topology is None or not any(r.target[0] == "device" for r in definition.deadlines):
         return []
 
     origin = Origin(source="deadlines")
@@ -231,12 +233,10 @@ def _deadlines_checked(definition: SensorDefinition,
     except ValueError as e:
         return [Finding("invalid", str(e), origin)]
 
-    return [Finding("valid", "every device a deadline rule targets is in the "
-                    "structure", origin)]
+    return [Finding("valid", "every device a deadline rule targets is in the structure", origin)]
 
 
-def _document_checked(definition: SensorDefinition,
-                      found: Iterable[Finding]) -> list[Finding]:
+def _document_checked(definition: SensorDefinition, found: Iterable[Finding]) -> list[Finding]:
     """Report the whole-definition error unless a part already reported the
     same message.
     """
@@ -260,16 +260,19 @@ def _asserted(topology: Topology | None) -> list[Finding]:
         traits = topology.record(placement).traits
 
         if traits:
-            findings.append(Finding(
-                "deferred", f"'{placement.device}' asserts {', '.join(traits)}; "
-                f"whether it satisfies them is answered at binding",
-                Origin(source="structure", path=(placement.device,))))
+            findings.append(
+                Finding(
+                    "deferred",
+                    f"'{placement.device}' asserts {', '.join(traits)}; "
+                    f"whether it satisfies them is answered at binding",
+                    Origin(source="structure", path=(placement.device,)),
+                )
+            )
 
     return findings
 
 
-def _rows(table: LifecycleWorkflow
-          ) -> Iterator[tuple[tuple[str | int, ...], Entry]]:
+def _rows(table: LifecycleWorkflow) -> Iterator[tuple[tuple[str | int, ...], Entry]]:
     """Yield phase and cleanup entries with their authored origin paths."""
     for phase in table.phases:
         for position, entry in enumerate(phase.entries):
@@ -285,22 +288,29 @@ def _entries_deferred(table: LifecycleWorkflow) -> list[Finding]:
     entry.
     """
     return [
-        Finding("deferred",
-                f"which placements match {_targets(entry)}, and whether each "
-                f"supports {', '.join(spec.op for spec in entry.ops)}, is "
-                f"answered at binding",
-                Origin(source=table.name, path=path))
-        for path, entry in _rows(table)]
+        Finding(
+            "deferred",
+            f"which placements match {_targets(entry)}, and whether each "
+            f"supports {', '.join(spec.op for spec in entry.ops)}, is "
+            f"answered at binding",
+            Origin(source=table.name, path=path),
+        )
+        for path, entry in _rows(table)
+    ]
 
 
 def _deadlines_deferred(rules: tuple[DeadlineRule, ...]) -> list[Finding]:
     """Record deferred trait matching for each trait-specific deadline rule."""
     return [
-        Finding("deferred",
-                f"which placements satisfy trait {rule.target[1]}, and so take "
-                f"this {_commanded(rule)} deadline, is answered at binding",
-                Origin(source="deadlines", path=(index,)))
-        for index, rule in enumerate(rules) if rule.target[0] == "trait"]
+        Finding(
+            "deferred",
+            f"which placements satisfy trait {rule.target[1]}, and so take "
+            f"this {_commanded(rule)} deadline, is answered at binding",
+            Origin(source="deadlines", path=(index,)),
+        )
+        for index, rule in enumerate(rules)
+        if rule.target[0] == "trait"
+    ]
 
 
 def _symbolic(selection: Selection) -> str:
@@ -345,22 +355,19 @@ def _structure(components: tuple[Component, ...], depth: int) -> Iterator[str]:
     for node in components:
         match node:
             case Device():
-                yield indent + _record(node.device, node.traits, node.tags,
-                                       node.instrument)
+                yield indent + _record(node.device, node.traits, node.tags, node.instrument)
             case Unit():
                 yield f"{indent}unit {node.unit}"
                 yield from _structure(node.components, depth + 1)
             case Selector():
-                yield f"{indent}selector " + _record(node.selector, node.traits,
-                                                     node.tags, False)
+                yield f"{indent}selector " + _record(node.selector, node.traits, node.tags, False)
 
                 for port in node.ports:
                     yield f"{indent}  port {port.name}"
                     yield from _structure(port.components, depth + 2)
 
 
-def _record(key: str, traits: tuple[str, ...], tags: tuple[str, ...],
-            instrument: bool) -> str:
+def _record(key: str, traits: tuple[str, ...], tags: tuple[str, ...], instrument: bool) -> str:
     """Describe a device key, instrument status, trait assertions and tags."""
     parts = [key]
 
@@ -393,12 +400,13 @@ def _deadlines(rules: tuple[DeadlineRule, ...]) -> Iterator[str]:
         yield "no deadline rules"
         return
 
-    yield ("deadline rules, where an operation states no timeout, device "
-           "first, then trait, then any, and rules for every command last")
+    yield (
+        "deadline rules, where an operation states no timeout, device "
+        "first, then trait, then any, and rules for every command last"
+    )
 
     for rule in rules:
-        yield (f"  {_commanded(rule)} on {_addressed(rule.target)}, "
-               f"{_seconds(rule.seconds)}")
+        yield f"  {_commanded(rule)} on {_addressed(rule.target)}, {_seconds(rule.seconds)}"
 
 
 def _commanded(rule: DeadlineRule) -> str:
@@ -412,19 +420,24 @@ def _policy(fail_fast: bool) -> str:
 
 def _table(table: LifecycleWorkflow) -> Iterator[str]:
     """Describe a table's phases, entries and cleanup specs."""
-    declared = {entry.id: phase.name for phase in table.phases
-                for entry in phase.entries if entry.id is not None}
+    declared = {
+        entry.id: phase.name
+        for phase in table.phases
+        for entry in phase.entries
+        if entry.id is not None
+    }
 
-    yield (f"table '{table.name}', {_policy(table.fail_fast)} unless a phase "
-           f"or an operation says otherwise")
+    yield (
+        f"table '{table.name}', {_policy(table.fail_fast)} unless a phase "
+        f"or an operation says otherwise"
+    )
 
     for index, phase in enumerate(table.phases):
         follows = table.follows(index)
         yield f"  phase '{phase.name}', {_ordered(phase, follows)}"
 
         for position, entry in enumerate(phase.entries):
-            yield from _entry(entry, position, follows, declared,
-                              phase.fail_fast, table.fail_fast)
+            yield from _entry(entry, position, follows, declared, phase.fail_fast, table.fail_fast)
 
     for spec in table.cleanup:
         yield from _cleanup_spec(spec, table.fail_fast)
@@ -449,9 +462,14 @@ def _quoted(names: Iterable[str]) -> str:
     return ", ".join(f"'{name}'" for name in names)
 
 
-def _entry(entry: Entry, position: int, follows: tuple[str, ...],
-           declared: dict[str, str], phase: bool | None,
-           table: bool) -> Iterator[str]:
+def _entry(
+    entry: Entry,
+    position: int,
+    follows: tuple[str, ...],
+    declared: dict[str, str],
+    phase: bool | None,
+    table: bool,
+) -> Iterator[str]:
     """Describe an entry's authored selection, requirements and commands."""
     yield f"    entry '{entry.id}'" if entry.id else f"    entry {position}"
     yield f"      select {_symbolic(entry.select)}"
@@ -470,8 +488,7 @@ def _entry(entry: Entry, position: int, follows: tuple[str, ...],
         yield f"        {_op(spec, index, phase, table)}"
 
 
-def _clause(clause: Join, follows: tuple[str, ...],
-            declared: dict[str, str]) -> str:
+def _clause(clause: Join, follows: tuple[str, ...], declared: dict[str, str]) -> str:
     """Describe a requirement and any inherited phase wait it replaces."""
     text = f"requires '{clause.name}' on {clause.on}"
 
@@ -490,18 +507,23 @@ def _op(spec: OpSpec, index: int, phase: bool | None, table: bool) -> str:
     """Describe an authored command with sequencing, failure policy and
     timeout source.
     """
-    parts = [format_command(spec.command),
-             "first at each target" if index == 0
-             else f"after the {spec.sequence} of the previous",
-             _effective(spec.fail_fast, phase, table)]
+    parts = [
+        format_command(spec.command),
+        "first at each target" if index == 0 else f"after the {spec.sequence} of the previous",
+        _effective(spec.fail_fast, phase, table),
+    ]
 
     if spec.optional:
         parts.append("optional")
 
-    parts.append("omitted where unsupported" if spec.unsupported == "omit"
-                 else "an error where unsupported")
-    parts.append("deadline from the rules" if spec.timeout_s is None
-                 else f"deadline {_seconds(spec.timeout_s)}, explicit")
+    parts.append(
+        "omitted where unsupported" if spec.unsupported == "omit" else "an error where unsupported"
+    )
+    parts.append(
+        "deadline from the rules"
+        if spec.timeout_s is None
+        else f"deadline {_seconds(spec.timeout_s)}, explicit"
+    )
 
     return "; ".join(parts)
 
@@ -519,8 +541,7 @@ def _effective(operation: bool | None, phase: bool | None, table: bool) -> str:
 
 def _cleanup_spec(spec: CleanupSpec, table: bool) -> Iterator[str]:
     """Describe a cleanup spec's eligibility, arming, timeout and entries."""
-    declared = {entry.id: spec.name for entry in spec.entries
-                if entry.id is not None}
+    declared = {entry.id: spec.name for entry in spec.entries if entry.id is not None}
 
     yield f"  cleanup '{spec.name}', runs {When[spec.when]}"
     yield f"    total deadline {_seconds(spec.timeout_s)}"
@@ -545,8 +566,10 @@ def _provenance(provenance: str) -> Iterator[str]:
     hardware state.
     """
     yield f"compiled against {provenance or 'facts of unrecorded provenance'}"
-    yield ("  Provenance says when the facts were assembled and which devices "
-           "they cover. It does not show that the hardware is unchanged now.")
+    yield (
+        "  Provenance says when the facts were assembled and which devices "
+        "they cover. It does not show that the hardware is unchanged now."
+    )
 
 
 def _name(node: Node) -> str:
@@ -567,8 +590,10 @@ def _graph(title: str, graph: Graph) -> Iterator[str]:
     by_id = {node.id: node for node in graph.nodes}
     operations = sum(isinstance(n.payload, Operation) for n in graph.nodes)
 
-    yield (f"{title}, {_count(operations, 'operation')} and "
-           f"{_count(len(graph.nodes) - operations, 'ordering node')}")
+    yield (
+        f"{title}, {_count(operations, 'operation')} and "
+        f"{_count(len(graph.nodes) - operations, 'ordering node')}"
+    )
 
     for nid in graph.topo_order():
         yield from _node(by_id[nid], graph, names)
@@ -587,8 +612,11 @@ def _node(node: Node, graph: Graph, names: dict[int, str]) -> Iterator[str]:
     match node.payload:
         case Operation() as operation:
             yield f"      {node.label}"
-            yield ("      no deadline" if operation.timeout_s is None
-                   else f"      deadline {_seconds(operation.timeout_s)}")
+            yield (
+                "      no deadline"
+                if operation.timeout_s is None
+                else f"      deadline {_seconds(operation.timeout_s)}"
+            )
 
             if operation.acquisition is not None:
                 yield from _acquisition(operation.acquisition)
@@ -601,12 +629,13 @@ def _node(node: Node, graph: Graph, names: dict[int, str]) -> Iterator[str]:
         yield "      optional, so a failure degrades the run without failing it"
 
     if node.override is not None:
-        yield (f"      overridden, recorded {node.override.outcome} without "
-               f"dispatching, because {node.override.reason}")
+        yield (
+            f"      overridden, recorded {node.override.outcome} without "
+            f"dispatching, because {node.override.reason}"
+        )
 
     if node.delay_s:
-        yield (f"      starts {_seconds(node.delay_s)} after what it waits on "
-               f"has resolved")
+        yield f"      starts {_seconds(node.delay_s)} after what it waits on has resolved"
 
     yield from _edges(node, graph, names)
 
@@ -631,8 +660,9 @@ def _edges(node: Node, graph: Graph, names: dict[int, str]) -> Iterator[str]:
         yield "      waits on nothing"
 
     for dep in deps:
-        kind = ("needs the success of" if dep in graph.hard[node.id]
-                else "waits for the completion of")
+        kind = (
+            "needs the success of" if dep in graph.hard[node.id] else "waits for the completion of"
+        )
         yield f"      {kind} {names[dep]}"
 
 
@@ -640,8 +670,10 @@ def _acquisition(acquisition: Acquisition) -> Iterator[str]:
     """Describe frame identity, planned keywords and dispatch-time header
     sampling.
     """
-    yield (f"      acquisition of request '{acquisition.request}', "
-           f"index {acquisition.index}, frame {acquisition.frame_number}")
+    yield (
+        f"      acquisition of request '{acquisition.request}', "
+        f"index {acquisition.index}, frame {acquisition.frame_number}"
+    )
 
     if acquisition.keywords:
         yield "      planned keywords, as requested rather than as achieved"
@@ -650,8 +682,10 @@ def _acquisition(acquisition: Acquisition) -> Iterator[str]:
         value = to_jsonable_python(acquisition.keywords[key], fallback=repr)
         yield f"        {key} = {json.dumps(value, sort_keys=True)}"
 
-    yield ("      header sampled at dispatch, so the command above is planned "
-           "and is not the header-bearing command sent")
+    yield (
+        "      header sampled at dispatch, so the command above is planned "
+        "and is not the header-bearing command sent"
+    )
 
 
 def _omitted(omissions: tuple[Omission, ...]) -> Iterator[str]:
@@ -660,13 +694,17 @@ def _omitted(omissions: tuple[Omission, ...]) -> Iterator[str]:
         yield "nothing omitted at compile"
         return
 
-    yield ("omitted at compile where the device lacks the command, by "
-           "capability and not by an operator")
+    yield (
+        "omitted at compile where the device lacks the command, by "
+        "capability and not by an operator"
+    )
 
     for omission in omissions:
         where = format_path(omission.target.path, "<root>")
-        yield (f"  {omission.command} on {omission.target.device} @ {where}, "
-               f"from {omission.origin}, because {omission.reason}")
+        yield (
+            f"  {omission.command} on {omission.target.device} @ {where}, "
+            f"from {omission.origin}, because {omission.reason}"
+        )
 
     yield "  What waited on an omitted operation waits on what it waited on."
 
@@ -676,9 +714,12 @@ def _overridden(workflow: ExecutableWorkflow) -> Iterator[str]:
     cleanup graphs.
     """
     graphs = (workflow.graph, *(c.graph for c in workflow.cleanup))
-    overridden = [(_name(node), override) for graph in graphs
-                  for node in graph.nodes
-                  if (override := node.override) is not None]
+    overridden = [
+        (_name(node), override)
+        for graph in graphs
+        for node in graph.nodes
+        if (override := node.override) is not None
+    ]
 
     if not overridden:
         yield "no operator overrides"
@@ -692,10 +733,8 @@ def _overridden(workflow: ExecutableWorkflow) -> Iterator[str]:
 
 def _cleanup(cleanup: Cleanup) -> Iterator[str]:
     """Describe a compiled cleanup's eligibility, arming, timeout and graph."""
-    yield (f"cleanup '{cleanup.origin}', runs {When[cleanup.when]} "
-           f"once the run has drained")
-    yield (f"  total deadline {_seconds(cleanup.timeout_s)}, beside each "
-           f"command's own")
+    yield f"cleanup '{cleanup.origin}', runs {When[cleanup.when]} once the run has drained"
+    yield f"  total deadline {_seconds(cleanup.timeout_s)}, beside each command's own"
 
     match cleanup.armed_by:
         case None:

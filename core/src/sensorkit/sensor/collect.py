@@ -116,8 +116,9 @@ class CommandRequest:
     device: str | None = None
     timeout_s: float | None = None
 
-    def resolve(self, participants: tuple[Placement, ...],
-                sensor: BoundSensor) -> tuple[RoutedCommand, ...]:
+    def resolve(
+        self, participants: tuple[Placement, ...], sensor: BoundSensor
+    ) -> tuple[RoutedCommand, ...]:
         """Route this command for the participants and attach its authored
         timeout.
 
@@ -131,23 +132,35 @@ class CommandRequest:
                 a named device is unreachable or unsupported.
         """
         named = type(self.command).model_tag()
-        unsupported = next((group for group in partition(self.subject,
-                                                         participants)
-                            if not sensor.supported_on(named, group)), None)
+        unsupported = next(
+            (
+                group
+                for group in partition(self.subject, participants)
+                if not sensor.supported_on(named, group)
+            ),
+            None,
+        )
 
         if self.device is None and unsupported is not None:
             raise SettingUnsatisfiable(
                 f"no device on {format_paths(unsupported)} supports '{named}', so "
-                f"nothing can establish what it was asked for")
+                f"nothing can establish what it was asked for"
+            )
 
-        routed = sensor.route(self.command, self.subject, participants,
-                              select=self.select, scope=self.scope,
-                              device=self.device)
+        routed = sensor.route(
+            self.command,
+            self.subject,
+            participants,
+            select=self.select,
+            scope=self.scope,
+            device=self.device,
+        )
 
         return tuple(replace(r, timeout_s=self.timeout_s) for r in routed)
 
-    def resolve_shared(self, participants: tuple[Placement, ...],
-                       sensor: BoundSensor) -> tuple[RoutedCommand, ...]:
+    def resolve_shared(
+        self, participants: tuple[Placement, ...], sensor: BoundSensor
+    ) -> tuple[RoutedCommand, ...]:
         """Route an epoch setting, distinguishing combined-participant
         conflicts.
 
@@ -162,8 +175,7 @@ class CommandRequest:
         except SettingUnsatisfiable:
             raise
         except ValueError as conflict:
-            if len(participants) > 1 and all(self._alone(p, sensor)
-                                             for p in participants):
+            if len(participants) > 1 and all(self._alone(p, sensor) for p in participants):
                 raise PackingConflict(str(conflict)) from conflict
 
             raise
@@ -205,8 +217,9 @@ class InstrumentRequest:
     prefers: tuple[Selection, ...] = ()
     assignment: str | None = None
 
-    def expand(self, target: Placement, first_frame: int,
-               first_index: int) -> tuple[PlannedAcquisition, ...]:
+    def expand(
+        self, target: Placement, first_frame: int, first_index: int
+    ) -> tuple[PlannedAcquisition, ...]:
         """Expand the full request into camera captures for one chosen
         instrument.
 
@@ -222,20 +235,25 @@ class InstrumentRequest:
         # Dispatch samples a fresh header and attaches it to a command copy.
         return tuple(
             PlannedAcquisition(
-                acquisition=Acquisition(request=self.id,
-                                        index=first_index + offset,
-                                        frame_number=frame,
-                                        keywords=KeywordDict(
-                                            self.collect.model_copy(
-                                                deep=True,
-                                                update={"frame_number": frame}))
-                                        if self.collect is not None else KeywordDict()),
+                acquisition=Acquisition(
+                    request=self.id,
+                    index=first_index + offset,
+                    frame_number=frame,
+                    keywords=(
+                        KeywordDict(
+                            self.collect.model_copy(deep=True, update={"frame_number": frame})
+                        )
+                        if self.collect is not None
+                        else KeywordDict()
+                    ),
+                ),
                 target=target,
-                command=CameraCapture(integration_time=asked.integration_time_s,
-                                      context=None),
+                command=CameraCapture(integration_time=asked.integration_time_s, context=None),
                 estimated_duration_s=asked.integration_time_s,
-                timeout_s=asked.timeout_s)
-            for offset, frame in enumerate(frames))
+                timeout_s=asked.timeout_s,
+            )
+            for offset, frame in enumerate(frames)
+        )
 
     def assignment_key(self, epoch: int, position: int) -> tuple[bool, str]:
         """Return the named assignment group or a unique key for an unnamed
@@ -262,13 +280,14 @@ class InstrumentRequest:
             # Omit the request to collect no frames.
             raise ValueError(
                 f"{where}: request '{self.id}' takes {asked.count} "
-                f"acquisition(s); drop the request instead")
+                f"acquisition(s); drop the request instead"
+            )
 
         # Bias frames permit zero integration time.
         if asked.integration_time_s < 0:
             raise ValueError(
-                f"{where}: request '{self.id}' integrates for "
-                f"{asked.integration_time_s} seconds")
+                f"{where}: request '{self.id}' integrates for {asked.integration_time_s} seconds"
+            )
 
 
 @dataclass(frozen=True)
@@ -341,6 +360,9 @@ commands.
 """
 
 
+type Members = tuple[tuple[InstrumentRequest, RequestEpoch], ...]
+
+
 def pack(intent: CollectIntent, sensor: BoundSensor) -> BoundCollect:
     """Choose instruments, route commands and split incompatible
     configuration epochs.
@@ -365,28 +387,34 @@ def pack(intent: CollectIntent, sensor: BoundSensor) -> BoundCollect:
     packed: list[BoundEpoch] = []
 
     for index, epoch in enumerate(intent.epochs):
-        packed += _packed(epoch, index, sensor, groups, chosen, load, frames,
-                          ordinals)
+        packed += _packed(epoch, index, sensor, groups, chosen, load, frames, ordinals)
 
-    participants = tuple(dict.fromkeys(unit.target for epoch in packed
-                                       for unit in epoch.units))
+    participants = tuple(dict.fromkeys(unit.target for epoch in packed for unit in epoch.units))
 
     return BoundCollect(
-        name=intent.name, epochs=tuple(packed),
-        prepare=tuple(routed for r in intent.prepare
-                      for routed in r.resolve(participants, sensor)),
-        cleanup=tuple(routed for r in intent.cleanup
-                      for routed in r.resolve(participants, sensor)),
+        name=intent.name,
+        epochs=tuple(packed),
+        prepare=tuple(
+            routed for r in intent.prepare for routed in r.resolve(participants, sensor)
+        ),
+        cleanup=tuple(
+            routed for r in intent.cleanup for routed in r.resolve(participants, sensor)
+        ),
         cleanup_timeout_s=intent.cleanup_timeout_s,
-        fail_fast=intent.fail_fast)
+        fail_fast=intent.fail_fast,
+    )
 
 
-def _packed(epoch: RequestEpoch, index: int, sensor: BoundSensor,
-            groups: Mapping[tuple[bool, str],
-                            tuple[tuple[InstrumentRequest, RequestEpoch], ...]],
-            chosen: dict[tuple[bool, str], tuple[Placement, ...]],
-            load: dict[Placement, float], frames: dict[Placement, int],
-            ordinals: dict[tuple[str, Placement], int]) -> list[BoundEpoch]:
+def _packed(
+    epoch: RequestEpoch,
+    index: int,
+    sensor: BoundSensor,
+    groups: Mapping[tuple[bool, str], Members],
+    chosen: dict[tuple[bool, str], tuple[Placement, ...]],
+    load: dict[Placement, float],
+    frames: dict[Placement, int],
+    ordinals: dict[tuple[str, Placement], int],
+) -> list[BoundEpoch]:
     """Pack one authored epoch into compatible child epochs without crossing
     its boundary.
     """
@@ -395,13 +423,15 @@ def _packed(epoch: RequestEpoch, index: int, sensor: BoundSensor,
 
     for position, request in enumerate(epoch.units):
         key = request.assignment_key(index, position)
-        options = ((chosen[key],) if key in chosen
-                   else _options(groups[key], sensor, load, where))
+        options = (chosen[key],) if key in chosen else _options(groups[key], sensor, load, where)
         targets = next(
-            (option for option in options
-             if _fits([*children[-1], (request, option)], epoch, sensor,
-                      where)),
-            None)
+            (
+                option
+                for option in options
+                if _fits([*children[-1], (request, option)], epoch, sensor, where)
+            ),
+            None,
+        )
 
         if targets is None:
             children.append([])
@@ -412,14 +442,16 @@ def _packed(epoch: RequestEpoch, index: int, sensor: BoundSensor,
         _bind(chosen, load, key, targets, groups[key])
         children[-1].append((request, targets))
 
-    return [_child(child, epoch, sensor, where, frames, ordinals)
-            for child in children if child]
+    return [_child(child, epoch, sensor, where, frames, ordinals) for child in children if child]
 
 
-def _bind(chosen: dict[tuple[bool, str], tuple[Placement, ...]],
-          load: dict[Placement, float], key: tuple[bool, str],
-          targets: tuple[Placement, ...],
-          members: tuple[tuple[InstrumentRequest, RequestEpoch], ...]) -> None:
+def _bind(
+    chosen: dict[tuple[bool, str], tuple[Placement, ...]],
+    load: dict[Placement, float],
+    key: tuple[bool, str],
+    targets: tuple[Placement, ...],
+    members: Members,
+) -> None:
     """Record a group's first assignment and charge its full duration to
     each target.
     """
@@ -432,10 +464,14 @@ def _bind(chosen: dict[tuple[bool, str], tuple[Placement, ...]],
         load[target] = load.get(target, 0.0) + _duration(members)
 
 
-def _child(assigned: list[tuple[InstrumentRequest, tuple[Placement, ...]]],
-           epoch: RequestEpoch, sensor: BoundSensor, where: str,
-           frames: dict[Placement, int],
-           ordinals: dict[tuple[str, Placement], int]) -> BoundEpoch:
+def _child(
+    assigned: list[tuple[InstrumentRequest, tuple[Placement, ...]]],
+    epoch: RequestEpoch,
+    sensor: BoundSensor,
+    where: str,
+    frames: dict[Placement, int],
+    ordinals: dict[tuple[str, Placement], int],
+) -> BoundEpoch:
     """Expand assigned requests and route the child epoch's settings.
 
     Frame numbers continue per instrument across the collect. Ordinals continue
@@ -460,12 +496,17 @@ def _child(assigned: list[tuple[InstrumentRequest, tuple[Placement, ...]]],
 
             units += request.expand(target, frame, ordinal)
 
-    return BoundEpoch(units=tuple(units), align=epoch.align,
-                      settings=_resolved(assigned, epoch, sensor, where))
+    return BoundEpoch(
+        units=tuple(units), align=epoch.align, settings=_resolved(assigned, epoch, sensor, where)
+    )
 
 
-def _fits(assigned: list[tuple[InstrumentRequest, tuple[Placement, ...]]],
-          epoch: RequestEpoch, sensor: BoundSensor, where: str) -> bool:
+def _fits(
+    assigned: list[tuple[InstrumentRequest, tuple[Placement, ...]]],
+    epoch: RequestEpoch,
+    sensor: BoundSensor,
+    where: str,
+) -> bool:
     """Test whether assigned requests can share an epoch.
 
     Return false only for `PackingConflict`; other planning errors propagate.
@@ -478,9 +519,12 @@ def _fits(assigned: list[tuple[InstrumentRequest, tuple[Placement, ...]]],
     return True
 
 
-def _resolved(assigned: list[tuple[InstrumentRequest, tuple[Placement, ...]]],
-              epoch: RequestEpoch, sensor: BoundSensor,
-              where: str) -> tuple[RoutedCommand, ...]:
+def _resolved(
+    assigned: list[tuple[InstrumentRequest, tuple[Placement, ...]]],
+    epoch: RequestEpoch,
+    sensor: BoundSensor,
+    where: str,
+) -> tuple[RoutedCommand, ...]:
     """Route and merge epoch settings and each request's instrument
     settings.
 
@@ -490,8 +534,7 @@ def _resolved(assigned: list[tuple[InstrumentRequest, tuple[Placement, ...]]],
         ValueError: Timeouts disagree, a setting overrides a derived selector
             position, or routing fails.
     """
-    participants = tuple(dict.fromkeys(p for _, targets in assigned
-                                       for p in targets))
+    participants = tuple(dict.fromkeys(p for _, targets in assigned for p in targets))
     _exclusive(participants, sensor, where)
     held: dict[tuple[Placement, type], tuple[RoutedCommand, str]] = {}
 
@@ -509,8 +552,12 @@ def _resolved(assigned: list[tuple[InstrumentRequest, tuple[Placement, ...]]],
     return tuple(routed for routed, _ in held.values())
 
 
-def _put(held: dict[tuple[Placement, type], tuple[RoutedCommand, str]],
-         routed: RoutedCommand, origin: str, where: str) -> None:
+def _put(
+    held: dict[tuple[Placement, type], tuple[RoutedCommand, str]],
+    routed: RoutedCommand,
+    origin: str,
+    where: str,
+) -> None:
     """Merge a setting by placement and command type, requiring equal
     requests.
 
@@ -531,41 +578,50 @@ def _put(held: dict[tuple[Placement, type], tuple[RoutedCommand, str]],
             f"{where}: '{routed.target.device}' is asked for "
             f"{format_command(routed.command)} by {origin} and for "
             f"{format_command(seen[0].command)} by {seen[1]}; a device holds "
-            f"one value per epoch")
+            f"one value per epoch"
+        )
 
     if seen[0].timeout_s != routed.timeout_s:
         raise ValueError(
             f"{where}: {origin} and {seen[1]} ask '{routed.target.device}' for "
             f"{format_command(routed.command)} under deadlines of "
             f"{routed.timeout_s} and {seen[0].timeout_s} seconds; nothing here "
-            f"chooses between them")
+            f"chooses between them"
+        )
 
 
-def _positioned(held: Mapping[tuple[Placement, type],
-                              tuple[RoutedCommand, str]],
-                participants: tuple[Placement, ...], sensor: BoundSensor,
-                where: str) -> None:
+def _positioned(
+    held: Mapping[tuple[Placement, type], tuple[RoutedCommand, str]],
+    participants: tuple[Placement, ...],
+    sensor: BoundSensor,
+    where: str,
+) -> None:
     """Reject authored settings on selectors already positioned by
     participants.
 
     Raises:
         ValueError: A setting targets a selector on a participating port path.
     """
-    positioned = {selector for participant in participants
-                  for selector, _ in
-                  sensor.topology.selector_states(participant)}
-    commanded = sorted({target.device for target, _ in held
-                        if target in positioned})
+    positioned = {
+        selector
+        for participant in participants
+        for selector, _ in sensor.topology.selector_states(participant)
+    }
+    commanded = sorted({target.device for target, _ in held if target in positioned})
 
     if commanded:
         raise ValueError(
             f"{where}: selector positions follow from the participants; do not "
-            f"command {', '.join(repr(device) for device in commanded)}")
+            f"command {', '.join(repr(device) for device in commanded)}"
+        )
 
 
-def _options(members: tuple[tuple[InstrumentRequest, RequestEpoch], ...],
-             sensor: BoundSensor, load: Mapping[Placement, float],
-             where: str) -> tuple[tuple[Placement, ...], ...]:
+def _options(
+    members: Members,
+    sensor: BoundSensor,
+    load: Mapping[Placement, float],
+    where: str,
+) -> tuple[tuple[Placement, ...], ...]:
     """Rank an assignment group's eligible instrument sets.
 
     Fan-out has one option containing every eligible instrument. Single-target
@@ -577,15 +633,12 @@ def _options(members: tuple[tuple[InstrumentRequest, RequestEpoch], ...],
     if first.acquisition.distribute == "each":
         return (eligible,)
 
-    ranked = sorted(eligible,
-                    key=lambda p: (-_preferred(members, p, sensor),
-                                   load.get(p, 0.0)))
+    ranked = sorted(eligible, key=lambda p: (-_preferred(members, p, sensor), load.get(p, 0.0)))
 
     return tuple((placement,) for placement in ranked)
 
 
-def _eligible(members: tuple[tuple[InstrumentRequest, RequestEpoch], ...],
-              sensor: BoundSensor, where: str) -> tuple[Placement, ...]:
+def _eligible(members: Members, sensor: BoundSensor, where: str) -> tuple[Placement, ...]:
     """Find instruments satisfying every segment and routing all group
     settings.
 
@@ -597,13 +650,14 @@ def _eligible(members: tuple[tuple[InstrumentRequest, RequestEpoch], ...],
         ValueError: No instrument meets selection and requirements, or routing
             fails structurally on an admitted instrument.
     """
-    admitted = tuple(placement for placement in sensor.topology.instruments()
-                     if all(_admits(member, placement, sensor)
-                            for member, _ in members))
+    admitted = tuple(
+        placement
+        for placement in sensor.topology.instruments()
+        if all(_admits(member, placement, sensor) for member, _ in members)
+    )
 
     if not admitted:
-        raise ValueError(
-            f"{where}: no instrument satisfies {_asked(members)}")
+        raise ValueError(f"{where}: no instrument satisfies {_asked(members)}")
 
     refused: SettingUnsatisfiable | None = None
     settled: list[Placement] = []
@@ -622,8 +676,11 @@ def _eligible(members: tuple[tuple[InstrumentRequest, RequestEpoch], ...],
     return tuple(settled)
 
 
-def _establishes(members: tuple[tuple[InstrumentRequest, RequestEpoch], ...],
-                 placement: Placement, sensor: BoundSensor) -> None:
+def _establishes(
+    members: Members,
+    placement: Placement,
+    sensor: BoundSensor,
+) -> None:
     """Check all segment and epoch settings against one instrument's chain.
 
     Packing checks compatibility with other participants separately.
@@ -637,35 +694,36 @@ def _establishes(members: tuple[tuple[InstrumentRequest, RequestEpoch], ...],
             setting.resolve((placement,), sensor)
 
 
-def _admits(request: InstrumentRequest, placement: Placement,
-            sensor: BoundSensor) -> bool:
+def _admits(request: InstrumentRequest, placement: Placement, sensor: BoundSensor) -> bool:
     """Test instrument selection at the placement and requirements over its
     chain.
     """
-    if request.select is not None and not request.select.matches(placement,
-                                                                 sensor):
+    if request.select is not None and not request.select.matches(placement, sensor):
         return False
 
     chain = sensor.topology.chain(placement)
 
-    return all(requirement.reaches(chain, sensor)
-               for requirement in request.requires)
+    return all(requirement.reaches(chain, sensor) for requirement in request.requires)
 
 
-def _preferred(members: tuple[tuple[InstrumentRequest, RequestEpoch], ...],
-               placement: Placement, sensor: BoundSensor) -> int:
+def _preferred(
+    members: Members,
+    placement: Placement,
+    sensor: BoundSensor,
+) -> int:
     """Count satisfied chain preferences across every segment of an
     assignment group.
     """
     chain = sensor.topology.chain(placement)
 
-    return sum(preference.reaches(chain, sensor)
-               for member, _ in members for preference in member.prefers)
+    return sum(
+        preference.reaches(chain, sensor) for member, _ in members for preference in member.prefers
+    )
 
 
-def _grouped(intent: CollectIntent
-             ) -> dict[tuple[bool, str],
-                       tuple[tuple[InstrumentRequest, RequestEpoch], ...]]:
+def _grouped(
+    intent: CollectIntent,
+) -> dict[tuple[bool, str], Members]:
     """Validate requests and group them with their containing authored
     epochs.
 
@@ -673,36 +731,33 @@ def _grouped(intent: CollectIntent
         ValueError: A request has invalid count or integration, or a named
             group mixes distribution modes.
     """
-    groups: dict[tuple[bool, str],
-                 list[tuple[InstrumentRequest, RequestEpoch]]] = {}
+    groups: dict[tuple[bool, str], list[tuple[InstrumentRequest, RequestEpoch]]] = {}
 
     for index, epoch in enumerate(intent.epochs):
         for position, request in enumerate(epoch.units):
             request.check(f"epoch {index}")
-            groups.setdefault(request.assignment_key(index, position),
-                              []).append((request, epoch))
+            groups.setdefault(request.assignment_key(index, position), []).append((request, epoch))
 
     for (named, name), members in groups.items():
-        if named and len({m.acquisition.distribute
-                          for m, _ in members}) > 1:
+        if named and len({m.acquisition.distribute for m, _ in members}) > 1:
             raise ValueError(
                 f"assignment '{name}' mixes distribute values; every "
-                f"segment of one request takes the same instruments")
+                f"segment of one request takes the same instruments"
+            )
 
     return {key: tuple(members) for key, members in groups.items()}
 
 
-def _duration(members: tuple[tuple[InstrumentRequest, RequestEpoch], ...]
-              ) -> float:
+def _duration(members: Members) -> float:
     """Sum group integration time for load ranking, excluding readout and
     overhead.
     """
-    return sum(member.acquisition.integration_time_s * member.acquisition.count
-               for member, _ in members)
+    return sum(
+        member.acquisition.integration_time_s * member.acquisition.count for member, _ in members
+    )
 
 
-def _exclusive(participants: tuple[Placement, ...], sensor: BoundSensor,
-               where: str) -> None:
+def _exclusive(participants: tuple[Placement, ...], sensor: BoundSensor, where: str) -> None:
     """Reject participants requiring different ports of one selector.
 
     Raises:
@@ -714,18 +769,22 @@ def _exclusive(participants: tuple[Placement, ...], sensor: BoundSensor,
         if selector is not None:
             raise PackingConflict(
                 f"{where}: '{a.device}' and '{b.device}' are on different "
-                f"ports of selector '{selector.device}'")
+                f"ports of selector '{selector.device}'"
+            )
 
 
-def _asked(members: tuple[tuple[InstrumentRequest, RequestEpoch], ...]) -> str:
+def _asked(members: Members) -> str:
     """Format unique request ids in a group for diagnostics."""
     return ", ".join(sorted({f"'{member.id}'" for member, _ in members}))
 
 
-def compile_collect(collect: BoundCollect, sensor: BoundSensor, *,
-                    deadlines: tuple[DeadlineRule, ...] = (),
-                    rules: tuple[OperatorRule, ...] = ()
-                    ) -> ExecutableWorkflow:
+def compile_collect(
+    collect: BoundCollect,
+    sensor: BoundSensor,
+    *,
+    deadlines: tuple[DeadlineRule, ...] = (),
+    rules: tuple[OperatorRule, ...] = (),
+) -> ExecutableWorkflow:
     """Compile a bound collect into executable graphs without contacting
     devices.
 
@@ -736,8 +795,7 @@ def compile_collect(collect: BoundCollect, sensor: BoundSensor, *,
         ValueError: Bound settings or participants conflict, commands are
             unsupported, or shared lowering rejects the workflow.
     """
-    return CollectCompiler(collect, sensor, deadlines=deadlines,
-                           rules=rules).run()
+    return CollectCompiler(collect, sensor, deadlines=deadlines, rules=rules).run()
 
 
 class CollectCompiler:
@@ -748,9 +806,14 @@ class CollectCompiler:
     omissions, deadlines, operator rules and graph construction.
     """
 
-    def __init__(self, collect: BoundCollect, sensor: BoundSensor, *,
-                 deadlines: tuple[DeadlineRule, ...] = (),
-                 rules: tuple[OperatorRule, ...] = ()):
+    def __init__(
+        self,
+        collect: BoundCollect,
+        sensor: BoundSensor,
+        *,
+        deadlines: tuple[DeadlineRule, ...] = (),
+        rules: tuple[OperatorRule, ...] = (),
+    ):
         self.collect = collect
         self.sensor = sensor
         self.topology = sensor.topology
@@ -758,8 +821,9 @@ class CollectCompiler:
         self.rules = rules
         self.steps: list[PlannedStep] = []
         # Governing command and its step, keyed by placement and command type.
-        self.governing: dict[tuple[Placement, type[DeviceCommand]],
-                             tuple[StepName, RoutedCommand]] = {}
+        self.governing: dict[
+            tuple[Placement, type[DeviceCommand]], tuple[StepName, RoutedCommand]
+        ] = {}
         self.latest: dict[Placement, StepName] = {}
         self.last_unit: dict[Placement, StepName] = {}
         self.prepared: list[tuple[Placement, StepName]] = []
@@ -778,10 +842,15 @@ class CollectCompiler:
 
         cleanup = (self._cleanup(),) if self.collect.cleanup else ()
 
-        return lower(self.collect.name, tuple(self.steps), self.sensor,
-                     provenance=self.sensor.capabilities.provenance,
-                     cleanup=cleanup, deadlines=self.deadlines,
-                     rules=self.rules)
+        return lower(
+            self.collect.name,
+            tuple(self.steps),
+            self.sensor,
+            provenance=self.sensor.capabilities.provenance,
+            cleanup=cleanup,
+            deadlines=self.deadlines,
+            rules=self.rules,
+        )
 
     def _compile_epoch(self, epoch: BoundEpoch, index: int) -> None:
         """Emit changed settings and each instrument's acquisition block."""
@@ -791,8 +860,7 @@ class CollectCompiler:
 
         for routed in (*self._ports(participants), *epoch.settings):
             if not self._in_force(routed):
-                self._setting(routed, where,
-                              (index, routed.command.model_tag()))
+                self._setting(routed, where, (index, routed.command.model_tag()))
 
         blocks: dict[Placement, list[PlannedAcquisition]] = {}
 
@@ -804,22 +872,28 @@ class CollectCompiler:
 
         for instrument, units in blocks.items():
             hard, soft = needs[instrument]
-            self._emit_units(units, index, hard,
-                             soft if aligned is None else (*soft, aligned),
-                             offsets[instrument])
+            self._emit_units(
+                units,
+                index,
+                hard,
+                soft if aligned is None else (*soft, aligned),
+                offsets[instrument],
+            )
 
-    def _ports(self, participants: tuple[Placement, ...]
-               ) -> tuple[RoutedCommand, ...]:
+    def _ports(self, participants: tuple[Placement, ...]) -> tuple[RoutedCommand, ...]:
         """Derive distinct selector-position commands from participant port
         paths.
         """
         states = dict.fromkeys(
-            state for participant in participants
-            for state in self.topology.selector_states(participant))
+            state
+            for participant in participants
+            for state in self.topology.selector_states(participant)
+        )
 
-        return tuple(RoutedCommand(target=selector,
-                                   command=SelectPort(port=port))
-                     for selector, port in states)
+        return tuple(
+            RoutedCommand(target=selector, command=SelectPort(port=port))
+            for selector, port in states
+        )
 
     def _in_force(self, routed: RoutedCommand) -> bool:
         """Test whether an equal command and authored timeout already govern
@@ -833,8 +907,7 @@ class CollectCompiler:
 
         return held is not None and held[1] == routed
 
-    def _setting(self, routed: RoutedCommand, group: str,
-                 path: tuple[str | int, ...]) -> StepName:
+    def _setting(self, routed: RoutedCommand, group: str, path: tuple[str | int, ...]) -> StepName:
         """Emit a governing setting after preceding readers and device work
         complete.
 
@@ -842,24 +915,30 @@ class CollectCompiler:
         success.
         """
         target = routed.target
-        waits = [self.last_unit[reader]
-                 for reader in self.topology.readers_of(target)
-                 if reader in self.last_unit]
+        waits = [
+            self.last_unit[reader]
+            for reader in self.topology.readers_of(target)
+            if reader in self.last_unit
+        ]
 
         if target in self.latest:
             waits.append(self.latest[target])
 
-        step = self._planned(group, path, target=target,
-                             command=routed.command, timeout_s=routed.timeout_s,
-                             deps=Dependency.completion(waits))
+        step = self._planned(
+            group,
+            path,
+            target=target,
+            command=routed.command,
+            timeout_s=routed.timeout_s,
+            deps=Dependency.completion(waits),
+        )
         self.steps.append(step)
         self.governing[routed.governs] = (step.name, routed)
         self.latest[target] = step.name
 
         return step.name
 
-    def _needs(self, instrument: Placement
-               ) -> tuple[tuple[StepName, ...], tuple[StepName, ...]]:
+    def _needs(self, instrument: Placement) -> tuple[tuple[StepName, ...], tuple[StepName, ...]]:
         """Return required successes and completion waits for an
         instrument's next block.
 
@@ -868,20 +947,19 @@ class CollectCompiler:
         later settings replace its governing state.
         """
         chain = frozenset(self.topology.chain(instrument))
-        hard = [name for (placement, _), (name, _) in self.governing.items()
-                if placement in chain]
-        hard += [name for placement, name in self.prepared
-                 if placement in chain]
-        soft = ((self.last_unit[instrument],) if instrument in self.last_unit
-                else ())
+        hard = [name for (placement, _), (name, _) in self.governing.items() if placement in chain]
+        hard += [name for placement, name in self.prepared if placement in chain]
+        soft = (self.last_unit[instrument],) if instrument in self.last_unit else ()
 
         return tuple(dict.fromkeys(hard)), soft
 
-    def _align(self, epoch: BoundEpoch,
-               blocks: Mapping[Placement, list[PlannedAcquisition]],
-               needs: Mapping[Placement, tuple[tuple[StepName, ...],
-                                               tuple[StepName, ...]]],
-               index: int) -> tuple[StepName | None, dict[Placement, float]]:
+    def _align(
+        self,
+        epoch: BoundEpoch,
+        blocks: Mapping[Placement, list[PlannedAcquisition]],
+        needs: Mapping[Placement, tuple[tuple[StepName, ...], tuple[StepName, ...]]],
+        index: int,
+    ) -> tuple[StepName | None, dict[Placement, float]]:
         """Build a common readiness point and offsets for estimated block
         midpoints.
 
@@ -894,20 +972,29 @@ class CollectCompiler:
             return None, dict.fromkeys(blocks, 0.0)
 
         waits = [name for hard, soft in needs.values() for name in (*hard, *soft)]
-        step = self._planned(f"epoch {index}", (index, "align"),
-                             deps=Dependency.completion(dict.fromkeys(waits)),
-                             reason=f"align midpoints of epoch {index}")
+        step = self._planned(
+            f"epoch {index}",
+            (index, "align"),
+            deps=Dependency.completion(dict.fromkeys(waits)),
+            reason=f"align midpoints of epoch {index}",
+        )
         self.steps.append(step)
-        spans = {instrument: sum(unit.estimated_duration_s for unit in units)
-                 for instrument, units in blocks.items()}
+        spans = {
+            instrument: sum(unit.estimated_duration_s for unit in units)
+            for instrument, units in blocks.items()
+        }
         longest = max(spans.values())
 
-        return step.name, {instrument: (longest - span) / 2
-                           for instrument, span in spans.items()}
+        return step.name, {instrument: (longest - span) / 2 for instrument, span in spans.items()}
 
-    def _emit_units(self, units: list[PlannedAcquisition], index: int,
-                    hard: tuple[StepName, ...], soft: tuple[StepName, ...],
-                    delay_s: float) -> None:
+    def _emit_units(
+        self,
+        units: list[PlannedAcquisition],
+        index: int,
+        hard: tuple[StepName, ...],
+        soft: tuple[StepName, ...],
+        delay_s: float,
+    ) -> None:
         """Emit one instrument's acquisition block with serial completion
         dependencies.
 
@@ -922,11 +1009,13 @@ class CollectCompiler:
             step = self._planned(
                 f"epoch {index}",
                 (index, acquisition.request, acquisition.frame_number),
-                target=unit.target, command=unit.command,
-                timeout_s=unit.timeout_s, acquisition=acquisition,
+                target=unit.target,
+                command=unit.command,
+                timeout_s=unit.timeout_s,
+                acquisition=acquisition,
                 delay_s=delay_s if previous is None else 0.0,
-                deps=(*(Dependency(on=name) for name in hard),
-                      *Dependency.completion(follows)))
+                deps=(*(Dependency(on=name) for name in hard), *Dependency.completion(follows)),
+            )
             self.steps.append(step)
             previous = step.name
 
@@ -947,33 +1036,45 @@ class CollectCompiler:
         for position, routed in enumerate(self.collect.cleanup):
             target = routed.target
             step = self._planned(
-                "cleanup", ("cleanup", position), target=target,
-                command=routed.command, timeout_s=routed.timeout_s,
-                deps=Dependency.completion(
-                    (latest[target],) if target in latest else ()),
-                fail_fast=False)
+                "cleanup",
+                ("cleanup", position),
+                target=target,
+                command=routed.command,
+                timeout_s=routed.timeout_s,
+                deps=Dependency.completion((latest[target],) if target in latest else ()),
+                fail_fast=False,
+            )
             steps.append(step)
             latest[target] = step.name
 
-        armed_by = (tuple(name for _, name in self.prepared)
-                    if self.collect.prepare else
-                    tuple(step.name for step in self.steps
-                          if step.command is not None))
+        armed_by = (
+            tuple(name for _, name in self.prepared)
+            if self.collect.prepare
+            else tuple(step.name for step in self.steps if step.command is not None)
+        )
 
         return CleanupPlan(
             steps=tuple(steps),
             origin=Origin(source=self.collect.name, path=("cleanup",)),
-            when="always", timeout_s=self.collect.cleanup_timeout_s,
-            armed_by=armed_by)
+            when="always",
+            timeout_s=self.collect.cleanup_timeout_s,
+            armed_by=armed_by,
+        )
 
-    def _planned(self, group: str, path: tuple[str | int, ...], *,
-                 target: Placement | None = None,
-                 command: DeviceCommand | None = None,
-                 deps: tuple[Dependency, ...] = (),
-                 timeout_s: float | None = None,
-                 acquisition: Acquisition | None = None, delay_s: float = 0.0,
-                 reason: str = "", fail_fast: bool | None = None
-                 ) -> PlannedStep:
+    def _planned(
+        self,
+        group: str,
+        path: tuple[str | int, ...],
+        *,
+        target: Placement | None = None,
+        command: DeviceCommand | None = None,
+        deps: tuple[Dependency, ...] = (),
+        timeout_s: float | None = None,
+        acquisition: Acquisition | None = None,
+        delay_s: float = 0.0,
+        reason: str = "",
+        fail_fast: bool | None = None,
+    ) -> PlannedStep:
         """Build a uniquely named step, inheriting collect failure policy
         unless overridden.
         """
@@ -983,13 +1084,20 @@ class CollectCompiler:
         return PlannedStep(
             name=f"{group}/{where}/{self.emitted}",
             origin=Origin(source=self.collect.name, path=path, reason=reason),
-            group=group, target=target, command=command, deps=deps,
+            group=group,
+            target=target,
+            command=command,
+            deps=deps,
             fail_fast=self.collect.fail_fast if fail_fast is None else fail_fast,
-            timeout_s=timeout_s, acquisition=acquisition, delay_s=delay_s)
+            timeout_s=timeout_s,
+            acquisition=acquisition,
+            delay_s=delay_s,
+        )
 
 
-def _consistent(epoch: BoundEpoch, participants: tuple[Placement, ...],
-                sensor: BoundSensor, where: str) -> None:
+def _consistent(
+    epoch: BoundEpoch, participants: tuple[Placement, ...], sensor: BoundSensor, where: str
+) -> None:
     """Check bound-epoch compatibility, including for manually built
     collects.
 

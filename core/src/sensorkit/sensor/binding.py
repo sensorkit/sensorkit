@@ -62,8 +62,10 @@ class CapabilitySnapshot:
         source = self.source or "an unnamed source"
         covered = ", ".join(f"'{device}'" for device, _ in self.devices)
 
-        return (f"capabilities of {covered or 'no device'} from {source}, "
-                f"taken {self.taken.isoformat()}")
+        return (
+            f"capabilities of {covered or 'no device'} from {source}, "
+            f"taken {self.taken.isoformat()}"
+        )
 
 
 @dataclass(frozen=True)
@@ -98,9 +100,9 @@ class BoundSensor:
         }
 
     @classmethod
-    def bind(cls, topology: Topology,
-             capabilities: CapabilitySnapshot) -> tuple[BoundSensor,
-                                                        BindingReport]:
+    def bind(
+        cls, topology: Topology, capabilities: CapabilitySnapshot
+    ) -> tuple[BoundSensor, BindingReport]:
         """Check device reports and trait assertions, then return a sensor
         and report.
 
@@ -112,23 +114,23 @@ class BoundSensor:
                 is unregistered or not satisfied by its device.
         """
         reported = dict(capabilities.devices)
-        silent = tuple(p for p in topology.placements()
-                       if p.device not in reported)
+        silent = tuple(p for p in topology.placements() if p.device not in reported)
 
         if silent:
             raise ValueError(
                 "the structure names devices that reported nothing: "
-                + ", ".join(f"'{p.device}' at '{format_path(p.path, "<root>")}'" for p in silent))
+                + ", ".join(f"'{p.device}' at '{format_path(p.path, '<root>')}'" for p in silent)
+            )
 
         sensor = cls(topology, capabilities)
-        unmet = tuple(f"'{p.device}' at '{format_path(p.path, "<root>")}' {reason}"
-                      for p in topology.placements()
-                      for reason in _unmet(topology.record(p),
-                                           sensor.traits(p)))
+        unmet = tuple(
+            f"'{p.device}' at '{format_path(p.path, '<root>')}' {reason}"
+            for p in topology.placements()
+            for reason in _unmet(topology.record(p), sensor.traits(p))
+        )
 
         if unmet:
-            raise ValueError("declared traits were not established: "
-                             + ", ".join(unmet))
+            raise ValueError("declared traits were not established: " + ", ".join(unmet))
 
         return sensor, BindingReport(established=tuple(sensor._established()))
 
@@ -158,8 +160,7 @@ class BoundSensor:
         """Return grouping tags from the authored placement record."""
         return frozenset(self.topology.record(placement).tags)
 
-    def kind(self, placement: Placement) -> Literal["device", "instrument",
-                                                    "selector"]:
+    def kind(self, placement: Placement) -> Literal["device", "instrument", "selector"]:
         """Return the placement record kind: device, instrument or selector."""
         match self.topology.record(placement):
             case Selector():
@@ -177,18 +178,25 @@ class BoundSensor:
 
         return isinstance(record, Device) and record.instrument
 
-    def supported_on(self, command: str,
-                     participants: tuple[Placement, ...]) -> bool:
+    def supported_on(self, command: str, participants: tuple[Placement, ...]) -> bool:
         """Test whether any device on the participating chains supports the
         command.
         """
-        return any(command in self.commands(placement.device)
-                   for placement in self._reachable(participants))
+        return any(
+            command in self.commands(placement.device)
+            for placement in self._reachable(participants)
+        )
 
-    def route(self, command: DeviceCommand, subject: Subject,
-              participants: tuple[Placement, ...], *,
-              select: Selection | None = None, scope: Scope = "any",
-              device: DeviceKey | None = None) -> tuple[RoutedCommand, ...]:
+    def route(
+        self,
+        command: DeviceCommand,
+        subject: Subject,
+        participants: tuple[Placement, ...],
+        *,
+        select: Selection | None = None,
+        scope: Scope = "any",
+        device: DeviceKey | None = None,
+    ) -> tuple[RoutedCommand, ...]:
         """Choose targets for a command and return one routed command per
         target.
 
@@ -208,14 +216,20 @@ class BoundSensor:
         """
         targets = dict.fromkeys(
             self._winner(command, subject, group, select, scope, device)
-            for group in partition(subject, participants))
+            for group in partition(subject, participants)
+        )
 
-        return tuple(RoutedCommand(target=target, command=command)
-                     for target in targets)
+        return tuple(RoutedCommand(target=target, command=command) for target in targets)
 
-    def _winner(self, command: DeviceCommand, subject: Subject,
-                participants: tuple[Placement, ...], select: Selection | None,
-                scope: Scope, device: DeviceKey | None) -> Placement:
+    def _winner(
+        self,
+        command: DeviceCommand,
+        subject: Subject,
+        participants: tuple[Placement, ...],
+        select: Selection | None,
+        scope: Scope,
+        device: DeviceKey | None,
+    ) -> Placement:
         """Choose one target for a participant group using filters and
         depth.
         """
@@ -226,32 +240,36 @@ class BoundSensor:
             reachable = self._named(device, reachable, named, participants)
 
         candidates = tuple(
-            p for p in reachable
+            p
+            for p in reachable
             if named in self.commands(p.device)
             and any(self._eligible(p, q, scope) for q in participants)
-            and (select is None or select.matches(p, self)))
+            and (select is None or select.matches(p, self))
+        )
 
         if not candidates:
             raise ValueError(
                 f"no device on {format_paths(participants)} supports '{named}'"
                 + ("" if scope == "any" else f" as a {scope} device")
-                + ("" if select is None else " and satisfies the selection"))
+                + ("" if select is None else " and satisfies the selection")
+            )
 
         if subject == "sensor":
             candidates = self._covering(candidates, participants, named)
 
-        best = (min if subject == "sensor" else max)(p.depth
-                                                      for p in candidates)
-        winners = sorted((p for p in candidates if p.depth == best),
-                         key=lambda p: (p.path, p.device))
+        best = (min if subject == "sensor" else max)(p.depth for p in candidates)
+        winners = sorted(
+            (p for p in candidates if p.depth == best), key=lambda p: (p.path, p.device)
+        )
 
         if len(winners) > 1:
             # Equal depths are ambiguous; require an explicit routing choice.
             raise ValueError(
                 f"'{named}' is supported by "
-                f"{", ".join(repr(p.device) for p in winners)} at the same "
+                f"{', '.join(repr(p.device) for p in winners)} at the same "
                 f"position on {format_paths(participants)}; name one with device, or "
-                f"set a scope")
+                f"set a scope"
+            )
 
         return winners[0]
 
@@ -261,20 +279,24 @@ class BoundSensor:
         """
         for placement in self.topology.placements():
             traits = sorted(self.traits(placement))
-            yield (f"'{placement.device}' at '{format_path(placement.path, "<root>")}' satisfies "
-                   f"{", ".join(traits) or 'no trait'}")
+            yield (
+                f"'{placement.device}' at '{format_path(placement.path, '<root>')}' satisfies "
+                f"{', '.join(traits) or 'no trait'}"
+            )
 
-    def _reachable(self, participants: tuple[Placement, ...]
-                   ) -> tuple[Placement, ...]:
+    def _reachable(self, participants: tuple[Placement, ...]) -> tuple[Placement, ...]:
         """Combine participant chains, retaining each placement on its first
         occurrence.
         """
-        return tuple(dict.fromkeys(p for q in participants
-                                   for p in self.topology.chain(q)))
+        return tuple(dict.fromkeys(p for q in participants for p in self.topology.chain(q)))
 
-    def _named(self, device: DeviceKey, reachable: tuple[Placement, ...],
-               named: str,
-               participants: tuple[Placement, ...]) -> tuple[Placement, ...]:
+    def _named(
+        self,
+        device: DeviceKey,
+        reachable: tuple[Placement, ...],
+        named: str,
+        participants: tuple[Placement, ...],
+    ) -> tuple[Placement, ...]:
         """Restrict reachable placements to an explicitly named device.
 
         Raises:
@@ -292,8 +314,7 @@ class BoundSensor:
 
         return (placement,)
 
-    def _eligible(self, placement: Placement, participant: Placement,
-                  scope: Scope) -> bool:
+    def _eligible(self, placement: Placement, participant: Placement, scope: Scope) -> bool:
         """Test chain membership and scope for one participant.
 
         Private or shared status is relative to this participant's topology.
@@ -309,35 +330,37 @@ class BoundSensor:
 
         return True
 
-    def _covering(self, candidates: tuple[Placement, ...],
-                  participants: tuple[Placement, ...],
-                  named: str) -> tuple[Placement, ...]:
+    def _covering(
+        self, candidates: tuple[Placement, ...], participants: tuple[Placement, ...], named: str
+    ) -> tuple[Placement, ...]:
         """Keep only candidates present on every participant's chain.
 
         Raises:
             ValueError: No supporting candidate is common to all chains.
         """
-        common = tuple(p for p in candidates
-                       if all(p in self.topology.chain(q)
-                              for q in participants))
+        common = tuple(
+            p for p in candidates if all(p in self.topology.chain(q) for q in participants)
+        )
 
         if not common:
             raise ValueError(
                 f"'{named}' is supported on {format_paths(participants)}, but by no "
                 f"device every one of them looks through; a sensor-scope "
-                f"command lands on one device or on none")
+                f"command lands on one device or on none"
+            )
 
         return common
 
 
-def _unmet(record: Device | Selector,
-           established: frozenset[TraitKey]) -> tuple[str, ...]:
+def _unmet(record: Device | Selector, established: frozenset[TraitKey]) -> tuple[str, ...]:
     """Describe declared traits that binding could not establish.
 
     Distinguish unregistered names from registered traits the device lacks.
     """
     return tuple(
         f"declares trait '{name}', which is not registered"
-        if get_trait(name) is None else
-        f"declares trait '{name}', which its device does not satisfy"
-        for name in record.traits if name not in established)
+        if get_trait(name) is None
+        else f"declares trait '{name}', which its device does not satisfy"
+        for name in record.traits
+        if name not in established
+    )

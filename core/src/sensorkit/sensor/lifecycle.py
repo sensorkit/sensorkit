@@ -69,8 +69,7 @@ class Join(BaseModel, frozen=True, extra="forbid"):
             return v
 
         # Restore `on` after YAML 1.1 parses the key as boolean True.
-        return {("on" if key is True else key): value
-                for key, value in v.items()}
+        return {("on" if key is True else key): value for key, value in v.items()}
 
 
 class OpSpec(BaseModel, frozen=True, extra="forbid"):
@@ -138,8 +137,9 @@ class Entry(BaseModel, frozen=True, extra="forbid"):
     id: str | None = None
     require: Annotated[
         tuple[Join, ...],
-        BeforeValidator(_accept_bare_require,
-                        json_schema_input_type=Join | str | tuple[Join | str, ...]),
+        BeforeValidator(
+            _accept_bare_require, json_schema_input_type=Join | str | tuple[Join | str, ...]
+        ),
     ] = ()
 
     @model_validator(mode="after")
@@ -160,10 +160,9 @@ class Entry(BaseModel, frozen=True, extra="forbid"):
         """
         return tuple(
             placement
-            for placement in self.select.matching(sensor.topology.placements(),
-                                                  sensor)
-            if self.exclude is None
-            or not self.exclude.matches(placement, sensor))
+            for placement in self.select.matching(sensor.topology.placements(), sensor)
+            if self.exclude is None or not self.exclude.matches(placement, sensor)
+        )
 
 
 class Phase(BaseModel, frozen=True, extra="forbid"):
@@ -197,8 +196,7 @@ class CleanupSpec(BaseModel, frozen=True, extra="forbid"):
 
     name: str
     entries: tuple[Entry, ...]
-    when: Literal["always", "failure", "cancelled",
-                  "failure_or_cancelled"] = "always"
+    when: Literal["always", "failure", "cancelled", "failure_or_cancelled"] = "always"
     timeout_s: float = 60.0
     armed_by: tuple[str, ...] | None = None
 
@@ -255,8 +253,7 @@ class LifecycleWorkflow(BaseModel, frozen=True, extra="forbid"):
         ids = [entry.id for entry in rows if entry.id is not None]
 
         _unique(phases, "a phase is named twice")
-        _unique([spec.name for spec in self.cleanup],
-                "a cleanup is named twice")
+        _unique([spec.name for spec in self.cleanup], "a cleanup is named twice")
         _unique(ids, "an entry id is used twice")
         _disjoint(phases, ids)
         _acyclic(self._dependencies(set(phases) | set(ids), set(ids)))
@@ -264,8 +261,9 @@ class LifecycleWorkflow(BaseModel, frozen=True, extra="forbid"):
         for spec in self.cleanup:
             _check_cleanup(spec, set(ids))
 
-    def _dependencies(self, known: set[str], ids: set[str]
-                      ) -> dict[tuple[str, str], set[tuple[str, str]]]:
+    def _dependencies(
+        self, known: set[str], ids: set[str]
+    ) -> dict[tuple[str, str], set[tuple[str, str]]]:
         """Build symbolic phase and entry dependencies, validating
         references.
 
@@ -284,16 +282,18 @@ class LifecycleWorkflow(BaseModel, frozen=True, extra="forbid"):
             for position, entry in enumerate(phase.entries):
                 row = ("entry", entry.id or f"{phase.name}[{position}]")
                 deps[node].add(row)
-                deps[row] = ({("phase", name) for name in follows}
-                             | _required(entry, known, ids))
+                deps[row] = {("phase", name) for name in follows} | _required(entry, known, ids)
 
         return deps
 
 
-def compile_lifecycle(workflow: LifecycleWorkflow, sensor: BoundSensor, *,
-                      deadlines: tuple[DeadlineRule, ...] = (),
-                      rules: tuple[OperatorRule, ...] = ()
-                      ) -> ExecutableWorkflow:
+def compile_lifecycle(
+    workflow: LifecycleWorkflow,
+    sensor: BoundSensor,
+    *,
+    deadlines: tuple[DeadlineRule, ...] = (),
+    rules: tuple[OperatorRule, ...] = (),
+) -> ExecutableWorkflow:
     """Compile a lifecycle table against a bound sensor without device
     calls.
 
@@ -305,8 +305,7 @@ def compile_lifecycle(workflow: LifecycleWorkflow, sensor: BoundSensor, *,
             overlap or select nothing, joins match no operations, a required
             command is unsupported, or shared lowering rejects the workflow.
     """
-    return TableCompiler(workflow, sensor, deadlines=deadlines,
-                         rules=rules).run()
+    return TableCompiler(workflow, sensor, deadlines=deadlines, rules=rules).run()
 
 
 class TableCompiler:
@@ -317,9 +316,14 @@ class TableCompiler:
     frozen steps before shared lowering.
     """
 
-    def __init__(self, table: LifecycleWorkflow, sensor: BoundSensor, *,
-                 deadlines: tuple[DeadlineRule, ...] = (),
-                 rules: tuple[OperatorRule, ...] = ()):
+    def __init__(
+        self,
+        table: LifecycleWorkflow,
+        sensor: BoundSensor,
+        *,
+        deadlines: tuple[DeadlineRule, ...] = (),
+        rules: tuple[OperatorRule, ...] = (),
+    ):
         self.table = table
         self.sensor = sensor
         self.deadlines = deadlines
@@ -344,10 +348,15 @@ class TableCompiler:
         # Compile cleanup after all main-workflow trigger entries are indexed.
         plans = tuple(self._cleanup(spec) for spec in self.table.cleanup)
 
-        return lower(self.table.name, self._settled(self.steps), self.sensor,
-                     provenance=self.sensor.capabilities.provenance,
-                     cleanup=plans,
-                     deadlines=self.deadlines, rules=self.rules)
+        return lower(
+            self.table.name,
+            self._settled(self.steps),
+            self.sensor,
+            provenance=self.sensor.capabilities.provenance,
+            cleanup=plans,
+            deadlines=self.deadlines,
+            rules=self.rules,
+        )
 
     def _compile_phase(self, phase: Phase, previous: str | None) -> None:
         """Emit a phase and attach inherited and explicit dependencies."""
@@ -358,12 +367,15 @@ class TableCompiler:
 
         for position, entry in enumerate(phase.entries):
             emitted, entry_heads = self._emit_entry(
-                entry, chosen[position], self._soft_links(entry, after, where),
-                group=phase.name, origin=(phase.name, entry.id or position),
-                stated=phase.fail_fast)
+                entry,
+                chosen[position],
+                self._soft_links(entry, after, where),
+                group=phase.name,
+                origin=(phase.name, entry.id or position),
+                stated=phase.fail_fast,
+            )
             self.steps += emitted
-            heads += [(entry, placement, head)
-                      for placement, head in entry_heads]
+            heads += [(entry, placement, head) for placement, head in entry_heads]
             names = [step.name for step in emitted]
             self.phase_steps[phase.name] += names
 
@@ -372,8 +384,7 @@ class TableCompiler:
 
         self._resolve_requires(heads, where)
 
-    def _declare_phase(self, phase: Phase,
-                       previous: str | None) -> tuple[str, ...]:
+    def _declare_phase(self, phase: Phase, previous: str | None) -> tuple[str, ...]:
         """Register a phase and its entry ids before emitting operations.
 
         Registering peer ids first allows requirements to reference later
@@ -385,14 +396,14 @@ class TableCompiler:
         if phase.name in self.phase_steps:
             raise ValueError(f"duplicate phase name '{phase.name}'")
 
-        after = (phase.after if phase.after is not None
-                 else (previous,) if previous else ())
+        after = phase.after if phase.after is not None else (previous,) if previous else ()
         unknown = [name for name in after if name not in self.phase_steps]
 
         if unknown:
             raise ValueError(
                 f"phase '{phase.name}': after names unknown or later phase(s) "
-                f"{unknown}; phases may only follow earlier ones")
+                f"{unknown}; phases may only follow earlier ones"
+            )
 
         self.phase_after[phase.name] = after
         self.phase_steps[phase.name] = []
@@ -408,8 +419,7 @@ class TableCompiler:
 
         return after
 
-    def _selected(self, entries: tuple[Entry, ...],
-                  where: str) -> list[tuple[Placement, ...]]:
+    def _selected(self, entries: tuple[Entry, ...], where: str) -> list[tuple[Placement, ...]]:
         """Select targets for a group and check that entries do not overlap.
 
         Check selection before unsupported-command omission.
@@ -428,7 +438,8 @@ class TableCompiler:
                     raise ValueError(
                         f"{where}: '{placement.device}' is reached by two "
                         f"entries, {held.describe()} and {entry.describe()}; "
-                        f"narrow one with exclude")
+                        f"narrow one with exclude"
+                    )
 
         return chosen
 
@@ -442,13 +453,12 @@ class TableCompiler:
 
         if not targets:
             raise ValueError(
-                f"{where}: entry selects no device on this sensor "
-                f"({entry.describe()})")
+                f"{where}: entry selects no device on this sensor ({entry.describe()})"
+            )
 
         return targets
 
-    def _soft_links(self, entry: Entry, after: tuple[str, ...],
-                    where: str) -> list[StepName]:
+    def _soft_links(self, entry: Entry, after: tuple[str, ...], where: str) -> list[StepName]:
         """Collect inherited phase waits that explicit requirements do not
         replace.
 
@@ -458,12 +468,17 @@ class TableCompiler:
         Raises:
             ValueError: A requirement names an unknown or later phase or entry.
         """
-        shadowed = {self._declaring_phase(clause.name, where)
-                    for clause in entry.require} & set(after)
+        required = {self._declaring_phase(clause.name, where) for clause in entry.require}
+        shadowed = required & set(after)
 
-        return list(dict.fromkeys(
-            name for followed in after if followed not in shadowed
-            for name in self._effective_steps(followed)))
+        return list(
+            dict.fromkeys(
+                name
+                for followed in after
+                if followed not in shadowed
+                for name in self._effective_steps(followed)
+            )
+        )
 
     def _declaring_phase(self, target: str, where: str) -> str:
         """Return a target phase or the phase declaring a target entry.
@@ -477,8 +492,7 @@ class TableCompiler:
         if target in self.phase_after:
             return target
 
-        raise ValueError(
-            f"{where}: require names unknown or later phase/entry '{target}'")
+        raise ValueError(f"{where}: require names unknown or later phase/entry '{target}'")
 
     def _effective_steps(self, phase: str) -> list[StepName]:
         """Return a phase's steps, or recursively its predecessors when
@@ -489,15 +503,24 @@ class TableCompiler:
         if names:
             return names
 
-        return list(dict.fromkeys(
-            name for followed in self.phase_after[phase]
-            for name in self._effective_steps(followed)))
+        return list(
+            dict.fromkeys(
+                name
+                for followed in self.phase_after[phase]
+                for name in self._effective_steps(followed)
+            )
+        )
 
-    def _emit_entry(self, entry: Entry, targets: tuple[Placement, ...],
-                    soft: list[StepName], *, group: str,
-                    origin: tuple[str | int, ...], stated: bool | None
-                    ) -> tuple[list[PlannedStep],
-                               list[tuple[Placement, StepName]]]:
+    def _emit_entry(
+        self,
+        entry: Entry,
+        targets: tuple[Placement, ...],
+        soft: list[StepName],
+        *,
+        group: str,
+        origin: tuple[str | int, ...],
+        stated: bool | None,
+    ) -> tuple[list[PlannedStep], list[tuple[Placement, StepName]]]:
         """Emit serial commands per placement and return each placement's
         first step.
 
@@ -511,12 +534,14 @@ class TableCompiler:
             previous: StepName | None = None
 
             for index, spec in enumerate(entry.ops):
-                step = self._step(spec, placement, group=group,
-                                  origin=origin + (index,), stated=stated)
+                step = self._step(
+                    spec, placement, group=group, origin=origin + (index,), stated=stated
+                )
                 self.deps[step.name] = (
                     list(Dependency.completion(soft))
-                    if previous is None else
-                    [Dependency(on=previous, kind=spec.sequence)])
+                    if previous is None
+                    else [Dependency(on=previous, kind=spec.sequence)]
+                )
 
                 if previous is None:
                     heads.append((placement, step.name))
@@ -526,37 +551,52 @@ class TableCompiler:
 
         return steps, heads
 
-    def _step(self, spec: OpSpec, placement: Placement, *, group: str,
-              origin: tuple[str | int, ...],
-              stated: bool | None) -> PlannedStep:
+    def _step(
+        self,
+        spec: OpSpec,
+        placement: Placement,
+        *,
+        group: str,
+        origin: tuple[str | int, ...],
+        stated: bool | None,
+    ) -> PlannedStep:
         """Build a planned command with a unique internal name and resolved
         failure policy.
         """
         self.emitted += 1
         step = PlannedStep(
             name=f"{group}/{placement.device}/{self.emitted}",
-            origin=Origin(source=self.table.name, path=origin), group=group,
-            target=placement, command=spec.command, optional=spec.optional,
+            origin=Origin(source=self.table.name, path=origin),
+            group=group,
+            target=placement,
+            command=spec.command,
+            optional=spec.optional,
             fail_fast=spec.effective_fail_fast(stated, self.table.fail_fast),
-            unsupported=spec.unsupported, timeout_s=spec.timeout_s)
+            unsupported=spec.unsupported,
+            timeout_s=spec.timeout_s,
+        )
         self.where[step.name] = placement
 
         return step
 
-    def _resolve_requires(self, heads: list[tuple[Entry, Placement, StepName]],
-                          where: str) -> None:
+    def _resolve_requires(
+        self, heads: list[tuple[Entry, Placement, StepName]], where: str
+    ) -> None:
         """Resolve entry requirements after emitting the whole phase,
         including peers.
         """
         for entry, placement, head in heads:
             for clause in entry.require:
-                named = (self.entry_steps.get(clause.name, [])
-                         if clause.name in self.entry_phase
-                         else self._effective_steps(clause.name))
+                named = (
+                    self.entry_steps.get(clause.name, [])
+                    if clause.name in self.entry_phase
+                    else self._effective_steps(clause.name)
+                )
                 self._join(clause, named, placement, head, where)
 
-    def _join(self, clause: Join, named: list[StepName], placement: Placement,
-              head: StepName, where: str) -> None:
+    def _join(
+        self, clause: Join, named: list[StepName], placement: Placement, head: StepName, where: str
+    ) -> None:
         """Filter a requirement's target steps and attach dependencies to
         the entry head.
 
@@ -564,9 +604,7 @@ class TableCompiler:
             ValueError: The target has no steps or the join selects none.
         """
         if not named:
-            raise ValueError(
-                f"{where}: require '{clause.name}' matches no step on this "
-                f"sensor")
+            raise ValueError(f"{where}: require '{clause.name}' matches no step on this sensor")
 
         narrowed = self._narrowed(clause, named, placement)
 
@@ -574,21 +612,24 @@ class TableCompiler:
         if not narrowed:
             raise ValueError(
                 f"{where}: require '{clause.name}' with join='{clause.join}' "
-                f"matches no step for '{placement.device}'")
+                f"matches no step for '{placement.device}'"
+            )
 
-        self.deps[head] += [Dependency(on=name, kind=clause.on)
-                            for name in narrowed]
+        self.deps[head] += [Dependency(on=name, kind=clause.on) for name in narrowed]
 
-    def _narrowed(self, clause: Join, named: list[StepName],
-                  placement: Placement) -> list[StepName]:
+    def _narrowed(
+        self, clause: Join, named: list[StepName], placement: Placement
+    ) -> list[StepName]:
         """Filter target steps by the clause's device or path relationship."""
         match clause.join:
             case "same-device":
-                return [name for name in named
-                        if self.where[name].device == placement.device]
+                return [name for name in named if self.where[name].device == placement.device]
             case "same-chain":
-                return [name for name in named
-                        if placement.path[:len(self.where[name].path)] == self.where[name].path]
+                return [
+                    name
+                    for name in named
+                    if placement.path[: len(self.where[name].path)] == self.where[name].path
+                ]
 
         return named
 
@@ -610,28 +651,32 @@ class TableCompiler:
 
         for position, entry in enumerate(spec.entries):
             emitted, entry_heads = self._emit_entry(
-                entry, chosen[position], [], group=spec.name,
+                entry,
+                chosen[position],
+                [],
+                group=spec.name,
                 origin=("cleanup", spec.name, entry.id or position),
-                stated=None)
+                stated=None,
+            )
             steps += emitted
-            heads += [(entry, placement, head)
-                      for placement, head in entry_heads]
+            heads += [(entry, placement, head) for placement, head in entry_heads]
 
             if entry.id is not None:
                 declared[entry.id] += [step.name for step in emitted]
 
         for entry, placement, head in heads:
             for clause in entry.require:
-                self._join(clause, declared[clause.name], placement, head,
-                           where)
+                self._join(clause, declared[clause.name], placement, head, where)
 
         return CleanupPlan(
-            steps=self._settled(steps), origin=Origin(source=spec.name),
-            when=spec.when, timeout_s=spec.timeout_s,
-            armed_by=self._arming(spec, where))
+            steps=self._settled(steps),
+            origin=Origin(source=spec.name),
+            when=spec.when,
+            timeout_s=spec.timeout_s,
+            armed_by=self._arming(spec, where),
+        )
 
-    def _declare_cleanup(self, spec: CleanupSpec,
-                         where: str) -> dict[str, list[StepName]]:
+    def _declare_cleanup(self, spec: CleanupSpec, where: str) -> dict[str, list[StepName]]:
         """Register entry ids and validate requirements within one cleanup
         spec.
 
@@ -650,19 +695,20 @@ class TableCompiler:
 
             declared[entry.id] = []
 
-        outside = sorted({clause.name for entry in spec.entries
-                          for clause in entry.require} - set(declared))
+        outside = sorted(
+            {clause.name for entry in spec.entries for clause in entry.require} - set(declared)
+        )
 
         if outside:
             raise ValueError(
                 f"{where}: require names entries outside it, "
                 f"{', '.join(outside)}; a cleanup is ordered against itself "
-                f"alone")
+                f"alone"
+            )
 
         return declared
 
-    def _arming(self, spec: CleanupSpec,
-                where: str) -> tuple[StepName, ...] | None:
+    def _arming(self, spec: CleanupSpec, where: str) -> tuple[StepName, ...] | None:
         """Expand main-workflow entry ids into cleanup trigger step names.
 
         Preserve `None` as unconditional and an empty tuple as never armed.
@@ -677,16 +723,14 @@ class TableCompiler:
 
         if unknown:
             raise ValueError(
-                f"{where}: armed_by names entries no phase declares, "
-                f"{', '.join(unknown)}")
+                f"{where}: armed_by names entries no phase declares, {', '.join(unknown)}"
+            )
 
-        return tuple(name for entry in spec.armed_by
-                     for name in self.entry_steps[entry])
+        return tuple(name for entry in spec.armed_by for name in self.entry_steps[entry])
 
     def _settled(self, steps: list[PlannedStep]) -> tuple[PlannedStep, ...]:
         """Copy emitted steps with their accumulated dependencies attached."""
-        return tuple(replace(step, deps=tuple(self.deps[step.name]))
-                     for step in steps)
+        return tuple(replace(step, deps=tuple(self.deps[step.name])) for step in steps)
 
 
 def _unique(names: list[str], what: str) -> None:
@@ -710,8 +754,7 @@ def _disjoint(phases: list[str], ids: list[str]) -> None:
     shared = sorted(set(phases) & set(ids))
 
     if shared:
-        raise ValueError(
-            f"a phase and an entry share a name: {', '.join(shared)}")
+        raise ValueError(f"a phase and an entry share a name: {', '.join(shared)}")
 
 
 def _resolves(names: Iterable[str], known: set[str], what: str) -> None:
@@ -726,14 +769,12 @@ def _resolves(names: Iterable[str], known: set[str], what: str) -> None:
         raise ValueError(f"{what} names nothing: {', '.join(unknown)}")
 
 
-def _required(entry: Entry, known: set[str],
-              ids: set[str]) -> set[tuple[str, str]]:
+def _required(entry: Entry, known: set[str], ids: set[str]) -> set[tuple[str, str]]:
     """Resolve requirement names to symbolic phase or entry nodes."""
     named = [clause.name for clause in entry.require]
     _resolves(named, known, "require")
 
-    return {("entry", name) if name in ids else ("phase", name)
-            for name in named}
+    return {("entry", name) if name in ids else ("phase", name) for name in named}
 
 
 def _check_cleanup(spec: CleanupSpec, armable: set[str]) -> None:
@@ -745,8 +786,7 @@ def _check_cleanup(spec: CleanupSpec, armable: set[str]) -> None:
         ValueError: Ids repeat, references are invalid, or dependencies cycle.
     """
     ids = [entry.id for entry in spec.entries if entry.id is not None]
-    named = {clause.name for entry in spec.entries
-             for clause in entry.require}
+    named = {clause.name for entry in spec.entries for clause in entry.require}
 
     _unique(ids, f"cleanup '{spec.name}' uses an entry id twice")
     _resolves(spec.armed_by or (), armable, f"cleanup '{spec.name}' armed_by")
@@ -755,8 +795,8 @@ def _check_cleanup(spec: CleanupSpec, armable: set[str]) -> None:
 
     if outside:
         raise ValueError(
-            f"cleanup '{spec.name}' require names entries outside it: "
-            f"{', '.join(outside)}")
+            f"cleanup '{spec.name}' require names entries outside it: {', '.join(outside)}"
+        )
 
     deps: dict[tuple[str, str], set[tuple[str, str]]] = {}
 
@@ -775,8 +815,9 @@ def _acyclic(deps: dict[tuple[str, str], set[tuple[str, str]]]) -> None:
         ValueError: Dependencies contain a cycle.
     """
     builder = GraphBuilder()
-    ids = {(kind, name): builder.add(f"{kind} '{name}'", kind, None)
-           for kind, name in sorted(deps)}
+    ids = {
+        (kind, name): builder.add(f"{kind} '{name}'", kind, None) for kind, name in sorted(deps)
+    }
 
     for node, following in deps.items():
         builder.order(ids[node], (ids[f] for f in following))

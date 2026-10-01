@@ -44,8 +44,9 @@ class Sensor:
     values.
     """
 
-    def __init__(self, definition: SensorDefinition, sensor: BoundSensor,
-                 executor: WorkflowExecutor):
+    def __init__(
+        self, definition: SensorDefinition, sensor: BoundSensor, executor: WorkflowExecutor
+    ):
         self._definition = definition
         self._sensor = sensor
         self._executor = executor
@@ -73,8 +74,7 @@ class Sensor:
         return self._executor
 
     @classmethod
-    async def connect(cls, definition: SensorDefinition,
-                      sensorkit: sk.SensorKit) -> Sensor:
+    async def connect(cls, definition: SensorDefinition, sensorkit: sk.SensorKit) -> Sensor:
         """Validate the definition, discover configured devices and bind
         their capabilities.
 
@@ -113,19 +113,19 @@ class Sensor:
 
             reported.append((key, info.details))
 
-        snapshot = CapabilitySnapshot(devices=tuple(reported), taken=taken,
-                                      source="device discovery")
+        snapshot = CapabilitySnapshot(
+            devices=tuple(reported), taken=taken, source="device discovery"
+        )
 
         # Binding reports every configured device missing from the snapshot.
         sensor, _ = BoundSensor.bind(topology, snapshot)
-        executor = WorkflowExecutor(sensor, clients,
-                                    events=AsyncObserver[OperationEvent]())
+        executor = WorkflowExecutor(sensor, clients, events=AsyncObserver[OperationEvent]())
 
         return cls(definition, sensor, executor)
 
-    def plan_lifecycle(self, workflow: LifecycleWorkflow, *,
-                       rules: tuple[OperatorRule, ...] = ()
-                       ) -> ExecutableWorkflow:
+    def plan_lifecycle(
+        self, workflow: LifecycleWorkflow, *, rules: tuple[OperatorRule, ...] = ()
+    ) -> ExecutableWorkflow:
         """Compile and issue a lifecycle table using this definition's
         deadlines.
 
@@ -134,12 +134,15 @@ class Sensor:
         Raises:
             ValueError: The table cannot compile against this sensor.
         """
-        return self._issue(compile_lifecycle(
-            workflow, self._sensor, deadlines=self._definition.deadlines,
-            rules=rules))
+        return self._issue(
+            compile_lifecycle(
+                workflow, self._sensor, deadlines=self._definition.deadlines, rules=rules
+            )
+        )
 
-    def plan_collect(self, intent: CollectIntent, *,
-                     rules: tuple[OperatorRule, ...] = ()) -> ExecutableWorkflow:
+    def plan_collect(
+        self, intent: CollectIntent, *, rules: tuple[OperatorRule, ...] = ()
+    ) -> ExecutableWorkflow:
         """Pack, compile and issue a collect intent using this definition's
         deadlines.
 
@@ -151,15 +154,19 @@ class Sensor:
         """
         bound = pack(intent, self._sensor)
 
-        return self._issue(compile_collect(
-            bound, self._sensor, deadlines=self._definition.deadlines,
-            rules=rules))
+        return self._issue(
+            compile_collect(bound, self._sensor, deadlines=self._definition.deadlines, rules=rules)
+        )
 
-    async def execute(self, workflow: ExecutableWorkflow, *,
-                      contexts: DeviceContexts | None = None,
-                      base: sk.Context | None = None,
-                      in_domain: AbortPredicate | None = None,
-                      state: ExecutionState | None = None) -> WorkflowReport:
+    async def execute(
+        self,
+        workflow: ExecutableWorkflow,
+        *,
+        contexts: DeviceContexts | None = None,
+        base: sk.Context | None = None,
+        in_domain: AbortPredicate | None = None,
+        state: ExecutionState | None = None,
+    ) -> WorkflowReport:
         """Run an issued workflow, keeping the session occupied through
         cleanup and drain.
 
@@ -191,18 +198,18 @@ class Sensor:
         if workflow not in self._issued:
             raise ValueError(
                 f"{workflow.name}: this session did not issue the workflow; "
-                f"plan it through the session that runs it")
+                f"plan it through the session that runs it"
+            )
 
         if self._running:
-            raise ValueError(
-                f"{workflow.name}: another run on this session has not ended")
+            raise ValueError(f"{workflow.name}: another run on this session has not ended")
 
         self._running = True
 
         try:
             return await self._executor.execute(
-                workflow, contexts=contexts, base=base, in_domain=in_domain,
-                state=state)
+                workflow, contexts=contexts, base=base, in_domain=in_domain, state=state
+            )
         finally:
             self._running = False
 

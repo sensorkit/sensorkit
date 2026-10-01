@@ -40,8 +40,7 @@ type DeviceContexts = Callable[[], Mapping[DeviceKey, sk.Context]]
 
 type OperationOutcome = Literal["begin", "ok", "failed", "cancelled"]
 
-type InterruptionOutcome = Literal["acknowledged", "unsupported", "failed",
-                                   "timed_out"]
+type InterruptionOutcome = Literal["acknowledged", "unsupported", "failed", "timed_out"]
 
 ABORT_TIMEOUT_S = 5.0
 """Abort response timeout in seconds, excluding local call teardown."""
@@ -95,20 +94,28 @@ class Dispatcher:
     a dispatcher per run to keep base and sampled contexts separate.
     """
 
-    def __init__(self, sensor: BoundSensor,
-                 clients: Mapping[DeviceKey, DeviceClient], *,
-                 contexts: DeviceContexts | None = None,
-                 base: sk.Context | None = None,
-                 events: AsyncObserver[OperationEvent] | None = None):
+    def __init__(
+        self,
+        sensor: BoundSensor,
+        clients: Mapping[DeviceKey, DeviceClient],
+        *,
+        contexts: DeviceContexts | None = None,
+        base: sk.Context | None = None,
+        events: AsyncObserver[OperationEvent] | None = None,
+    ):
         self.sensor = sensor
         self.clients = clients
         self.contexts = contexts
         self.base = base
         self.events = events
 
-    async def perform(self, operation: Operation, node: Node,
-                      attempt: AttemptRecorder,
-                      interrupted: InterruptionRecorder) -> object:
+    async def perform(
+        self,
+        operation: Operation,
+        node: Node,
+        attempt: AttemptRecorder,
+        interrupted: InterruptionRecorder,
+    ) -> object:
         """Send an operation under its resolved timeout and drain its call
         task.
 
@@ -148,8 +155,7 @@ class Dispatcher:
         attempt(operation)
         self.notify(OperationEvent(operation, node, "begin"))
         sending = asyncio.create_task(send())
-        expired, cancelled = await _owned(sending, operation.timeout_s,
-                                          interruptible=True)
+        expired, cancelled = await _owned(sending, operation.timeout_s, interruptible=True)
 
         # Handle Abort outside the command wait to avoid recursive interruption.
         if _dropped(sending):
@@ -171,8 +177,7 @@ class Dispatcher:
             return operation.command
 
         # Give each acquisition its own context without modifying the planned command.
-        return operation.command.model_copy(
-            deep=True, update={"context": self.header(operation)})
+        return operation.command.model_copy(deep=True, update={"context": self.header(operation)})
 
     def header(self, operation: Operation) -> sk.Context:
         """Build a fresh acquisition context with sources in precedence
@@ -188,14 +193,11 @@ class Dispatcher:
         # Frame numbering is already included in planned acquisition keywords.
         reported = self.contexts() if self.contexts is not None else {}
         chain = self.sensor.topology.chain(operation.target)
-        planned = (operation.acquisition.keywords
-                   if operation.acquisition is not None else None)
+        planned = operation.acquisition.keywords if operation.acquisition is not None else None
 
-        return merge_contexts(
-            self.base, *(reported.get(p.device) for p in chain), planned)
+        return merge_contexts(self.base, *(reported.get(p.device) for p in chain), planned)
 
-    async def abort(self, device: DeviceKey,
-                    record: InterruptionRecorder) -> Interruption:
+    async def abort(self, device: DeviceKey, record: InterruptionRecorder) -> Interruption:
         """Attempt built-in Abort once, recording the outcome before
         returning or raising.
 
@@ -225,8 +227,7 @@ class Dispatcher:
 
         # Send directly so Abort failure cannot trigger another Abort.
         attempt = asyncio.create_task(abort())
-        expired, cancelled = await _owned(attempt, ABORT_TIMEOUT_S,
-                                          interruptible=False)
+        expired, cancelled = await _owned(attempt, ABORT_TIMEOUT_S, interruptible=False)
 
         if expired:
             interruption = Interruption("timed_out")
@@ -277,9 +278,14 @@ class Dispatcher:
         except Exception as e:
             logger.warning(f"{where}: an operation subscriber failed ({e!r})")
 
-    def _concluded(self, operation: Operation, node: Node,
-                   sending: asyncio.Task, expired: bool,
-                   cancelled: asyncio.CancelledError | None) -> object:
+    def _concluded(
+        self,
+        operation: Operation,
+        node: Node,
+        sending: asyncio.Task,
+        expired: bool,
+        cancelled: asyncio.CancelledError | None,
+    ) -> object:
         """Emit the call's terminal event, then return its result or
         propagate failure.
 
@@ -289,8 +295,8 @@ class Dispatcher:
         match sending.cancelled(), expired:
             case True, True if cancelled is None:
                 error: BaseException | None = TimeoutError(
-                    f"'{operation.id}' did not finish within "
-                    f"{operation.timeout_s}s")
+                    f"'{operation.id}' did not finish within {operation.timeout_s}s"
+                )
             case True, _:
                 error = cancelled or asyncio.CancelledError()
             case _:
@@ -298,8 +304,7 @@ class Dispatcher:
 
         match error:
             case None:
-                self.notify(OperationEvent(operation, node, "ok",
-                                           sending.result()))
+                self.notify(OperationEvent(operation, node, "ok", sending.result()))
             case asyncio.CancelledError():
                 self.notify(OperationEvent(operation, node, "cancelled"))
             case _:
@@ -314,9 +319,9 @@ class Dispatcher:
         return sending.result()
 
 
-async def _owned(task: asyncio.Task, seconds: float | None, *,
-                 interruptible: bool
-                 ) -> tuple[bool, asyncio.CancelledError | None]:
+async def _owned(
+    task: asyncio.Task, seconds: float | None, *, interruptible: bool
+) -> tuple[bool, asyncio.CancelledError | None]:
     """Wait for an owned task, cancelling it once when the initial wait
     ends.
 
@@ -340,9 +345,9 @@ async def _owned(task: asyncio.Task, seconds: float | None, *,
     return expired, cancelled
 
 
-async def _until_stopped(task: asyncio.Task, seconds: float | None,
-                         interruptible: bool
-                         ) -> tuple[bool, asyncio.CancelledError | None]:
+async def _until_stopped(
+    task: asyncio.Task, seconds: float | None, interruptible: bool
+) -> tuple[bool, asyncio.CancelledError | None]:
     """Wait for completion, timeout or caller cancellation when
     interruptible.
 

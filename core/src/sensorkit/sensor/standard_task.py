@@ -50,8 +50,7 @@ SIDEREAL = FrameTarget(frame=ReferenceFrame.ICRF)
 """Target value that holds the current pointing under sidereal tracking."""
 
 
-def translate(task: StandardCollectTask, *,
-              readout_margin_s: float = 60.0) -> CollectIntent:
+def translate(task: StandardCollectTask, *, readout_margin_s: float = 60.0) -> CollectIntent:
     """Build collect requests and target-based epochs from a standard task.
 
     Exposure segments retain their ids and assignments across epochs.
@@ -75,11 +74,17 @@ def translate(task: StandardCollectTask, *,
         count = sum(1 for _ in frames)
         # Include only the segment frames remaining for each exposure.
         units = tuple(
-            _segment(task, number, target,
-                     min(first + count, params.frame_count) - first,
-                     settings[number], readout_margin_s)
+            _segment(
+                task,
+                number,
+                target,
+                min(first + count, params.frame_count) - first,
+                settings[number],
+                readout_margin_s,
+            )
             for number, params in enumerate(exposures)
-            if first < params.frame_count)
+            if first < params.frame_count
+        )
         epochs.append(RequestEpoch(units=units, settings=(_pointing(target),)))
         first += count
 
@@ -88,15 +93,25 @@ def translate(task: StandardCollectTask, *,
         return CollectIntent(name=task.task_type, epochs=())
 
     return CollectIntent(
-        name=task.task_type, epochs=tuple(epochs),
+        name=task.task_type,
+        epochs=tuple(epochs),
         prepare=(_pointing(task.target),),
-        cleanup=(CommandRequest(command=Stop(), subject="sensor",
-                                select=Supports(supports=FollowTarget)),))
+        cleanup=(
+            CommandRequest(
+                command=Stop(), subject="sensor", select=Supports(supports=FollowTarget)
+            ),
+        ),
+    )
 
 
-def _segment(task: StandardCollectTask, number: int, target: Target,
-             count: int, settings: tuple[CommandRequest, ...],
-             margin_s: float) -> InstrumentRequest:
+def _segment(
+    task: StandardCollectTask,
+    number: int,
+    target: Target,
+    count: int,
+    settings: tuple[CommandRequest, ...],
+    margin_s: float,
+) -> InstrumentRequest:
     """Build one exposure segment with a stable request id and assignment
     group.
     """
@@ -104,12 +119,16 @@ def _segment(task: StandardCollectTask, number: int, target: Target,
     name = f"exposure-{number}"
 
     return InstrumentRequest(
-        id=name, assignment=name,
+        id=name,
+        assignment=name,
         acquisition=AcquisitionRequest(
-            integration_time_s=params.integration_time_seconds, count=count,
-            timeout_s=params.integration_time_seconds + margin_s),
+            integration_time_s=params.integration_time_seconds,
+            count=count,
+            timeout_s=params.integration_time_seconds + margin_s,
+        ),
         collect=Collect(target=target, target_id=target_id(task), params=params),
-        settings=settings)
+        settings=settings,
+    )
 
 
 def _pointing(target: Target) -> CommandRequest:
@@ -130,8 +149,7 @@ def frame_targets(task: StandardCollectTask, count: int) -> tuple[Target, ...]:
 
     switching = set(task.sidereal_frames)
 
-    return tuple(SIDEREAL if number in switching else task.target
-                 for number in frames)
+    return tuple(SIDEREAL if number in switching else task.target for number in frames)
 
 
 def camera_settings(params: CameraParameterSet) -> tuple[CommandRequest, ...]:
@@ -154,15 +172,12 @@ def camera_settings(params: CameraParameterSet) -> tuple[CommandRequest, ...]:
         case int(x), int(y):
             binning = Binning(x=x, y=y)
         case x, y:
-            raise ValueError(
-                f"binning is {x} by {y}; give both axes or neither")
+            raise ValueError(f"binning is {x} by {y}; give both axes or neither")
 
     if binning is not None or params.gain is not None:
-        commands.append(ConfigureCameraSensor(binning=binning,
-                                              gain=params.gain))
+        commands.append(ConfigureCameraSensor(binning=binning, gain=params.gain))
 
-    return tuple(CommandRequest(command=command)
-                 for command in commands)
+    return tuple(CommandRequest(command=command) for command in commands)
 
 
 def target_id(task: StandardCollectTask) -> str | None:
@@ -187,10 +202,9 @@ def _check_sidereal(task: StandardCollectTask, longest: int) -> None:
     Raises:
         ValueError: An index is negative or beyond all exposures.
     """
-    outside = sorted(number for number in task.sidereal_frames
-                     if not 0 <= number < longest)
+    outside = sorted(number for number in task.sidereal_frames if not 0 <= number < longest)
 
     if outside:
         raise ValueError(
-            f"sidereal_frames {outside} name no frame; the longest exposure "
-            f"takes {longest}")
+            f"sidereal_frames {outside} name no frame; the longest exposure takes {longest}"
+        )
