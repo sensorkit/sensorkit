@@ -6,14 +6,11 @@ sensorkit:
     - sensorkit.indigo.service
     - sensorkit.thesky.service
     - /opt/sk/huntsman_dome.py        # custom Musca dome controller module (SensorKit plugin)
-    - sensorkit.sensor
     - sensorkit.burr.program
     - sensorkit.otto.program
-    - sensorkit.auto.agent
     - sensorkit.senpai.service
     - sensorkit.slack.service
     - sensorkit.sky_transmission.service
-    - sensorkit.webapi
 
 automation:
   first_run:
@@ -152,7 +149,7 @@ automation:
       controller_name: Huntsman
     standard_collect:
       FileNameTemplate:
-        template: f"{task_id}_{frame_num}.fits"
+        template: f"{TaskInfo.task_id}_{Collect.frame_number}.fits"
 
 data_flow:
   - entity: ASI183MM
@@ -168,43 +165,43 @@ data_flow:
             TASKID: =OttoContext.visit_id
           define:
             SITELAT:
-              value: =latitude
+              value: =SitePosition.latitude_degrees
               comment: geographic latitude [+/-] of the observation
             SITELONG:
-              value: =longitude
+              value: =SitePosition.longitude_degrees
               comment: geographic longitude [+/-] of the observation
             SITEELEV:
-              value: =elevation
+              value: =SitePosition.altitude_km
               comment: geographic elevation [km] of the observation
             ALT:
-              value: =alt
+              value: =AltAzPointing.altitude_degrees
               comment: measured altitude [deg]
             ALT_RATE:
-              value: =alt_rate/3600
+              value: =AxisRates.altitude.velocity
               comment: measured altitude rate [deg/s]
             AZ:
-              value: =az
+              value: =AltAzPointing.azimuth_degrees
               comment: measured azimuth [deg]
             AZ_RATE:
-              value: =az_rate/3600
+              value: =AxisRates.azimuth.velocity
               comment: measured azimuth rate [deg/s]
             RA:
-              value: =ra
+              value: =RADecPointing.right_ascension_hours * 15
               comment: measured right ascension [deg]
             RA_RATE:
-              value: =ra_rate/3600
+              value: =AxisRates.right_ascension.velocity
               comment: measured right ascension rate [deg/s]
             DEC:
-              value: =dec
+              value: =RADecPointing.declination_degrees
               comment: measured declination [deg]
             DEC_RATE:
-              value: =dec_rate/3600
+              value: =AxisRates.declination.velocity
               comment: measured declination rate [deg/s]
             FILTER:
-              value: =filter_name
+              value: =Collect.params.filter_name
               comment: name of filter used during the observation
             FRAMECNT:
-              value: =frame_count
+              value: =Collect.params.frame_count
               comment: total requested frame count
         - op: array_to_fits
         - op: compress_fits
@@ -236,17 +233,16 @@ data_flow:
 sensors:
   - id: Huntsman
 
-    devices:
-      dome: HuntsmanDome
-      mount: ParamountMEII
-      focuser: Birger
-      filter_wheel: EFW7x36
-      camera: ASI183MM
-
-    site_position:
-      latitude_degrees: -31.27175
-      longitude_degrees: 149.06149
-      altitude_km: 1.165
+    model:
+      components:
+        - device: HuntsmanDome
+        - device: ParamountMEII
+        - unit: science
+          components:
+            - device: Birger
+            - device: EFW7x36
+            - device: ASI183MM
+              instrument: true
 
     policies:
       concurrent_dome_and_mount_init: false
@@ -254,8 +250,6 @@ sensors:
       dome_open_close_timeout: 120
       mount_init_timeout: 180
       mount_home_timeout: 180
-
-    controller_name: ""
 
 burr:
   - id: Burr

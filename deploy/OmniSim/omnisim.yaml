@@ -4,12 +4,9 @@ sensorkit:
   imports:
     - sensorkit.alpaca.service
     - sensorkit.sdasim.service
-    - sensorkit.sensor
     - sensorkit.otto.program
-    - sensorkit.auto.agent
     - sensorkit.senpai.service
     - sensorkit.slack.service
-    - sensorkit.webapi
 
 automation:
   first_run:
@@ -67,7 +64,7 @@ automation:
               program_name: otto
             standard_collect:
               FileNameTemplate:
-                template: f"{task_id}_{frame_num}.fits"
+                template: f"{TaskInfo.task_id}_{Collect.frame_number}.fits"
 
   contexts:
     all:
@@ -87,43 +84,43 @@ data_flow:
             TASKID: =OttoContext.visit_id
           define:
             SITELAT:
-              value: =latitude
+              value: =SitePosition.latitude_degrees
               comment: geographic latitude [+/-] of the observation
             SITELONG:
-              value: =longitude
+              value: =SitePosition.longitude_degrees
               comment: geographic longitude [+/-] of the observation
             SITEELEV:
-              value: =elevation
+              value: =SitePosition.altitude_km
               comment: geographic elevation [km] of the observation
             ALT:
-              value: =alt
+              value: =AltAzPointing.altitude_degrees
               comment: measured altitude [deg]
             ALT_RATE:
-              value: =alt_rate/3600
+              value: =AxisRates.altitude.velocity
               comment: measured altitude rate [deg/s]
             AZ:
-              value: =az
+              value: =AltAzPointing.azimuth_degrees
               comment: measured azimuth [deg]
             AZ_RATE:
-              value: =az_rate/3600
+              value: =AxisRates.azimuth.velocity
               comment: measured azimuth rate [deg/s]
             RA:
-              value: =ra
+              value: =RADecPointing.right_ascension_hours * 15
               comment: measured right ascension [deg]
             RA_RATE:
-              value: =ra_rate/3600
+              value: =AxisRates.right_ascension.velocity
               comment: measured right ascension rate [deg/s]
             DEC:
-              value: =dec
+              value: =RADecPointing.declination_degrees
               comment: measured declination [deg]
             DEC_RATE:
-              value: =dec_rate/3600
+              value: =AxisRates.declination.velocity
               comment: measured declination rate [deg/s]
             FILTER:
-              value: =filter_name
+              value: =Collect.params.filter_name
               comment: name of filter used during the observation
             FRAMECNT:
-              value: =frame_count
+              value: =Collect.params.frame_count
               comment: total requested frame count
         - op: array_to_fits
         - op: write_file
@@ -154,19 +151,18 @@ data_flow:
 sensors:
   - id: OmniSim
 
-    devices:
-      dome: OmniSimDome
-      mirror_cover: OmniSimCoverCalibrator
-      mount: OmniSimTelescope
-      rotator: OmniSimRotator
-      focuser: OmniSimFocuser
-      filter_wheel: OmniSimFilterWheel
-      camera: sdasimCamera
-
-    site_position:
-      latitude_degrees: 20.82028
-      longitude_degrees: -156.27944
-      altitude_km: 1.0
+    model:
+      components:
+        - device: OmniSimDome
+        - device: OmniSimCoverCalibrator
+        - device: OmniSimTelescope
+        - unit: science
+          components:
+            - device: OmniSimRotator
+            - device: OmniSimFocuser
+            - device: OmniSimFilterWheel
+            - device: sdasimCamera
+              instrument: true
 
     policies:
       concurrent_dome_and_mount_init: true
@@ -176,8 +172,6 @@ sensors:
       mirror_cover_open_close_timeout: 60.0
       mount_init_timeout: 180.0
       mount_home_timeout: 180.0
-
-    controller_name: ""
 
 otto:
   - id: Otto
