@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from sensorkit.astro.common import SitePosition
+from sensorkit.backend.request import CallError
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.task import TaskInfo
 from sensorkit.sensor.client import Sensor
@@ -14,9 +15,9 @@ from sensorkit.sensor.execution import WorkflowError
 from sensorkit.sensor.impl import SensorConfig, SensorController
 from sensorkit.sensor.policies import SensorPolicies
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
-from sensorkit.std.optics import Filter
+from sensorkit.std.optics import Filter, Filters, SetFilter
 
-from .common import TARGET, authored
+from .common import BENCH, TARGET, authored
 
 
 @pytest.fixture
@@ -196,3 +197,80 @@ async def test_collect_headers_keep_task_context_without_keywords_from_other_cha
         assert capture.context.get(Filter) is None
     finally:
         await controller_impl.stop_device_subscriptions()
+
+
+# Filter assignment
+
+
+async def attached(controller_impl, document: str) -> SensorController:
+    """Attach a controller to the sensor document and register its collect handler."""
+    definition = authored(document)
+    await controller_impl.kv_put_model(SensorConfig(
+        model=definition.sensor, policies=SensorPolicies()))
+    await controller_impl.kv_put_model(SitePosition(
+        latitude_degrees=20.0, longitude_degrees=-100.0, altitude_km=1.0))
+    controller = SensorController()
+    await controller.on_attach()
+    controller_impl.task_handler(StandardCollectTask)(controller.collect_task)
+
+    return controller
+
+
+def collecting(filter_name: str) -> StandardCollectTask:
+    return StandardCollectTask(target=TARGET, camera_params=CameraParameterSet(
+        integration_time_seconds=0.1, frame_count=1, filter_name=filter_name))
+
+
+@pytest.mark.asyncio
+async def test_collect_assigns_the_camera_whose_wheel_reports_the_filter(
+        kit, rig, service_context, controller_impl):
+    for branch, held in (("e", "r"), ("w", "g")):
+        await rig.serve(service_context, f"wheel-{branch}", ("SetFilter",),
+                        keywords=[Filters(filters=[Filter(name=held)])])
+        await rig.serve(service_context, f"cam-{branch}",
+                        ("CameraCapture", "Abort"))
+
+    controller = await attached(controller_impl, BENCH.replace("foc-e", "wheel-e"))
+    await controller_impl.start_device_subscriptions()
+
+    try:
+        # Wait for the filter lists published before the subscriptions started.
+        async with asyncio.timeout(2.0):
+            while any(controller.device_contexts()[wheel].get(Filters) is None
+                      for wheel in ("wheel-e", "wheel-w")):
+                await asyncio.sleep(0)
+
+        client = kit.controller(str(controller_impl.entity))
+        await client.enable()
+        await client.execute_task(collecting("g"))
+    finally:
+        await controller_impl.stop_device_subscriptions()
+
+    assert rig["wheel-w"].sent("SetFilter") == [SetFilter(filter="g")]
+    assert len(rig["cam-w"].sent("CameraCapture")) == 1
+    assert rig["wheel-e"].received == []
+    assert rig["cam-e"].received == []
+
+
+@pytest.mark.asyncio
+async def test_a_refused_filter_on_an_unknown_wheel_blocks_the_capture(
+        kit, rig, service_context, controller_impl):
+    wheel = await rig.serve(service_context, "wheel", ("SetFilter",))
+    wheel.refusing["SetFilter"] = 1
+    await attached(controller_impl, """
+        sensor:
+          name: bench
+          components:
+            - device: mount
+            - device: wheel
+            - device: cam
+              instrument: true
+        """)
+    client = kit.controller(str(controller_impl.entity))
+    await client.enable()
+
+    with pytest.raises(CallError):
+        await client.execute_task(collecting("g"))
+
+    assert wheel.sent("SetFilter") == [SetFilter(filter="g")]
+    assert rig["cam"].sent("CameraCapture") == []

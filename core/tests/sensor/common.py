@@ -25,13 +25,14 @@ from collections.abc import Coroutine, Iterable, Mapping
 from pathlib import Path
 
 import yaml
+from pydantic import BaseModel
 
 import sensorkit.common.predicate as p
 import sensorkit.std.traits  # noqa: F401  registers the command vocabulary
 from sensorkit.astro.coords import Horizontal
 from sensorkit.astro.target import AltAzTarget
 from sensorkit.common.dag import RunReport
-from sensorkit.common.keyword import KeywordDict
+from sensorkit.common.keyword import KeywordDict, get_keyword_info
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.entity import DeviceDetails
 from sensorkit.sensor.binding import BoundSensor
@@ -314,17 +315,28 @@ class Rig:
     def __getitem__(self, name: str) -> Device:
         return self.devices[name]
 
-    async def serve(self, context, name: str,
-                    commands: Iterable[str]) -> Device:
-        """Serve one device, publishing what it handles once it handles it."""
+    async def serve(self, context, name: str, commands: Iterable[str],
+                    keywords: Iterable[BaseModel] = ()) -> Device:
+        """Serve a device with command handlers and optional published keywords.
+
+        Advertise the registered commands and keyword keys, then publish each
+        supplied keyword value once.
+        """
         impl = await context.register_device(name)
         device = self.devices[name] = Device(name, self)
+        keywords = tuple(keywords)
 
         for tag in commands:
             impl.command_handler(DeviceCommand.registry.get_type(tag))(
                 device.handle)
 
+        for value in keywords:
+            impl.declare_published_keyword(get_keyword_info(value).key)
+
         await impl.publish_entity_info()
+
+        for value in keywords:
+            await impl.publish(value)
 
         return device
 

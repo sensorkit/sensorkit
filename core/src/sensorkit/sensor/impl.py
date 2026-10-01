@@ -174,8 +174,14 @@ class SensorController:
 
     @sk.task_handler
     async def collect_task(self, task: StandardCollectTask):
-        """Point at the task's target and capture its exposures."""
-        workflow = self.sensor.plan_collect(translate(task))
+        """Point at the task's target and capture its exposures.
+
+        Planning uses one snapshot of subscribed device keywords. Frame headers
+        sample them again when each capture is dispatched.
+        """
+        workflow = self.sensor.plan_collect(
+            translate(task), device_keywords=self.device_contexts()
+        )
         base = sk.Context(task.execution.context, self.site)
 
         await self.execute(workflow, contexts=self.device_contexts, base=base)
