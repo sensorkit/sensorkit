@@ -141,7 +141,6 @@ async def test_discovery_copies_no_device_keywords(kit, rig, document):
 async def test_a_device_that_reported_nothing_fails_connection(kit, rig):
     definition = authored("""
         sensor:
-          name: bench
           components:
             - device: mount
             - device: cam-x
@@ -158,7 +157,6 @@ async def test_an_entity_that_is_not_a_device_fails_connection(
     await service_context.register_entity("gate")
     definition = authored("""
         sensor:
-          name: bench
           components:
             - device: gate
         """)
@@ -171,7 +169,6 @@ async def test_an_entity_that_is_not_a_device_fails_connection(
 async def test_a_declared_trait_the_device_lacks_fails_connection(kit, rig):
     definition = authored("""
         sensor:
-          name: bench
           components:
             - device: mount
               traits: camera
@@ -186,7 +183,6 @@ async def test_a_declared_trait_the_device_lacks_fails_connection(kit, rig):
 async def test_a_declared_trait_the_device_has_binds(kit, rig):
     session = await Sensor.connect(authored("""
         sensor:
-          name: bench
           components:
             - device: cam-e
               instrument: true
@@ -211,7 +207,6 @@ async def test_a_failed_connection_leaves_nothing_running_and_the_client_open(
         kit, service_context, rig):
     definition = authored("""
         sensor:
-          name: bench
           components:
             - device: cam-x
               instrument: true

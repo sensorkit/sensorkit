@@ -135,14 +135,13 @@ type Component = Annotated[
 
 
 class Structure(BaseModel, frozen=True, extra="forbid"):
-    """The named root and components of one sensor.
+    """The root components of one sensor.
 
     Non-instrument devices at the root, such as a mount or dome, appear on every
-    instrument's chain. The sensor name is excluded from placement paths.
+    instrument's chain.
     Build a `Topology` to check device uniqueness and sibling path names.
     """
 
-    name: str
     components: tuple[Component, ...] = ()
 
 

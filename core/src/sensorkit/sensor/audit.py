@@ -99,7 +99,7 @@ class AuditReport:
     description: str
 
 
-def audit_definition(definition: SensorDefinition) -> AuditReport:
+def audit_definition(definition: SensorDefinition, *, name: str | None = None) -> AuditReport:
     """Check an existing definition and describe its authored structure and
     tables.
 
@@ -109,8 +109,13 @@ def audit_definition(definition: SensorDefinition) -> AuditReport:
 
     Check each part separately so a Python-built definition can report multiple
     errors. YAML parsing and model validation belong to the loader.
+
+    Args:
+        definition: The definition to check and describe.
+        name: Label for the sensor in the description, such as its entity ID.
     """
-    topology, structure = _structure_checked(definition.sensor)
+    label = f" '{name}'" if name else ""
+    topology, structure = _structure_checked(definition.sensor, label)
     checked = (
         structure,
         *(_table_checked(t) for t in definition.tables),
@@ -125,11 +130,11 @@ def audit_definition(definition: SensorDefinition) -> AuditReport:
     )
 
     lines = [
-        f"definition of sensor '{definition.sensor.name}', without device facts",
+        f"definition of sensor{label}, without device facts",
         "  Which placements a selection reaches and what each device supports "
         "are answered at binding, so selections are shown as authored.",
         "",
-        f"structure '{definition.sensor.name}'",
+        f"structure{label}",
         *_structure(definition.sensor.components, 1),
         "",
         *_deadlines(definition.deadlines),
@@ -182,7 +187,7 @@ def audit_workflow(workflow: ExecutableWorkflow) -> AuditReport:
 # TODO: Support concrete offline previews from saved device reports.
 
 
-def _structure_checked(structure: Structure) -> tuple[Topology | None, Finding]:
+def _structure_checked(structure: Structure, label: str) -> tuple[Topology | None, Finding]:
     """Try building topology and return it with a structural validation
     finding.
     """
@@ -195,7 +200,7 @@ def _structure_checked(structure: Structure) -> tuple[Topology | None, Finding]:
 
     return topology, Finding(
         "valid",
-        f"structure '{structure.name}' places every device once and names every position once",
+        f"structure{label} places every device once and names every position once",
         origin,
     )
 

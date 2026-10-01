@@ -75,7 +75,6 @@ def bench() -> BoundSensor:
               "ConfigureCameraCooler")
 
     return sensor_of("""
-        name: bench
         components:
           - device: mount
           - unit: east

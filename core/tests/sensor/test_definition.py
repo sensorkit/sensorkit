@@ -18,7 +18,6 @@ from sensorkit.std.traits import Connect, Init
 
 MINIMAL = """
 sensor:
-  name: one
   components:
     - device: mount
 """
@@ -30,7 +29,6 @@ def document(tables: str) -> str:
 
 
 def test_a_definition_loads_with_no_devices_present(definition):
-    assert definition.sensor.name == "demo"
     assert [t.name for t in definition.tables] == ["bring-up", "shutdown"]
 
 
@@ -135,7 +133,6 @@ def test_a_malformed_structure_fails_at_load():
     with pytest.raises(ValueError, match="placed twice"):
         SensorDefinition.from_yaml("""
             sensor:
-              name: dupe
               components:
                 - device: mount
                 - device: mount

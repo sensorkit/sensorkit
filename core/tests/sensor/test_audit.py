@@ -86,7 +86,6 @@ def statuses(report: AuditReport) -> dict[tuple, str]:
 
 NESTED = """
     sensor:
-      name: nested
       components:
         - device: mount
           traits: MustConnect
@@ -149,7 +148,6 @@ def test_a_selection_is_rendered_as_authored_including_negation():
 def test_a_keyword_match_is_rendered_without_device_keywords():
     report = audit_definition(SensorDefinition.from_yaml(textwrap.dedent("""
         sensor:
-          name: wheels
           components:
             - device: wheel
             - device: cam
@@ -220,7 +218,7 @@ def test_a_deferred_selection_names_no_target_and_counts_none(definition):
 
 
 def test_structural_and_reference_errors_are_reported_where_they_are():
-    structure = Structure(name="twice", components=(
+    structure = Structure(components=(
         Device(device="cam"),
         Unit(unit="bench", components=(Device(device="cam"),))))
     definition = SensorDefinition(sensor=structure, tables=(

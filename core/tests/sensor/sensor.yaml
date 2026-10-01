@@ -2,7 +2,6 @@
 # shared by everything, a nested unit, a selector with two ports, a private
 # focuser, two instruments behind one port, and a tagged service camera.
 sensor:
-  name: demo
   components:
     - device: mount
       traits: MustConnect

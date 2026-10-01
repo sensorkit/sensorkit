@@ -85,7 +85,7 @@ def test_a_declared_trait_the_device_does_not_satisfy_raises(topology):
 
 
 def test_an_unregistered_declared_trait_says_so():
-    structure = Structure(name="tiny", components=(
+    structure = Structure(components=(
         Device(device="cam", traits=("Imaginary",), instrument=True),))
     details = details_of({"cam": (("Connect",), ())})
 

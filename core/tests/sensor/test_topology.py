@@ -82,7 +82,7 @@ def test_readers_of_is_the_inverse_of_chain(topology, at):
 
 
 def test_readers_of_is_empty_where_no_instrument_reaches():
-    structure = Structure(name="s", components=(Device(device="orphan"),))
+    structure = Structure(components=(Device(device="orphan"),))
 
     assert Topology(structure).readers_of(Placement("orphan", ())) == ()
 
@@ -120,7 +120,7 @@ def test_chain_answers_for_instruments_only(topology, at):
 
 
 def build(*components) -> Topology:
-    return Topology(Structure(name="s", components=components))
+    return Topology(Structure(components=components))
 
 
 def test_a_device_named_twice_anywhere_is_a_structural_error():

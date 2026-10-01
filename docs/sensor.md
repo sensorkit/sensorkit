@@ -17,7 +17,6 @@ Declare each sensor in the `sensors` section of the unified config:
 sensors:
   - id: MySensor
     model:
-      name: MySensor
       components:
         - device: MyMount
         - device: MyDome

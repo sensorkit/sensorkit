@@ -87,7 +87,6 @@ BRANCHES = """
 
 BENCH = """
     sensor:
-      name: bench
       components:
         - device: mount
     """ + BRANCHES

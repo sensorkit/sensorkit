@@ -31,7 +31,6 @@ from .common import TARGET, filters, sensor_of
 STAR = ICRSTarget(coords=Equatorial(ra=180.0, dec=45.0))
 
 BENCH = """
-    name: bench
     components:
       - device: mount
       - unit: east
@@ -289,7 +288,6 @@ def test_cleanup_stops_the_mount_that_tracked(bench):
 def wheels() -> BoundSensor:
     """Two camera branches with a filter wheel on each chain."""
     return sensor_of("""
-        name: wheels
         components:
           - device: mount
           - unit: first

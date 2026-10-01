@@ -63,7 +63,6 @@ pytestmark = pytest.mark.timeout(60)
 
 OBSERVATORY = """
     sensor:
-      name: observatory
       components:
         - device: dome
         - device: mount

@@ -83,7 +83,7 @@ without it still loads."""
 
 def structure(*devices: str) -> Structure:
     return Structure.model_validate(
-        {"name": "bench", "components": [{"device": d} for d in devices]})
+        {"components": [{"device": d} for d in devices]})
 
 
 def definition_of(sensor: BoundSensor, **fields) -> SensorDefinition:
@@ -506,7 +506,6 @@ def test_composition_rejects_what_loading_would(sensor):
 
 AUTHORED_SHUTDOWN = """
     sensor:
-      name: bench
       components:
         - device: mount
         - device: dome
@@ -1104,7 +1103,6 @@ def test_a_device_rule_outranks_a_generated_trait_rule(sensor):
 def test_an_explicit_timeout_still_wins(sensor):
     definition = SensorDefinition.from_yaml(textwrap.dedent("""
         sensor:
-          name: bench
           components:
             - device: mount
             - device: dome

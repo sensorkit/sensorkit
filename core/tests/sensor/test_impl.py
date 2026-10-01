@@ -33,7 +33,6 @@ async def test_a_lifecycle_failure_aborts_all_devices_and_preserves_the_error(
         kit, rig, refuse_abort):
     definition = authored("""
         sensor:
-          name: bench
           components:
             - device: mount
             - device: cam
@@ -72,7 +71,6 @@ async def test_cleanup_skips_a_cancellation_after_service_stop(
         kit, rig, stopped, cleaned_up):
     definition = authored("""
         sensor:
-          name: bench
           components:
             - device: mount
         tables:
@@ -122,7 +120,6 @@ async def test_attach_subscribes_to_reported_keywords_outside_the_pointing_vocab
     await wheel.publish_entity_info()
     definition = authored("""
         sensor:
-          name: bench
           components:
             - device: wheel
         """)
@@ -155,7 +152,6 @@ async def test_collect_headers_keep_task_context_without_keywords_from_other_cha
     await wheel.publish_entity_info()
     definition = authored("""
         sensor:
-          name: bench
           components:
             - device: mount
             - unit: collecting
@@ -259,7 +255,6 @@ async def test_a_refused_filter_on_an_unknown_wheel_blocks_the_capture(
     wheel.refusing["SetFilter"] = 1
     await attached(controller_impl, """
         sensor:
-          name: bench
           components:
             - device: mount
             - device: wheel

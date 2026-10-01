@@ -372,7 +372,6 @@ def test_settings_are_flat_and_kept_once(facts):
 
 
 TWO_MOUNTS = """
-    name: pair
     components:
       - unit: east
         components:
@@ -665,7 +664,6 @@ def test_a_group_no_instrument_can_be_set_up_for_rejects_planning(topology):
 def bench() -> BoundSensor:
     """Two cameras behind one wheel, one behind its own, and one behind none."""
     return sensor_of("""
-        name: bench
         components:
           - device: cam-bare
             instrument: true
@@ -782,7 +780,6 @@ def wheels() -> BoundSensor:
     camera without a wheel.
     """
     return sensor_of("""
-        name: wheels
         components:
           - unit: stacked
             components:
@@ -953,7 +950,6 @@ def test_a_target_preference_outside_instrument_settings_is_rejected(wheels, pha
 
 def test_a_requirement_leaves_an_ambiguous_route_ambiguous():
     sensor = sensor_of("""
-        name: tied
         components:
           - device: wheel-a
           - device: wheel-b
