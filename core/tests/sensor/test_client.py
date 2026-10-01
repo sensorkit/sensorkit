@@ -119,7 +119,7 @@ def untouched(state: ExecutionState) -> bool:
 @pytest.mark.asyncio
 async def test_discovery_reads_the_devices_the_definition_names(session, rig,
                                                               handles):
-    reported = dict(session.sensor.capabilities.devices)
+    reported = session.sensor.details
 
     assert list(reported) == ["mount", "foc-e", "cam-e", "wheel-w", "cam-w"]
     assert reported["mount"].supported_commands >= set(handles["mount"])
@@ -131,7 +131,7 @@ async def test_discovery_reads_the_devices_the_definition_names(session, rig,
 async def test_discovery_copies_no_device_keywords(kit, rig, document):
     session = await Sensor.connect(document, kit)
 
-    assert session.sensor.capabilities.device_keywords is None
+    assert session.sensor.device_keywords("mount") is None
 
 
 @pytest.mark.asyncio

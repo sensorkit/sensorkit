@@ -4,7 +4,6 @@ things of a chain and of a placement."""
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
 
 import pytest
 from pydantic import TypeAdapter
@@ -42,7 +41,7 @@ UNKNOWN = KeywordMatch(keyword="Filters", field="filters", predicate=p.exists(Fa
 
 def holding(facts: BoundSensor, keywords: Mapping[str, KeywordDict]) -> BoundSensor:
     """The same sensor, with keywords copied from its devices."""
-    return BoundSensor(facts.topology, replace(facts.capabilities, device_keywords=keywords))
+    return BoundSensor(facts.topology, facts.details, device_keywords=keywords)
 
 
 def filters(*names: str) -> KeywordDict:

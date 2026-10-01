@@ -52,7 +52,7 @@ from sensorkit.std.mount import FollowTarget
 from sensorkit.std.optics import ChangeFocusPosition, SelectPort, SetFilter
 from sensorkit.std.traits import Stop, TemperatureUnit
 
-from .common import REPORTED, TARGET, pointing, sensor_of, snapshot_of
+from .common import REPORTED, TARGET, details_of, pointing, sensor_of
 
 
 def adding(reported, **extra: tuple[str, ...]):
@@ -104,7 +104,7 @@ def bench() -> BoundSensor:
 def ported(topology) -> BoundSensor:
     """`sensor.yaml` with a pickoff that can be positioned and cameras that
     can capture."""
-    sensor, _ = BoundSensor.bind(topology, snapshot_of(adding(
+    sensor, _ = BoundSensor.bind(topology, details_of(adding(
         POSITIONED, cam_sci=("CameraCapture",), cam_guide=("CameraCapture",),
         cam_acq=("CameraCapture",))))
 
@@ -729,8 +729,8 @@ def test_the_workflow_takes_the_collect_name(bench):
 
 
 def test_a_command_the_device_cannot_perform_is_a_compile_error(topology):
-    # Nothing on this snapshot can capture.
-    sensor, _ = BoundSensor.bind(topology, snapshot_of(POSITIONED))
+    # Nothing reported here can capture.
+    sensor, _ = BoundSensor.bind(topology, details_of(POSITIONED))
 
     with pytest.raises(ValueError, match="does not support 'CameraCapture'"):
         compiled(sensor, RequestEpoch(units=(asking("a", "cam-acq"),)))

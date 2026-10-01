@@ -181,8 +181,7 @@ def audit_workflow(workflow: ExecutableWorkflow) -> AuditReport:
     return AuditReport(findings=(), description="\n".join(lines))
 
 
-# TODO: Support concrete offline previews from saved capability snapshots,
-# showing their source and age.
+# TODO: Support concrete offline previews from saved device reports.
 
 
 def _structure_checked(structure: Structure) -> tuple[Topology | None, Finding]:

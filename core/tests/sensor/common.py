@@ -4,8 +4,8 @@
 `sensor.yaml` describes one sensor exercising every structural feature the
 package has, so the tests read one document rather than inventing one each.
 
-`REPORTED` is what each device says about itself, and `snapshot_of` turns it
-into a capability snapshot, so a test that needs a device to report something
+`REPORTED` is what each device says about itself, and `details_of` turns it
+into device details, so a test that needs a device to report something
 else passes a variant of the mapping rather than building details by hand.
 
 `BENCH` is one mount shared by two instrument branches. The east branch has a
@@ -32,7 +32,7 @@ from sensorkit.astro.target import AltAzTarget
 from sensorkit.common.dag import RunReport
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.entity import DeviceDetails
-from sensorkit.sensor.binding import BoundSensor, CapabilitySnapshot
+from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.collect import (
     AcquisitionRequest,
     CommandRequest,
@@ -93,13 +93,11 @@ TARGET = AltAzTarget(coords=Horizontal(az=90.0, alt=30.0))
 """Followed by rate, so a sidereal frame is a change of pointing."""
 
 
-def snapshot_of(reported: Reported) -> CapabilitySnapshot:
-    """A capability snapshot of what these devices report."""
-    return CapabilitySnapshot(
-        devices=tuple(
-            (device, DeviceDetails(supported_commands=frozenset(commands),
-                                   published_keywords=frozenset(keywords)))
-            for device, (commands, keywords) in reported.items()))
+def details_of(reported: Reported) -> dict[str, DeviceDetails]:
+    """The details these devices report."""
+    return {device: DeviceDetails(supported_commands=frozenset(commands),
+                                  published_keywords=frozenset(keywords))
+            for device, (commands, keywords) in reported.items()}
 
 
 def sensor_of(structure: str | Structure, reported: Reported) -> BoundSensor:
@@ -109,7 +107,7 @@ def sensor_of(structure: str | Structure, reported: Reported) -> BoundSensor:
             structure = Structure.model_validate(
                 yaml.safe_load(textwrap.dedent(structure)))
 
-    sensor, _ = BoundSensor.bind(Topology(structure), snapshot_of(reported))
+    sensor, _ = BoundSensor.bind(Topology(structure), details_of(reported))
 
     return sensor
 

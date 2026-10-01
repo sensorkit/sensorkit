@@ -273,7 +273,7 @@ async def test_a_site_composes_plans_and_audits_before_anything_is_sent(
 
     # Connection read what the structure names, and nothing so far sent a
     # command.
-    assert [device for device, _ in session.sensor.capabilities.devices] == [
+    assert list(session.sensor.details) == [
         "dome", "mount", "cover", *BENCH_DEVICES[1:]]
     assert rig.log == []
 

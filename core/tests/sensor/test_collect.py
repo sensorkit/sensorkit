@@ -38,7 +38,7 @@ from sensorkit.std.instrument import Binning, ConfigureCameraSensor
 from sensorkit.std.optics import SetFilter
 from sensorkit.std.traits import Home
 
-from .common import REPORTED, TARGET, sensor_of, snapshot_of
+from .common import REPORTED, TARGET, details_of, sensor_of
 
 
 def asking(id: str, count: int = 1, seconds: float = 1.0, **kw
@@ -310,7 +310,7 @@ def test_a_child_keeps_its_parent_alignment_and_settings(facts):
 
 
 def test_one_device_asked_for_two_values_opens_a_child(topology):
-    sensor, _ = BoundSensor.bind(topology, snapshot_of(BINNED))
+    sensor, _ = BoundSensor.bind(topology, details_of(BINNED))
     collect = pack(
         intent_of(RequestEpoch(units=(
             asking("a", select=IsRef(device="cam-guide"),
@@ -324,7 +324,7 @@ def test_one_device_asked_for_two_values_opens_a_child(topology):
 
 
 def test_one_device_asked_for_two_values_alone_raises(topology):
-    sensor, _ = BoundSensor.bind(topology, snapshot_of(BINNED))
+    sensor, _ = BoundSensor.bind(topology, details_of(BINNED))
 
     with pytest.raises(PackingConflict, match="holds one value per epoch"):
         pack(intent_of(RequestEpoch(units=(
@@ -334,7 +334,7 @@ def test_one_device_asked_for_two_values_alone_raises(topology):
 
 
 def test_two_deadlines_for_one_command_is_a_planning_error(topology):
-    sensor, _ = BoundSensor.bind(topology, snapshot_of(BINNED))
+    sensor, _ = BoundSensor.bind(topology, details_of(BINNED))
 
     with pytest.raises(ValueError, match="nothing here chooses between them"):
         pack(intent_of(RequestEpoch(units=(
@@ -622,7 +622,7 @@ def filter_of(name: str, **kw) -> CommandRequest:
 
 def test_an_epoch_setting_passes_over_a_candidate_that_cannot_take_it(
         topology):
-    sensor, _ = BoundSensor.bind(topology, snapshot_of(SPLIT_ROLES))
+    sensor, _ = BoundSensor.bind(topology, details_of(SPLIT_ROLES))
     collect = pack(
         intent_of(RequestEpoch(settings=(binning(2.0),),
                                units=(asking("a"),))),
@@ -633,7 +633,7 @@ def test_an_epoch_setting_passes_over_a_candidate_that_cannot_take_it(
 
 
 def test_a_later_epoch_setting_decides_a_group_assignment(topology):
-    sensor, _ = BoundSensor.bind(topology, snapshot_of(SPLIT_ROLES))
+    sensor, _ = BoundSensor.bind(topology, details_of(SPLIT_ROLES))
     collect = pack(
         intent_of(
             RequestEpoch(units=(asking("a", assignment="whole"),)),
@@ -645,7 +645,7 @@ def test_a_later_epoch_setting_decides_a_group_assignment(topology):
 
 
 def test_a_group_no_instrument_can_be_set_up_for_rejects_planning(topology):
-    sensor, _ = BoundSensor.bind(topology, snapshot_of(SPLIT_ROLES))
+    sensor, _ = BoundSensor.bind(topology, details_of(SPLIT_ROLES))
 
     with pytest.raises(SettingUnsatisfiable):
         pack(intent_of(
@@ -758,7 +758,7 @@ def test_a_malformed_epoch_setting_raises_rather_than_passing_over(
         topology, reported, setting, match):
     # Another instrument could take each of these, so a failure read as
     # ineligibility would quietly pick it instead.
-    sensor, _ = BoundSensor.bind(topology, snapshot_of(reported))
+    sensor, _ = BoundSensor.bind(topology, details_of(reported))
 
     with pytest.raises(ValueError, match=match) as raised:
         pack(intent_of(RequestEpoch(settings=(setting,),

@@ -41,14 +41,6 @@ from sensorkit.sensor.workflow import (
 
 
 @dataclass(frozen=True)
-class CapabilitySnapshot:
-    """Device capabilities and published keywords."""
-
-    devices: tuple[tuple[DeviceKey, DeviceDetails], ...]
-    device_keywords: Mapping[DeviceKey, KeywordDict] | None = None
-
-
-@dataclass(frozen=True)
 class BindingReport:
     """Trait descriptions from a successful binding, one per placement.
 
@@ -60,28 +52,38 @@ class BindingReport:
 
 
 class BoundSensor:
-    """A topology with reported capabilities and established traits.
+    """A topology with reported device details and established traits.
 
     Implements `PlacementFacts` for selection and routing. Use `bind` to check
-    snapshot coverage and trait assertions; direct construction skips those
+    report coverage and trait assertions; direct construction skips those
     checks.
+
+    `device_keywords` holds keywords copied from devices for planning. `None`
+    means none were supplied. Copied keywords may describe device state as well
+    as capabilities, and may change before execution.
     """
 
-    def __init__(self, topology: Topology, capabilities: CapabilitySnapshot):
+    def __init__(
+        self,
+        topology: Topology,
+        details: Mapping[DeviceKey, DeviceDetails],
+        *,
+        device_keywords: Mapping[DeviceKey, KeywordDict] | None = None,
+    ):
         self.topology = topology
-        self.capabilities = capabilities
-        self._details = dict(capabilities.devices)
+        self.details = dict(details)
+        self._device_keywords = device_keywords
 
         # Keep every matching trait, including multiple archetypes.
         self._traits = {
-            placement: frozenset(t.name for t in match_traits(details))
+            placement: frozenset(t.name for t in match_traits(found))
             for placement in topology.placements()
-            if (details := self._details.get(placement.device)) is not None
+            if (found := self.details.get(placement.device)) is not None
         }
 
     @classmethod
     def bind(
-        cls, topology: Topology, capabilities: CapabilitySnapshot
+        cls, topology: Topology, details: Mapping[DeviceKey, DeviceDetails]
     ) -> tuple[BoundSensor, BindingReport]:
         """Check device reports and trait assertions, then return a sensor
         and report.
@@ -93,8 +95,7 @@ class BoundSensor:
             ValueError: A configured device has no report, or an authored trait
                 is unregistered or not satisfied by its device.
         """
-        reported = dict(capabilities.devices)
-        silent = tuple(p for p in topology.placements() if p.device not in reported)
+        silent = tuple(p for p in topology.placements() if p.device not in details)
 
         if silent:
             raise ValueError(
@@ -102,7 +103,7 @@ class BoundSensor:
                 + ", ".join(f"'{p.device}' at '{format_path(p.path, '<root>')}'" for p in silent)
             )
 
-        sensor = cls(topology, capabilities)
+        sensor = cls(topology, details)
         unmet = tuple(
             f"'{p.device}' at '{format_path(p.path, '<root>')}' {reason}"
             for p in topology.placements()
@@ -118,17 +119,17 @@ class BoundSensor:
         """Return reported command identifiers, or an empty set for an
         unknown device.
         """
-        details = self._details.get(device)
+        found = self.details.get(device)
 
-        return details.supported_commands if details else frozenset()
+        return found.supported_commands if found else frozenset()
 
     def published_keywords(self, device: DeviceKey) -> frozenset[str]:
         """Return reported keyword identifiers, or an empty set for an
         unknown device.
         """
-        details = self._details.get(device)
+        found = self.details.get(device)
 
-        return details.published_keywords if details else frozenset()
+        return found.published_keywords if found else frozenset()
 
     def device_keywords(self, device: DeviceKey) -> KeywordDict | None:
         """Return keywords copied from a device, or `None` if none were
@@ -136,12 +137,10 @@ class BoundSensor:
 
         A device missing from supplied keywords has none.
         """
-        supplied = self.capabilities.device_keywords
-
-        if supplied is None:
+        if self._device_keywords is None:
             return None
 
-        return supplied.get(device, KeywordDict())
+        return self._device_keywords.get(device, KeywordDict())
 
     def traits(self, placement: Placement) -> frozenset[TraitKey]:
         """Return established traits, or an empty set for an unknown

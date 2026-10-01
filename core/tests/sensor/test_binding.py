@@ -21,7 +21,7 @@ from sensorkit.std.traits import (
     Stop,
 )
 
-from .common import REPORTED, snapshot_of
+from .common import REPORTED, details_of
 
 
 def without(device: str) -> dict:
@@ -62,8 +62,8 @@ def test_kind_and_instrument_come_from_the_record(facts, at):
     assert facts.instrument(at("cam-sci"))
 
 
-def test_the_report_lists_what_each_placement_established(topology, snapshot):
-    _, report = BoundSensor.bind(topology, snapshot)
+def test_the_report_lists_what_each_placement_established(topology, details):
+    _, report = BoundSensor.bind(topology, details)
 
     assert len(report.established) == len(topology.placements())
     assert report.established[0].startswith("'mount' at '<root>'")
@@ -81,7 +81,7 @@ def test_a_device_that_reported_nothing_raises(topology, device, where):
     # `cover` declares no trait and `mount` declares one. Silence is a
     # deployment error either way.
     with pytest.raises(ValueError, match=f"'{device}' at '{where}'"):
-        BoundSensor.bind(topology, snapshot_of(without(device)))
+        BoundSensor.bind(topology, details_of(without(device)))
 
 
 def test_a_declared_trait_the_device_does_not_satisfy_raises(topology):
@@ -91,16 +91,16 @@ def test_a_declared_trait_the_device_does_not_satisfy_raises(topology):
 
     with pytest.raises(ValueError,
                        match="'dome' at '<root>' declares trait 'MustEnable'"):
-        BoundSensor.bind(topology, snapshot_of(lost))
+        BoundSensor.bind(topology, details_of(lost))
 
 
 def test_an_unregistered_declared_trait_says_so():
     structure = Structure(name="tiny", components=(
         Device(device="cam", traits=("Imaginary",), instrument=True),))
-    snapshot = snapshot_of({"cam": (("Connect",), ())})
+    details = details_of({"cam": (("Connect",), ())})
 
     with pytest.raises(ValueError, match="'Imaginary', which is not registered"):
-        BoundSensor.bind(Topology(structure), snapshot)
+        BoundSensor.bind(Topology(structure), details)
 
 
 # Routing by depth

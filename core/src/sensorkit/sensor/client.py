@@ -18,7 +18,7 @@ import sensorkit.api as sk
 from sensorkit.backend.base import KeyNotFound
 from sensorkit.common.aio import AsyncObserver
 from sensorkit.core.entity import DeviceDetails, EntityInfo
-from sensorkit.sensor.binding import BoundSensor, CapabilitySnapshot
+from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.collect import CollectIntent, compile_collect, pack
 from sensorkit.sensor.definition import SensorDefinition
 from sensorkit.sensor.dispatch import DeviceContexts, OperationEvent
@@ -87,7 +87,7 @@ class Sensor:
             sensorkit: Client used to access configured devices.
 
         Returns:
-            A session bound to the discovered capability snapshot.
+            A session bound to the discovered device details.
 
         Raises:
             ValueError: The definition is invalid, an entity is not a device, a
@@ -98,7 +98,7 @@ class Sensor:
         topology = definition.check()
         keys = tuple(p.device for p in topology.placements())
         clients = {key: sensorkit.device(key) for key in keys}
-        reported = []
+        reported: dict[str, DeviceDetails] = {}
 
         for key, client in clients.items():
             try:
@@ -109,12 +109,10 @@ class Sensor:
             if not isinstance(info.details, DeviceDetails):
                 raise ValueError(f"'{key}' is not a device")
 
-            reported.append((key, info.details))
+            reported[key] = info.details
 
-        snapshot = CapabilitySnapshot(devices=tuple(reported))
-
-        # Binding reports every configured device missing from the snapshot.
-        sensor, _ = BoundSensor.bind(topology, snapshot)
+        # Binding reports every configured device missing from the reports.
+        sensor, _ = BoundSensor.bind(topology, reported)
         executor = WorkflowExecutor(sensor, clients, events=AsyncObserver[OperationEvent]())
 
         return cls(definition, sensor, executor)

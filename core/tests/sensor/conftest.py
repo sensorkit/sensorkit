@@ -16,13 +16,14 @@ import pytest
 import pytest_asyncio
 
 from sensorkit.common.aio import AsyncObserver
-from sensorkit.sensor.binding import BoundSensor, CapabilitySnapshot
+from sensorkit.core.entity import DeviceDetails
+from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.definition import SensorDefinition
 from sensorkit.sensor.dispatch import OperationEvent
 from sensorkit.sensor.execution import WorkflowExecutor
 from sensorkit.sensor.topology import Placement, Topology
 
-from .common import REPORTED, SENSOR_YAML, Rig, snapshot_of
+from .common import REPORTED, SENSOR_YAML, Rig, details_of
 
 
 @pytest.fixture(scope="session")
@@ -36,13 +37,13 @@ def topology(definition) -> Topology:
 
 
 @pytest.fixture(scope="session")
-def snapshot() -> CapabilitySnapshot:
-    return snapshot_of(REPORTED)
+def details() -> dict[str, DeviceDetails]:
+    return details_of(REPORTED)
 
 
 @pytest.fixture(scope="session")
-def facts(topology, snapshot) -> BoundSensor:
-    sensor, _ = BoundSensor.bind(topology, snapshot)
+def facts(topology, details) -> BoundSensor:
+    sensor, _ = BoundSensor.bind(topology, details)
 
     return sensor
 

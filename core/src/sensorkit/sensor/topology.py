@@ -21,7 +21,7 @@ from typing import Annotated
 from pydantic import BaseModel, BeforeValidator, Discriminator, Field, Tag
 
 type DeviceKey = str
-"""Device identifier used in the structure and capability snapshot."""
+"""Device identifier used in the structure and device reports."""
 
 type TraitKey = str
 """Registered trait name, checked against device capabilities at binding."""

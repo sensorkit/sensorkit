@@ -28,7 +28,6 @@ from sensorkit.sensor.audit import (
 from sensorkit.sensor.binding import (
     BindingReport,
     BoundSensor,
-    CapabilitySnapshot,
 )
 from sensorkit.sensor.client import Sensor
 from sensorkit.sensor.collect import (

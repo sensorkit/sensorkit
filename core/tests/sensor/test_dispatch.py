@@ -28,7 +28,7 @@ from sensorkit.sensor.workflow import Acquisition, Operation, Origin
 from sensorkit.std.instrument import CameraCapture
 from sensorkit.std.traits import Stop
 
-from .common import REPORTED, snapshot_of
+from .common import REPORTED, details_of
 
 WITHOUT_ABORT = REPORTED["mount"][0]
 WITH_ABORT = (*WITHOUT_ABORT, "Abort")
@@ -81,7 +81,7 @@ async def before(kit, mount) -> set[asyncio.Task]:
 def dispatcher(kit, topology, commands: tuple[str, ...]) -> Dispatcher:
     """A dispatcher whose mount reports these commands."""
     sensor, _ = BoundSensor.bind(
-        topology, snapshot_of({**REPORTED, "mount": (commands, ())}))
+        topology, details_of({**REPORTED, "mount": (commands, ())}))
 
     return Dispatcher(sensor, {"mount": kit.device("mount")})
 
