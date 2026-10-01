@@ -507,7 +507,7 @@ async def test_models_built_directly_plan_audit_and_run(session, rig):
     focused = CollectIntent(
         name="focused", epochs=(RequestEpoch(units=(InstrumentRequest(
             id="focused", select=IsRef(device="cam-e"),
-            acquisition=AcquisitionRequest(integration_time_s=0.5, count=2),
+            acquisition=AcquisitionRequest(integration_time_s=0.5), count=2,
             settings=(CommandRequest(
                 command=ChangeFocusPosition(position=900)),)),)),),
         cleanup=(CommandRequest(command=Stop(), subject="sensor"),))

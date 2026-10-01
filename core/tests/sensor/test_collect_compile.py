@@ -116,9 +116,9 @@ def asking(id: str, device: str, count: int = 1, seconds: float = 1.0,
     """One request, pinned to one instrument so a case says where work goes."""
     return InstrumentRequest(
         id=id, select=IsRef(device=device),
-        acquisition=AcquisitionRequest(integration_time_s=seconds, count=count,
+        acquisition=AcquisitionRequest(integration_time_s=seconds,
                                        timeout_s=timeout_s),
-        **kw)
+        count=count, **kw)
 
 
 def compiled(sensor: BoundSensor, *epochs: RequestEpoch,
@@ -804,9 +804,8 @@ def test_a_standard_task_points_once_and_stops_the_mount(bench):
 @pytest.mark.asyncio
 async def test_a_directly_authored_collect_needs_no_adapter(bench):
     fanned = InstrumentRequest(
-        id="flat", acquisition=AcquisitionRequest(integration_time_s=0.5,
-                                                  count=2, distribute="each"),
-        settings=(configured(1),))
+        id="flat", acquisition=AcquisitionRequest(integration_time_s=0.5),
+        count=2, distribute="each", settings=(configured(1),))
     workflow = compiled(
         bench, RequestEpoch(settings=(pointing(),), units=(fanned,)),
         prepare=(pointing(),),

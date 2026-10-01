@@ -2,21 +2,23 @@
 """Translate standard collect tasks into hardware-independent collect
 intents.
 
-The target becomes sensor-subject preparation and epoch settings; Stop becomes
+The target becomes sensor-subject preparation and epoch settings. Stop becomes
 cleanup. Camera parameters become per-request instrument settings. Packing
-chooses devices and checks that requested settings have supporting commands.
+chooses devices and checks command support and setting requirements.
 
-For a requested filter, packing prefers instruments whose routed wheel reports
-the name. A nonempty filter list that omits the name makes the instrument
-ineligible. Missing or empty lists leave name validation to the setting command.
+When planning keywords are supplied, packing prefers instruments whose routed
+wheel reports the requested filter. A nonempty list that lacks the name makes
+the instrument ineligible. Missing or empty lists leave name validation to the
+setting command.
 
 Target changes, including sidereal frames, divide the collect into epochs.
-Segments of each exposure share an assignment so they stay on one instrument
-and continue their request ordinals. Shorter exposures leave later epochs.
+Segments of each exposure share an assignment and stay on one instrument.
+Request ordinals continue across segments. Exposures appear only in epochs
+where they have frames remaining.
 
-The `Collect` keyword records requested target and camera parameters,
-separately from achieved device values. Packing fills its per-instrument frame
-number.
+The `Collect` keyword records the requested target and camera parameters.
+Packing fills its per-instrument frame number. Reported device values are
+sampled at dispatch.
 """
 
 from __future__ import annotations
@@ -127,9 +129,9 @@ def _segment(
         assignment=name,
         acquisition=AcquisitionRequest(
             integration_time_s=params.integration_time_seconds,
-            count=count,
             timeout_s=params.integration_time_seconds + margin_s,
         ),
+        count=count,
         collect=Collect(target=target, target_id=target_id(task), params=params),
         settings=settings,
     )
@@ -187,7 +189,7 @@ def camera_settings(params: CameraParameterSet) -> tuple[CommandRequest, ...]:
 
 
 def _filter(name: str) -> CommandRequest:
-    """Request the named filter and prefer a wheel that reports it.
+    """Request a filter with availability requirements and preferences.
 
     Wheels with absent or empty filter lists remain eligible.
     """

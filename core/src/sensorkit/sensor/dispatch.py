@@ -4,7 +4,8 @@ calls.
 
 Operations already contain resolved timeouts and command parameters. For an
 acquisition, dispatch samples a fresh header from base context, device contexts
-along the chain, then planned keywords. It sends a copy of the command.
+along the chain, then planned keywords. It adds the header to a copy of the
+acquisition command.
 
 Record attempts immediately before sending; failures before this point do not
 arm cleanup. A cancelled or timed-out call triggers one built-in Abort attempt
@@ -79,8 +80,8 @@ class Interruption:
     """Result of the built-in Abort attempt for a dropped call.
 
     Acknowledged means the device answered, not that motion stopped.
-    Unsupported means nothing was sent. `error` records a known failure
-    exception.
+    Unsupported means nothing was sent. `error` holds the Abort exception
+    when available.
     """
 
     outcome: InterruptionOutcome

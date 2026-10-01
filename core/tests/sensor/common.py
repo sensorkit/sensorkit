@@ -143,7 +143,7 @@ def asking(device: str, count: int = 1, **kw) -> InstrumentRequest:
     """A request for frames from one named instrument."""
     return InstrumentRequest(
         id=f"{device}-frames", select=IsRef(device=device),
-        acquisition=AcquisitionRequest(integration_time_s=0.1, count=count),
+        acquisition=AcquisitionRequest(integration_time_s=0.1), count=count,
         **kw)
 
 

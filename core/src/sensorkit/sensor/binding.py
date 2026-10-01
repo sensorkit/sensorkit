@@ -42,13 +42,12 @@ from sensorkit.sensor.workflow import (
 class BoundSensor:
     """A topology with reported device details and established traits.
 
-    Implements `PlacementFacts` for selection and routing. Use `bind` to check
-    report coverage and trait assertions; direct construction skips those
-    checks.
+    Implements `PlacementFacts` for selection and routing. `bind` validates
+    report coverage and trait assertions. Direct construction skips validation.
 
-    `device_keywords` holds keywords copied from devices for planning. `None`
-    means none were supplied. Copied keywords may describe device state as well
-    as capabilities, and may change before execution.
+    `device_keywords` supplies device keyword values for planning. `None`
+    means no mapping was supplied. The values may describe capabilities or
+    current state and may become stale before execution.
     """
 
     def __init__(
@@ -121,7 +120,7 @@ class BoundSensor:
         """Return keywords copied from a device, or `None` if none were
         supplied.
 
-        A device missing from supplied keywords has none.
+        A device missing from a supplied mapping has an empty keyword set.
         """
         if self._device_keywords is None:
             return None
@@ -139,7 +138,7 @@ class BoundSensor:
         return frozenset(self.topology.record(placement).tags)
 
     def kind(self, placement: Placement) -> Literal["device", "instrument", "selector"]:
-        """Return the placement record kind: device, instrument or selector."""
+        """Return the placement's device, instrument or selector kind."""
         match self.topology.record(placement):
             case Selector():
                 return "selector"

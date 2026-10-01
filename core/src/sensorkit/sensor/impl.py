@@ -86,8 +86,7 @@ class SensorController:
                 ],
             )
 
-        # Compat only, for UI code not yet reading ControllerInfo and
-        # SensorConfig.
+        # Publish device roles for consumers of the legacy capability model.
         await controller.kv_put_model(
             Capabilities(
                 tasks=controller.entity_info().details.supported_tasks,
@@ -134,8 +133,8 @@ class SensorController:
         return report
 
     async def run_table(self, name: str):
-        """Plan and execute a lifecycle table, aborting every device if it
-        fails.
+        """Plan and execute a lifecycle table, attempting Abort on every
+        device after failure.
 
         Raises:
             WorkflowError: Required work or cleanup failed.
@@ -170,7 +169,7 @@ class SensorController:
 
     @sk.task_handler
     async def recover_task(self, task: sk.RecoverTask):
-        """Reconnect every device, then stop any motion."""
+        """Attempt to reconnect every device, then stop motion."""
         await self.run_table("recover")
 
     @sk.task_handler
@@ -183,9 +182,10 @@ class SensorController:
 
 
 class SensorDevices(BaseModel):
-    """Compat only. Devices by role, with per-camera roles paired by position.
+    """Legacy device roles, with focusers and filter wheels paired to cameras.
 
-    An empty key marks a camera without that device.
+    Each paired list follows camera order. An empty key marks a camera without
+    that device. The list is empty when no camera has that device.
     """
 
     mount: str | None = None
@@ -229,7 +229,7 @@ class SensorDevices(BaseModel):
 
 
 class Capabilities(BaseModel):
-    """Compat only. A sensor controller's tasks and devices by role."""
+    """Legacy model of a sensor controller's tasks and device roles."""
 
     type: Literal["controller"] = "controller"
     tasks: list[str]

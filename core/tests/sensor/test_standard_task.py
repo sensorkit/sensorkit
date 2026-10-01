@@ -84,7 +84,7 @@ the east camera is already committed to the whole of the first."""
 
 def counts(intent: CollectIntent) -> list[list[tuple[str, int]]]:
     """Each epoch's segments, as request id and frame count."""
-    return [[(request.id, request.acquisition.count) for request in epoch.units]
+    return [[(request.id, request.count) for request in epoch.units]
             for epoch in intent.epochs]
 
 
@@ -124,7 +124,7 @@ def test_every_segment_keeps_its_exposure_identity():
     requests = [r for epoch in translate(SEVERAL).epochs for r in epoch.units]
 
     assert all(r.assignment == r.id for r in requests)
-    assert all(r.acquisition.distribute == "one" for r in requests)
+    assert all(r.distribute == "one" for r in requests)
     assert all(r.requires == () and r.prefers == () for r in requests)
 
 

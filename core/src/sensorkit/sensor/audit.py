@@ -2,10 +2,10 @@
 """Explain sensor definitions and compiled workflows without contacting
 hardware.
 
-Definition audits check structure and references, rendering selections
-symbolically and deferring capability-dependent answers to binding. Workflow
-audits describe stored nodes, edges, deadlines, overrides, omissions and
-cleanup conditions. Provenance describes compilation facts, not current state.
+Definition audits check structure and references. They render selections
+symbolically and defer capability-dependent checks to binding or compilation.
+Workflow audits describe stored nodes, edges, deadlines, overrides, omissions
+and cleanup conditions.
 
 Audits read their inputs without modifying them. Compiled workflows are
 rendered as supplied rather than revalidated.
@@ -103,13 +103,12 @@ def audit_definition(definition: SensorDefinition) -> AuditReport:
     """Check an existing definition and describe its authored structure and
     tables.
 
-    Report structural and reference checks as valid or invalid. Defer target
-    selection, trait assertions, command support and trait deadlines to
-    binding. Render predicates symbolically, including negation, without
-    guessing targets.
+    Report structural and reference checks as valid or invalid. Target
+    selection, trait assertions, command support and trait deadlines remain
+    deferred until device facts are supplied. Predicates are shown as authored.
 
-    Parsing errors belong to the loader; this audit can report structural
-    errors in Python-built definitions and checks individual parts separately.
+    Check each part separately so a Python-built definition can report multiple
+    errors. YAML parsing and model validation belong to the loader.
     """
     topology, structure = _structure_checked(definition.sensor)
     checked = (
@@ -147,12 +146,11 @@ def audit_workflow(workflow: ExecutableWorkflow) -> AuditReport:
     workflow.
 
     Include dependency kinds, target placements, deadlines, delays, acquisition
-    keywords, omissions, outcome overrides and cleanup triggers.
-    Findings are empty because this renders the artifact without revalidation.
+    keywords, omissions, outcome overrides and cleanup triggers. Findings are
+    empty because the workflow is rendered without revalidation.
 
-    Outcome overrides retain operator reasons. Rules changing only failure
-    policy or optionality appear as effective policy; lowering does not retain
-    their reasons.
+    Outcome overrides include operator reasons. Rules changing only failure
+    policy or optionality appear as effective policy without their reasons.
     """
     lines = [
         f"workflow '{workflow.name}', as compiled",

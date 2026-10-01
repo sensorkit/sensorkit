@@ -2,7 +2,7 @@
 """Author and compile lifecycle tables such as bring-up and shutdown.
 
 Tables contain phases of entries. Each entry selects placements and runs an
-ordered list of commands on each; entries in one phase must select disjoint
+ordered list of commands on each. Entries in one phase must select disjoint
 placements. Compilation emits planned steps for shared workflow lowering.
 
 A phase normally follows the preceding phase with completion dependencies.
@@ -77,12 +77,12 @@ class OpSpec(BaseModel, frozen=True, extra="forbid"):
 
     A bare command name is shorthand for a command using default arguments.
     `sequence` requires success or completion of the preceding command at the
-    same placement; it has no effect on the first command.
+    same placement. It has no effect on the first command.
 
     `unsupported` chooses compilation error or omission. `optional` controls
     whether an unsuccessful result fails the run. `fail_fast` controls whether
     failure stops dispatch and inherits from the phase, then table, when unset.
-    `timeout_s` overrides configured deadlines; `None` inherits them.
+    `timeout_s` overrides configured deadlines. `None` inherits them.
     """
 
     command: Annotated[DeviceCommand, BeforeValidator(_accept_str_command)]
@@ -123,9 +123,10 @@ def _accept_bare_require(v: object) -> object:
 class Entry(BaseModel, frozen=True, extra="forbid"):
     """A selection of placements and the commands to run on each.
 
-    `exclude` removes placements from `select`. Entries within a phase or
-    cleanup must not overlap. Commands are serial per placement; different
-    placements may run concurrently.
+    `select` is evaluated over all placements before `exclude` removes matches
+    from the result. Entries within a phase or cleanup must not overlap.
+    Commands run serially per placement. Different placements may run
+    concurrently.
 
     `require` adds dependencies or refines inherited waits on named phases.
     Each clause specifies its join and success or completion condition.
@@ -168,7 +169,7 @@ class Entry(BaseModel, frozen=True, extra="forbid"):
 class Phase(BaseModel, frozen=True, extra="forbid"):
     """A named group of entries with inherited completion dependencies.
 
-    `after=None` follows the preceding phase; an empty tuple follows none.
+    `after=None` follows the preceding phase. An empty tuple follows none.
     `after` names earlier phases. Entry requirements may narrow their inherited
     waits. An unset `fail_fast` inherits the table default.
     """
@@ -185,11 +186,10 @@ class CleanupSpec(BaseModel, frozen=True, extra="forbid"):
     Entries are ordered only by their own `require` clauses, which may
     reference entries in this spec. Each spec has its own entry-id namespace.
 
-    `armed_by` names main-workflow entries: any attempted operation from those
-    entries arms cleanup. `None` is unconditional; an empty tuple never arms
-    it. `when` independently selects the run outcome, with `cancelled` meaning
-    a domain abort. Hard cancellation skips cleanup. `timeout_s` bounds the
-    graph.
+    `armed_by` names main-workflow entries. An attempted operation from any
+    named entry arms cleanup. `None` is unconditional. An empty tuple never
+    arms it. `when` selects by run outcome, with `cancelled` meaning a domain
+    abort. Hard cancellation skips cleanup. `timeout_s` bounds the graph.
 
     Keep cleanup to stopping ongoing work; it cannot provide crash recovery.
     """
@@ -205,8 +205,8 @@ class LifecycleWorkflow(BaseModel, frozen=True, extra="forbid"):
     """A named lifecycle table with phases, cleanup and a failure-policy
     default.
 
-    `fail_fast` is required: true stops the run on failure, while false allows
-    other work to continue subject to dependencies. Operations can override it.
+    `fail_fast` is required. True stops the run on failure. False allows other
+    work to continue subject to dependencies. Operations can override it.
     Definition mappings supply `name` from the table's mapping key.
     """
 

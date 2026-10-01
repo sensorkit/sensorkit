@@ -45,8 +45,8 @@ from sensorkit.std.traits import Connect, Deinit, Home, Init, Stop
 class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
     """Site options for generating standard lifecycle tables and deadlines.
 
-    Every command has a deadline rule, through a default for commands no
-    other rule names.
+    A default deadline covers commands without a matching command-specific
+    rule.
     """
 
     concurrent_dome_and_mount_init: bool = False
@@ -113,7 +113,7 @@ class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
     def tables(self) -> tuple[LifecycleWorkflow, ...]:
         """Generate `init`, `standby`, `shutdown` and `recover` tables.
 
-        `standby` currently duplicates `init` under a separate name.
+        `standby` uses the same sequence as `init`.
         Unsupported commands are omitted during lowering. `compose_tables`
         removes generated entries that select no equipment and applies authored
         table replacements.

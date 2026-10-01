@@ -36,14 +36,12 @@ from sensorkit.sensor.workflow import ExecutableWorkflow, OperatorRule
 
 
 class Sensor:
-    """A definition, bound sensor and executor with session-owned workflow
-    issuance.
+    """A connected sensor that plans workflows and executes them one at a time.
 
-    Execute only workflows this session planned, one at a time. Issued
-    workflows are held weakly so discarded plans are not retained. The session
-    keeps its definition and binding for its lifetime; callers must not mutate
-    them. Issuance checks provenance, not tampering with nested workflow
-    values.
+    Only workflows planned by this session may execute through it. Discarded
+    plans are not retained. Callers must not mutate the definition, binding or
+    compiled workflows. The session checks workflow identity without checking
+    for mutations to nested values.
     """
 
     def __init__(
@@ -80,9 +78,9 @@ class Sensor:
         """Validate the definition, discover configured devices and bind
         their capabilities.
 
-        Read reports sequentially after structural validation. The caller
-        retains ownership of the supplied client and backend; the session does
-        not close them.
+        Validate the definition before reading device reports. The caller owns
+        the supplied client and backend and remains responsible for closing
+        them.
 
         Args:
             definition: Authored definition with any generated deadlines
@@ -114,7 +112,7 @@ class Sensor:
 
             reported[key] = info.details
 
-        # Binding reports every configured device missing from the reports.
+        # Report all missing devices in one binding error.
         sensor = BoundSensor.bind(topology, reported)
         executor = WorkflowExecutor(sensor, clients, events=AsyncObserver[OperationEvent]())
 
@@ -147,10 +145,10 @@ class Sensor:
         """Pack, compile and issue a collect intent using this definition's
         deadlines.
 
-        Caller-supplied rules apply to the compiled workflow. Selections use
-        `device_keywords` for planning. Omitted devices and keywords are treated
-        as absent; omitting the mapping treats all device keywords as absent.
-        Planning chooses all hardware before any commands are sent.
+        `device_keywords` supplies the keywords for planning selections. A
+        missing mapping, device or keyword is treated as absent. Operator rules
+        use the session's binding independently of this mapping. Planning
+        chooses all hardware before any commands are sent.
 
         Raises:
             ValueError: The intent cannot pack or compile against this sensor.
@@ -173,7 +171,7 @@ class Sensor:
         """Run an issued workflow, keeping the session occupied through
         cleanup and drain.
 
-        Reject overlapping runs rather than queueing them.
+        Overlapping runs are rejected.
 
         Args:
             workflow: Workflow planned by this session.

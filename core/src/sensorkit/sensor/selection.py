@@ -2,15 +2,15 @@
 """Select devices by placement properties, reported capabilities and device
 keywords.
 
-`matches` tests one placement; `matching` filters a supplied list. `reaches`
-tests an instrument chain. Compositions evaluate each member over the whole
-chain: a wheel may satisfy `Supports(SetFilter)` while its camera satisfies
-`Supports(CameraCapture)`. At one placement, both must hold on that device.
+`matches` tests one placement. `matching` filters supplied placements. `reaches`
+tests an instrument chain. On a chain, `AllOf` may match different members at
+different placements. A wheel can satisfy `Supports(supports=SetFilter)` while
+its camera satisfies `Supports(supports=CameraCapture)`.
 
-Except for device-key comparisons, predicates require `PlacementFacts`,
-implemented by `BoundSensor`. Missing facts raise rather than count as false,
-including under negation. `KeywordMatch` also requires device keywords, which
-planning copies into the facts; other facts contain capability identifiers.
+Except for device-key comparisons, predicates use `PlacementFacts`, implemented
+by `BoundSensor`. Evaluating a predicate without required facts raises, including
+under negation. `KeywordMatch` requires a device keyword mapping. Capability
+predicates use reported command and keyword identifiers.
 
 Authored selections use a distinguishing key; a bare string names a trait.
 Routing chooses a command target from matching placements in `binding`.
@@ -74,7 +74,7 @@ class PlacementFacts(DeviceFacts, Protocol):
         """Return the tags declared on the placement record."""
 
     def kind(self, placement: Placement) -> Literal["device", "instrument", "selector"]:
-        """Return the record kind: device, instrument or selector."""
+        """Return the record's device, instrument or selector kind."""
 
     def instrument(self, placement: Placement) -> bool:
         """Return whether the record marks this device as a collection
@@ -173,10 +173,9 @@ class Selection(BaseModel, ABC, frozen=True, extra="forbid"):
     def reaches(self, chain: tuple[Placement, ...], facts: PlacementFacts | None = None) -> bool:
         """Test whether the chain satisfies this predicate.
 
-        Simple predicates match if any placement does. Compositions evaluate
-        each member over the chain: `AllOf` may use different devices for its
-        members, and `Not` requires that its member fail for the chain as a
-        whole.
+        Simple predicates match if any placement does. `AllOf` may match its
+        members on different devices. `Not` matches only if its member fails
+        to match the chain as a whole.
         """
         return any(self.matches(p, facts) for p in chain)
 
@@ -290,8 +289,8 @@ class KeywordMatch(Selection):
     predicate are checked against the keyword type when authored. An omitted
     field tests the keyword object itself.
 
-    A device or keyword missing from the supplied device keywords is absent,
-    which only `exists` selects. Facts without device keywords raise.
+    A missing device or keyword is passed to the predicate as absent.
+    Facts without a device keyword mapping raise `SelectionError`.
     """
 
     type = SelectionType.keyword

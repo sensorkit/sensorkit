@@ -22,9 +22,9 @@ from sensorkit.sensor.workflow import DeadlineRule
 class SensorDefinition(BaseModel, frozen=True, extra="forbid"):
     """A sensor's structure, lifecycle tables and deadline rules.
 
-    Tables may be supplied as a mapping; each key becomes the table name and
-    the values are stored as a tuple. Python construction validates the models;
-    call `check` for structural and reference checks, or use the YAML loaders.
+    Tables may be supplied as a mapping whose keys supply the table names.
+    Python construction validates the models. Call `check` for structural and
+    reference checks, or use the YAML loaders to perform both.
     """
 
     sensor: Structure
@@ -64,10 +64,8 @@ class SensorDefinition(BaseModel, frozen=True, extra="forbid"):
         """Check structure, table names, deadline targets and table
         dependencies.
 
-        This method uses no device facts. It is explicit so Python-built
-        definitions can be inspected or audited before all checks pass. Success
-        does not guarantee that a table will compile against a particular
-        sensor.
+        Checks require no device facts. Compilation later checks selected
+        targets, command support and resolved deadlines against a bound sensor.
 
         Returns:
             The validated topology for binding or further inspection.

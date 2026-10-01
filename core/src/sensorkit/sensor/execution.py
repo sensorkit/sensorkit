@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Run workflow graphs, own cleanup and report aggregate outcomes.
 
-`DagRunner` schedules nodes; this executor supplies dispatch, interruption
+`DagRunner` schedules nodes. This executor supplies dispatch, interruption
 recording and cleanup sequencing. Eligible, armed cleanup runs after the main
 graph drains, including after a fail-fast failure.
 
@@ -85,8 +85,8 @@ class CleanupReport:
 class ExecutionState:
     """Caller-owned, single-use records of one execution.
 
-    Attempts are recorded at dispatch, not inferred from node results:
-    overrides and cancelled delays send no command. Cleanup triggers use
+    Attempts are recorded when dispatch begins. Overrides and cancelled
+    delays send no command and do not count as attempts. Cleanup triggers use
     operation identity.
 
     `run` and `cleanup` hold node results; `interruptions` separately holds
@@ -184,9 +184,9 @@ class WorkflowError(Exception):
 class WorkflowExecutor:
     """Run lifecycle or collect workflows against a bound sensor's clients.
 
-    Each execution creates its own state and dispatcher. The observer spans
-    runs. Direct execution permits concurrent runs; `Sensor` enforces
-    one at a time and checks workflow issuance.
+    Each execution uses a separate state and dispatcher. The observer spans
+    runs. Direct execution permits concurrent runs. `Sensor` permits one run
+    at a time and checks that it issued the workflow.
     """
 
     def __init__(

@@ -132,7 +132,7 @@ class RoutedCommand:
 
     @property
     def governs(self) -> tuple[Placement, type[DeviceCommand]]:
-        """Return the collect state key: target placement and command type."""
+        """Return the target placement and command type governing collect state."""
         return self.target, type(self.command)
 
 
@@ -303,8 +303,11 @@ def resolve_deadline(
     explicit: float | None,
     facts: PlacementFacts,
 ) -> float | None:
-    """Resolve an operation timeout: explicit value, then rules naming the
-    command, then rules for every command, each by device, trait, any.
+    """Resolve an operation timeout from an explicit value or deadline rules.
+
+    An explicit value takes precedence. Rules naming the command precede
+    defaults. Within each group, device rules precede trait rules, which
+    precede universal rules.
 
     Return `None` if neither an explicit value nor a matching rule exists.
     Lowering validates the result and stores it on the operation.
@@ -312,7 +315,6 @@ def resolve_deadline(
     Raises:
         ValueError: Multiple rules match at the winning specificity.
     """
-    # Resolve only device, trait and universal targets.
     if explicit is not None:
         return explicit
 
@@ -415,9 +417,10 @@ class Cleanup:
     `when` selects by run outcome. Domain aborts select `cancelled` cleanup;
     hard cancellation skips all cleanup, including `always`.
 
-    `armed_by` uses operation identity: `None` is always armed, an empty tuple
-    is never armed, and any attempted trigger arms a nonempty tuple. Attempts
-    count even when they fail, since hardware may already have started moving.
+    `armed_by` identifies triggers by operation identity. `None` is always
+    armed. An empty tuple is never armed. A nonempty tuple is armed when any
+    trigger is attempted, even if it fails, since hardware may have started
+    moving.
 
     `timeout_s` bounds the whole graph independently of per-operation
     deadlines. Cleanup is not durable crash recovery; keep it to stopping
@@ -749,8 +752,8 @@ def _arming(
 ) -> tuple[Operation, ...] | None:
     """Resolve named cleanup triggers to emitted main-workflow operations.
 
-    Omitted and ordering steps contribute no trigger. An empty result remains
-    never armed; it does not become unconditional or inherit dependencies.
+    Omitted and ordering steps contribute no trigger. Cleanup with an empty
+    result is never armed.
 
     Raises:
         ValueError: A trigger names a step outside the main workflow.

@@ -53,11 +53,9 @@ def asking(id: str, count: int = 1, seconds: float = 1.0, **kw
            ) -> InstrumentRequest:
     """One instrument request, with the acquisition fields inlined."""
     acquisition = AcquisitionRequest(
-        integration_time_s=seconds, count=count,
-        distribute=kw.pop("distribute", "one"),
-        timeout_s=kw.pop("timeout_s", None))
+        integration_time_s=seconds, timeout_s=kw.pop("timeout_s", None))
 
-    return InstrumentRequest(id=id, acquisition=acquisition, **kw)
+    return InstrumentRequest(id=id, acquisition=acquisition, count=count, **kw)
 
 
 def intent_of(*epochs: RequestEpoch, **kw) -> CollectIntent:

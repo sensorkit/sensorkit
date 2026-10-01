@@ -369,8 +369,8 @@ def darks(collecting) -> ExecutableWorkflow:
             units=(
                 InstrumentRequest(
                     id="darks", select=IsRef(device="cam-guide"),
-                    acquisition=AcquisitionRequest(integration_time_s=4.0,
-                                                   count=2),
+                    acquisition=AcquisitionRequest(integration_time_s=4.0),
+                    count=2,
                     collect=Collect(target=TARGET, target_id="dark",
                                     params=CameraParameterSet(integration_time_seconds=4.0,
                                                               frame_count=2))),

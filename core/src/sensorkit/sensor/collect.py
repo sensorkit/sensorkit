@@ -3,25 +3,25 @@
 workflows.
 
 `pack` chooses participants, routes settings and splits incompatible requests
-into child epochs. `compile_collect` emits planned steps with dependencies;
-shared lowering builds the executable graphs. Current expansion produces camera
-captures, with planned keywords carried on each acquisition.
+into child epochs. `compile_collect` derives dependencies and emits planned
+steps. Shared lowering builds the executable graphs. Each acquisition expands
+into a camera capture with planned keywords.
 
-Settings must describe absolute state. State is keyed by placement and command
-type; later commands replace earlier ones without merging partial fields. Equal
-commands with equal authored timeouts are elided, not retried. Relative
-commands such as offsets are unsuitable for settings because repeats may be
-elided. Preparation seeds the same state and has the same constraints.
+Settings must describe absolute state. Each placement holds one setting per
+command type. A later command replaces that setting without merging partial
+fields. Equal commands with equal authored timeouts reuse the earlier step.
+Relative commands such as offsets are unsuitable because each occurrence may
+need to execute. Preparation establishes settings under the same rules.
 
-Dependencies follow devices, not epoch boundaries. Settings wait for preceding
-operations on their device and acquisitions reading through it. Acquisitions
-require successful governing settings and preparation on their chain, and
-serialize per instrument. Independent chains may overlap across epochs.
+Settings wait for preceding operations on their device and acquisitions that
+use it. Acquisitions require successful settings and preparation on their
+chain. Captures run serially on each instrument. Independent chains may overlap
+across epoch boundaries.
 
-Midpoint alignment centers estimated acquisition blocks within a child epoch;
-the estimates include integration time only. Teardown uses a separate cleanup
-graph, armed by attempted preparation or, without preparation, any attempted
-command. It should stop ongoing work; recovery belongs to the agent.
+Midpoint alignment centers acquisition blocks using integration-time estimates.
+Cleanup runs in a separate graph, armed by attempted preparation. Without
+preparation, any attempted command arms cleanup. Cleanup should stop ongoing
+work. Recovery belongs to the agent.
 """
 
 from __future__ import annotations
@@ -77,21 +77,13 @@ class SettingUnsatisfiable(ValueError):
 
 @dataclass(frozen=True)
 class AcquisitionRequest:
-    """Frame integration time, count, distribution and optional command
-    timeout.
+    """Integration time and optional command timeout for one capture.
 
-    Zero integration is allowed for bias frames. `distribute="one"` assigns all
-    `count` frames to one chosen instrument. `each` assigns `count` frames to
-    every eligible instrument. Splitting a count across instruments is
-    unsupported.
-
-    `timeout_s` limits each capture separately, not the whole request or its
-    integration estimate. `None` inherits configured deadline rules.
+    Zero integration is allowed for bias frames. `timeout_s` limits each
+    capture. `None` inherits configured deadline rules.
     """
 
     integration_time_s: float
-    count: int = 1
-    distribute: Literal["one", "each"] = "one"
     timeout_s: float | None = None
 
 
@@ -104,10 +96,12 @@ class CommandRequest:
     and `device` narrow the targets. Requests can configure an epoch,
     individual instruments, preparation or cleanup.
 
-    Every predicate in `requires` must match every routed target. Requirements
-    are checked after routing and do not affect target selection. Predicates in
-    `prefers` contribute to instrument ranking for each routed target they
-    match. Only instrument settings may specify preferences.
+    Every predicate in `requires` must match every routed target. Instrument
+    settings with unmet requirements make the instrument ineligible during
+    assignment. Routing chooses targets before checking requirements.
+
+    Each matching `prefers` predicate adds one point per routed target to the
+    instrument's ranking. Only instrument settings may specify preferences.
 
     Collect settings must be absolute, with one state per command type. Restate
     all required fields in partial-update commands; compilation does not merge
@@ -129,9 +123,8 @@ class CommandRequest:
         """Route this command, check target requirements and attach its
         authored timeout.
 
-        Different requests colliding on a shared device are checked during
-        packing. Explicit device references skip the support precheck to retain
-        routing errors.
+        Packing checks that requests sharing a target agree. An explicit
+        device must belong to a participating chain and support the command.
 
         Raises:
             SettingUnsatisfiable: A participant group has no supporting device,
@@ -217,25 +210,32 @@ class CommandRequest:
 
 @dataclass(frozen=True)
 class InstrumentRequest:
-    """An acquisition request with instrument criteria, settings and collect
-    metadata.
+    """Acquisitions to repeat on selected instruments under requested settings.
 
-    `select` filters instrument placements. `requires` filters their chains;
-    `prefers` ranks eligible chains without excluding them. Each setting must
-    route successfully and satisfy its target requirements. Chain preferences
-    and setting target preferences contribute to the same ranking.
+    `count` is the number of captures per assigned instrument.
+    `distribute="one"` chooses one instrument for the entire count.
+    `distribute="each"` gives the entire count to every eligible instrument.
 
-    `collect` carries the standard task's target and requested camera parameters.
-    Expansion fills its per-instrument frame number. Device keywords are sampled
-    from subscriptions at dispatch.
+    `select` tests instrument placements. Each predicate in `requires` must
+    match the instrument's chain. Each setting must route successfully and
+    satisfy its target requirements. Chain preferences and setting target
+    preferences contribute to the same ranking.
 
-    A named `assignment` keeps segments on the same instruments across the
-    collect. Every segment must agree on distribution and be eligible there.
-    Ordinals continue across segments; an unnamed request forms its own group.
+    `collect` carries the requested target and camera parameters. Expansion
+    fills its per-instrument frame number. Dispatch samples device keywords
+    for each capture's header.
+
+    Requests with the same `assignment` form a group across the collect.
+    The chosen instruments must be eligible for every segment. Segments must
+    agree on distribution but may have different counts. Request ordinals
+    continue per instrument across segments. An unnamed request forms its own
+    group.
     """
 
     id: RequestId
     acquisition: AcquisitionRequest
+    count: int = 1
+    distribute: Literal["one", "each"] = "one"
     collect: CollectKeyword | None = None
     select: Selection | None = None
     settings: tuple[CommandRequest, ...] = ()
@@ -249,16 +249,14 @@ class InstrumentRequest:
         """Expand the full request into camera captures for one chosen
         instrument.
 
-        `first_frame` starts per-instrument numbering across the collect.
-        `first_index` continues the assignment group's ordinals. Packing
-        maintains both counters. Each capture carries its acquisition keywords
-        and explicit timeout; dispatch supplies its header later. Duration
-        estimates include integration only.
+        `first_frame` starts per-instrument frame numbering. `first_index`
+        starts this segment's request ordinals. Each capture carries planned
+        keywords and the acquisition timeout. Dispatch builds its header.
+        Duration estimates include integration time only.
         """
         asked = self.acquisition
-        frames = range(first_frame, first_frame + asked.count)
+        frames = range(first_frame, first_frame + self.count)
 
-        # Dispatch samples a fresh header and attaches it to a command copy.
         return tuple(
             PlannedAcquisition(
                 acquisition=Acquisition(
@@ -300,14 +298,13 @@ class InstrumentRequest:
         Raises:
             ValueError: Count is below one or integration time is negative.
         """
-        asked = self.acquisition
-
-        if asked.count < 1:
-            # Omit the request to collect no frames.
+        if self.count < 1:
             raise ValueError(
-                f"{where}: request '{self.id}' takes {asked.count} "
+                f"{where}: request '{self.id}' takes {self.count} "
                 f"acquisition(s); drop the request instead"
             )
+
+        asked = self.acquisition
 
         # Bias frames permit zero integration time.
         if asked.integration_time_s < 0:
@@ -338,11 +335,10 @@ class Epoch[Setting, Unit]:
     """A group of acquisitions under one configuration, before or after
     binding.
 
-    Packing preserves authored boundaries but may split incompatible requests
-    into child epochs. Each child retains epoch settings and alignment;
-    requests retain their instrument settings. Alignment applies separately to
-    each child. Bound settings are a flat tuple of commands routed to
-    placements.
+    Packing may split incompatible requests into child epochs while preserving
+    authored boundaries. Each child retains the epoch's settings and alignment.
+    Request settings also apply to the child. Alignment is calculated per
+    child. Bound settings contain commands routed to placements.
     """
 
     units: tuple[Unit, ...]
@@ -359,8 +355,9 @@ class Collect[Setting, Unit]:
     attempted preparation arms cleanup; without preparation, any attempted
     command does. A workflow with no attempted command never arms its cleanup.
 
-    `fail_fast` defaults main-workflow operations. Cleanup is non-fail-fast and
-    bounded by `cleanup_timeout_s`, independently of command deadlines.
+    `fail_fast` sets the default for main-workflow operations. Cleanup continues
+    after command failures and is bounded by `cleanup_timeout_s`. Command
+    deadlines apply independently.
     """
 
     name: str
@@ -404,9 +401,9 @@ def pack(
     assignment group's full duration when first placed. Preserve authored
     epoch boundaries, order, settings and per-child alignment.
 
-    Selections use only the supplied `device_keywords`, including when the
-    sensor already carries keywords. Omitted devices and keywords are treated
-    as absent; omitting the mapping treats all device keywords as absent.
+    `device_keywords` supplies the keywords for planning selections and
+    replaces any keywords in `sensor`. A missing mapping, device or keyword
+    is treated as absent.
 
     Raises:
         SettingUnsatisfiable: A required setting has no supporting device,
@@ -522,7 +519,7 @@ def _child(
     units: list[PlannedAcquisition] = []
 
     for request, targets in assigned:
-        count = request.acquisition.count
+        count = request.count
 
         for target in targets:
             frame = frames.get(target, 0)
@@ -638,8 +635,8 @@ def _positioned(
     sensor: BoundSensor,
     where: str,
 ) -> None:
-    """Reject authored settings on selectors already positioned by
-    participants.
+    """Reject authored settings on selectors whose positions follow from
+    the participants.
 
     Raises:
         ValueError: A setting targets a selector on a participating port path.
@@ -673,7 +670,7 @@ def _options(
     eligible = _eligible(members, sensor, where)
     first, _ = members[0]
 
-    if first.acquisition.distribute == "each":
+    if first.distribute == "each":
         return (eligible,)
 
     ranked = sorted(eligible, key=lambda p: (-_preferred(members, p, sensor), load.get(p, 0.0)))
@@ -817,7 +814,7 @@ def _grouped(
             groups.setdefault(request.assignment_key(index, position), []).append((request, epoch))
 
     for (named, name), members in groups.items():
-        if named and len({m.acquisition.distribute for m, _ in members}) > 1:
+        if named and len({m.distribute for m, _ in members}) > 1:
             raise ValueError(
                 f"assignment '{name}' mixes distribute values; every "
                 f"segment of one request takes the same instruments"
@@ -830,9 +827,7 @@ def _duration(members: Members) -> float:
     """Sum group integration time for load ranking, excluding readout and
     overhead.
     """
-    return sum(
-        member.acquisition.integration_time_s * member.acquisition.count for member, _ in members
-    )
+    return sum(member.acquisition.integration_time_s * member.count for member, _ in members)
 
 
 def _exclusive(participants: tuple[Placement, ...], sensor: BoundSensor, where: str) -> None:
@@ -973,12 +968,10 @@ class CollectCompiler:
         )
 
     def _in_force(self, routed: RoutedCommand) -> bool:
-        """Test whether an equal command and authored timeout already govern
-        this key.
+        """Test whether the current setting has an equal command and timeout.
 
-        Equality elides a new setting but retains the earlier success
-        requirement. It does not request a retry after that earlier setting
-        fails.
+        An equal setting reuses the earlier step and its success requirement,
+        even if that step fails.
         """
         held = self.governing.get(routed.governs)
 
