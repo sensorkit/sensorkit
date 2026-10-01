@@ -103,7 +103,7 @@ class Graph:
             ValueError: The graph has a dependency cycle. The message names one
                 cycle by its node labels.
         """
-        indeg = {n.id: len(self.deps[n.id]) for n in self.nodes}
+        indeg = Counter({n.id: len(self.deps[n.id]) for n in self.nodes})
         dependents: dict[int, list[int]] = {n.id: [] for n in self.nodes}
 
         for nid, ds in self.deps.items():
@@ -111,11 +111,10 @@ class Graph:
                 dependents[d].append(nid)
 
         order = [nid for nid, deg in indeg.items() if deg == 0]
+
         for nid in order:
-            for dep in dependents[nid]:
-                indeg[dep] -= 1
-                if indeg[dep] == 0:
-                    order.append(dep)
+            indeg.subtract(dependents[nid])
+            order.extend(dep for dep in dependents[nid] if indeg[dep] == 0)
 
         if len(order) < len(self.nodes):
             labels = {n.id: n.label for n in self.nodes}
