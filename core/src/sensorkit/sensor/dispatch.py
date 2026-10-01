@@ -217,7 +217,7 @@ class Dispatcher:
             asyncio.CancelledError: The caller was cancelled during the
                 attempt.
         """
-        if Abort.model_tag() not in self.sensor.commands(device):
+        if Abort.model_tag() not in self.sensor.supported_commands(device):
             logger.warning(f"{device}: interrupted, and it has no Abort")
             record(interruption := Interruption("unsupported"))
             return interruption

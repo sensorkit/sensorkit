@@ -644,7 +644,7 @@ def _fates(
 
         named = step.command.model_tag()
 
-        if named in facts.commands(step.target.device):
+        if named in facts.supported_commands(step.target.device):
             continue
 
         reason = f"'{step.target.device}' does not support '{named}'"

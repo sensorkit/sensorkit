@@ -81,7 +81,7 @@ class SensorController:
                 placement.device,
                 subscribe=[
                     keyword
-                    for name in sorted(bound.keywords(placement.device))
+                    for name in sorted(bound.published_keywords(placement.device))
                     if (keyword := get_keyword_type(name)) is not None
                 ],
             )

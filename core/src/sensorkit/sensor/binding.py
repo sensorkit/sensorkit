@@ -134,7 +134,7 @@ class BoundSensor:
 
         return sensor, BindingReport(established=tuple(sensor._established()))
 
-    def commands(self, device: DeviceKey) -> frozenset[str]:
+    def supported_commands(self, device: DeviceKey) -> frozenset[str]:
         """Return reported command identifiers, or an empty set for an
         unknown device.
         """
@@ -142,7 +142,7 @@ class BoundSensor:
 
         return details.supported_commands if details else frozenset()
 
-    def keywords(self, device: DeviceKey) -> frozenset[str]:
+    def published_keywords(self, device: DeviceKey) -> frozenset[str]:
         """Return reported keyword identifiers, or an empty set for an
         unknown device.
         """
@@ -183,7 +183,7 @@ class BoundSensor:
         command.
         """
         return any(
-            command in self.commands(placement.device)
+            command in self.supported_commands(placement.device)
             for placement in self._reachable(participants)
         )
 
@@ -242,7 +242,7 @@ class BoundSensor:
         candidates = tuple(
             p
             for p in reachable
-            if named in self.commands(p.device)
+            if named in self.supported_commands(p.device)
             and any(self._eligible(p, q, scope) for q in participants)
             and (select is None or select.matches(p, self))
         )
@@ -309,7 +309,7 @@ class BoundSensor:
             # An explicit reference must still belong to a participating chain.
             raise ValueError(f"'{device}' is not on {format_paths(participants)}")
 
-        if named not in self.commands(device):
+        if named not in self.supported_commands(device):
             raise ValueError(f"'{device}' does not support '{named}'")
 
         return (placement,)

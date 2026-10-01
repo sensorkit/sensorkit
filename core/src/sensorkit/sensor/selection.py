@@ -44,10 +44,10 @@ class SelectionError(ValueError):
 class DeviceFacts(Protocol):
     """Reported command and keyword identifiers for each device."""
 
-    def commands(self, device: DeviceKey) -> frozenset[str]:
+    def supported_commands(self, device: DeviceKey) -> frozenset[str]:
         """Return the command identifiers reported by a device."""
 
-    def keywords(self, device: DeviceKey) -> frozenset[str]:
+    def published_keywords(self, device: DeviceKey) -> frozenset[str]:
         """Return the keyword identifiers reported by a device."""
 
 
@@ -255,7 +255,7 @@ class Supports(Selection):
     def matches(self, placement, facts=None):
         known = _known(facts, f"supports: {self.supports}")
 
-        return self.supports in known.commands(placement.device)
+        return self.supports in known.supported_commands(placement.device)
 
 
 class Publishes(Selection):
@@ -270,7 +270,7 @@ class Publishes(Selection):
     def matches(self, placement, facts=None):
         known = _known(facts, f"publishes: {self.publishes}")
 
-        return self.publishes in known.keywords(placement.device)
+        return self.publishes in known.published_keywords(placement.device)
 
 
 class AllOf(Selection):
