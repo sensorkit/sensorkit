@@ -429,6 +429,7 @@ class AlpacaCamera(AlpacaDevice):
         # GPS/timing metadata defaults (None = keyword omitted from FITS header)
         context.set_value("time_src", None)
         context.set_value("date_end", None)
+        context.set_value("gps_stat", None)
         context.set_value("gps_seqn", None)
         context.set_value("gps_lat", None)
         context.set_value("gps_lon", None)
@@ -439,6 +440,7 @@ class AlpacaCamera(AlpacaDevice):
             if isinstance(gps_meta, dict):
                 context.set_value("time_src", gps_meta.get("TIME-SRC"))
                 context.set_value("date_end", gps_meta.get("DATE-END"))
+                context.set_value("gps_stat", gps_meta.get("GPS-STAT"))
                 if gps_meta.get("TIME-SRC") == "GPS":
                     context.set_value("gps_seqn", gps_meta.get("GPS-SEQN"))
                     context.set_value("gps_lat", gps_meta.get("GPS-LAT"))
