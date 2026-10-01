@@ -29,8 +29,11 @@ class SetFilter(sk.DeviceCommand):
 StandardFilterChanger = sk.declare_archetype(
     "filter_changer",
     required_commands=(SetFilter,),
+    required_keywords=("Filters",),
 )
-"""A device that can change optical filters by name or position."""
+"""A device that reports available filters and selects one by name or
+position.
+"""
 
 
 @sk.declare_keyword

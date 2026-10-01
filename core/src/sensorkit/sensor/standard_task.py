@@ -6,6 +6,10 @@ The target becomes sensor-subject preparation and epoch settings; Stop becomes
 cleanup. Camera parameters become per-request instrument settings. Packing
 chooses devices and checks that requested settings have supporting commands.
 
+For a requested filter, packing prefers instruments whose routed wheel reports
+the name. A nonempty filter list that omits the name makes the instrument
+ineligible. Missing or empty lists leave name validation to the setting command.
+
 Target changes, including sidereal frames, divide the collect into epochs.
 Segments of each exposure share an assignment so they stay on one instrument
 and continue their request ordinals. Shorter exposures leave later epochs.
@@ -27,7 +31,7 @@ from sensorkit.astro.target import (
     Target,
     TLETarget,
 )
-from sensorkit.core.device import DeviceCommand
+from sensorkit.common.predicate import contains, exists
 from sensorkit.sensor.collect import (
     AcquisitionRequest,
     CollectIntent,
@@ -35,7 +39,7 @@ from sensorkit.sensor.collect import (
     InstrumentRequest,
     RequestEpoch,
 )
-from sensorkit.sensor.selection import Supports
+from sensorkit.sensor.selection import AnyOf, KeywordMatch, Supports
 from sensorkit.std.collect import (
     CameraParameterSet,
     Collect,
@@ -43,7 +47,7 @@ from sensorkit.std.collect import (
 )
 from sensorkit.std.instrument import Binning, ConfigureCameraSensor
 from sensorkit.std.mount import FollowTarget
-from sensorkit.std.optics import SetFilter
+from sensorkit.std.optics import Filters, SetFilter
 from sensorkit.std.traits import Stop
 
 SIDEREAL = FrameTarget(frame=ReferenceFrame.ICRF)
@@ -161,10 +165,10 @@ def camera_settings(params: CameraParameterSet) -> tuple[CommandRequest, ...]:
     Raises:
         ValueError: Only one binning axis is supplied.
     """
-    commands: list[DeviceCommand] = []
+    settings: list[CommandRequest] = []
 
     if params.filter_name is not None:
-        commands.append(SetFilter(filter=params.filter_name))
+        settings.append(_filter(params.filter_name))
 
     match params.binning_x, params.binning_y:
         case None, None:
@@ -175,9 +179,26 @@ def camera_settings(params: CameraParameterSet) -> tuple[CommandRequest, ...]:
             raise ValueError(f"binning is {x} by {y}; give both axes or neither")
 
     if binning is not None or params.gain is not None:
-        commands.append(ConfigureCameraSensor(binning=binning, gain=params.gain))
+        settings.append(
+            CommandRequest(command=ConfigureCameraSensor(binning=binning, gain=params.gain))
+        )
 
-    return tuple(CommandRequest(command=command) for command in commands)
+    return tuple(settings)
+
+
+def _filter(name: str) -> CommandRequest:
+    """Request the named filter and prefer a wheel that reports it.
+
+    Wheels with absent or empty filter lists remain eligible.
+    """
+    held = KeywordMatch(keyword=Filters, field="filters.name", predicate=contains(name))
+    unreported = KeywordMatch(keyword=Filters, field="filters", predicate=exists(False))
+
+    return CommandRequest(
+        command=SetFilter(filter=name),
+        requires=(AnyOf(any_of=(held, unreported)),),
+        prefers=(held,),
+    )
 
 
 def target_id(task: StandardCollectTask) -> str | None:

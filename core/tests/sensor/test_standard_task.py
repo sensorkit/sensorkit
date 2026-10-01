@@ -26,7 +26,7 @@ from sensorkit.std.mount import FollowTarget
 from sensorkit.std.optics import SetFilter
 from sensorkit.std.traits import Stop
 
-from .common import TARGET, sensor_of
+from .common import TARGET, filters, sensor_of
 
 STAR = ICRSTarget(coords=Equatorial(ra=180.0, dec=45.0))
 
@@ -161,6 +161,9 @@ def test_requested_camera_parameters_are_commanded(exposure, commands):
 
     assert [s.command for s in request.settings] == commands
     assert all(s.subject == "instrument" for s in request.settings)
+    # Binning and gain settings carry no target requirements or preferences.
+    assert all(not (s.requires or s.prefers) for s in request.settings
+               if not isinstance(s.command, SetFilter))
 
 
 def test_collect_metadata_holds_the_requested_target_and_parameters():
@@ -280,6 +283,51 @@ def test_cleanup_stops_the_mount_that_tracked(bench):
 
     assert [(s.target.device, s.command) for s in collect.cleanup] == [
         ("mount", Stop())]
+
+
+@pytest.fixture(scope="module")
+def wheels() -> BoundSensor:
+    """Two camera branches with a filter wheel on each chain."""
+    return sensor_of("""
+        name: wheels
+        components:
+          - device: mount
+          - unit: first
+            components:
+              - device: wheel-a
+              - device: cam-a
+                instrument: true
+          - unit: second
+            components:
+              - device: wheel-b
+              - device: cam-b
+                instrument: true
+        """, {
+        "mount": (("Connect", "FollowTarget", "Stop"), ()),
+        "wheel-a": (("SetFilter",), ("Filters",)),
+        "cam-a": (("Connect",), ()),
+        "wheel-b": (("SetFilter",), ("Filters",)),
+        "cam-b": (("Connect",), ()),
+    })
+
+
+@pytest.mark.parametrize(("held", "camera"), [
+    ({}, "cam-a"),
+    ({"wheel-b": filters("g", "r")}, "cam-b"),
+    ({"wheel-a": filters("g")}, "cam-b"),
+    ({"wheel-a": filters("g"), "wheel-b": filters()}, "cam-b"),
+], ids=["unknown", "reported-holder", "reported-lack", "empty-list"])
+def test_a_requested_filter_goes_to_a_wheel_that_may_hold_it(wheels, held, camera):
+    collect = pack(translate(task(params(filter_name="r"))), wheels, device_keywords=held)
+
+    assert {unit.target.device for unit in units_of(collect)} == {camera}
+
+
+def test_a_filter_every_wheel_reports_lacking_rejects_the_collect(wheels):
+    held = {"wheel-a": filters("g"), "wheel-b": filters("g")}
+
+    with pytest.raises(SettingUnsatisfiable, match="does not satisfy"):
+        pack(translate(task(params(filter_name="r"))), wheels, device_keywords=held)
 
 
 def test_a_filter_no_chain_can_change_rejects_the_collect():
