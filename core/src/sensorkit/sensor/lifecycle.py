@@ -297,8 +297,7 @@ def compile_lifecycle(
     """Compile a lifecycle table against a bound sensor without device
     calls.
 
-    The result includes capability provenance and can be inspected before
-    running.
+    The result can be inspected before running.
 
     Raises:
         ValueError: References or declaration order are invalid, entries
@@ -352,7 +351,6 @@ class TableCompiler:
             self.table.name,
             self._settled(self.steps),
             self.sensor,
-            provenance=self.sensor.capabilities.provenance,
             cleanup=plans,
             deadlines=self.deadlines,
             rules=self.rules,

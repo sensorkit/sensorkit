@@ -99,8 +99,7 @@ def snapshot_of(reported: Reported) -> CapabilitySnapshot:
         devices=tuple(
             (device, DeviceDetails(supported_commands=frozenset(commands),
                                    published_keywords=frozenset(keywords)))
-            for device, (commands, keywords) in reported.items()),
-        source="tests")
+            for device, (commands, keywords) in reported.items()))
 
 
 def sensor_of(structure: str | Structure, reported: Reported) -> BoundSensor:

@@ -111,7 +111,7 @@ class Sensor:
 
             reported.append((key, info.details))
 
-        snapshot = CapabilitySnapshot(devices=tuple(reported), source="device discovery")
+        snapshot = CapabilitySnapshot(devices=tuple(reported))
 
         # Binding reports every configured device missing from the snapshot.
         sensor, _ = BoundSensor.bind(topology, snapshot)
@@ -166,9 +166,7 @@ class Sensor:
         """Run an issued workflow, keeping the session occupied through
         cleanup and drain.
 
-        Reject overlapping runs rather than queueing them. Reports, including
-        those carried by `WorkflowError`, retain the workflow's capability
-        provenance.
+        Reject overlapping runs rather than queueing them.
 
         Args:
             workflow: Workflow planned by this session.

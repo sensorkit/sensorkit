@@ -722,12 +722,10 @@ def test_a_deadline_rule_resolves_what_nothing_authored(bench):
     assert only(frames(workflow, "cam-e1")).payload.timeout_s == 7.0
 
 
-def test_the_workflow_carries_the_snapshot_provenance(bench):
+def test_the_workflow_takes_the_collect_name(bench):
     workflow = compiled(bench, RequestEpoch(units=(asking("a", "cam-w"),)))
 
     assert workflow.name == "demo"
-    assert workflow.provenance == bench.capabilities.provenance
-    assert "tests" in workflow.provenance
 
 
 def test_a_command_the_device_cannot_perform_is_a_compile_error(topology):

@@ -137,8 +137,7 @@ class WorkflowReport:
     outcomes.
 
     Cleanup reports retain execution order. `reason` records the first claimed
-    cancellation for an aborted workflow, otherwise `None`. `provenance`
-    describes the capability facts used during compilation.
+    cancellation for an aborted workflow, otherwise `None`.
     """
 
     name: str
@@ -148,7 +147,6 @@ class WorkflowReport:
     interruptions: Mapping[Operation, Interruption] = field(default_factory=dict)
     outcome: WorkflowOutcome = "completed"
     reason: str | None = None
-    provenance: str = ""
 
 
 class WorkflowError(Exception):
@@ -267,7 +265,6 @@ class WorkflowExecutor:
             interruptions=dict(state.interruptions),
             outcome="aborted" if aborted else "completed",
             reason=reasons[0] if aborted and reasons else None,
-            provenance=workflow.provenance,
         )
 
         # Domain abort preserves established main failures but returns cleanup outcomes.

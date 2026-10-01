@@ -147,7 +147,7 @@ def audit_workflow(workflow: ExecutableWorkflow) -> AuditReport:
     workflow.
 
     Include dependency kinds, target placements, deadlines, delays, acquisition
-    keywords, omissions, outcome overrides, cleanup triggers and provenance.
+    keywords, omissions, outcome overrides and cleanup triggers.
     Findings are empty because this renders the artifact without revalidation.
 
     Outcome overrides retain operator reasons. Rules changing only failure
@@ -156,7 +156,6 @@ def audit_workflow(workflow: ExecutableWorkflow) -> AuditReport:
     """
     lines = [
         f"workflow '{workflow.name}', as compiled",
-        *_provenance(workflow.provenance),
         "",
         *_graph("run", workflow.graph),
         "",
@@ -567,17 +566,6 @@ def _armed_by_entries(armed_by: tuple[str, ...] | None) -> str:
             return "never armed, so it never runs"
 
     return f"armed once any operation of {_quoted(armed_by)} is attempted"
-
-
-def _provenance(provenance: str) -> Iterator[str]:
-    """Describe compilation facts and their limits as evidence of current
-    hardware state.
-    """
-    yield f"compiled against {provenance or 'facts of unrecorded provenance'}"
-    yield (
-        "  Provenance says when the facts were assembled and which devices "
-        "they cover. It does not show that the hardware is unchanged now."
-    )
 
 
 def _name(node: Node) -> str:

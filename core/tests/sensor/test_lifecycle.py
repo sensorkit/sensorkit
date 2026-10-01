@@ -665,11 +665,8 @@ def test_an_operator_rule_amends_the_operations_it_addresses(facts):
     assert graph.nodes[node(graph, "dome.Connect")].override is None
 
 
-def test_a_compiled_table_reports_the_facts_it_stood_on(facts):
-    workflow = compiled(CONNECT_THEN_HOME, facts)
-
-    assert workflow.name == "t"
-    assert "tests" in workflow.provenance
+def test_a_compiled_table_takes_its_name(facts):
+    assert compiled(CONNECT_THEN_HOME, facts).name == "t"
 
 
 # Inheriting across an omission

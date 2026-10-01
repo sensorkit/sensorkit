@@ -128,19 +128,10 @@ async def test_discovery_reads_the_devices_the_definition_names(session, rig,
 
 
 @pytest.mark.asyncio
-async def test_the_snapshot_says_where_it_came_from_and_what_it_covers(
-        kit, rig, document):
+async def test_discovery_copies_no_device_keywords(kit, rig, document):
     session = await Sensor.connect(document, kit)
-    capabilities = session.sensor.capabilities
 
-    assert capabilities.source == "device discovery"
-    assert capabilities.device_keywords is None
-    assert "device discovery" in capabilities.provenance
-
-    for device in ("mount", "foc-e", "cam-e", "wheel-w", "cam-w"):
-        assert f"'{device}'" in capabilities.provenance
-
-    assert "extra" not in capabilities.provenance
+    assert session.sensor.capabilities.device_keywords is None
 
 
 @pytest.mark.asyncio
@@ -249,7 +240,6 @@ async def test_a_table_plans_and_runs_with_no_adapter(session, rig):
 
     assert report.outcome == "completed"
     assert rig.arrived() == ["mount Home", "mount Stop"]
-    assert report.provenance == session.sensor.capabilities.provenance
 
 
 @pytest.mark.asyncio
@@ -258,7 +248,6 @@ async def test_a_collect_plans_and_runs_with_no_adapter(session, rig):
 
     assert report.outcome == "completed"
     assert len(rig["cam-e"].sent("CameraCapture")) == 2
-    assert report.provenance == session.sensor.capabilities.provenance
 
 
 @pytest.mark.asyncio
@@ -490,16 +479,11 @@ async def test_an_overlapping_run_is_refused_while_a_cancellation_drains(
 
 
 @pytest.mark.asyncio
-async def test_a_failed_run_reports_its_provenance_and_frees_the_session(
-        session, rig):
+async def test_a_failed_run_frees_the_session(session, rig):
     rig["mount"].refusing["Home"] = 1
 
-    with pytest.raises(WorkflowError, match="in the run") as raised:
+    with pytest.raises(WorkflowError, match="in the run"):
         await session.execute(session.plan_lifecycle(table(session, "home")))
-
-    assert raised.value.report.provenance == (
-        session.sensor.capabilities.provenance)
-    assert "device discovery" in raised.value.report.provenance
 
     report = await session.execute(session.plan_collect(frames()))
 

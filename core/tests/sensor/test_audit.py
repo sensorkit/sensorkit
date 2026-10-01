@@ -513,17 +513,6 @@ def test_cleanup_eligibility_and_every_arming_state(facts):
         report, "cleanup 'lost-trigger'")
 
 
-def test_provenance_reaches_both_families(facts, definition, darks):
-    lifecycle = compile_lifecycle(definition.tables[1], facts)
-
-    for workflow in (lifecycle, darks):
-        lines = audit_workflow(workflow).description.splitlines()
-
-        assert lines[1] == f"compiled against {workflow.provenance}"
-        assert lines[1].endswith("from tests")
-        assert "not show that the hardware is unchanged now" in lines[2]
-
-
 def carried(payload: Operation | None) -> tuple | None:
     """What one node's payload holds, as values to compare."""
     if payload is None:

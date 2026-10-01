@@ -576,12 +576,10 @@ def test_a_command_may_be_allowed_longer_than_its_cleanup(facts, at):
     assert cleanup.graph.nodes[0].payload.timeout_s == 120.0
 
 
-def test_provenance_and_name_are_carried(facts, at):
-    workflow = lower("bring-up", (step("a", at("mount"), Connect()),), facts,
-                     provenance="facts taken at noon")
+def test_the_name_is_carried(facts, at):
+    workflow = lower("bring-up", (step("a", at("mount"), Connect()),), facts)
 
     assert workflow.name == "bring-up"
-    assert workflow.provenance == "facts taken at noon"
 
 
 def test_a_command_nothing_supports_omits_wherever_it_lands(facts, at):

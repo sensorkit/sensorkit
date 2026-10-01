@@ -300,16 +300,14 @@ async def test_a_site_composes_plans_and_audits_before_anything_is_sent(
     assert "table 'stop'" in described.description
     assert "table 'init'" in described.description
     assert_describes(compiled.description, init)
-    assert f"compiled against {init.provenance}" in compiled.description
     assert rig.log == []
 
 
 @pytest.mark.asyncio
-async def test_a_generated_bring_up_runs_and_reports_its_provenance(kit, rig):
+async def test_a_generated_bring_up_runs(kit, rig):
     session, tables = await site(kit)
     init = session.plan_lifecycle(tables["init"])
     report = await session.execute(init)
-    provenance = session.sensor.capabilities.provenance
 
     assert report.outcome == "completed"
     assert report.run.ok
@@ -326,13 +324,6 @@ async def test_a_generated_bring_up_runs_and_reports_its_provenance(kit, rig):
 
     assert rig.ended_before("dome OpenEnclosure", "mount Init")
     assert rig.ended_before("mount Init", "cover OpenMirrorCover")
-
-    assert report.provenance == init.provenance == provenance
-
-    for device in ("dome", "mount", "cover", *BENCH_DEVICES):
-        assert f"'{device}'" in report.provenance
-
-    assert "extra" not in report.provenance
 
 
 @pytest.mark.asyncio
@@ -531,7 +522,6 @@ async def test_models_built_directly_plan_audit_and_run(session, rig):
         report = await session.execute(workflow)
 
         assert report.outcome == "completed"
-        assert report.provenance == session.sensor.capabilities.provenance
 
     assert Counter(rig.arrived()) == planned(workflows[0]) + planned(
         workflows[1])

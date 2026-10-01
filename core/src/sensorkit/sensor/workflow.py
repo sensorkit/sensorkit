@@ -475,12 +475,10 @@ class CleanupPlan:
 
 @dataclass(frozen=True, eq=False)
 class ExecutableWorkflow:
-    """A compiled graph with cleanup graphs, omissions and capability
-    provenance.
+    """A compiled graph with cleanup graphs and omissions.
 
     Preparation is ordinary work in the main graph. Cleanup runs separately
-    after it drains. Provenance describes the facts used to compile the
-    workflow; it is not an identity or replay record.
+    after it drains.
 
     Workflows compare by object identity so sessions can track which they
     issued. Callers must not mutate their graphs, commands or nested metadata.
@@ -488,7 +486,6 @@ class ExecutableWorkflow:
 
     name: str
     graph: Graph
-    provenance: str = ""
     cleanup: tuple[Cleanup, ...] = ()
     omissions: tuple[Omission, ...] = ()
 
@@ -498,7 +495,6 @@ def lower(
     steps: tuple[PlannedStep, ...],
     facts: PlacementFacts,
     *,
-    provenance: str = "",
     cleanup: tuple[CleanupPlan, ...] = (),
     deadlines: tuple[DeadlineRule, ...] = (),
     rules: tuple[OperatorRule, ...] = (),
@@ -533,7 +529,6 @@ def lower(
     workflow = ExecutableWorkflow(
         name=name,
         graph=graph,
-        provenance=provenance,
         cleanup=tuple(plans),
         omissions=tuple(refused),
     )

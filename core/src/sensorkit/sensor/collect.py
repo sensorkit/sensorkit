@@ -788,8 +788,8 @@ def compile_collect(
     """Compile a bound collect into executable graphs without contacting
     devices.
 
-    Dependencies follow previously emitted steps. The result includes
-    capability provenance and can be inspected before execution.
+    Dependencies follow previously emitted steps. The result can be inspected
+    before execution.
 
     Raises:
         ValueError: Bound settings or participants conflict, commands are
@@ -846,7 +846,6 @@ class CollectCompiler:
             self.collect.name,
             tuple(self.steps),
             self.sensor,
-            provenance=self.sensor.capabilities.provenance,
             cleanup=cleanup,
             deadlines=self.deadlines,
             rules=self.rules,

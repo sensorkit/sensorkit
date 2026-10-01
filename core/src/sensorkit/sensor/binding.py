@@ -46,15 +46,6 @@ class CapabilitySnapshot:
 
     devices: tuple[tuple[DeviceKey, DeviceDetails], ...]
     device_keywords: Mapping[DeviceKey, KeywordDict] | None = None
-    source: str = ""
-
-    @property
-    def provenance(self) -> str:
-        """Describe the snapshot source and covered devices for reports."""
-        source = self.source or "an unnamed source"
-        covered = ", ".join(f"'{device}'" for device, _ in self.devices)
-
-        return f"capabilities of {covered or 'no device'} from {source}"
 
 
 @dataclass(frozen=True)
