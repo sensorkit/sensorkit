@@ -146,6 +146,34 @@ def test_a_selection_is_rendered_as_authored_including_negation():
     assert "      exclude not (supports Home)" in entry
 
 
+def test_a_keyword_match_is_rendered_without_device_keywords():
+    report = audit_definition(SensorDefinition.from_yaml(textwrap.dedent("""
+        sensor:
+          name: wheels
+          components:
+            - device: wheel
+            - device: cam
+              instrument: true
+        tables:
+          t:
+            fail_fast: true
+            phases:
+              - name: p
+                entries:
+                  - select:
+                      keyword: Filters
+                      field: filters.name
+                      predicate: {op: contains, values: [g]}
+                    exclude: {keyword: Filters, predicate: {op: exists, present: false}}
+                    ops: Connect
+        """)))
+    entry = block(report, "entry 0")
+
+    assert ('      select keyword Filters.filters.name {"op":"contains","values":["g"]}'
+            in entry)
+    assert '      exclude keyword Filters {"op":"exists","present":false}' in entry
+
+
 def test_policy_sequencing_and_timeouts_say_where_they_came_from():
     report = audit_definition(
         SensorDefinition.from_yaml(textwrap.dedent(NESTED)))
@@ -492,7 +520,7 @@ def test_provenance_reaches_both_families(facts, definition, darks):
         lines = audit_workflow(workflow).description.splitlines()
 
         assert lines[1] == f"compiled against {workflow.provenance}"
-        assert "taken 2026-01-01" in lines[1]
+        assert lines[1].endswith("from tests")
         assert "not show that the hardware is unchanged now" in lines[2]
 
 

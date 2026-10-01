@@ -3,10 +3,16 @@
 things of a chain and of a placement."""
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import replace
+
 import pytest
 from pydantic import TypeAdapter
 
+import sensorkit.common.predicate as p
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.trait import Trait
+from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.selection import (
     AllOf,
     AnyOf,
@@ -16,14 +22,31 @@ from sensorkit.sensor.selection import (
     IsInstrument,
     IsKind,
     IsRef,
+    KeywordMatch,
     Not,
     Publishes,
     SelectionError,
     Supports,
 )
+from sensorkit.std.optics import Filter, Filters
 from sensorkit.std.traits import Connect, Enabled, MustConnect, MustEnable
 
 PARSE = TypeAdapter(AnySelection).validate_python
+
+HOLDS_G = KeywordMatch(keyword="Filters", field="filters.name", predicate=p.contains("g"))
+"""A wheel reports a filter named g."""
+
+UNKNOWN = KeywordMatch(keyword="Filters", field="filters", predicate=p.exists(False))
+"""A wheel reports no filters, or none at all."""
+
+
+def holding(facts: BoundSensor, keywords: Mapping[str, KeywordDict]) -> BoundSensor:
+    """The same sensor, with keywords copied from its devices."""
+    return BoundSensor(facts.topology, replace(facts.capabilities, device_keywords=keywords))
+
+
+def filters(*names: str) -> KeywordDict:
+    return KeywordDict(Filters(filters=[Filter(name=name) for name in names]))
 
 
 def test_a_bare_string_is_a_trait_name():
@@ -41,6 +64,33 @@ def test_a_keyword_type_stands_for_its_key():
 def test_a_keyword_that_was_never_declared_is_rejected():
     with pytest.raises(ValueError, match="is not a declared keyword"):
         PARSE({"publishes": int})
+
+
+def test_a_keyword_match_is_authored_by_type_or_key():
+    authored = {"field": "filters.name", "predicate": {"op": "contains", "values": ["g"]}}
+
+    assert PARSE({"keyword": Filters, **authored}) == HOLDS_G
+    assert PARSE({"keyword": "Filters", **authored}) == HOLDS_G
+
+
+def test_a_keyword_match_round_trips():
+    assert PARSE(HOLDS_G.model_dump()) == HOLDS_G
+    assert PARSE(UNKNOWN.model_dump()) == UNKNOWN
+
+
+@pytest.mark.parametrize(("authored", "error"), [
+    ({"keyword": "Nonsense", "predicate": {"op": "exists"}}, "is not a declared keyword"),
+    ({"keyword": int, "predicate": {"op": "exists"}}, "is not a declared keyword"),
+    ({"keyword": "Filters", "field": "filters.colour", "predicate": {"op": "exists"}},
+     "no field 'colour'"),
+    ({"keyword": "Filters", "field": "filters.position",
+      "predicate": {"op": "contains", "values": ["g"]}}, "cannot equal an element"),
+    ({"keyword": "Filters", "field": "filters.name", "predicate": {"op": "eq", "value": "g"}},
+     "collection"),
+])
+def test_a_keyword_match_is_checked_where_it_is_authored(authored, error):
+    with pytest.raises(ValueError, match=error):
+        PARSE(authored)
 
 
 def test_one_key_per_question():
@@ -174,7 +224,7 @@ def test_a_record_declaring_a_subset_changes_no_answer(topology, facts, at):
 def test_every_question_but_device_needs_facts(at):
     asked = (HasTrait(trait="MustConnect"), HasTag(tag="primary"),
              IsKind(kind="any"), IsInstrument(), Supports(supports="Connect"),
-             Publishes(publishes="Enabled"))
+             Publishes(publishes="Enabled"), HOLDS_G)
 
     for selection in asked:
         with pytest.raises(SelectionError, match="none was given"):
@@ -189,6 +239,57 @@ def test_a_capability_predicate_raises_rather_than_answering_false(at):
 def test_an_unanswerable_predicate_under_negation_still_raises(at):
     with pytest.raises(SelectionError):
         Not(negated=Supports(supports="Connect")).matches(at("mount"))
+
+
+def test_a_keyword_match_reads_one_device(facts, at):
+    sensor = holding(facts, {"wheel": filters("g", "r"), "cam-sci": filters("b")})
+
+    assert HOLDS_G.matches(at("wheel"), sensor)
+    assert not HOLDS_G.matches(at("cam-sci"), sensor)
+    assert not UNKNOWN.matches(at("wheel"), sensor)
+
+
+def test_a_missing_keyword_is_absent(facts, at):
+    sensor = holding(facts, {"cam-sci": filters("g")})
+
+    assert not HOLDS_G.matches(at("wheel"), sensor)
+    assert UNKNOWN.matches(at("wheel"), sensor)
+
+
+def test_an_empty_list_is_absent(facts, at):
+    sensor = holding(facts, {"wheel": filters()})
+
+    assert not HOLDS_G.matches(at("wheel"), sensor)
+    assert UNKNOWN.matches(at("wheel"), sensor)
+
+
+def test_an_omitted_field_tests_the_keyword_itself(facts, at):
+    published = KeywordMatch(keyword=Filters, predicate=p.exists())
+    sensor = holding(facts, {"wheel": filters()})
+
+    assert published.matches(at("wheel"), sensor)
+    assert not published.matches(at("cam-sci"), sensor)
+
+
+def test_a_keyword_match_composes_over_a_chain(topology, facts, at):
+    sensor = holding(facts, {"wheel": filters("g")})
+    capable = AllOf(all_of=(HOLDS_G, Supports(supports="Init")))
+    chain = topology.chain(at("cam-sci"))
+
+    # The wheel holds g and the camera initializes, but no one device does both.
+    assert capable.reaches(chain, sensor)
+    assert not capable.matching(chain, sensor)
+    assert not HOLDS_G.reaches(topology.chain(at("cam-guide")), sensor)
+
+
+def test_a_keyword_match_raises_without_device_keywords(facts, at):
+    with pytest.raises(SelectionError, match="answered from device keywords"):
+        HOLDS_G.matches(at("wheel"), facts)
+
+
+def test_a_keyword_match_under_negation_still_raises(facts, at):
+    with pytest.raises(SelectionError, match="answered from device keywords"):
+        Not(negated=UNKNOWN).matches(at("wheel"), facts)
 
 
 def test_supporting_asks_for_every_command_a_trait_requires():

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Select devices by placement properties and reported capabilities.
+"""Select devices by placement properties, reported capabilities and device
+keywords.
 
 `matches` tests one placement; `matching` filters a supplied list. `reaches`
 tests an instrument chain. Compositions evaluate each member over the whole
@@ -8,8 +9,8 @@ chain: a wheel may satisfy `Supports(SetFilter)` while its camera satisfies
 
 Except for device-key comparisons, predicates require `PlacementFacts`,
 implemented by `BoundSensor`. Missing facts raise rather than count as false,
-including under negation. Facts contain capability identifiers, not current
-device values.
+including under negation. `KeywordMatch` also requires device keywords, which
+planning copies into the facts; other facts contain capability identifiers.
 
 Authored selections use a distinguishing key; a bare string names a trait.
 Routing chooses a command target from matching placements in `binding`.
@@ -31,24 +32,32 @@ from pydantic import (
     model_validator,
 )
 
-from sensorkit.common.keyword import get_keyword_info
+from sensorkit.common.keyword import KeywordDict, get_keyword_info, get_keyword_type
+from sensorkit.common.predicate import AnyPredicate, FieldMatch
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.trait import Trait
 from sensorkit.sensor.topology import DeviceKey, Placement, TagKey, TraitKey
 
 
 class SelectionError(ValueError):
-    """A predicate requires placement facts that were not supplied."""
+    """A predicate requires placement facts or device keywords that were not
+    supplied.
+    """
 
 
 class DeviceFacts(Protocol):
-    """Reported command and keyword identifiers for each device."""
+    """Reported command and keyword identifiers, and any device keywords."""
 
     def supported_commands(self, device: DeviceKey) -> frozenset[str]:
         """Return the command identifiers reported by a device."""
 
     def published_keywords(self, device: DeviceKey) -> frozenset[str]:
         """Return the keyword identifiers reported by a device."""
+
+    def device_keywords(self, device: DeviceKey) -> KeywordDict | None:
+        """Return keywords copied from a device, or `None` if none were
+        supplied.
+        """
 
 
 class PlacementFacts(DeviceFacts, Protocol):
@@ -120,6 +129,7 @@ class SelectionType(StrEnum):
     instrument = "instrument"
     supports = "supports"
     publishes = "publishes"
+    keyword = "keyword"
     all_of = "all_of"
     any_of = "any_of"
     negated = "not"
@@ -273,6 +283,50 @@ class Publishes(Selection):
         return self.publishes in known.published_keywords(placement.device)
 
 
+class KeywordMatch(Selection):
+    """Match a device keyword with a predicate at an optional field path.
+
+    A declared keyword class may be supplied in place of its key. The field and
+    predicate are checked against the keyword type when authored. An omitted
+    field tests the keyword object itself.
+
+    A device or keyword missing from the supplied device keywords is absent,
+    which only `exists` selects. Facts without device keywords raise.
+    """
+
+    type = SelectionType.keyword
+    keyword: Annotated[str, BeforeValidator(_keyword_key)]
+    field: str | None = None
+    predicate: AnyPredicate
+
+    @model_validator(mode="after")
+    def _checks_keyword(self) -> KeywordMatch:
+        keyword_type = get_keyword_type(self.keyword)
+
+        if keyword_type is None:
+            raise ValueError(f"'{self.keyword}' is not a declared keyword")
+
+        self.field_match.validate_against(keyword_type)
+
+        return self
+
+    @property
+    def field_match(self) -> FieldMatch:
+        """Return the field and predicate as a match on the keyword."""
+        return FieldMatch(field=self.field, predicate=self.predicate)
+
+    def matches(self, placement, facts=None):
+        question = f"keyword: {self.keyword}"
+        copied = _known(facts, question).device_keywords(placement.device)
+
+        if copied is None:
+            raise SelectionError(
+                f"'{question}' is answered from device keywords, and none were given"
+            )
+
+        return self.field_match.test(copied.get(self.keyword))
+
+
 class AllOf(Selection):
     """Require every member to match.
 
@@ -361,6 +415,7 @@ type AnySelection = Annotated[
     | Annotated[IsInstrument, Tag(IsInstrument.type)]
     | Annotated[Supports, Tag(Supports.type)]
     | Annotated[Publishes, Tag(Publishes.type)]
+    | Annotated[KeywordMatch, Tag(KeywordMatch.type)]
     | Annotated[AllOf, Tag(AllOf.type)]
     | Annotated[AnyOf, Tag(AnyOf.type)]
     | Annotated[Not, Tag(Not.type)],

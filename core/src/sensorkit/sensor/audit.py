@@ -39,6 +39,7 @@ from sensorkit.sensor.selection import (
     IsInstrument,
     IsKind,
     IsRef,
+    KeywordMatch,
     Not,
     Publishes,
     Selection,
@@ -330,6 +331,13 @@ def _symbolic(selection: Selection) -> str:
             return f"supports {selection.supports}"
         case Publishes():
             return f"publishes {selection.publishes}"
+        case KeywordMatch(field=None):
+            return f"keyword {selection.keyword} {selection.predicate.model_dump_json()}"
+        case KeywordMatch():
+            return (
+                f"keyword {selection.keyword}.{selection.field} "
+                f"{selection.predicate.model_dump_json()}"
+            )
         case AllOf():
             return f"all of ({', '.join(map(_symbolic, selection.all_of))})"
         case AnyOf():

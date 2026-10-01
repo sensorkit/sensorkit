@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import dataclasses
-from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -129,16 +128,13 @@ async def test_discovery_reads_the_devices_the_definition_names(session, rig,
 
 
 @pytest.mark.asyncio
-async def test_the_snapshot_says_when_it_was_taken_and_what_it_covers(
+async def test_the_snapshot_says_where_it_came_from_and_what_it_covers(
         kit, rig, document):
-    before = datetime.now(UTC)
     session = await Sensor.connect(document, kit)
-    after = datetime.now(UTC)
     capabilities = session.sensor.capabilities
 
-    assert before <= capabilities.taken <= after
     assert capabilities.source == "device discovery"
-    assert capabilities.taken.isoformat() in capabilities.provenance
+    assert capabilities.device_keywords is None
     assert "device discovery" in capabilities.provenance
 
     for device in ("mount", "foc-e", "cam-e", "wheel-w", "cam-w"):

@@ -12,11 +12,11 @@ merging duplicate targets. Scope and selection filters narrow the candidates.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Literal
 
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.entity import DeviceDetails
 from sensorkit.core.trait import get_trait, match_traits
@@ -42,30 +42,19 @@ from sensorkit.sensor.workflow import (
 
 @dataclass(frozen=True)
 class CapabilitySnapshot:
-    """Device reports with their discovery time and source.
-
-    Missing devices are unknown, not devices with no capabilities. Binding
-    rejects a snapshot that lacks a configured device. Discovery may read
-    devices sequentially; `taken` labels the snapshot, not simultaneous
-    hardware state.
-    """
+    """Device capabilities and published keywords."""
 
     devices: tuple[tuple[DeviceKey, DeviceDetails], ...]
-    taken: datetime
+    device_keywords: Mapping[DeviceKey, KeywordDict] | None = None
     source: str = ""
 
     @property
     def provenance(self) -> str:
-        """Describe the snapshot source, timestamp and covered devices for
-        reports.
-        """
+        """Describe the snapshot source and covered devices for reports."""
         source = self.source or "an unnamed source"
         covered = ", ".join(f"'{device}'" for device, _ in self.devices)
 
-        return (
-            f"capabilities of {covered or 'no device'} from {source}, "
-            f"taken {self.taken.isoformat()}"
-        )
+        return f"capabilities of {covered or 'no device'} from {source}"
 
 
 @dataclass(frozen=True)
@@ -149,6 +138,19 @@ class BoundSensor:
         details = self._details.get(device)
 
         return details.published_keywords if details else frozenset()
+
+    def device_keywords(self, device: DeviceKey) -> KeywordDict | None:
+        """Return keywords copied from a device, or `None` if none were
+        supplied.
+
+        A device missing from supplied keywords has none.
+        """
+        supplied = self.capabilities.device_keywords
+
+        if supplied is None:
+            return None
+
+        return supplied.get(device, KeywordDict())
 
     def traits(self, placement: Placement) -> frozenset[TraitKey]:
         """Return established traits, or an empty set for an unknown

@@ -13,7 +13,6 @@ against the bound sensor. Standard-task translation is also optional.
 from __future__ import annotations
 
 import weakref
-from datetime import UTC, datetime
 
 import sensorkit.api as sk
 from sensorkit.backend.base import KeyNotFound
@@ -99,7 +98,6 @@ class Sensor:
         topology = definition.check()
         keys = tuple(p.device for p in topology.placements())
         clients = {key: sensorkit.device(key) for key in keys}
-        taken = datetime.now(UTC)
         reported = []
 
         for key, client in clients.items():
@@ -113,9 +111,7 @@ class Sensor:
 
             reported.append((key, info.details))
 
-        snapshot = CapabilitySnapshot(
-            devices=tuple(reported), taken=taken, source="device discovery"
-        )
+        snapshot = CapabilitySnapshot(devices=tuple(reported), source="device discovery")
 
         # Binding reports every configured device missing from the snapshot.
         sensor, _ = BoundSensor.bind(topology, snapshot)

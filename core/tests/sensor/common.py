@@ -22,7 +22,6 @@ import asyncio
 import textwrap
 from collections import Counter, defaultdict
 from collections.abc import Coroutine, Iterable, Mapping
-from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -68,9 +67,6 @@ REPORTED: Reported = {
 device satisfying no trait reachable in a test.
 """
 
-TAKEN = datetime(2026, 1, 1, tzinfo=UTC)
-"""Provenance the tests never read, fixed so nothing varies by clock."""
-
 BRANCHES = """
         - unit: east
           components:
@@ -104,7 +100,7 @@ def snapshot_of(reported: Reported) -> CapabilitySnapshot:
             (device, DeviceDetails(supported_commands=frozenset(commands),
                                    published_keywords=frozenset(keywords)))
             for device, (commands, keywords) in reported.items()),
-        taken=TAKEN, source="tests")
+        source="tests")
 
 
 def sensor_of(structure: str | Structure, reported: Reported) -> BoundSensor:
