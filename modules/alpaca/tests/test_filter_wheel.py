@@ -67,7 +67,9 @@ async def test_filter_wheel_set_by_index(filter_wheel):
 async def test_filter_wheel_set_invalid_name(filter_wheel):
     from sensorkit.std.optics import SetFilter
 
-    # Setting an unknown filter name should not raise, just log and return
-    await filter_wheel.filter_wheel_set_filter(SetFilter(filter="Nonexistent"))
-    # Position should remain unchanged
+    with pytest.raises(RuntimeError, match="Unknown filter name: Nonexistent"):
+        await filter_wheel.filter_wheel_set_filter(SetFilter(filter="Nonexistent"))
+
+    # An unknown name leaves the wheel and cached positions unchanged.
+    assert filter_wheel.filter_wheel._properties["Position"] == 0
     assert filter_wheel.filter_wheel_position == 0

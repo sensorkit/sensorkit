@@ -69,7 +69,9 @@ class TestFilterWheelCommands:
 
     @pytest.mark.asyncio
     async def test_set_filter_invalid_name(self, client, filter_wheel):
-        """Invalid filter name logs error and returns without issuing a request."""
-        await filter_wheel.filter_wheel_set_filter(SetFilter(filter="InvalidFilter"))
+        """Reject an unknown filter name before requesting a filter change."""
+        with pytest.raises(RuntimeError, match="Unknown filter name: InvalidFilter"):
+            await filter_wheel.filter_wheel_set_filter(SetFilter(filter="InvalidFilter"))
+
         reqs = client.find_requests("/equipment/filterwheel/change-filter")
         assert len(reqs) == 0

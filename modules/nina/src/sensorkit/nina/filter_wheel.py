@@ -9,10 +9,18 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
-from sensorkit.std import Connect, Connected, Disconnect, Filter, Filters, SetFilter
+from sensorkit.std import (
+    Connect,
+    Connected,
+    Disconnect,
+    Filter,
+    Filters,
+    SetFilter,
+    StandardFilterChanger,
+)
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardFilterChanger)
 class NinaFilterWheel(NinaDevice):
     """NINA FilterWheel implementation."""
 
@@ -93,8 +101,7 @@ class NinaFilterWheel(NinaDevice):
         else:
             filter_id = self._name_to_id.get(cmd.filter)
             if filter_id is None:
-                logger.error(f"Unknown filter name: {cmd.filter}")
-                return
+                raise RuntimeError(f"Unknown filter name: {cmd.filter}")
 
         logger.debug(f"changing filter to {filter_id}")
         await self.client.get("/equipment/filterwheel/change-filter", filterId=filter_id)

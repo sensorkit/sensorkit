@@ -15,14 +15,14 @@ from sensorkit.alpaca.device import (
 )
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect
-from sensorkit.std.optics import Filter, Filters, SetFilter
+from sensorkit.std.optics import Filter, Filters, SetFilter, StandardFilterChanger
 
 
 class AlpacaFilterWheelState(AlpacaDeviceState):
     device_type: Literal["filter_wheel"] = "filter_wheel"
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardFilterChanger)
 class AlpacaFilterWheel(AlpacaDevice):
     """Alpaca FilterWheel implementation."""
 
@@ -98,8 +98,7 @@ class AlpacaFilterWheel(AlpacaDevice):
         else:
             position = self._name_to_index.get(cmd.filter)
             if position is None:
-                logger.error(f"Unknown filter name: {cmd.filter}")
-                return
+                raise RuntimeError(f"Unknown filter name: {cmd.filter}")
 
         await self.put(self.filter_wheel, "Position", position)
 
