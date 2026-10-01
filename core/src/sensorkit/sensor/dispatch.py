@@ -129,7 +129,8 @@ class Dispatcher:
             operation: Planned command, target and timeout.
             node: Graph node included in operation events.
             attempt: Callback recording that dispatch is starting.
-            interrupted: Callback storing an Abort outcome, if attempted.
+            interrupted: Callback storing the Abort outcome, including when
+                the device does not support Abort.
 
         Returns:
             The device command's result.

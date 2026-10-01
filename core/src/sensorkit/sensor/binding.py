@@ -117,10 +117,10 @@ class BoundSensor:
         return found.published_keywords if found else frozenset()
 
     def device_keywords(self, device: DeviceKey) -> KeywordDict | None:
-        """Return keywords copied from a device, or `None` if none were
-        supplied.
+        """Return the supplied device keywords, or `None` if no mapping was supplied.
 
         A device missing from a supplied mapping has an empty keyword set.
+        Supplied keyword values are returned without copying.
         """
         if self._device_keywords is None:
             return None

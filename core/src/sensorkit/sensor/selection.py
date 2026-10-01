@@ -55,9 +55,7 @@ class DeviceFacts(Protocol):
         """Return the keyword identifiers reported by a device."""
 
     def device_keywords(self, device: DeviceKey) -> KeywordDict | None:
-        """Return keywords copied from a device, or `None` if none were
-        supplied.
-        """
+        """Return device keyword values, or `None` if no mapping was supplied."""
 
 
 class PlacementFacts(DeviceFacts, Protocol):

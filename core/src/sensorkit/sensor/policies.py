@@ -138,7 +138,7 @@ class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
 
         Commands whose limit differs by device kind are scoped to a trait, so
         a device failing that trait takes the default. Explicit operation
-        timeouts and device rules can override these.
+        timeouts and command-specific device rules can override these.
         """
         scoped = (
             (StandardEnclosure.name, Init, self.dome_init_timeout),
@@ -253,7 +253,7 @@ class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
         enclosure = Supports(supports=CloseEnclosure)
         always = self.always_deinit_dome
 
-        # Continue after failed closure with completion sequencing and no fail-fast.
+        # When always is set, failed closure must still allow deinitialization.
         if self.concurrent_dome_deinit_close:
             closing = (
                 Phase(
