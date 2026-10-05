@@ -14,7 +14,7 @@ import uuid
 
 import pytest
 
-from sensorkit.auto.lifecycle import ControllerLifecycle, LifecycleStep
+from sensorkit.auto.lifecycle import ControllerLifecycle, DemandProc, LifecycleStep
 from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.task import (
     CollectTask,
@@ -618,4 +618,48 @@ async def test_stop_aborts_running_task(kit):
             await task_aborted.wait()
     finally:
         task_can_finish.set()
+        await sc.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_procedure_restarts_current_demand(kit):
+    """Procedure cancellation leaves supervision running for the current demand."""
+    starts = 0
+    restarted = asyncio.Event()
+    release = asyncio.Event()
+
+    class CancellingLifecycle(ControllerLifecycle):
+        class StandbyProc(DemandProc):
+            async def state_logic(self):
+                nonlocal starts
+                starts += 1
+
+                if starts == 1:
+                    raise asyncio.CancelledError()
+
+                restarted.set()
+                await release.wait()
+
+    sc = await kit.register_service("ctrl-svc", "0.1.0")
+    lifecycle = CancellingLifecycle()
+
+    try:
+        await sc.register_controller("ctrl1")
+        await kit.controller("ctrl1").enable()
+
+        async with asyncio.TaskGroup() as tg:
+            lifecycle.start(kit.controller("ctrl1"), task_group=tg)
+
+            try:
+                lifecycle.enable()
+                lifecycle.set_demand_state(InternalControllerState.STANDBY)
+
+                async with asyncio.timeout(5.0):
+                    await restarted.wait()
+
+                assert starts == 2
+            finally:
+                async with asyncio.timeout(5.0):
+                    await lifecycle.stop()
+    finally:
         await sc.shutdown()

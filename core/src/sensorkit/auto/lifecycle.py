@@ -300,9 +300,12 @@ class DemandProc(ABC):
         return self._aio_task.done()
 
     @final
-    def error(self):
-        """Return the exception raised by the task, or None if still running or successful."""
-        return self._aio_task.exception() if self._aio_task.done() else None
+    def error(self) -> BaseException | None:
+        """Return the task's exception, or None if running, successful, or cancelled."""
+        if not self._aio_task.done() or self._aio_task.cancelled():
+            return None
+
+        return self._aio_task.exception()
 
     @final
     def future(self) -> asyncio.Future[None]:
@@ -447,8 +450,6 @@ class ControllerLifecycle:
     async def _lifecycle_reactor(self, demand_proc: DemandProc | None):
         # Build a list of futures that capture when:
         #   a) the demand procedure, if there is one, ends
-        #     - it should have raised; this is considered an active error
-        #     - if it did not raise, this is a bug
         #   b) a demand state change is detected
         #   c) the Controller explicitly reports an error
         waiters = (
@@ -469,8 +470,8 @@ class ControllerLifecycle:
 
             if demand_proc:
                 if demand_proc.done():
-                    # The demand procedure has ended. This can only happen through cancellation
-                    # or by an error occurring, so by contract it must have raised.
+                    # Inspect the completed procedure for an error. Clean exit and cancellation
+                    # allow the lifecycle to apply the current demand again.
                     active_error = demand_proc.error()
                 elif self._demand.pending_change():
                     # The demand procedure is still executing and our demand has changed. Stop
