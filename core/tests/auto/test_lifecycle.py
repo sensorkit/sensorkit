@@ -564,3 +564,58 @@ async def test_shutdown_task_completes_despite_demand_change(kit):
             await asyncio.sleep(0.05)
 
     await cleanup(lifecycle, sc)
+
+
+@pytest.mark.asyncio
+async def test_stop_aborts_running_task(kit):
+    """Stopping the lifecycle aborts in-flight tasking before the service goes away."""
+    sc = await kit.register_service("ctrl-svc", "0.1.0")
+    controller = await sc.register_controller("ctrl1")
+    program = await sc.register_program("prog1")
+
+    task_started = asyncio.Event()
+    task_aborted = asyncio.Event()
+    task_can_finish = asyncio.Event()
+
+    @controller.task_handler(InitTask)
+    async def handle_init(task):
+        pass
+
+    @controller.task_handler(CollectTask)
+    async def handle_collect(task):
+        task_started.set()
+
+        try:
+            await task_can_finish.wait()
+        except asyncio.CancelledError:
+            task_aborted.set()
+            raise
+
+    @program.task_factory
+    async def factory():
+        yield CollectTask()
+
+    await kit.controller("ctrl1").enable()
+    prog_client = kit.program("prog1")
+    await prog_client.enable("ctrl1")
+
+    lifecycle = ControllerLifecycle()
+
+    try:
+        async with asyncio.TaskGroup() as tg:
+            lifecycle.start(kit.controller("ctrl1"), task_group=tg)
+            lifecycle.enable()
+            lifecycle.set_demand_state(InternalControllerState.OPERATE, program=prog_client)
+
+            async with asyncio.timeout(10.0):
+                await task_started.wait()
+
+            async with asyncio.timeout(10.0):
+                await lifecycle.stop()
+
+        # The service is still up, so only the lifecycle's abort can reach the handler.
+        async with asyncio.timeout(10.0):
+            await task_aborted.wait()
+    finally:
+        task_can_finish.set()
+        await sc.shutdown()

@@ -451,9 +451,12 @@ class ControllerLifecycle:
         #     - if it did not raise, this is a bug
         #   b) a demand state change is detected
         #   c) the Controller explicitly reports an error
-        futures: list[asyncio.Future[None]] = [
+        waiters = (
             asyncio.create_task(self._demand.wait_until_pending()),
             asyncio.create_task(self._monitor.wait()),
+        )
+        futures: list[asyncio.Future[None]] = [
+            *waiters,
             *([demand_proc.future()] if demand_proc else []),
         ]
 
@@ -511,9 +514,12 @@ class ControllerLifecycle:
 
             return error_kind
         finally:
-            # Clean up tasks.
-            for future in futures:
-                future.cancel()
+            # The procedure is borrowed. It ends through the interrupt paths above or, on
+            # cancellation, through the managed abort in our caller.
+            for waiter in waiters:
+                waiter.cancel()
+
+            await asyncio.wait(waiters)
 
     async def _error_recovery(self):
         self.belief_state = InternalControllerState.ERROR
