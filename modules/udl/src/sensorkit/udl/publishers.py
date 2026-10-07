@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
+import uuid_utils.compat as uuid
 from loguru import logger
 from pydantic import TypeAdapter, ValidationError
 from unifieddatalibrary.types.observations.eo_observation_unvalidated_publish_params import (
@@ -48,6 +49,13 @@ def _to_udl_timestamp(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def _tasked_object_id(request: CollectRequestFull) -> str | None:
+    """The CollectRequest's target as an origObjectId: its origObjectId, else its satNo."""
+    if request.orig_object_id:
+        return request.orig_object_id
+    return str(request.sat_no) if request.sat_no is not None else None
+
+
 class SkyImageryPublisher:
     """Uploads FITS frames to the UDL SkyImagery filedrop."""
 
@@ -75,7 +83,6 @@ class SkyImageryPublisher:
         if request:
             ident = f"CollectRequest {request.id}"
             image_set_length = request.num_frames or 1
-            image_set_id = request.id
             provenance = {
                 "classificationMarking": request.classification_marking,
                 "dataMode": request.data_mode,
@@ -87,7 +94,6 @@ class SkyImageryPublisher:
         else:
             ident = "untasked frame"
             image_set_length = int(context.get("frame_count") or 1)
-            image_set_id = context.get("task_id")
             provenance = {
                 "classificationMarking": self._config.classification_marking,
                 "dataMode": self._config.data_mode,
@@ -100,6 +106,10 @@ class SkyImageryPublisher:
                 f"check the udl entity's data_flow keyword_map"
             )
 
+        # imageSetId is our own ID for the frame set (the SensorKit task), separate
+        # from idRequest, which links to the CollectRequest.
+        image_set_id = context.get("task_id")
+
         filename = info.path.name
         exp_start_time = datetime.fromisoformat(context["date_obs"])
         exp_end_time = exp_start_time + timedelta(seconds=float(context["exptime"]))
@@ -108,11 +118,14 @@ class SkyImageryPublisher:
         frame_num = context.get("frame_num", 0)
         sequence_id = frame_num + 1
 
-        # Build SkyImagery metadata
+        # Build SkyImagery metadata. The id is set here, not by UDL, so the
+        # EOObservations from this frame can reference it as idSkyImagery. A UUIDv7
+        # keeps it unique across providers.
+        sky_imagery_id = str(uuid.uuid7())
         metadata = {
+            "id": sky_imagery_id,
             **provenance,
             "idSensor": program.config.api.id_sensor,
-            "origSensorId": program.config.api.id_sensor,
             "expStartTime": _to_udl_timestamp(exp_start_time),
             "expEndTime": _to_udl_timestamp(exp_end_time),
             "imageSetLength": image_set_length,
@@ -168,6 +181,7 @@ class SkyImageryPublisher:
         zip_buffer.seek(0)
 
         await self._upload(zip_buffer.getvalue())
+        program.state.sky_imagery_ids[filename] = sky_imagery_id
         logger.debug(
             f"uploaded SkyImagery {sequence_id}/{image_set_length} for {ident}"
         )
@@ -488,6 +502,9 @@ class EOObservationPublisher:
                 "origin": request.origin,
                 "track_id": request.id,
                 "task_id": request.task_id,
+                # The tasked object, for UCT follow-up. The detection itself is not
+                # correlated, so uct stays True.
+                "orig_object_id": _tasked_object_id(request),
             }
         else:
             ident = "untasked result"
@@ -522,13 +539,13 @@ class EOObservationPublisher:
                 "ob_time": ob_time,
                 "source": program.config.api.source,
                 "id_sensor": program.config.api.id_sensor,
-                "orig_sensor_id": program.config.api.id_sensor,
                 "ra": ra,
                 "declination": declination,
-                "reference_frame": "J2000",
+                # UDL reads a null referenceFrame as J2000, the frame of ra/declination.
                 "uct": True,
                 "exp_duration": result.exposure_time_seconds,
                 "descriptor": name,
+                "id_sky_imagery": program.state.sky_imagery_ids.get(name),
                 "mag": mags.get(band),
                 "mag_unc": errs.get(band),
                 **site_fields,

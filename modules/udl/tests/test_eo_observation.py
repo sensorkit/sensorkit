@@ -94,7 +94,7 @@ def site():
     )
 
 
-def build(result, collect_request, api_config, eo_config, site=None):
+def build(result, collect_request, api_config, eo_config, site=None, sky_imagery_ids=None):
     """Publish through a stub program; returns the posted records ([] when nothing shipped)."""
     program = UDLProgram()
     program.config = UDLConfig(
@@ -103,6 +103,7 @@ def build(result, collect_request, api_config, eo_config, site=None):
         publish=PublishConfig(eo_observation=eo_config),
     )
     program._site = site
+    program.state.sky_imagery_ids.update(sky_imagery_ids or {})
     program.upload_client = FakeUDLClient()
     publisher = EOObservationPublisher(program)
     asyncio.run(publisher.publish(result, collect_request))
@@ -220,15 +221,35 @@ class TestBuildEOObservations:
         assert "sat_no" not in record
         assert "id_on_orbit" not in record
 
+    def test_orig_object_id_is_the_tasked_object(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(), collect_request, api_config, eo_config)
+        assert record["orig_object_id"] == collect_request.orig_object_id
+        assert record["uct"] is True
+
+    def test_id_sky_imagery_links_the_frame(self, collect_request, api_config, eo_config):
+        ids = {"frame_0001.fits": "01a0f04f-c69b-7d71-a567-a02fa33dea1f"}
+        [record] = build(make_result(), collect_request, api_config, eo_config, sky_imagery_ids=ids)
+        assert record["id_sky_imagery"] == "01a0f04f-c69b-7d71-a567-a02fa33dea1f"
+
+    def test_id_sky_imagery_omitted_without_upload(self, collect_request, api_config, eo_config):
+        [record] = build(make_result(), collect_request, api_config, eo_config)
+        assert "id_sky_imagery" not in record
+
+    def test_orig_object_id_falls_back_to_sat_no(self, collect_request, api_config, eo_config):
+        collect_request.orig_object_id = None
+        collect_request.sat_no = 25544
+        [record] = build(make_result(), collect_request, api_config, eo_config)
+        assert record["orig_object_id"] == "25544"
+
     def test_identity_and_provenance_fields(self, collect_request, api_config, eo_config):
         [record] = build(make_result(), collect_request, api_config, eo_config)
         # Position is the detection's, plus annual aberration (< 20.5");
         # TestConvertWcsObservation pins the correction itself.
         assert record["ra"] == pytest.approx(210.5, abs=0.006)
         assert record["declination"] == pytest.approx(-12.25, abs=0.006)
-        assert record["reference_frame"] == "J2000"
+        assert "reference_frame" not in record  # null means J2000 in UDL
         assert record["id_sensor"] == "SENSOR-01"
-        assert record["orig_sensor_id"] == "SENSOR-01"
+        assert "orig_sensor_id" not in record
         assert record["track_id"] == "test-request-001"
         assert record["task_id"] == "udl-task-42"
         assert record["origin"] == "TEST_ORG"
