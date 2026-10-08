@@ -446,6 +446,8 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         task.associate_execution(execution)
         logger.debug(f"execution begun {execution=}")
         finish_info = TaskFinishInfo(aborted=True)
+        target = task.target_state()
+        arrived = False
 
         # Emit the execution start event, seeding the executing state's context from the
         # incoming execution context. This becomes the base layer that `update_context`
@@ -453,7 +455,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         await self._state.update(
             self,
             TaskExecutionState(executing=True, execution=execution, context=execution.context),
-            self._state.operating_state.derive(target=task.target_state()),
+            self._state.operating_state.derive(target=target),
         )
 
         try:
@@ -468,15 +470,22 @@ class ControllerImpl(EntityImpl, ControllerInterface):
             raise
         else:
             finish_info = TaskFinishInfo()
+            arrived = True
         finally:
+            # A lifecycle task that did not finish may have left the hardware between states.
+            match target:
+                case None:
+                    current = self._state.operating_state.current
+                case _ if arrived:
+                    current = target
+                case _:
+                    current = InternalControllerState.UNKNOWN
+
             try:
                 await self._state.update(
                     self,
                     TaskExecutionState(finished=finish_info, execution=execution),
-                    self._state.operating_state.derive(
-                        current=ts if (ts := task.target_state()) is not None else ControllerOperatingState.NO_CHANGE,
-                        target=None,
-                    ),
+                    self._state.operating_state.derive(current=current, target=None),
                 )
             except Exception as e:
                 logger.warning(f"Error logging final task execution state ({type(e).__name__})")

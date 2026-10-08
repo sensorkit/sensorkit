@@ -15,6 +15,8 @@ import uuid
 import pytest
 
 from sensorkit.auto.lifecycle import ControllerLifecycle, DemandProc, LifecycleStep
+from sensorkit.backend.request import CallError
+from sensorkit.core.client import SensorKit
 from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.task import (
     CollectTask,
@@ -663,3 +665,44 @@ async def test_cancelled_procedure_restarts_current_demand(kit):
                     await lifecycle.stop()
     finally:
         await sc.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_failed_shutdown_is_not_skipped_after_restart(backend):
+    """A shutdown that failed before a restart runs again under SHUTDOWN demand."""
+    kit = SensorKit(backend)
+    sc = await kit.register_service("ctrl-svc", "0.1.0")
+    controller = await sc.register_controller("ctrl1")
+
+    @controller.task_handler(ShutdownTask)
+    async def fail_shutdown(task):
+        raise RuntimeError("enclosure fault")
+
+    try:
+        await kit.controller("ctrl1").enable()
+
+        with pytest.raises(CallError):
+            await kit.controller("ctrl1").execute_task(ShutdownTask())
+    finally:
+        await sc.shutdown()
+
+    # Restart on the same backend, so the controller recovers its persisted state.
+    kit = SensorKit(backend)
+    sc = await kit.register_service("ctrl-svc", "0.1.0")
+    controller = await sc.register_controller("ctrl1")
+    shutdown_ran = asyncio.Event()
+
+    @controller.task_handler(ShutdownTask)
+    async def handle_shutdown(task):
+        shutdown_ran.set()
+
+    lifecycle = ControllerLifecycle()
+    lifecycle.start(kit.controller("ctrl1"))
+    lifecycle.enable()
+    lifecycle.set_demand_state(InternalControllerState.SHUTDOWN)
+
+    try:
+        async with asyncio.timeout(5.0):
+            await shutdown_ran.wait()
+    finally:
+        await cleanup(lifecycle, sc)

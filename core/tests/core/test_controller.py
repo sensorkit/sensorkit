@@ -13,10 +13,15 @@ from pydantic import BaseModel
 from sensorkit.backend.event import Event
 from sensorkit.backend.request import CallError
 from sensorkit.common.keyword import declare_keyword
-from sensorkit.core.controller import ControllerDevice, ControllerState, TaskExecutionState
+from sensorkit.core.controller import (
+    ControllerDevice,
+    ControllerState,
+    InternalControllerState,
+    TaskExecutionState,
+)
 from sensorkit.core.device import DeviceClient
 from sensorkit.core.impl.controller import ControllerImpl
-from sensorkit.core.task import CollectTask, InitTask, TaskExecution
+from sensorkit.core.task import CollectTask, InitTask, ShutdownTask, TaskExecution
 
 
 @pytest.mark.asyncio
@@ -160,6 +165,62 @@ async def test_controller_abort(kit):
 
         with pytest.raises(CallError):
             await exec_call.wait()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        ("succeed", InternalControllerState.SHUTDOWN),
+        ("fail", InternalControllerState.UNKNOWN),
+        ("abort", InternalControllerState.UNKNOWN),
+    ],
+)
+async def test_lifecycle_task_reports_arrival_only_on_success(kit, outcome, expected):
+    async with asyncio.timeout(1.0):
+        sc = await kit.register_service("testservice", "0.1.0")
+        controller = await sc.register_controller("mycontroller")
+
+    started = asyncio.Event()
+
+    @controller.task_handler(InitTask)
+    async def run_init(_: InitTask):
+        pass
+
+    @controller.task_handler(ShutdownTask)
+    async def run_shutdown(_: ShutdownTask):
+        started.set()
+
+        match outcome:
+            case "fail":
+                raise RuntimeError("enclosure fault")
+            case "abort":
+                await asyncio.sleep(5)
+
+    async with asyncio.timeout(1.0):
+        cli = kit.controller("mycontroller")
+        await cli.execute_task(InitTask())
+
+        exec_call = cli.execute_task(ShutdownTask())
+        await exec_call.invoke()
+        await started.wait()
+
+        match outcome:
+            case "succeed":
+                await exec_call.wait()
+            case "fail":
+                with pytest.raises(CallError):
+                    await exec_call.wait()
+            case "abort":
+                await cli.abort_task()
+
+                with pytest.raises(CallError):
+                    await exec_call.wait()
+
+        state = await cli.kv_get_model(ControllerState)
+
+    assert state.operating_state.current == expected
+    assert state.operating_state.target is None
 
 
 @pytest.mark.asyncio
