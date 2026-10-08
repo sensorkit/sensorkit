@@ -85,10 +85,6 @@ pwi4:
           MyMount:
             device_type: mount
             status_frequency: 1.0
-            park_absolute: true          # park to explicit axis positions
-            park_axis0_degrees: 30.0
-            park_axis1_degrees: 0.0
-            disable_axis_on_deinit: false
           MyFocuser:
             device_type: focuser
           MyRotator:

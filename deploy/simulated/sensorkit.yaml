@@ -94,7 +94,6 @@ sensors:
 
 otto:
   - id: Otto
-    entity: Otto
     controller: SimulatedSensor
     task:
       orbits:
@@ -114,7 +113,6 @@ otto:
       num_frames: 3
     publish:
       upload: false
-      sensor_name: "SimulatedSensor"
 
 alpaca:
   - id: Alpaca
@@ -157,9 +155,6 @@ pwi4:
         SimulatedMount:
           device_type: mount
           status_frequency: 1.0
-          park_absolute: true
-          park_axis0_degrees: 30
-          park_axis1_degrees: 0
 
 webapi:
   id: WebAPI
