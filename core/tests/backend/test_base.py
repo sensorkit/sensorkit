@@ -305,3 +305,23 @@ async def test_kv_ttl(_backend, ttl_expiry_delivery):
         # Verify key no longer exists
         with pytest.raises(KeyNotFound):
             await key_value.get("ttl_key")
+
+
+@pytest.mark.asyncio
+async def test_kv_ttl_renewal_outlives_earlier_deadlines(_backend):
+    key_value = _backend.key_value(Entity.at("mydevice"))
+
+    async with asyncio.timeout(5.0):
+        await key_value.create(key="ttl_key", value=b"v0", ttl=1.0)
+
+        # Renew twice, each before the previous deadline.
+        await asyncio.sleep(0.4)
+        await key_value.update(key="ttl_key", value=b"v1")
+        await asyncio.sleep(0.4)
+        await key_value.update(key="ttl_key", value=b"v2")
+
+        # Past the first renewal's deadline, but within the latest one.
+        await asyncio.sleep(0.8)
+        entry = await key_value.get("ttl_key")
+
+    assert entry.value == b"v2"

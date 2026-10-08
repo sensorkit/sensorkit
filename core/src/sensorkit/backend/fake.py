@@ -361,7 +361,9 @@ class FakeBackendImpl(BackendImpl):
                 await self.kv_delete(target, revision)
 
             def _expire_cleanup(t):
-                del self._kv_expirers[target]
+                # A replaced expirer finishes after its successor is registered.
+                if self._kv_expirers.get(target) is t:
+                    del self._kv_expirers[target]
 
                 if not t.cancelled():
                     t.exception()
