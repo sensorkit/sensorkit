@@ -33,10 +33,9 @@ from sensorkit.common.dag import Node
 from sensorkit.core.device import Abort, DeviceClient, DeviceCommand
 from sensorkit.data.context import merge_contexts
 from sensorkit.sensor.binding import BoundSensor
-from sensorkit.sensor.topology import DeviceKey
 from sensorkit.sensor.workflow import Operation
 
-type DeviceContexts = Callable[[], Mapping[DeviceKey, sk.Context]]
+type DeviceContexts = Callable[[], Mapping[str, sk.Context]]
 """Callable supplying current device contexts, sampled for each acquisition."""
 
 type OperationOutcome = Literal["begin", "ok", "failed", "cancelled"]
@@ -98,7 +97,7 @@ class Dispatcher:
     def __init__(
         self,
         sensor: BoundSensor,
-        clients: Mapping[DeviceKey, DeviceClient],
+        clients: Mapping[str, DeviceClient],
         *,
         contexts: DeviceContexts | None = None,
         base: sk.Context | None = None,
@@ -199,7 +198,7 @@ class Dispatcher:
 
         return merge_contexts(self.base, *(reported.get(p.device) for p in chain), planned)
 
-    async def abort(self, device: DeviceKey, record: InterruptionRecorder) -> Interruption:
+    async def abort(self, device: str, record: InterruptionRecorder) -> Interruption:
         """Attempt built-in Abort once, recording the outcome before
         returning or raising.
 

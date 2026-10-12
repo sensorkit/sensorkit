@@ -42,7 +42,7 @@ from sensorkit.sensor.routing import (
     partition,
 )
 from sensorkit.sensor.selection import Selection
-from sensorkit.sensor.topology import DeviceKey, Placement, format_paths
+from sensorkit.sensor.topology import Placement, format_paths
 from sensorkit.sensor.workflow import (
     Acquisition,
     CleanupPlan,
@@ -52,8 +52,6 @@ from sensorkit.sensor.workflow import (
     OperatorRule,
     Origin,
     PlannedStep,
-    RequestId,
-    StepName,
     format_command,
     lower,
 )
@@ -236,7 +234,7 @@ class InstrumentRequest:
     group.
     """
 
-    id: RequestId
+    id: str
     acquisition: AcquisitionRequest
     count: int = 1
     distribute: Literal["one", "each"] = "one"
@@ -405,7 +403,7 @@ def pack(
     intent: CollectIntent,
     sensor: BoundSensor,
     *,
-    device_keywords: Mapping[DeviceKey, KeywordDict] | None = None,
+    device_keywords: Mapping[str, KeywordDict] | None = None,
 ) -> BoundCollect:
     """Choose instruments, route commands and split incompatible
     configuration epochs.
@@ -442,7 +440,7 @@ class CollectPacker:
         intent: CollectIntent,
         sensor: BoundSensor,
         *,
-        device_keywords: Mapping[DeviceKey, KeywordDict] | None = None,
+        device_keywords: Mapping[str, KeywordDict] | None = None,
     ):
         self.intent = intent
         self.sensor = BoundSensor(
@@ -903,12 +901,10 @@ class CollectCompiler:
         self.rules = rules
         self.steps: list[PlannedStep] = []
         # Governing command and its step, keyed by placement and command type.
-        self.governing: dict[
-            tuple[Placement, type[DeviceCommand]], tuple[StepName, RoutedCommand]
-        ] = {}
-        self.latest: dict[Placement, StepName] = {}
-        self.last_unit: dict[Placement, StepName] = {}
-        self.prepared: list[tuple[Placement, StepName]] = []
+        self.governing: dict[tuple[Placement, type[DeviceCommand]], tuple[str, RoutedCommand]] = {}
+        self.latest: dict[Placement, str] = {}
+        self.last_unit: dict[Placement, str] = {}
+        self.prepared: list[tuple[Placement, str]] = []
         self.emitted = 0
 
     def run(self) -> ExecutableWorkflow:
@@ -986,7 +982,7 @@ class CollectCompiler:
 
         return held is not None and held[1] == routed
 
-    def _setting(self, routed: RoutedCommand, group: str, path: tuple[str | int, ...]) -> StepName:
+    def _setting(self, routed: RoutedCommand, group: str, path: tuple[str | int, ...]) -> str:
         """Emit a governing setting after preceding readers and device work
         complete.
 
@@ -1017,7 +1013,7 @@ class CollectCompiler:
 
         return step.name
 
-    def _needs(self, instrument: Placement) -> tuple[tuple[StepName, ...], tuple[StepName, ...]]:
+    def _needs(self, instrument: Placement) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """Return required successes and completion waits for an
         instrument's next block.
 
@@ -1036,9 +1032,9 @@ class CollectCompiler:
         self,
         epoch: BoundEpoch,
         blocks: Mapping[Placement, list[PlannedAcquisition]],
-        needs: Mapping[Placement, tuple[tuple[StepName, ...], tuple[StepName, ...]]],
+        needs: Mapping[Placement, tuple[tuple[str, ...], tuple[str, ...]]],
         index: int,
-    ) -> tuple[StepName | None, dict[Placement, float]]:
+    ) -> tuple[str | None, dict[Placement, float]]:
         """Build a common readiness point and offsets for estimated block
         midpoints.
 
@@ -1070,8 +1066,8 @@ class CollectCompiler:
         self,
         units: list[PlannedAcquisition],
         index: int,
-        hard: tuple[StepName, ...],
-        soft: tuple[StepName, ...],
+        hard: tuple[str, ...],
+        soft: tuple[str, ...],
         delay_s: float,
     ) -> None:
         """Emit one instrument's acquisition block with serial completion
@@ -1080,7 +1076,7 @@ class CollectCompiler:
         Every unit requires successful block settings. A failed capture alone
         does not skip the next, though fail-fast policy can stop the whole run.
         """
-        previous: StepName | None = None
+        previous: str | None = None
 
         for unit in units:
             acquisition = unit.acquisition
@@ -1110,7 +1106,7 @@ class CollectCompiler:
         teardown continue after a failed command.
         """
         steps: list[PlannedStep] = []
-        latest: dict[Placement, StepName] = {}
+        latest: dict[Placement, str] = {}
 
         for position, routed in enumerate(self.collect.cleanup):
             target = routed.target

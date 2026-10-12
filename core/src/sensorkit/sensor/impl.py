@@ -29,7 +29,7 @@ from sensorkit.sensor.policies import (
 )
 from sensorkit.sensor.selection import Supports
 from sensorkit.sensor.standard_task import translate
-from sensorkit.sensor.topology import DeviceKey, Placement, Structure
+from sensorkit.sensor.topology import Placement, Structure
 from sensorkit.sensor.workflow import ExecutableWorkflow
 from sensorkit.std.collect import StandardCollectTask
 from sensorkit.std.enclosure import CloseEnclosure
@@ -93,7 +93,7 @@ class SensorController:
     async def on_detach(self):
         self.stopping = True
 
-    def device_contexts(self) -> Mapping[DeviceKey, sk.Context]:
+    def device_contexts(self) -> Mapping[str, sk.Context]:
         """Return each device's latest subscribed keywords, unmerged.
 
         Dispatch merges only the contexts along an instrument's chain.
@@ -210,7 +210,7 @@ class SensorDevices(BaseModel):
 
         def supporting(
             command: type[sk.DeviceCommand], choices: tuple[Placement, ...]
-        ) -> DeviceKey | None:
+        ) -> str | None:
             return next(iter(Supports(supports=command).refs(choices, sensor)), None)
 
         def paired(command: type[sk.DeviceCommand]) -> list[str]:

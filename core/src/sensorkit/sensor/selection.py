@@ -38,7 +38,7 @@ from sensorkit.common.predicate import AnyPredicate, FieldMatch
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.trait import Trait
 from sensorkit.sensor.binding import BoundSensor
-from sensorkit.sensor.topology import DeviceKey, Placement, TagKey, TraitKey
+from sensorkit.sensor.topology import Placement
 
 
 class SelectionError(ValueError):
@@ -129,7 +129,7 @@ class Selection(BaseModel, ABC, frozen=True, extra="forbid"):
 
     def refs(
         self, placements: tuple[Placement, ...], facts: BoundSensor | None = None
-    ) -> tuple[DeviceKey, ...]:
+    ) -> tuple[str, ...]:
         """Return matching device keys in the supplied placement order."""
         return tuple(p.device for p in self.matching(placements, facts))
 
@@ -149,7 +149,7 @@ class HasTrait(Selection):
     """
 
     type = SelectionType.trait
-    trait: TraitKey
+    trait: str
 
     @model_validator(mode="before")
     @classmethod
@@ -166,7 +166,7 @@ class HasTag(Selection):
     """Match a grouping tag declared on the device or selector record."""
 
     type = SelectionType.tag
-    tag: TagKey
+    tag: str
 
     def matches(self, placement, facts=None):
         known = _known(facts, f"tag: {self.tag}")
@@ -178,21 +178,17 @@ class IsRef(Selection):
     """Match a device key; no bound sensor is required."""
 
     type = SelectionType.device
-    device: DeviceKey
+    device: str
 
     def matches(self, placement, facts=None):
         return self.device == placement.device
-
-
-type KindQuery = Literal["device", "instrument", "selector", "any"]
-"""Record kinds accepted by `IsKind`; `any` matches every kind."""
 
 
 class IsKind(Selection):
     """Match the record kind, or every placement when `kind` is `any`."""
 
     type = SelectionType.kind
-    kind: KindQuery
+    kind: Literal["device", "instrument", "selector", "any"]
 
     def matches(self, placement, facts=None):
         known = _known(facts, f"kind: {self.kind}")

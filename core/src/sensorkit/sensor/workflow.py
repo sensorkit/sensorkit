@@ -37,26 +37,9 @@ from sensorkit.core.device import DeviceCommand
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.selection import Selection
 from sensorkit.sensor.topology import (
-    DeviceKey,
     Placement,
-    TraitKey,
     format_path,
 )
-
-type RequestId = str
-"""Authored request label shared by all acquisitions expanded from it."""
-
-type OperationId = str
-"""Readable operation label derived from its origin and target device.
-
-Used in logs and audits. Cleanup and execution track operations by object
-identity; graph node identifiers belong to `sensorkit.common.dag`.
-"""
-
-type StepName = str
-"""Step identifier unique within one compilation, used to resolve
-dependencies.
-"""
 
 
 @dataclass(frozen=True)
@@ -77,13 +60,15 @@ class Origin:
 class Acquisition:
     """One frame's request identity, numbering and planned keywords.
 
-    `index` is the request ordinal, continuing across segments and repeated for
-    each instrument during fan-out. `frame_number` is unique per instrument
-    across the collect. The pair (instrument, frame_number) identifies a frame.
+    `request` is the authored request label. `index` is the request ordinal,
+    continuing across segments and repeated for each instrument during fan-out.
+    `frame_number` is unique per instrument across the collect. The pair
+    (instrument, frame_number) identifies a frame.
+
     Keywords travel with the acquisition through packing and compilation.
     """
 
-    request: RequestId
+    request: str
     index: int
     frame_number: int
     keywords: KeywordDict
@@ -97,11 +82,11 @@ class Dependency:
     result regardless of outcome. A run-wide stop can still prevent dispatch.
     """
 
-    on: StepName
+    on: str
     kind: Literal["success", "completion"] = "success"
 
     @classmethod
-    def completion(cls, names: Iterable[StepName]) -> tuple[Dependency, ...]:
+    def completion(cls, names: Iterable[str]) -> tuple[Dependency, ...]:
         """Build completion dependencies for the supplied step names."""
         return tuple(cls(on=name, kind="completion") for name in names)
 
@@ -120,7 +105,7 @@ class PlannedStep:
     finite and positive.
     """
 
-    name: StepName
+    name: str
     origin: Origin
     group: str
     target: Placement | None = None
@@ -151,13 +136,14 @@ class PlannedStep:
 class Operation:
     """A graph payload containing one command for one placement.
 
-    Operations compare and hash by object identity, allowing execution and
-    cleanup to track separate attempts even when their fields match.
-    `timeout_s` is already resolved; `None` means unbounded. An acquisition
-    marks a command whose header must be populated at dispatch.
+    Operations compare and hash by object identity so execution and cleanup
+    can distinguish attempts with identical fields.
+
+    `id` is a label for logs and audits. `timeout_s` is resolved; `None` means
+    unbounded. An acquisition marks a command that needs a header at dispatch.
     """
 
-    id: OperationId
+    id: str
     target: Placement
     command: DeviceCommand
     origin: Origin
@@ -203,9 +189,7 @@ class Omission:
 
 
 type DeadlineTarget = (
-    tuple[Literal["device"], DeviceKey]
-    | tuple[Literal["trait"], TraitKey]
-    | tuple[Literal["any"], None]
+    tuple[Literal["device"], str] | tuple[Literal["trait"], str] | tuple[Literal["any"], None]
 )
 """A deadline target tagged as a device key, trait name or universal match."""
 
@@ -283,7 +267,7 @@ def resolve_deadline(
 
 
 def _addressing(
-    rules: tuple[DeadlineRule, ...], rung: str, target: Placement, traits: frozenset[TraitKey]
+    rules: tuple[DeadlineRule, ...], rung: str, target: Placement, traits: frozenset[str]
 ) -> tuple[DeadlineRule, ...]:
     """Return rules at one specificity that match the placement."""
     match rung:
@@ -426,7 +410,7 @@ class CleanupPlan:
     origin: Origin
     when: Literal["always", "failure", "cancelled", "failure_or_cancelled"] = "always"
     timeout_s: float = 60.0
-    armed_by: tuple[StepName, ...] | None = None
+    armed_by: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -499,7 +483,7 @@ def _compile(
     facts: BoundSensor,
     deadlines: tuple[DeadlineRule, ...],
     rules: tuple[OperatorRule, ...],
-) -> tuple[Graph, dict[StepName, Operation], tuple[Omission, ...]]:
+) -> tuple[Graph, dict[str, Operation], tuple[Omission, ...]]:
     """Lower one step list into a graph, operation index and omission
     records.
     """
@@ -508,8 +492,8 @@ def _compile(
     resolved = _resolved(by_name, omitted)
 
     builder = GraphBuilder()
-    nodes: dict[StepName, int] = {}
-    operations: dict[StepName, Operation] = {}
+    nodes: dict[str, int] = {}
+    operations: dict[str, Operation] = {}
 
     for step in steps:
         if step.name in omitted:
@@ -545,7 +529,7 @@ def _compile(
     return builder.build(), operations, tuple(omissions)
 
 
-def _checked(steps: tuple[PlannedStep, ...]) -> dict[StepName, PlannedStep]:
+def _checked(steps: tuple[PlannedStep, ...]) -> dict[str, PlannedStep]:
     """Index steps after checking names, command-target pairs and
     dependencies.
 
@@ -553,7 +537,7 @@ def _checked(steps: tuple[PlannedStep, ...]) -> dict[StepName, PlannedStep]:
         ValueError: Names repeat, only one of command and target is set, or a
             dependency names an absent step.
     """
-    by_name: dict[StepName, PlannedStep] = {}
+    by_name: dict[str, PlannedStep] = {}
 
     for step in steps:
         if step.name in by_name:
@@ -578,7 +562,7 @@ def _checked(steps: tuple[PlannedStep, ...]) -> dict[StepName, PlannedStep]:
 
 def _fates(
     steps: tuple[PlannedStep, ...], facts: BoundSensor
-) -> tuple[frozenset[StepName], list[Omission]]:
+) -> tuple[frozenset[str], list[Omission]]:
     """Find unsupported steps to omit and record their reasons.
 
     Ordering steps are always retained.
@@ -586,7 +570,7 @@ def _fates(
     Raises:
         ValueError: An unsupported command has `unsupported="error"`.
     """
-    omitted: list[StepName] = []
+    omitted: list[str] = []
     omissions: list[Omission] = []
 
     for step in steps:
@@ -612,10 +596,10 @@ def _fates(
 
 
 def _resolved(
-    by_name: dict[StepName, PlannedStep], omitted: frozenset[StepName]
-) -> dict[StepName, tuple[Dependency, ...]]:
+    by_name: dict[str, PlannedStep], omitted: frozenset[str]
+) -> dict[str, tuple[Dependency, ...]]:
     """Resolve each step's dependencies through omitted predecessors."""
-    resolved: dict[StepName, tuple[Dependency, ...]] = {}
+    resolved: dict[str, tuple[Dependency, ...]] = {}
 
     for name in by_name:
         _resolve(name, by_name, omitted, resolved, frozenset())
@@ -624,11 +608,11 @@ def _resolved(
 
 
 def _resolve(
-    name: StepName,
-    by_name: dict[StepName, PlannedStep],
-    omitted: frozenset[StepName],
-    resolved: dict[StepName, tuple[Dependency, ...]],
-    seen: frozenset[StepName],
+    name: str,
+    by_name: dict[str, PlannedStep],
+    omitted: frozenset[str],
+    resolved: dict[str, tuple[Dependency, ...]],
+    seen: frozenset[str],
 ) -> tuple[Dependency, ...]:
     """Replace omitted predecessors with their dependencies recursively.
 
@@ -667,7 +651,7 @@ def _merged(deps: list[Dependency]) -> tuple[Dependency, ...]:
     """Merge duplicate predecessors in first-seen order, retaining success
     requirements.
     """
-    kinds: dict[StepName, Literal["success", "completion"]] = {}
+    kinds: dict[str, Literal["success", "completion"]] = {}
 
     for dep in deps:
         if kinds.get(dep.on) != "success":
@@ -701,7 +685,7 @@ def _effects(
 
 
 def _arming(
-    plan: CleanupPlan, steps: tuple[PlannedStep, ...], operations: Mapping[StepName, Operation]
+    plan: CleanupPlan, steps: tuple[PlannedStep, ...], operations: Mapping[str, Operation]
 ) -> tuple[Operation, ...] | None:
     """Resolve named cleanup triggers to emitted main-workflow operations.
 

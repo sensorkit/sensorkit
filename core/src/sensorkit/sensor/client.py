@@ -31,7 +31,6 @@ from sensorkit.sensor.execution import (
     WorkflowReport,
 )
 from sensorkit.sensor.lifecycle import LifecycleWorkflow, compile_lifecycle
-from sensorkit.sensor.topology import DeviceKey
 from sensorkit.sensor.workflow import ExecutableWorkflow, OperatorRule
 
 
@@ -140,7 +139,7 @@ class Sensor:
         intent: CollectIntent,
         *,
         rules: tuple[OperatorRule, ...] = (),
-        device_keywords: Mapping[DeviceKey, KeywordDict] | None = None,
+        device_keywords: Mapping[str, KeywordDict] | None = None,
     ) -> ExecutableWorkflow:
         """Pack, compile and issue a collect intent using this definition's
         deadlines.

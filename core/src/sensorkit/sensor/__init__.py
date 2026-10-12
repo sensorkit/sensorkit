@@ -94,15 +94,12 @@ from sensorkit.sensor.selection import (
 from sensorkit.sensor.topology import (
     Component,
     Device,
-    DeviceKey,
     Placement,
     Port,
     Selector,
     Structure,
     StructurePath,
-    TagKey,
     Topology,
-    TraitKey,
     Unit,
 )
 from sensorkit.sensor.workflow import (
@@ -115,12 +112,9 @@ from sensorkit.sensor.workflow import (
     ExecutableWorkflow,
     Omission,
     Operation,
-    OperationId,
     OperatorRule,
     Origin,
     PlannedStep,
-    RequestId,
-    StepName,
     lower,
     resolve_deadline,
 )

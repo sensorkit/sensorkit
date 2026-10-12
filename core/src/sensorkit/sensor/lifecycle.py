@@ -36,7 +36,6 @@ from sensorkit.sensor.workflow import (
     OperatorRule,
     Origin,
     PlannedStep,
-    StepName,
     lower,
 )
 
@@ -328,11 +327,11 @@ class TableCompiler:
         self.deadlines = deadlines
         self.rules = rules
         self.steps: list[PlannedStep] = []
-        self.deps: dict[StepName, list[Dependency]] = {}
-        self.where: dict[StepName, Placement] = {}
-        self.phase_steps: dict[str, list[StepName]] = {}
+        self.deps: dict[str, list[Dependency]] = {}
+        self.where: dict[str, Placement] = {}
+        self.phase_steps: dict[str, list[str]] = {}
         self.phase_after: dict[str, tuple[str, ...]] = {}
-        self.entry_steps: dict[str, list[StepName]] = {}
+        self.entry_steps: dict[str, list[str]] = {}
         self.entry_phase: dict[str, str] = {}
         self.emitted = 0
 
@@ -361,7 +360,7 @@ class TableCompiler:
         where = f"phase '{phase.name}'"
         after = self._declare_phase(phase, previous)
         chosen = self._selected(phase.entries, where)
-        heads: list[tuple[Entry, Placement, StepName]] = []
+        heads: list[tuple[Entry, Placement, str]] = []
 
         for position, entry in enumerate(phase.entries):
             emitted, entry_heads = self._emit_entry(
@@ -456,7 +455,7 @@ class TableCompiler:
 
         return targets
 
-    def _soft_links(self, entry: Entry, after: tuple[str, ...], where: str) -> list[StepName]:
+    def _soft_links(self, entry: Entry, after: tuple[str, ...], where: str) -> list[str]:
         """Collect inherited phase waits that explicit requirements do not
         replace.
 
@@ -492,7 +491,7 @@ class TableCompiler:
 
         raise ValueError(f"{where}: require names unknown or later phase/entry '{target}'")
 
-    def _effective_steps(self, phase: str) -> list[StepName]:
+    def _effective_steps(self, phase: str) -> list[str]:
         """Return a phase's steps, or recursively its predecessors when
         empty.
         """
@@ -513,12 +512,12 @@ class TableCompiler:
         self,
         entry: Entry,
         targets: tuple[Placement, ...],
-        soft: list[StepName],
+        soft: list[str],
         *,
         group: str,
         origin: tuple[str | int, ...],
         stated: bool | None,
-    ) -> tuple[list[PlannedStep], list[tuple[Placement, StepName]]]:
+    ) -> tuple[list[PlannedStep], list[tuple[Placement, str]]]:
         """Emit serial commands per placement and return each placement's
         first step.
 
@@ -526,10 +525,10 @@ class TableCompiler:
         the wait through their sequence dependencies.
         """
         steps: list[PlannedStep] = []
-        heads: list[tuple[Placement, StepName]] = []
+        heads: list[tuple[Placement, str]] = []
 
         for placement in targets:
-            previous: StepName | None = None
+            previous: str | None = None
 
             for index, spec in enumerate(entry.ops):
                 step = self._step(
@@ -577,9 +576,7 @@ class TableCompiler:
 
         return step
 
-    def _resolve_requires(
-        self, heads: list[tuple[Entry, Placement, StepName]], where: str
-    ) -> None:
+    def _resolve_requires(self, heads: list[tuple[Entry, Placement, str]], where: str) -> None:
         """Resolve entry requirements after emitting the whole phase,
         including peers.
         """
@@ -593,7 +590,7 @@ class TableCompiler:
                 self._join(clause, named, placement, head, where)
 
     def _join(
-        self, clause: Join, named: list[StepName], placement: Placement, head: StepName, where: str
+        self, clause: Join, named: list[str], placement: Placement, head: str, where: str
     ) -> None:
         """Filter a requirement's target steps and attach dependencies to
         the entry head.
@@ -615,9 +612,7 @@ class TableCompiler:
 
         self.deps[head] += [Dependency(on=name, kind=clause.on) for name in narrowed]
 
-    def _narrowed(
-        self, clause: Join, named: list[StepName], placement: Placement
-    ) -> list[StepName]:
+    def _narrowed(self, clause: Join, named: list[str], placement: Placement) -> list[str]:
         """Filter target steps by the clause's device or path relationship."""
         match clause.join:
             case "same-device":
@@ -645,7 +640,7 @@ class TableCompiler:
         declared = self._declare_cleanup(spec, where)
         chosen = self._selected(spec.entries, where)
         steps: list[PlannedStep] = []
-        heads: list[tuple[Entry, Placement, StepName]] = []
+        heads: list[tuple[Entry, Placement, str]] = []
 
         for position, entry in enumerate(spec.entries):
             emitted, entry_heads = self._emit_entry(
@@ -674,7 +669,7 @@ class TableCompiler:
             armed_by=self._arming(spec, where),
         )
 
-    def _declare_cleanup(self, spec: CleanupSpec, where: str) -> dict[str, list[StepName]]:
+    def _declare_cleanup(self, spec: CleanupSpec, where: str) -> dict[str, list[str]]:
         """Register entry ids and validate requirements within one cleanup
         spec.
 
@@ -682,7 +677,7 @@ class TableCompiler:
             ValueError: Ids repeat or requirements reference entries outside
                 the spec.
         """
-        declared: dict[str, list[StepName]] = {}
+        declared: dict[str, list[str]] = {}
 
         for entry in spec.entries:
             if entry.id is None:
@@ -706,7 +701,7 @@ class TableCompiler:
 
         return declared
 
-    def _arming(self, spec: CleanupSpec, where: str) -> tuple[StepName, ...] | None:
+    def _arming(self, spec: CleanupSpec, where: str) -> tuple[str, ...] | None:
         """Expand main-workflow entry ids into cleanup trigger step names.
 
         Preserve `None` as unconditional and an empty tuple as never armed.

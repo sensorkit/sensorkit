@@ -8,8 +8,8 @@ Instruments behind different ports of the same selector are mutually exclusive.
 
 `Topology` validates device uniqueness and sibling path names, then indexes
 chains, readers, private devices and required selector states without contacting
-hardware. Binding checks declared traits against reported capabilities. Tags
-provide grouping labels without asserting capabilities.
+hardware. Binding checks declared traits against reported capabilities.
+Tags group devices without asserting capabilities.
 """
 
 from __future__ import annotations
@@ -19,15 +19,6 @@ from dataclasses import dataclass
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, Discriminator, Field, Tag
-
-type DeviceKey = str
-"""Device identifier used in the structure and device reports."""
-
-type TraitKey = str
-"""Registered trait name, checked against device capabilities at binding."""
-
-type TagKey = str
-"""Grouping label, such as a rack or cooling loop, with no capability meaning."""
 
 type StructurePath = tuple[str, ...]
 """Path of unit names, port names and an instrument key, from root to leaf.
@@ -40,7 +31,7 @@ The sensor name is excluded; root devices have an empty path.
 class Placement:
     """A device key and its structural path, used to identify workflow targets."""
 
-    device: DeviceKey
+    device: str
     path: StructurePath
 
     @property
@@ -64,9 +55,9 @@ class Device(BaseModel, frozen=True, extra="forbid"):
     final path segment, distinguishing instruments in the same component list.
     """
 
-    device: DeviceKey
-    traits: Annotated[tuple[TraitKey, ...], BeforeValidator(_listed)] = ()
-    tags: Annotated[tuple[TagKey, ...], BeforeValidator(_listed)] = ()
+    device: str
+    traits: Annotated[tuple[str, ...], BeforeValidator(_listed)] = ()
+    tags: Annotated[tuple[str, ...], BeforeValidator(_listed)] = ()
     instrument: bool = False
 
     def placement(self, path: StructurePath) -> Placement:
@@ -104,10 +95,10 @@ class Selector(BaseModel, frozen=True, extra="forbid"):
     At least one port is required. Traits and tags work as they do on `Device`.
     """
 
-    selector: DeviceKey
+    selector: str
     ports: tuple[Port, ...] = Field(min_length=1)
-    traits: Annotated[tuple[TraitKey, ...], BeforeValidator(_listed)] = ()
-    tags: Annotated[tuple[TagKey, ...], BeforeValidator(_listed)] = ()
+    traits: Annotated[tuple[str, ...], BeforeValidator(_listed)] = ()
+    tags: Annotated[tuple[str, ...], BeforeValidator(_listed)] = ()
 
 
 def _record_kind(v: object) -> str | None:
@@ -182,7 +173,7 @@ class Topology:
         self._records: dict[Placement, Device | Selector] = {}
         self._chains: dict[Placement, tuple[Placement, ...]] = {}
         self._ports: dict[Placement, tuple[tuple[Placement, str], ...]] = {}
-        self._placed: dict[DeviceKey, Placement] = {}
+        self._placed: dict[str, Placement] = {}
 
         self._visit(structure.components, (), (), ())
 
@@ -214,7 +205,7 @@ class Topology:
         """
         return self._records[placement]
 
-    def tags(self, placement: Placement) -> frozenset[TagKey]:
+    def tags(self, placement: Placement) -> frozenset[str]:
         """Return grouping tags from the authored placement record.
 
         Raises:
@@ -391,7 +382,7 @@ class Topology:
 
         return tuple(shared)
 
-    def _claim(self, device: DeviceKey, placement: Placement) -> None:
+    def _claim(self, device: str, placement: Placement) -> None:
         """Reserve a device key for one placement.
 
         Raises:

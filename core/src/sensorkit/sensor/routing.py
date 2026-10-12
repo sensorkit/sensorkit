@@ -15,7 +15,7 @@ from typing import Literal
 from sensorkit.core.device import DeviceCommand
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.selection import Selection
-from sensorkit.sensor.topology import DeviceKey, Placement, format_paths
+from sensorkit.sensor.topology import Placement, format_paths
 
 type Scope = Literal["any", "private", "shared"]
 """Filter routing candidates by their relation to an instrument.
@@ -89,7 +89,7 @@ class CommandRouter:
         *,
         select: Selection | None = None,
         scope: Scope = "any",
-        device: DeviceKey | None = None,
+        device: str | None = None,
     ) -> tuple[RoutedCommand, ...]:
         """Choose targets for a command and return one routed command per
         target.
@@ -122,7 +122,7 @@ class CommandRouter:
         participants: tuple[Placement, ...],
         select: Selection | None,
         scope: Scope,
-        device: DeviceKey | None,
+        device: str | None,
     ) -> Placement:
         """Choose one target for a participant group using filters and
         depth.
@@ -178,7 +178,7 @@ class CommandRouter:
 
     def _named(
         self,
-        device: DeviceKey,
+        device: str,
         reachable: tuple[Placement, ...],
         named: str,
         participants: tuple[Placement, ...],

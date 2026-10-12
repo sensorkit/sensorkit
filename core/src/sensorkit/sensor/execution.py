@@ -44,7 +44,6 @@ from sensorkit.sensor.dispatch import (
     InterruptionRecorder,
     OperationEvent,
 )
-from sensorkit.sensor.topology import DeviceKey
 from sensorkit.sensor.workflow import (
     Cleanup,
     ExecutableWorkflow,
@@ -192,7 +191,7 @@ class WorkflowExecutor:
     def __init__(
         self,
         sensor: BoundSensor,
-        clients: Mapping[DeviceKey, DeviceClient],
+        clients: Mapping[str, DeviceClient],
         *,
         events: AsyncObserver[OperationEvent] | None = None,
     ):

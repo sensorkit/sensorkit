@@ -15,11 +15,9 @@ from sensorkit.core.entity import DeviceDetails
 from sensorkit.core.trait import get_trait, match_traits
 from sensorkit.sensor.topology import (
     Device,
-    DeviceKey,
     Placement,
     Selector,
     Topology,
-    TraitKey,
     format_path,
 )
 
@@ -38,9 +36,9 @@ class BoundSensor:
     def __init__(
         self,
         topology: Topology,
-        details: Mapping[DeviceKey, DeviceDetails],
+        details: Mapping[str, DeviceDetails],
         *,
-        device_keywords: Mapping[DeviceKey, KeywordDict] | None = None,
+        device_keywords: Mapping[str, KeywordDict] | None = None,
     ):
         self.topology = topology
         self.details = dict(details)
@@ -54,7 +52,7 @@ class BoundSensor:
         }
 
     @classmethod
-    def bind(cls, topology: Topology, details: Mapping[DeviceKey, DeviceDetails]) -> BoundSensor:
+    def bind(cls, topology: Topology, details: Mapping[str, DeviceDetails]) -> BoundSensor:
         """Check device reports and trait assertions, then return a sensor.
 
         Trait matching uses the same capability predicates as device
@@ -85,7 +83,7 @@ class BoundSensor:
 
         return sensor
 
-    def supported_commands(self, device: DeviceKey) -> frozenset[str]:
+    def supported_commands(self, device: str) -> frozenset[str]:
         """Return reported command identifiers, or an empty set for an
         unknown device.
         """
@@ -93,7 +91,7 @@ class BoundSensor:
 
         return found.supported_commands if found else frozenset()
 
-    def published_keywords(self, device: DeviceKey) -> frozenset[str]:
+    def published_keywords(self, device: str) -> frozenset[str]:
         """Return reported keyword identifiers, or an empty set for an
         unknown device.
         """
@@ -101,7 +99,7 @@ class BoundSensor:
 
         return found.published_keywords if found else frozenset()
 
-    def device_keywords(self, device: DeviceKey) -> KeywordDict | None:
+    def device_keywords(self, device: str) -> KeywordDict | None:
         """Return the supplied device keywords, or `None` if no mapping was supplied.
 
         A device missing from a supplied mapping has an empty keyword set.
@@ -112,14 +110,14 @@ class BoundSensor:
 
         return self._device_keywords.get(device, KeywordDict())
 
-    def traits(self, placement: Placement) -> frozenset[TraitKey]:
+    def traits(self, placement: Placement) -> frozenset[str]:
         """Return established traits, or an empty set for an unknown
         placement.
         """
         return self._traits.get(placement, frozenset())
 
 
-def _unmet(record: Device | Selector, established: frozenset[TraitKey]) -> tuple[str, ...]:
+def _unmet(record: Device | Selector, established: frozenset[str]) -> tuple[str, ...]:
     """Describe declared traits that binding could not establish.
 
     Distinguish unregistered names from registered traits the device lacks.
