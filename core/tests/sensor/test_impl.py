@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from sensorkit.astro.common import SitePosition
+from sensorkit.astro.common import RADecPointing, SitePosition
 from sensorkit.backend.request import CallError
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.task import TaskInfo
@@ -113,35 +113,39 @@ async def test_cleanup_skips_a_cancellation_after_service_stop(
 
 
 @pytest.mark.asyncio
-async def test_attach_subscribes_to_reported_keywords_outside_the_pointing_vocabulary(
-        service_context, controller_impl):
-    wheel = await service_context.register_device("wheel")
-    wheel.declare_published_keyword("Filter")
-    await wheel.publish_entity_info()
-    definition = authored("""
+async def test_collect_headers_carry_pointing_from_an_undeclared_mount(
+        kit, rig, service_context, controller_impl):
+    pointing = RADecPointing(right_ascension_hours=6.0, declination_degrees=-30.0)
+    await rig.serve(service_context, "telescope",
+                    ("Init", "Deinit", "MoveToPark", "SetParkPosition", "Stop",
+                     "Home", "FollowTarget", "Abort"),
+                    keywords=[pointing], declare=False)
+    controller = await attached(controller_impl, """
         sensor:
           components:
-            - device: wheel
+            - device: telescope
+            - device: cam
+              instrument: true
         """)
-    await controller_impl.kv_put_model(SensorConfig(
-        model=definition.sensor, policies=SensorPolicies()))
-    await controller_impl.kv_put_model(SitePosition(
-        latitude_degrees=20.0, longitude_degrees=-100.0, altitude_km=1.0))
-    controller = SensorController()
-    await controller.on_attach()
     await controller_impl.start_device_subscriptions()
 
     try:
-        value = Filter(name="r")
-
+        # Wait for the pointing published before the subscriptions started.
         async with asyncio.timeout(2.0):
-            while controller.device_contexts()["wheel"].get(Filter) is None:
-                await wheel.publish(value)
+            while controller.device_contexts()["telescope"].get(RADecPointing) is None:
                 await asyncio.sleep(0)
 
-        assert controller.device_contexts()["wheel"][Filter] == value
+        client = kit.controller(str(controller_impl.entity))
+        await client.enable()
+        await client.execute_task(StandardCollectTask(
+            target=TARGET, camera_params=CameraParameterSet(
+                integration_time_seconds=0.1, frame_count=1)))
     finally:
         await controller_impl.stop_device_subscriptions()
+
+    capture, = rig["cam"].sent("CameraCapture")
+
+    assert capture.context[RADecPointing] == pointing
 
 
 @pytest.mark.asyncio

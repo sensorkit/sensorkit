@@ -9,10 +9,11 @@ from typing import TYPE_CHECKING, Any, Unpack, overload, override
 
 from pydantic import BaseModel
 
-from sensorkit.common.keyword import CompositeKeyword, KeywordDict
+from sensorkit.common.keyword import CompositeKeyword, KeywordDict, get_keyword_type
+from sensorkit.core.trait import trait_keyword_ids
 
 if TYPE_CHECKING:
-    from sensorkit.core.entity import EntityClient
+    from sensorkit.core.entity import DeviceDetails, EntityClient
 
 _SAFE_BUILTINS = {
     "__import__": builtins.__import__,
@@ -262,6 +263,21 @@ class ContextSubscription:
         """
         self._ready.clear()
         self._add_queue.put_nowait(keyword_type)
+
+    def add_trait_keywords(self, details: DeviceDetails):
+        """Register a subscription for each keyword required by a trait the device satisfies.
+
+        Args:
+            details: The device details to match against registered traits.
+
+        Raises:
+            ValueError: A matched trait requires a keyword that is not declared.
+        """
+        for keyword_id in sorted(trait_keyword_ids(details)):
+            if (keyword_type := get_keyword_type(keyword_id)) is None:
+                raise ValueError(f"trait keyword '{keyword_id}' is not a declared keyword")
+
+            self.add(keyword_type)
 
     async def _subscription_adder(self):
         while True:

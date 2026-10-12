@@ -6,7 +6,11 @@ import pytest_asyncio
 from pydantic import BaseModel
 
 from sensorkit.common.keyword import KeywordDict, declare_keyword
+from sensorkit.core.device import DeviceCommand
+from sensorkit.core.entity import DeviceDetails
+from sensorkit.core.trait import declare_trait
 from sensorkit.data.context import Context, ContextSubscription, merge_contexts
+from sensorkit.std.optics import Filter, Filters
 
 # --- Ordered merge ----------------------------------------------------------------
 
@@ -405,6 +409,38 @@ async def test_context_subscription_latest_value_wins(subscription, device_impl)
         await device_impl.publish(SampleTemperature(celsius=celsius))
 
     assert await cached(subscription, SampleTemperature, SampleTemperature(celsius=30.0))
+
+
+@pytest.mark.asyncio
+async def test_context_subscription_adds_trait_keywords(subscription, device_impl):
+    """A device matching a trait by its commands is subscribed to the trait's keywords."""
+    filters = Filters(filters=[Filter(name="r")])
+    subscription.add_trait_keywords(
+        DeviceDetails(supported_commands=frozenset({"SetFilter"}), published_keywords=frozenset())
+    )
+    await subscription.start()
+
+    await device_impl.publish(filters)
+
+    assert await cached(subscription, Filters, filters)
+
+
+class UnmatchedCommand(DeviceCommand):
+    """A command no device implements, so its trait matches only here."""
+
+
+@pytest.mark.asyncio
+async def test_context_subscription_rejects_undeclared_trait_keyword(subscription):
+    """A matched trait naming an undeclared keyword raises."""
+    declare_trait(
+        "undeclared_keyword_trait",
+        required_commands=(UnmatchedCommand,),
+        required_keywords=("NotADeclaredKeyword",),
+    )
+    details = DeviceDetails(supported_commands=frozenset({"UnmatchedCommand"}), published_keywords=frozenset())
+
+    with pytest.raises(ValueError, match="NotADeclaredKeyword"):
+        subscription.add_trait_keywords(details)
 
 
 @pytest.mark.asyncio

@@ -209,6 +209,7 @@ StandardMount = sk.declare_archetype(
         Home,
         FollowTarget,
     ),
+    required_keywords=("RADecPointing", "AltAzPointing", "AxisRates"),
     optional_commands=(
         EnableAxis,
         DisableAxis,

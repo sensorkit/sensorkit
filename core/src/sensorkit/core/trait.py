@@ -45,11 +45,18 @@ class Trait:
 
     def match(self, details: DeviceDetails) -> bool:
         """Return True if the given device details satisfy this trait's commands and keywords."""
-        if not (self.effective_command_ids() <= details.supported_commands):
+        commands = self.effective_command_ids()
+
+        if not (commands <= details.supported_commands):
             return False
-        if not (self.effective_keyword_ids() <= details.published_keywords):
-            return False
-        return True
+
+        # FIXME: Devices cannot declare the keywords they publish, so a trait matched by its
+        #        commands is trusted to publish its keywords. A trait without commands still
+        #        requires declared keywords.
+        if commands:
+            return True
+
+        return self.effective_keyword_ids() <= details.published_keywords
 
     def __hash__(self):
         return hash(self.name)
@@ -178,6 +185,14 @@ def match_traits(
             output.append(trait)
 
     return output
+
+
+def trait_keyword_ids(
+    details: DeviceDetails,
+    traits: Iterable[Trait] | None = None,
+) -> frozenset[str]:
+    """Return the keyword IDs required by every trait the device satisfies."""
+    return frozenset().union(*(trait.effective_keyword_ids() for trait in match_traits(details, traits)))
 
 
 def match_archetype(details: DeviceDetails) -> Archetype | None:

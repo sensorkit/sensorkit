@@ -177,6 +177,8 @@ TRACKING = sk.declare_trait("tracking", required_commands=(FollowTarget, Stop))
 ```
 
 - `Trait(name, required_commands, required_keywords)` — `match(details)` tests a device; declared via `declare_trait(...)`.
+  A device that implements a trait's required commands is currently assumed to publish its required keywords.
+  A trait with no required commands still needs its keywords declared.
 - `Archetype` — a trait a device should match at most one of (mount, camera, …), adding `required_traits` and non-matching `optional_commands`; declared via `declare_archetype(...)`.
 
 Declared traits/archetypes join global registries used for discovery (`SensorKit.list_devices()` reports each device's resolved traits and archetype) and for validation at device registration when passed to `declare_device(type=..., traits=[...])`.

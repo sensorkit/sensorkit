@@ -19,6 +19,7 @@ from sensorkit.core.trait import (
     get_registered_traits,
     match_archetype,
     match_traits,
+    trait_keyword_ids,
 )
 from sensorkit.std import (
     Connect,
@@ -63,6 +64,31 @@ class TestTraitMatching:
         details_partial = DeviceDetails(supported_commands={"Connect"}, published_keywords=frozenset())
         assert t.match(details_ok)
         assert not t.match(details_partial)
+
+
+class TestKeywordMatching:
+    def test_command_match_implies_keywords(self):
+        t = declare_trait("t_kw_implied", required_commands=(Stop,), required_keywords=("KwA",))
+        details = DeviceDetails(supported_commands={"Stop"}, published_keywords=frozenset())
+        assert t.match(details)
+
+    def test_partial_command_match_fails_despite_keywords(self):
+        t = declare_trait("t_kw_partial", required_commands=(Stop, Init), required_keywords=("KwA",))
+        details = DeviceDetails(supported_commands={"Stop"}, published_keywords=frozenset({"KwA"}))
+        assert not t.match(details)
+
+    def test_keyword_only_trait_requires_declared_keywords(self):
+        t = declare_trait("t_kw_only", required_keywords=("KwA",))
+        undeclared = DeviceDetails(supported_commands={"Stop"}, published_keywords=frozenset())
+        declared = DeviceDetails(supported_commands=frozenset(), published_keywords=frozenset({"KwA"}))
+        assert not t.match(undeclared)
+        assert t.match(declared)
+
+    def test_archetype_command_match_implies_keyword_only_sub_trait(self):
+        provider = declare_trait("t_kw_provider", required_keywords=("KwA",))
+        arch = declare_archetype("t_kw_arch", required_commands=(Init,), required_traits=(provider,))
+        details = DeviceDetails(supported_commands={"Init"}, published_keywords=frozenset())
+        assert arch.match(details)
 
 
 class TestArchetypeMatching:
@@ -157,6 +183,13 @@ class TestMatchHelpers:
         )
         details = DeviceDetails(supported_commands={"Init", "FollowTarget", "Stop"}, published_keywords=frozenset())
         assert match_archetype(details) == arch
+
+    def test_trait_keyword_ids(self):
+        t1 = declare_trait("t_tk_1", required_commands=(Stop,), required_keywords=("KwA", "KwB"))
+        t2 = declare_trait("t_tk_2", required_keywords=("KwC",))
+        t3 = declare_trait("t_tk_3", required_commands=(FollowTarget,), required_keywords=("KwD",))
+        details = DeviceDetails(supported_commands={"Stop"}, published_keywords=frozenset({"KwC"}))
+        assert trait_keyword_ids(details, [t1, t2, t3]) == frozenset({"KwA", "KwB", "KwC"})
 
     def test_match_archetype_no_match(self):
         # With no matching archetype for this device, should return None.

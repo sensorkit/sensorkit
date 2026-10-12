@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
 from sensorkit.astro.common import SitePosition
-from sensorkit.common.keyword import get_keyword_type
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.client import Sensor
 from sensorkit.sensor.definition import SensorDefinition
@@ -71,19 +70,15 @@ class SensorController:
             for table in compose_tables(definition, config.policies.tables(), bound)
         }
 
-        # Subscriptions start after attach; each device supplies whichever
-        # header keywords it reports publishing.
+        # Subscriptions start after attach. Only keywords named by a matched trait
+        # are subscribed, so custom keywords are never subscribed implicitly.
         placements = bound.topology.placements()
         self.devices = tuple(placement.device for placement in placements)
 
         for placement in placements:
-            controller.use_device(
-                placement.device,
-                subscribe=[
-                    keyword
-                    for name in sorted(bound.published_keywords(placement.device))
-                    if (keyword := get_keyword_type(name)) is not None
-                ],
+            controller.use_device(placement.device)
+            controller.get_device(placement.device).subscription.add_trait_keywords(
+                bound.details[placement.device]
             )
 
         # Publish device roles for consumers of the legacy capability model.

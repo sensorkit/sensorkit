@@ -315,11 +315,12 @@ class Rig:
         return self.devices[name]
 
     async def serve(self, context, name: str, commands: Iterable[str],
-                    keywords: Iterable[BaseModel] = ()) -> Device:
+                    keywords: Iterable[BaseModel] = (), *,
+                    declare: bool = True) -> Device:
         """Serve a device with command handlers and optional published keywords.
 
-        Advertise the registered commands and keyword keys, then publish each
-        supplied keyword value once.
+        Advertise the registered commands and, if `declare`, the keyword keys,
+        then publish each supplied keyword value once.
         """
         impl = await context.register_device(name)
         device = self.devices[name] = Device(name, self)
@@ -329,7 +330,7 @@ class Rig:
             impl.command_handler(DeviceCommand.registry.get_type(tag))(
                 device.handle)
 
-        for value in keywords:
+        for value in keywords if declare else ():
             impl.declare_published_keyword(get_keyword_info(value).key)
 
         await impl.publish_entity_info()
