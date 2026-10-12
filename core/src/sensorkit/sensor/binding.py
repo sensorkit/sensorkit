@@ -18,7 +18,6 @@ from sensorkit.sensor.topology import (
     Placement,
     Selector,
     Topology,
-    format_path,
 )
 
 
@@ -68,12 +67,12 @@ class BoundSensor:
         if silent:
             raise ValueError(
                 "the structure names devices that reported nothing: "
-                + ", ".join(f"'{p.device}' at '{format_path(p.path, '<root>')}'" for p in silent)
+                + ", ".join(f"'{p.device}' at '{p.path_str}'" for p in silent)
             )
 
         sensor = cls(topology, details)
         unmet = tuple(
-            f"'{p.device}' at '{format_path(p.path, '<root>')}' {reason}"
+            f"'{p.device}' at '{p.path_str}' {reason}"
             for p in topology.placements()
             for reason in _unmet(topology.record(p), sensor.traits(p))
         )

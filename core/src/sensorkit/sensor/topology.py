@@ -39,6 +39,11 @@ class Placement:
         """Number of path segments below the sensor root."""
         return len(self.path)
 
+    @property
+    def path_str(self) -> str:
+        """Path segments joined with slashes, or `<root>` at the sensor root."""
+        return "/".join(self.path) or "<root>"
+
 
 def _listed(v: object) -> object:
     """Accept a single name wherever a list of names is expected."""
@@ -142,19 +147,9 @@ Port.model_rebuild()
 Selector.model_rebuild()
 
 
-def format_path(path: StructurePath, root: str = "") -> str:
-    """Render a path for a label or an error message.
-
-    Args:
-        path: Path segments from root to leaf, joined with slashes.
-        root: Label to return for an empty path.
-    """
-    return "/".join(path) or root
-
-
 def format_paths(placements: Iterable[Placement]) -> str:
     """Render participant paths for routing diagnostics."""
-    return ", ".join(format_path(p.path, "<root>") for p in placements) or "<no instrument>"
+    return ", ".join(p.path_str for p in placements) or "<no instrument>"
 
 
 class Topology:
@@ -377,7 +372,7 @@ class Topology:
         dupes = sorted({s for s in segments if segments.count(s) > 1})
 
         if dupes:
-            where = format_path(path, "<root>")
+            where = "/".join(path) or "<root>"
             raise ValueError(f"positions named twice under '{where}': {', '.join(dupes)}")
 
         return tuple(shared)
@@ -393,8 +388,7 @@ class Topology:
         if held is not None:
             raise ValueError(
                 f"device '{device}' is placed twice, at "
-                f"'{format_path(held.path, '<root>')}' and "
-                f"'{format_path(placement.path, '<root>')}'"
+                f"'{held.path_str}' and '{placement.path_str}'"
             )
 
         self._placed[device] = placement

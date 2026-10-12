@@ -13,7 +13,7 @@ from sensorkit.sensor.topology import (
     Structure,
     Topology,
     Unit,
-    format_path,
+    format_paths,
 )
 
 
@@ -147,7 +147,7 @@ def build(*components) -> Topology:
 
 
 def test_a_device_named_twice_anywhere_is_a_structural_error():
-    with pytest.raises(ValueError, match="'mount' is placed twice"):
+    with pytest.raises(ValueError, match="'mount' is placed twice, at '<root>' and 'ota'"):
         build(Device(device="mount"),
               Unit(unit="ota", components=(Device(device="mount"),)))
 
@@ -187,6 +187,11 @@ def test_an_empty_structure_is_well_formed():
     assert topology.instruments() == ()
 
 
-def test_format_path_names_the_root(at):
-    assert format_path(at("mount").path, "<root>") == "<root>"
-    assert format_path(at("cam-sci").path) == "ota/science/cam-sci"
+def test_a_path_string_names_the_root(at):
+    assert at("mount").path_str == "<root>"
+    assert at("cam-sci").path_str == "ota/science/cam-sci"
+
+
+def test_participants_are_listed_in_order_or_named_as_absent(at):
+    assert format_paths((at("cam-guide"), at("mount"))) == "ota/guide/cam-guide, <root>"
+    assert format_paths(()) == "<no instrument>"

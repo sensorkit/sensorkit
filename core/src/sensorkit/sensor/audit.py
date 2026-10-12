@@ -52,7 +52,6 @@ from sensorkit.sensor.topology import (
     Structure,
     Topology,
     Unit,
-    format_path,
 )
 from sensorkit.sensor.workflow import (
     Acquisition,
@@ -698,9 +697,8 @@ def _omitted(omissions: tuple[Omission, ...]) -> Iterator[str]:
     )
 
     for omission in omissions:
-        where = format_path(omission.target.path, "<root>")
         yield (
-            f"  {omission.command} on {omission.target.device} @ {where}, "
+            f"  {omission.command} on {omission.target.device} @ {omission.target.path_str}, "
             f"from {omission.origin}, because {omission.reason}"
         )
 

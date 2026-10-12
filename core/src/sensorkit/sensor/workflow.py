@@ -36,10 +36,7 @@ from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceCommand
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.selection import Selection
-from sensorkit.sensor.topology import (
-    Placement,
-    format_path,
-)
+from sensorkit.sensor.topology import Placement
 
 
 @dataclass(frozen=True)
@@ -126,10 +123,7 @@ class PlannedStep:
         if self.command is None or self.target is None:
             return self.origin.reason or self.name
 
-        return (
-            f"{format_command(self.command):<18} {self.target.device} "
-            f"@ {format_path(self.target.path, '<root>')}"
-        )
+        return f"{format_command(self.command):<18} {self.target.device} @ {self.target.path_str}"
 
 
 @dataclass(frozen=True, eq=False)
