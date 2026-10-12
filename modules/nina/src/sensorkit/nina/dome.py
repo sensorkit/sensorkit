@@ -22,7 +22,7 @@ from sensorkit.std import (
     Opened,
     Stop,
 )
-from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
+from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure, StandardEnclosure
 
 
 @sk.declare_keyword
@@ -35,7 +35,7 @@ class NinaDomeStatus(BaseModel):
     following: bool = False
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardEnclosure)
 class NinaDome(NinaDevice):
     """NINA Dome implementation."""
 

@@ -16,7 +16,7 @@ from sensorkit.alpaca.device import (
 )
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect, Opened, Stop
-from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
+from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover, StandardMirrorCover
 
 # CoverStatus enum (ICoverCalibratorV2)
 _COVER_NOT_PRESENT = 0
@@ -69,7 +69,7 @@ class AlpacaCoverCalibratorState(AlpacaDeviceState):
     device_type: Literal["cover_calibrator"] = "cover_calibrator"
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardMirrorCover)
 class AlpacaCoverCalibrator(AlpacaDevice):
     """Alpaca CoverCalibrator implementation."""
 

@@ -41,6 +41,7 @@ from sensorkit.std import (
     MoveToPark,
     SetParkPosition,
     Slewing,
+    StandardMount,
     Stop,
     Tracking,
 )
@@ -127,7 +128,7 @@ def radec_rates_to_altaz_rates(
     return alt_rate_deg_per_sec, az_rate_deg_per_sec
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardMount)
 class TheSkyTelescope(TheSkyDevice):
     """TheSky Telescope implementation."""
 

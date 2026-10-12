@@ -16,7 +16,7 @@ from sensorkit.alpaca.device import (
 )
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect, Stop
-from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
+from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition, StandardRotator
 
 
 class AlpacaRotatorState(AlpacaDeviceState):
@@ -36,7 +36,7 @@ class AlpacaRotatorStatus(BaseModel):
     step_size: float | None = None
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardRotator)
 class AlpacaRotator(AlpacaDevice):
     """Alpaca Rotator implementation."""
 

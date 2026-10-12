@@ -11,7 +11,7 @@ import sensorkit.api as sk
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std import Connect, Connected, Disconnect, Stop
-from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
+from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition, StandardRotator
 
 
 @sk.declare_keyword
@@ -22,7 +22,7 @@ class NinaRotatorStatus(BaseModel):
     step_size: float | None = None
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardRotator)
 class NinaRotator(NinaDevice):
     """NINA Rotator implementation."""
 

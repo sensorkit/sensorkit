@@ -9,7 +9,7 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect
-from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
+from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition, StandardRotator
 from sensorkit.thesky.device import (
     TheSkyDevice,
     TheSkyDeviceConfig,
@@ -17,7 +17,7 @@ from sensorkit.thesky.device import (
 )
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardRotator)
 class TheSkyRotator(TheSkyDevice):
     """TheSky Rotator implementation."""
 

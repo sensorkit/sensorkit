@@ -15,10 +15,10 @@ from sensorkit.node_platform.device import (
     NodePlatformDeviceState,
 )
 from sensorkit.std import Connected, RotatorPosition, Stop
-from sensorkit.std.instrument import ChangeRotatorPosition
+from sensorkit.std.instrument import ChangeRotatorPosition, StandardRotator
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardRotator)
 class NodePlatformRotator(NodePlatformDevice):
     """Node Platform Rotator implementation."""
 

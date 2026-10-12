@@ -24,14 +24,14 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.alpaca.focuser import AlpacaFocuser, AlpacaFocuserConfig, AlpacaFocuserState
 from sensorkit.autoslew.device import AutoslewMixin
-from sensorkit.std import Home
+from sensorkit.std import Home, StandardFocuser
 
 
 class AutoslewFocuserState(AlpacaFocuserState):
     has_been_homed: bool = False
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardFocuser)
 class AutoslewFocuser(AutoslewMixin, AlpacaFocuser):
     """ASA Autoslew focuser implementation."""
 

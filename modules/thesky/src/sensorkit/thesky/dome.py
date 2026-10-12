@@ -22,6 +22,7 @@ from sensorkit.std import (
     MoveToPark,
     Opened,
     OpenEnclosure,
+    StandardEnclosure,
     Stop,
 )
 from sensorkit.thesky.device import (
@@ -41,7 +42,7 @@ class IsTracking(BaseModel):
     is_tracking: bool = False
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardEnclosure)
 class TheSkyDome(TheSkyDevice):
     """TheSky Dome implementation."""
 

@@ -11,7 +11,7 @@ import sensorkit.api as sk
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std import Connect, Connected, Disconnect, Stop
-from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
+from sensorkit.std.optics import ChangeFocusPosition, FocusPosition, StandardFocuser
 
 
 @sk.declare_keyword
@@ -23,7 +23,7 @@ class NinaFocuserStatus(BaseModel):
     step_size: float | None = None
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardFocuser)
 class NinaFocuser(NinaDevice):
     """NINA Focuser implementation."""
 

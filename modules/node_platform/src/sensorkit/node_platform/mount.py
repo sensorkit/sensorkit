@@ -48,6 +48,7 @@ from sensorkit.std import (
     MoveToPark,
     SetParkPosition,
     Slewing,
+    StandardMount,
     Stop,
     Tracking,
 )
@@ -122,7 +123,7 @@ def altaz_rates_to_radec_rates(
     return ra_rate_deg_per_sec, dec_rate_deg_per_sec
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardMount)
 class NodePlatformMount(NodePlatformDevice):
     """Node Platform Mount implementation."""
 

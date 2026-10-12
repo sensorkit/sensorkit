@@ -30,6 +30,7 @@ from sensorkit.std import (
     FocusPosition,
     FrameType,
     RotatorPosition,
+    StandardCamera,
     Stop,
     TemperatureUnit,
 )
@@ -65,7 +66,7 @@ class SdasimCameraStatus(BaseModel):
     defocus_um: float | None = None  # focal shift fed to sdasim's optics model
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardCamera)
 class SdasimCamera:
     """Simulated camera backed by the sdasim renderer.
 

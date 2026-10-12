@@ -32,6 +32,7 @@ from sensorkit.std import (
     Connected,
     Disconnect,
     ExposureInfo,
+    StandardCamera,
     Stop,
     TemperatureUnit,
 )
@@ -125,7 +126,7 @@ class NinaCameraStatus(BaseModel):
     supported_actions: list[str] | None = None
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardCamera)
 class NinaCamera(NinaDevice):
     """NINA Camera implementation."""
 

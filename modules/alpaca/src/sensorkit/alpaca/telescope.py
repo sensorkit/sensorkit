@@ -43,6 +43,7 @@ from sensorkit.std import (
     MoveToPark,
     SetParkPosition,
     Slewing,
+    StandardMount,
     Stop,
     Tracking,
 )
@@ -160,7 +161,7 @@ class AlpacaTelescopeState(AlpacaDeviceState):
     has_been_homed: bool = False
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardMount)
 class AlpacaTelescope(AlpacaDevice):
     """Alpaca Telescope implementation."""
 

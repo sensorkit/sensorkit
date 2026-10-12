@@ -34,6 +34,7 @@ from sensorkit.std import (
     Disconnect,
     ExposureInfo,
     FrameType,
+    StandardCamera,
     Stop,
     TemperatureUnit,
 )
@@ -132,7 +133,7 @@ class AlpacaCameraState(AlpacaDeviceState):
     device_type: Literal["camera"] = "camera"
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardCamera)
 class AlpacaCamera(AlpacaDevice):
     """Alpaca Camera implementation."""
 

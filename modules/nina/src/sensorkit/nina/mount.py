@@ -38,6 +38,7 @@ from sensorkit.std import (
     MoveToPark,
     SetParkPosition,
     Slewing,
+    StandardMount,
     Stop,
     Tracking,
 )
@@ -53,7 +54,7 @@ class NinaMountStatus(BaseModel):
     sidereal_time: float | None = None
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardMount)
 class NinaMount(NinaDevice):
     """NINA mount implementation."""
 

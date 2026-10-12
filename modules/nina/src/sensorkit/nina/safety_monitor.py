@@ -9,10 +9,10 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
-from sensorkit.std import BasicSafety, Connect, Connected, Disconnect
+from sensorkit.std import BasicSafety, Connect, Connected, Disconnect, StandardSafety
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardSafety)
 class NinaSafetyMonitor(NinaDevice):
     """NINA SafetyMonitor implementation."""
 

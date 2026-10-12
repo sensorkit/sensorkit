@@ -66,6 +66,7 @@ from sensorkit.std import (
     MoveToPark,
     SetParkPosition,
     Slewing,
+    StandardMount,
     Stop,
     Tracking,
 )
@@ -153,7 +154,7 @@ class AutoslewTelescopeState(AlpacaTelescopeState):
     """Autoslew mount state."""
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardMount)
 class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
     """ASA Autoslew mount implementation.
 

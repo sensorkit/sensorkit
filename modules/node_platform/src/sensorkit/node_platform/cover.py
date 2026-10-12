@@ -15,10 +15,10 @@ from sensorkit.node_platform.device import (
     NodePlatformDeviceState,
 )
 from sensorkit.std import Connected, Opened, Stop
-from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover
+from sensorkit.std.optics import CloseMirrorCover, OpenMirrorCover, StandardMirrorCover
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardMirrorCover)
 class NodePlatformCover(NodePlatformDevice):
     """Node Platform Cover implementation."""
 

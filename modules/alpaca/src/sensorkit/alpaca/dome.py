@@ -27,7 +27,7 @@ from sensorkit.std import (
     Opened,
     Stop,
 )
-from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure
+from sensorkit.std.enclosure import CloseEnclosure, MoveEnclosure, OpenEnclosure, StandardEnclosure
 
 _SHUTTER_OPEN = 0
 _SHUTTER_CLOSED = 1
@@ -75,7 +75,7 @@ class AlpacaDomeState(AlpacaDeviceState):
     has_been_homed: bool = False
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardEnclosure)
 class AlpacaDome(AlpacaDevice):
     """Alpaca Dome implementation."""
 

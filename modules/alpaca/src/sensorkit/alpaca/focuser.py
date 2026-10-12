@@ -16,7 +16,7 @@ from sensorkit.alpaca.device import (
 )
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect, Stop, Temperature, TemperatureUnit
-from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
+from sensorkit.std.optics import ChangeFocusPosition, FocusPosition, StandardFocuser
 
 
 class AlpacaFocuserState(AlpacaDeviceState):
@@ -38,7 +38,7 @@ class AlpacaFocuserStatus(BaseModel):
     temperature: float | None = None
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardFocuser)
 class AlpacaFocuser(AlpacaDevice):
     """Alpaca Focuser implementation."""
 

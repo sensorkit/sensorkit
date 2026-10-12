@@ -10,10 +10,10 @@ import sensorkit.api as sk
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.pwi4.device import PWI4Client, PWI4Device, PWI4DeviceConfig, PWI4DeviceState
 from sensorkit.std import Connect, Connected, Disable, Disconnect, Enable, Enabled, Stop
-from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition
+from sensorkit.std.instrument import ChangeRotatorPosition, RotatorPosition, StandardRotator
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardRotator)
 class PWI4Rotator(PWI4Device):
     """PWI4 rotator implementation."""
 

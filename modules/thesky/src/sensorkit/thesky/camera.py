@@ -27,6 +27,7 @@ from sensorkit.std import (
     Disconnect,
     ExposureInfo,
     FrameType,
+    StandardCamera,
     Stop,
     TemperatureUnit,
 )
@@ -38,7 +39,7 @@ from sensorkit.thesky.device import (
 )
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardCamera)
 class TheSkyCamera(TheSkyDevice):
     """TheSky Camera implementation."""
 

@@ -24,13 +24,14 @@ from sensorkit.alpaca.cover_calibrator import (
     AlpacaCoverCalibratorState,
 )
 from sensorkit.autoslew.device import AutoslewMixin
+from sensorkit.std import StandardMirrorCover
 
 
 class AutoslewCoverCalibratorState(AlpacaCoverCalibratorState):
     """Autoslew mirror cover state (distinct KV key from the Alpaca base)."""
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardMirrorCover)
 class AutoslewCoverCalibrator(AutoslewMixin, AlpacaCoverCalibrator):
     """ASA Autoslew mirror cover implementation."""
 

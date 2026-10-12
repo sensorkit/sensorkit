@@ -10,10 +10,10 @@ import sensorkit.api as sk
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.pwi4.device import PWI4Client, PWI4Device, PWI4DeviceConfig, PWI4DeviceState
 from sensorkit.std import Connect, Connected, Disable, Disconnect, Enable, Enabled, Stop
-from sensorkit.std.optics import ChangeFocusPosition, FocusPosition
+from sensorkit.std.optics import ChangeFocusPosition, FocusPosition, StandardFocuser
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardFocuser)
 class PWI4Focuser(PWI4Device):
     """PWI4 focuser implementation."""
 

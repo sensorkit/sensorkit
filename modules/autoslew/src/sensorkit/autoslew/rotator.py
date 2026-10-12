@@ -25,14 +25,14 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.alpaca.rotator import AlpacaRotator, AlpacaRotatorConfig, AlpacaRotatorState
 from sensorkit.autoslew.device import AutoslewMixin
-from sensorkit.std import Home
+from sensorkit.std import Home, StandardRotator
 
 
 class AutoslewRotatorState(AlpacaRotatorState):
     has_been_homed: bool = False
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardRotator)
 class AutoslewRotator(AutoslewMixin, AlpacaRotator):
     """ASA Autoslew rotator implementation."""
 

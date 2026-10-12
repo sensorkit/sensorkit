@@ -18,7 +18,7 @@ from sensorkit.node_platform.device import (
     NodePlatformDeviceState,
 )
 from sensorkit.std import Connected, Deinit, Home, Init, Opened, Stop
-from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure
+from sensorkit.std.enclosure import CloseEnclosure, OpenEnclosure, StandardEnclosure
 
 # Re-export SDK enums for convenience in config / external use
 EnclosureShutterState = osapi.EnclosureShutterState
@@ -53,7 +53,7 @@ class EnclosureStatus(BaseModel):
     hvac_error: str | None = None
 
 
-@sk.declare_device
+@sk.declare_device(type=StandardEnclosure)
 class NodePlatformEnclosure(NodePlatformDevice):
     """Node Platform Enclosure implementation."""
 
