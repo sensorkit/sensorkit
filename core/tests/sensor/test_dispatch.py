@@ -277,7 +277,7 @@ def named(**values) -> KeywordDict:
 def acquiring(at, keywords: KeywordDict) -> Operation:
     """One acquisition on the science camera, planned with these keywords."""
     return Operation(
-        id="t/frame@cam-sci", target=at("cam-sci"),
+        target=at("cam-sci"),
         command=CameraCapture(integration_time=1.0, context=None),
         origin=Origin(source="t"),
         acquisition=Acquisition(request="r", index=0, frame_number=7,
@@ -339,7 +339,7 @@ def test_an_acquisition_is_sent_as_a_copy_carrying_its_header(facts, at):
 
 
 def test_other_work_is_sent_as_planned(facts, at):
-    operation = Operation(id="t/stop@mount", target=at("mount"),
-                          command=Stop(), origin=Origin(source="t"))
+    operation = Operation(target=at("mount"), command=Stop(),
+                          origin=Origin(source="t"))
 
     assert Dispatcher(facts, {}).outgoing(operation) is operation.command

@@ -139,21 +139,24 @@ class Operation:
     Operations compare and hash by object identity so execution and cleanup
     can distinguish attempts with identical fields.
 
-    `id` is a label for logs and audits. `timeout_s` is resolved; `None` means
-    unbounded. An acquisition marks a command that needs a header at dispatch.
+    `timeout_s` is resolved; `None` means unbounded. An acquisition marks a
+    command that needs a header at dispatch.
     """
 
-    id: str
     target: Placement
     command: DeviceCommand
     origin: Origin
     timeout_s: float | None = None
     acquisition: Acquisition | None = None
 
+    @property
+    def id(self) -> str:
+        """Return the origin and target device label used in logs and audits."""
+        return f"{self.origin}@{self.target.device}"
+
     @classmethod
     def planned(cls, step: PlannedStep, timeout_s: float | None) -> Operation:
-        """Build an operation with an origin-based label and a deep-copied
-        command.
+        """Build an operation with a deep-copied command.
 
         Copying detaches the caller's command; it does not make exposed nested
         values immutable. Callers must not mutate compiled workflows.
@@ -167,7 +170,6 @@ class Operation:
             )
 
         return cls(
-            id=f"{step.origin}@{step.target.device}",
             target=step.target,
             command=step.command.model_copy(deep=True),
             origin=step.origin,
