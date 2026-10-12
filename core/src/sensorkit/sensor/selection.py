@@ -7,13 +7,14 @@ tests an instrument chain. On a chain, `AllOf` may match different members at
 different placements. A wheel can satisfy `Supports(supports=SetFilter)` while
 its camera satisfies `Supports(supports=CameraCapture)`.
 
-Except for device-key comparisons, predicates use `PlacementFacts`, implemented
-by `BoundSensor`. Evaluating a predicate without required facts raises, including
-under negation. `KeywordMatch` requires a device keyword mapping. Capability
-predicates use reported command and keyword identifiers.
+Except for device-key comparisons, predicates read a `BoundSensor`. Tags, kind
+and instrument status come from its topology. Evaluating a predicate without a
+sensor raises, including under negation. `KeywordMatch` requires a device
+keyword mapping. Capability predicates use reported command and keyword
+identifiers.
 
 Authored selections use a distinguishing key; a bare string names a trait.
-Routing chooses a command target from matching placements in `binding`.
+Routing chooses a command target from matching placements in `routing`.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Annotated, ClassVar, Literal, Protocol
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import (
     BaseModel,
@@ -32,64 +33,28 @@ from pydantic import (
     model_validator,
 )
 
-from sensorkit.common.keyword import KeywordDict, get_keyword_info, get_keyword_type
+from sensorkit.common.keyword import get_keyword_info, get_keyword_type
 from sensorkit.common.predicate import AnyPredicate, FieldMatch
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.trait import Trait
+from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.topology import DeviceKey, Placement, TagKey, TraitKey
 
 
 class SelectionError(ValueError):
-    """A predicate requires placement facts or device keywords that were not
+    """A predicate requires a bound sensor or device keywords that were not
     supplied.
     """
 
 
-class DeviceFacts(Protocol):
-    """Reported command and keyword identifiers, and any device keywords."""
-
-    def supported_commands(self, device: DeviceKey) -> frozenset[str]:
-        """Return the command identifiers reported by a device."""
-
-    def published_keywords(self, device: DeviceKey) -> frozenset[str]:
-        """Return the keyword identifiers reported by a device."""
-
-    def device_keywords(self, device: DeviceKey) -> KeywordDict | None:
-        """Return device keyword values, or `None` if no mapping was supplied."""
-
-
-class PlacementFacts(DeviceFacts, Protocol):
-    """Device capabilities and structural properties used by selections.
-
-    `BoundSensor` implements this protocol. Binding establishes traits from
-    capabilities; tags, kind and instrument status come from the structure.
-    """
-
-    def traits(self, placement: Placement) -> frozenset[TraitKey]:
-        """Return all traits established for the placement."""
-
-    def tags(self, placement: Placement) -> frozenset[TagKey]:
-        """Return the tags declared on the placement record."""
-
-    def kind(self, placement: Placement) -> Literal["device", "instrument", "selector"]:
-        """Return the record's device, instrument or selector kind."""
-
-    def instrument(self, placement: Placement) -> bool:
-        """Return whether the record marks this device as a collection
-        target.
-
-        Instrument status is configured, not inferred from camera capabilities.
-        """
-
-
-def _known(facts: PlacementFacts | None, question: str) -> PlacementFacts:
-    """Require facts for a predicate, naming it in the error.
+def _known(facts: BoundSensor | None, question: str) -> BoundSensor:
+    """Require a bound sensor for a predicate, naming it in the error.
 
     Raises:
-        SelectionError: No facts were supplied.
+        SelectionError: No sensor was supplied.
     """
     if facts is None:
-        raise SelectionError(f"'{question}' is answered from PlacementFacts, and none was given")
+        raise SelectionError(f"'{question}' is answered from a bound sensor, and none was given")
 
     return facts
 
@@ -143,32 +108,32 @@ class Selection(BaseModel, ABC, frozen=True, extra="forbid"):
     type: ClassVar[SelectionType]
 
     @abstractmethod
-    def matches(self, placement: Placement, facts: PlacementFacts | None = None) -> bool:
+    def matches(self, placement: Placement, facts: BoundSensor | None = None) -> bool:
         """Test whether one placement satisfies this predicate.
 
         Raises:
-            SelectionError: The predicate requires facts and none were
-                supplied.
+            SelectionError: The predicate requires a bound sensor and none
+                was supplied.
         """
         ...
 
     def matching(
-        self, placements: tuple[Placement, ...], facts: PlacementFacts | None = None
+        self, placements: tuple[Placement, ...], facts: BoundSensor | None = None
     ) -> tuple[Placement, ...]:
         """Return matching placements in the supplied order.
 
         Callers supply the search set, such as a whole sensor or a
-        participant's chain. The facts provider does not enumerate placements.
+        participant's chain. The sensor does not enumerate placements.
         """
         return tuple(p for p in placements if self.matches(p, facts))
 
     def refs(
-        self, placements: tuple[Placement, ...], facts: PlacementFacts | None = None
+        self, placements: tuple[Placement, ...], facts: BoundSensor | None = None
     ) -> tuple[DeviceKey, ...]:
         """Return matching device keys in the supplied placement order."""
         return tuple(p.device for p in self.matching(placements, facts))
 
-    def reaches(self, chain: tuple[Placement, ...], facts: PlacementFacts | None = None) -> bool:
+    def reaches(self, chain: tuple[Placement, ...], facts: BoundSensor | None = None) -> bool:
         """Test whether the chain satisfies this predicate.
 
         Simple predicates match if any placement does. `AllOf` may match its
@@ -206,11 +171,11 @@ class HasTag(Selection):
     def matches(self, placement, facts=None):
         known = _known(facts, f"tag: {self.tag}")
 
-        return self.tag in known.tags(placement)
+        return self.tag in known.topology.tags(placement)
 
 
 class IsRef(Selection):
-    """Match a device key; no facts provider is required."""
+    """Match a device key; no bound sensor is required."""
 
     type = SelectionType.device
     device: DeviceKey
@@ -232,7 +197,7 @@ class IsKind(Selection):
     def matches(self, placement, facts=None):
         known = _known(facts, f"kind: {self.kind}")
 
-        return self.kind in ("any", known.kind(placement))
+        return self.kind in ("any", known.topology.kind(placement))
 
 
 class IsInstrument(Selection):
@@ -247,7 +212,7 @@ class IsInstrument(Selection):
     def matches(self, placement, facts=None):
         known = _known(facts, f"instrument: {self.instrument}")
 
-        return known.instrument(placement) == self.instrument
+        return known.topology.instrument(placement) == self.instrument
 
 
 class Supports(Selection):
@@ -288,7 +253,7 @@ class KeywordMatch(Selection):
     field tests the keyword object itself.
 
     A missing device or keyword is passed to the predicate as absent.
-    Facts without a device keyword mapping raise `SelectionError`.
+    A sensor without a device keyword mapping raises `SelectionError`.
     """
 
     type = SelectionType.keyword

@@ -80,10 +80,14 @@ from sensorkit.sensor.policies import (
     compose_deadlines,
     compose_tables,
 )
+from sensorkit.sensor.routing import (
+    CommandRouter,
+    RoutedCommand,
+    Scope,
+    Subject,
+)
 from sensorkit.sensor.selection import (
     AnySelection,
-    DeviceFacts,
-    PlacementFacts,
     Selection,
     SelectionError,
 )
@@ -116,10 +120,7 @@ from sensorkit.sensor.workflow import (
     Origin,
     PlannedStep,
     RequestId,
-    RoutedCommand,
-    Scope,
     StepName,
-    Subject,
     lower,
     resolve_deadline,
 )

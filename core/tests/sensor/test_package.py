@@ -8,7 +8,7 @@ import pytest
 
 MODULES = (
     "audit", "binding", "client", "collect", "definition", "dispatch",
-    "execution", "impl", "lifecycle", "policies", "selection",
+    "execution", "impl", "lifecycle", "policies", "routing", "selection",
     "standard_task", "topology", "workflow",
 )
 
@@ -24,4 +24,14 @@ def test_the_package_exports_what_it_declares():
     assert sensor.Topology is not None
     assert sensor.Selection is not None
     assert sensor.SensorDefinition is not None
+
+
+def test_the_package_exports_routing_from_its_module():
+    import sensorkit.sensor as sensor
+    import sensorkit.sensor.routing as routing
+
+    assert sensor.CommandRouter is routing.CommandRouter
+    assert sensor.RoutedCommand is routing.RoutedCommand
+    assert sensor.Scope is routing.Scope
+    assert sensor.Subject is routing.Subject
 

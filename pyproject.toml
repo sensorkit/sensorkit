@@ -304,9 +304,9 @@ layers = [
     "audit | policies | standard_task",
     "definition | execution",
     "collect | dispatch | lifecycle",
-    "binding",
-    "workflow",
+    "workflow | routing",
     "selection",
+    "binding",
     "topology",
 ]
 

@@ -32,6 +32,7 @@ from sensorkit.sensor.collect import (
     compile_collect,
     pack,
 )
+from sensorkit.sensor.routing import RoutedCommand
 from sensorkit.sensor.selection import IsRef
 from sensorkit.sensor.standard_task import SIDEREAL, translate
 from sensorkit.sensor.workflow import (
@@ -39,7 +40,6 @@ from sensorkit.sensor.workflow import (
     DeadlineRule,
     ExecutableWorkflow,
     Operation,
-    RoutedCommand,
 )
 from sensorkit.std.collect import CameraParameterSet, Collect, StandardCollectTask
 from sensorkit.std.instrument import (

@@ -114,6 +114,29 @@ def test_record_raises_where_nothing_sits(topology):
         topology.record(Placement("nobody", ()))
 
 
+def test_kind_and_instrument_come_from_the_record(topology, at):
+    assert topology.kind(at("pickoff")) == "selector"
+    assert topology.kind(at("wheel")) == "device"
+    assert topology.kind(at("cam-sci")) == "instrument"
+    assert not topology.instrument(at("wheel"))
+    assert not topology.instrument(at("pickoff"))
+    assert topology.instrument(at("cam-sci"))
+
+
+def test_tags_come_from_the_record(topology, at):
+    assert topology.tags(at("mount")) == frozenset({"primary"})
+    assert topology.tags(at("cam-guide")) == frozenset({"guiding"})
+    assert topology.tags(at("dome")) == frozenset()
+
+
+def test_record_questions_raise_where_nothing_sits(topology):
+    nobody = Placement("nobody", ())
+
+    for question in (topology.tags, topology.kind, topology.instrument):
+        with pytest.raises(KeyError):
+            question(nobody)
+
+
 def test_chain_answers_for_instruments_only(topology, at):
     with pytest.raises(KeyError):
         topology.chain(at("mount"))

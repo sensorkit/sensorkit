@@ -34,7 +34,8 @@ from sensorkit.common.dag import (
 )
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceCommand
-from sensorkit.sensor.selection import PlacementFacts, Selection
+from sensorkit.sensor.binding import BoundSensor
+from sensorkit.sensor.selection import Selection
 from sensorkit.sensor.topology import (
     DeviceKey,
     Placement,
@@ -56,35 +57,6 @@ type StepName = str
 """Step identifier unique within one compilation, used to resolve
 dependencies.
 """
-
-type Scope = Literal["any", "private", "shared"]
-"""Filter routing candidates by their relation to an instrument.
-
-`private` uses the topology's local, sole-reader placements; `shared` uses the
-rest of the chain. `any` accepts both. Ancestor infrastructure remains shared
-even when it has only one reader.
-"""
-
-type Subject = Literal["sensor", "instrument"]
-"""Choose how participants are grouped and targets are ranked for routing.
-
-`sensor` chooses the shallowest supporting device common to all participants.
-`instrument` chooses the deepest supporting device on each participant's chain.
-Shared targets are commanded once. `Scope` filters candidates independently.
-"""
-
-
-def partition(
-    subject: Subject, participants: tuple[Placement, ...]
-) -> tuple[tuple[Placement, ...], ...]:
-    """Group all sensor participants together, or each instrument
-    separately.
-    """
-    match subject:
-        case "sensor":
-            return (participants,)
-        case "instrument":
-            return tuple((p,) for p in participants)
 
 
 @dataclass(frozen=True)
@@ -115,25 +87,6 @@ class Acquisition:
     index: int
     frame_number: int
     keywords: KeywordDict
-
-
-@dataclass(frozen=True)
-class RoutedCommand:
-    """A command with its target placement and optional explicit timeout.
-
-    Routing chooses the target; lowering resolves the timeout against deadline
-    rules. The timeout is orchestration metadata, not part of the device
-    command.
-    """
-
-    target: Placement
-    command: DeviceCommand
-    timeout_s: float | None = None
-
-    @property
-    def governs(self) -> tuple[Placement, type[DeviceCommand]]:
-        """Return the target placement and command type governing collect state."""
-        return self.target, type(self.command)
 
 
 @dataclass(frozen=True)
@@ -301,7 +254,7 @@ def resolve_deadline(
     target: Placement,
     stated: tuple[DeadlineRule, ...],
     explicit: float | None,
-    facts: PlacementFacts,
+    facts: BoundSensor,
 ) -> float | None:
     """Resolve an operation timeout from an explicit value or deadline rules.
 
@@ -395,7 +348,7 @@ class OperatorRule:
                 "operation that will not be dispatched cannot fail"
             )
 
-    def matches(self, step: PlannedStep, facts: PlacementFacts) -> bool:
+    def matches(self, step: PlannedStep, facts: BoundSensor) -> bool:
         """Test the command and placement filters against a planned step.
 
         Ordering steps never match. Placement selection covers all commands on
@@ -496,7 +449,7 @@ class ExecutableWorkflow:
 def lower(
     name: str,
     steps: tuple[PlannedStep, ...],
-    facts: PlacementFacts,
+    facts: BoundSensor,
     *,
     cleanup: tuple[CleanupPlan, ...] = (),
     deadlines: tuple[DeadlineRule, ...] = (),
@@ -543,7 +496,7 @@ def lower(
 
 def _compile(
     steps: tuple[PlannedStep, ...],
-    facts: PlacementFacts,
+    facts: BoundSensor,
     deadlines: tuple[DeadlineRule, ...],
     rules: tuple[OperatorRule, ...],
 ) -> tuple[Graph, dict[StepName, Operation], tuple[Omission, ...]]:
@@ -624,7 +577,7 @@ def _checked(steps: tuple[PlannedStep, ...]) -> dict[StepName, PlannedStep]:
 
 
 def _fates(
-    steps: tuple[PlannedStep, ...], facts: PlacementFacts
+    steps: tuple[PlannedStep, ...], facts: BoundSensor
 ) -> tuple[frozenset[StepName], list[Omission]]:
     """Find unsupported steps to omit and record their reasons.
 
@@ -724,7 +677,7 @@ def _merged(deps: list[Dependency]) -> tuple[Dependency, ...]:
 
 
 def _effects(
-    step: PlannedStep, rules: tuple[OperatorRule, ...], facts: PlacementFacts
+    step: PlannedStep, rules: tuple[OperatorRule, ...], facts: BoundSensor
 ) -> tuple[OnFailure, bool, NodeOverride | None]:
     """Resolve node failure policy and the first matching operator rule.
 

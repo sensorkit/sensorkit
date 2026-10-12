@@ -196,6 +196,25 @@ def test_a_named_device_is_not_obscured_by_the_support_precheck(facts, at):
             (at("cam-sci"),), facts)
 
 
+def test_an_instrument_setting_without_participants_routes_nowhere(facts):
+    assert CommandRequest(command=Home()).resolve((), facts) == ()
+    assert CommandRequest(command=Home(), device="mount").resolve((), facts) == ()
+
+
+def test_a_sensor_setting_without_participants_is_unsatisfiable(facts):
+    with pytest.raises(SettingUnsatisfiable, match="no device on <no instrument>"):
+        CommandRequest(command=Home(), subject="sensor").resolve((), facts)
+
+
+def test_a_named_device_without_participants_reports_itself(facts):
+    request = CommandRequest(command=Home(), subject="sensor", device="mount")
+
+    with pytest.raises(ValueError, match="'mount' is not on <no instrument>") as raised:
+        request.resolve((), facts)
+
+    assert not isinstance(raised.value, SettingUnsatisfiable)
+
+
 # Choosing participants
 
 
@@ -444,6 +463,20 @@ def test_prepare_and_cleanup_route_against_every_participant(facts):
     assert [r.target.device for r in collect.prepare] == ["mount"]
     assert collect.prepare[0].timeout_s == 30.0
     assert [r.target.device for r in collect.cleanup] == ["mount"]
+
+
+def test_a_collect_without_acquisitions_prepares_no_instrument(facts):
+    collect = pack(intent_of(prepare=(CommandRequest(command=Home()),),
+                             cleanup=(CommandRequest(command=Home()),)), facts)
+
+    assert collect.prepare == ()
+    assert collect.cleanup == ()
+
+
+def test_a_sensor_preparation_without_acquisitions_is_unsatisfiable(facts):
+    with pytest.raises(SettingUnsatisfiable, match="<no instrument>"):
+        pack(intent_of(prepare=(CommandRequest(command=Home(), subject="sensor"),)),
+             facts)
 
 
 def test_a_request_taking_no_acquisition_raises(facts):

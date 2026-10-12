@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, Discriminator, Field, Tag
 
@@ -213,6 +213,41 @@ class Topology:
             KeyError: The placement is not in this topology.
         """
         return self._records[placement]
+
+    def tags(self, placement: Placement) -> frozenset[TagKey]:
+        """Return grouping tags from the authored placement record.
+
+        Raises:
+            KeyError: The placement is not in this topology.
+        """
+        return frozenset(self.record(placement).tags)
+
+    def kind(self, placement: Placement) -> Literal["device", "instrument", "selector"]:
+        """Return the placement's device, instrument or selector kind.
+
+        Raises:
+            KeyError: The placement is not in this topology.
+        """
+        match self.record(placement):
+            case Selector():
+                return "selector"
+            case Device(instrument=True):
+                return "instrument"
+
+        return "device"
+
+    def instrument(self, placement: Placement) -> bool:
+        """Test whether the record marks this placement as a collection
+        target.
+
+        Instrument status is configured, not inferred from camera capabilities.
+
+        Raises:
+            KeyError: The placement is not in this topology.
+        """
+        record = self.record(placement)
+
+        return isinstance(record, Device) and record.instrument
 
     def instruments(self) -> tuple[Placement, ...]:
         """Return collection targets in structure traversal order."""

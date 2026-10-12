@@ -34,6 +34,13 @@ from typing import Literal
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceCommand
 from sensorkit.sensor.binding import BoundSensor
+from sensorkit.sensor.routing import (
+    CommandRouter,
+    RoutedCommand,
+    Scope,
+    Subject,
+    partition,
+)
 from sensorkit.sensor.selection import Selection
 from sensorkit.sensor.topology import DeviceKey, Placement, format_paths
 from sensorkit.sensor.workflow import (
@@ -46,13 +53,9 @@ from sensorkit.sensor.workflow import (
     Origin,
     PlannedStep,
     RequestId,
-    RoutedCommand,
-    Scope,
     StepName,
-    Subject,
     format_command,
     lower,
-    partition,
 )
 from sensorkit.std.collect import Collect as CollectKeyword
 from sensorkit.std.instrument import CameraCapture
@@ -132,12 +135,13 @@ class CommandRequest:
             ValueError: Routing is ambiguous, filters remove all candidates, or
                 a named device is unreachable or unsupported.
         """
+        router = CommandRouter(sensor)
         named = type(self.command).model_tag()
         unsupported = next(
             (
                 group
                 for group in partition(self.subject, participants)
-                if not sensor.supported_on(named, group)
+                if not router.supported_on(named, group)
             ),
             None,
         )
@@ -148,7 +152,7 @@ class CommandRequest:
                 f"nothing can establish what it was asked for"
             )
 
-        routed = sensor.route(
+        routed = router.route(
             self.command,
             self.subject,
             participants,
