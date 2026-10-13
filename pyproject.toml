@@ -38,7 +38,7 @@ dependencies = [
     "intervaltree>=3.1.0",
     "loguru~=0.7",
     "nats-py==2.14",
-    "pillow>=12.0.0",
+    "pillow>=12.3.0",
     "pydantic~=2.11",
     "python-dateutil>=2.9.0.post0",
     "python-dotenv>=1.2.2",
@@ -107,7 +107,7 @@ senpai = [
 ]
 slack = [
     "slack-sdk",
-    "aiohttp",
+    "aiohttp>=3.14.3",
 ]
 systemd = [
     "systemd-python==235; sys_platform == 'linux'",
@@ -149,7 +149,7 @@ dev = [
     {include-group = "imports"},
     {include-group = "docs"},
     "coverage>=7.8.0",
-    "cryptography>=44.0.0",
+    "cryptography>=50.0.0",
     "httpx>=0.28.0",
     "pygtrie>=2.5.0",
     "pytest-asyncio>=0.25.2",
@@ -157,7 +157,7 @@ dev = [
     "pytest-httpserver>=1.1.2",
     "pytest-mock>=3.14.0",
     "pytest-timeout>=2.4.0",
-    "pytest>=8.3.4",
+    "pytest>=9.0.3",
     "sensorkit[thesky-simulator]",
     "testcontainers[nats]>=4.9.0",
     "ty>=0.0.80",
