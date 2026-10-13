@@ -21,6 +21,18 @@ class MountAxis(enum.StrEnum):
     DECLINATION = "declination"
 
 
+class RateSource(enum.StrEnum):
+    """Provenance of an `AxisRate.velocity`.
+
+    MEASURED is a rate observed from real motion or read back from the device. COMMANDED is
+    the demanded rate, reported before the mount has a measured rate (for example, right after
+    a slew). An unset source makes no claim either way.
+    """
+
+    MEASURED = "measured"
+    COMMANDED = "commanded"
+
+
 class EnableAxis(sk.DeviceCommand):
     """Enable motion control for a mount axis."""
 
@@ -52,6 +64,7 @@ class AxisRate(BaseModel):
     max_mechanical_position: float | None = Field(None, description="Maximum mechanical position (degrees)")
 
     velocity: float | None = Field(None, description="Current Velocity (Degrees per Second)")
+    velocity_source: RateSource | None = Field(None, description="Provenance of velocity")
     max_velocity: float | None = Field(None, description="Max Velocity (Degrees per Second)")
 
     acceleration: float | None = Field(None, description="Current Acceleration (Degrees per Second ^2)")
