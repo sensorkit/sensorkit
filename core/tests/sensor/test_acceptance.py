@@ -43,9 +43,10 @@ from sensorkit.sensor.selection import IsRef
 from sensorkit.sensor.standard_task import SIDEREAL, translate
 from sensorkit.sensor.workflow import ExecutableWorkflow, Operation
 from sensorkit.std.collect import CameraParameterSet, CollectInfo, StandardCollectTask
+from sensorkit.std.focus import ChangeFocusPosition, FocusPosition
 from sensorkit.std.instrument import ConfigureCameraSensor
 from sensorkit.std.mount import FollowTarget
-from sensorkit.std.optics import ChangeFocusPosition, Filter, FocusPosition
+from sensorkit.std.optics import Filter
 from sensorkit.std.traits import Home, Stop
 
 from .common import (

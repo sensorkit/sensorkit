@@ -11,7 +11,7 @@ import sensorkit.api as sk
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.nina.device import NinaDevice, NinaDeviceConfig, NinaDeviceState
 from sensorkit.std import Connect, Connected, Disconnect, Stop
-from sensorkit.std.optics import ChangeFocusPosition, FocusPosition, StandardFocuser
+from sensorkit.std.focus import ChangeFocusPosition, FocusPosition, StandardFocuser
 
 
 @sk.declare_keyword

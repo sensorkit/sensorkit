@@ -12,6 +12,17 @@ from sensorkit.std.enclosure import (
     OpenEnclosure,
     StandardEnclosure,
 )
+from sensorkit.std.focus import (
+    AutoFocus,
+    ChangeFocusPosition,
+    FocusAnalysis,
+    FocusAnalysisSource,
+    FocusPosition,
+    FocusProvider,
+    FocusSweepAnalysis,
+    FocusSweepContext,
+    StandardFocuser,
+)
 from sensorkit.std.instrument import (
     AcquireData,
     Binning,
@@ -55,16 +66,13 @@ from sensorkit.std.mount import (
     Tracking,
 )
 from sensorkit.std.optics import (
-    ChangeFocusPosition,
     CloseMirrorCover,
     Filter,
     Filters,
-    FocusPosition,
     OpenMirrorCover,
     SelectPort,
     SetFilter,
     StandardFilterChanger,
-    StandardFocuser,
     StandardMirrorCover,
     StandardSelector,
 )

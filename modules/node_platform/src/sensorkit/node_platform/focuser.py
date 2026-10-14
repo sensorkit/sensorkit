@@ -15,7 +15,7 @@ from sensorkit.node_platform.device import (
     NodePlatformDeviceState,
 )
 from sensorkit.std import Connected, FocusPosition, Stop
-from sensorkit.std.optics import ChangeFocusPosition, StandardFocuser
+from sensorkit.std.focus import ChangeFocusPosition, StandardFocuser
 
 
 @sk.declare_device(type=StandardFocuser)

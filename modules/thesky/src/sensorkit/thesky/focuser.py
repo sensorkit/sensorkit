@@ -9,7 +9,7 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect
-from sensorkit.std.optics import ChangeFocusPosition, FocusPosition, StandardFocuser
+from sensorkit.std.focus import ChangeFocusPosition, FocusPosition, StandardFocuser
 from sensorkit.thesky.device import (
     TheSkyDevice,
     TheSkyDeviceConfig,

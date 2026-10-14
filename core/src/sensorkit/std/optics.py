@@ -36,26 +36,6 @@ position.
 """
 
 
-@sk.declare_keyword
-class FocusPosition(BaseModel):
-    """Current position of the focuser."""
-
-    position: float
-
-
-class ChangeFocusPosition(sk.DeviceCommand):
-    """Command to change the focus position to a specified value."""
-
-    position: float
-
-
-StandardFocuser = sk.declare_archetype(
-    "focuser",
-    required_commands=(ChangeFocusPosition,),
-)
-"""A device that can adjust a focus position."""
-
-
 class SelectPort(sk.DeviceCommand):
     """Route the beam to one of a selector's ports.
 

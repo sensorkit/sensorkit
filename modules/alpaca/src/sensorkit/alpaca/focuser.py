@@ -16,7 +16,7 @@ from sensorkit.alpaca.device import (
 )
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import Connect, Connected, Disconnect, Stop, Temperature, TemperatureUnit
-from sensorkit.std.optics import ChangeFocusPosition, FocusPosition, StandardFocuser
+from sensorkit.std.focus import ChangeFocusPosition, FocusPosition, StandardFocuser
 
 
 class AlpacaFocuserState(AlpacaDeviceState):

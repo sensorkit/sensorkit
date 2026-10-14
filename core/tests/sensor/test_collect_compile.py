@@ -42,6 +42,7 @@ from sensorkit.sensor.workflow import (
     Operation,
 )
 from sensorkit.std.collect import CameraParameterSet, CollectInfo, StandardCollectTask
+from sensorkit.std.focus import ChangeFocusPosition
 from sensorkit.std.instrument import (
     Binning,
     CameraSensorTemperature,
@@ -49,7 +50,7 @@ from sensorkit.std.instrument import (
     ConfigureCameraSensor,
 )
 from sensorkit.std.mount import FollowTarget
-from sensorkit.std.optics import ChangeFocusPosition, SelectPort, SetFilter
+from sensorkit.std.optics import SelectPort, SetFilter
 from sensorkit.std.traits import Stop, TemperatureUnit
 
 from .common import REPORTED, TARGET, details_of, pointing, sensor_of

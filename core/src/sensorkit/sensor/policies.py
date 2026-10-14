@@ -31,10 +31,10 @@ from sensorkit.std.enclosure import (
     OpenEnclosure,
     StandardEnclosure,
 )
+from sensorkit.std.focus import ChangeFocusPosition
 from sensorkit.std.instrument import ConfigureCameraSensor
 from sensorkit.std.mount import FollowTarget, StandardMount
 from sensorkit.std.optics import (
-    ChangeFocusPosition,
     CloseMirrorCover,
     OpenMirrorCover,
     SetFilter,

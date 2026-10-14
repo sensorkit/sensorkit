@@ -33,9 +33,10 @@ from sensorkit.sensor.topology import Placement, Structure
 from sensorkit.sensor.workflow import ExecutableWorkflow
 from sensorkit.std.collect import StandardCollectTask
 from sensorkit.std.enclosure import CloseEnclosure
+from sensorkit.std.focus import ChangeFocusPosition
 from sensorkit.std.instrument import ChangeRotatorPosition
 from sensorkit.std.mount import FollowTarget
-from sensorkit.std.optics import ChangeFocusPosition, CloseMirrorCover, SetFilter
+from sensorkit.std.optics import CloseMirrorCover, SetFilter
 
 
 class SensorConfig(BaseModel):
