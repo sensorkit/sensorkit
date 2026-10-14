@@ -6,10 +6,21 @@ import asyncio
 import pytest
 from pydantic import BaseModel
 
+import sensorkit.api as sk
 from sensorkit.backend.event import Event
 from sensorkit.backend.request import HandlerError, declare_request
 from sensorkit.common.keyword import UnknownKeyword, declare_keyword
-from sensorkit.core.entity import EntityRef
+from sensorkit.core.entity import (
+    ControllerDetails,
+    DeviceDetails,
+    EntityDetails,
+    EntityInfo,
+    EntityRef,
+)
+from sensorkit.core.impl.controller import ControllerImpl
+from sensorkit.core.impl.device import DeviceImpl
+from sensorkit.core.impl.entity import EntityImpl
+from sensorkit.core.impl.program import ProgramImpl
 
 
 def test_entity_ref_unset_and_unresolved_behavior():
@@ -225,3 +236,98 @@ async def test_entity_duplicate_request_handler(entity_impl):
     # The name is what binds the backend subject, so a different declaration still collides.
     with pytest.raises(HandlerError, match="already handles request"):
         await entity_impl.handle_request(other, handle_other)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "impl_type, details_type",
+    [
+        (EntityImpl, EntityDetails),
+        (DeviceImpl, DeviceDetails),
+        (ControllerImpl, ControllerDetails),
+        (ProgramImpl, EntityDetails),
+    ],
+)
+async def test_attachment_advertises_keywords(service_context, kit, impl_type, details_type):
+    impl = impl_type.for_service_context(service_context, "provider")
+
+    def declare_outputs():
+        impl.declare_published_keyword("ResultA")
+        impl.declare_published_keyword("ResultB")
+        impl.declare_published_keyword("ResultA")
+
+    impl.on_attach(declare_outputs)
+    await service_context.register_impl(impl)
+    info = await kit.entity("provider").kv_get_model(EntityInfo)
+
+    assert type(info.details) is details_type
+    assert info.details.published_keywords == {"ResultA", "ResultB"}
+
+
+@pytest.mark.asyncio
+async def test_late_keyword_declaration_needs_republish(service_context, kit):
+    """Late declarations appear after entity information is republished."""
+    declaration = sk.declare_entity(name="provider")
+    await declaration.register(kit, service_context)
+    client = kit.entity("provider")
+    declaration.declare_published_keyword("ResultA")
+
+    info = await client.kv_get_model(EntityInfo)
+    assert info.details.published_keywords == frozenset()
+
+    await declaration.publish_entity_info()
+
+    info = await client.kv_get_model(EntityInfo)
+    assert info.details.published_keywords == {"ResultA"}
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        EntityInfo(entity_type="generic", details=EntityDetails(published_keywords={"KwA"})),
+        EntityInfo(entity_type="program", details=EntityDetails()),
+        EntityInfo(
+            entity_type="device",
+            details=DeviceDetails(supported_commands={"Stop"}, published_keywords={"KwA"}),
+        ),
+        EntityInfo(
+            entity_type="device",
+            details=DeviceDetails(supported_commands={"Stop"}),
+        ),
+        EntityInfo(
+            entity_type="controller",
+            details=ControllerDetails(
+                supported_tasks=["Observe"],
+                controlled_devices=["camera"],
+                published_keywords={"KwA"},
+            ),
+        ),
+        EntityInfo(
+            entity_type="controller",
+            details=ControllerDetails(supported_tasks=[], controlled_devices=[]),
+        ),
+    ],
+)
+def test_entity_info_round_trip_preserves_details_type(info):
+    restored = EntityInfo.model_validate_json(info.model_dump_json())
+
+    assert type(restored.details) is type(info.details)
+    assert restored == info
+
+
+@pytest.mark.parametrize(
+    "data, details",
+    [
+        (
+            '{"entity_type": "controller", "details": {"supported_tasks": ["Observe"], "controlled_devices": []}}',
+            ControllerDetails(supported_tasks=["Observe"], controlled_devices=[]),
+        ),
+        ('{"entity_type": "generic", "details": null}', None),
+        ('{"entity_type": "program", "details": null}', None),
+    ],
+)
+def test_entity_info_reads_historical_records(data, details):
+    info = EntityInfo.model_validate_json(data)
+
+    assert type(info.details) is type(details)
+    assert info.details == details

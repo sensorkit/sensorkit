@@ -62,7 +62,7 @@ from sensorkit.core.device import (
     DeviceCommand,
     DeviceRef,
 )
-from sensorkit.core.entity import EntityClient, EntityRef
+from sensorkit.core.entity import EntityClient, EntityDetails, EntityRef
 from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.impl.device import DeviceImpl
 from sensorkit.core.impl.entity import EntityImpl

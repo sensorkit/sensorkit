@@ -13,7 +13,7 @@ from sensorkit.backend.base import Entity, KVError, SpecialProperty
 from sensorkit.backend.event import Event
 from sensorkit.backend.request import HandlerError, RequestBase, RequestHandlerFunc
 from sensorkit.common.keyword import Keyword, dump_keyword_json, get_keyword_info
-from sensorkit.core.entity import EntityBase, EntityInfo, EntityInterface
+from sensorkit.core.entity import EntityBase, EntityDetails, EntityInfo, EntityInterface
 from sensorkit.data.graph import DataGraph
 
 if TYPE_CHECKING:
@@ -42,6 +42,7 @@ class EntityImpl(EntityBase, EntityInterface):
         self._attach_hooks: list[Callable] = []
         self._detach_hooks: list[Callable] = []
         self._requests: dict[str, RequestBase] = {}
+        self._published_keywords: set[str] = set()
 
     async def init_impl(self):
         """Implements initialization of the entity.
@@ -123,6 +124,11 @@ class EntityImpl(EntityBase, EntityInterface):
                 base_var.reset(base_token)
 
     @override
+    def declare_published_keyword(self, keyword_id: str) -> None:
+        """Declare a keyword this entity can publish."""
+        self._published_keywords.add(keyword_id)
+
+    @override
     @property
     def task_group(self):
         return self._task_group
@@ -196,7 +202,12 @@ class EntityImpl(EntityBase, EntityInterface):
 
     def entity_info(self) -> EntityInfo:
         """Build this entity's info record from its current state."""
-        return EntityInfo(entity_type="generic", details=None)
+        return EntityInfo(
+            entity_type="generic",
+            details=EntityDetails(
+                published_keywords=frozenset(self._published_keywords),
+            ),
+        )
 
     @override
     async def publish_entity_info(self) -> EntityInfo:

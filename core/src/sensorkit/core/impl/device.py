@@ -38,11 +38,6 @@ class DeviceImpl(EntityImpl, DeviceInterface):
         self._enable_hooks: list[Callable[[], None]] = []
         self._disable_hooks: list[Callable[[], None]] = []
         self._handlers: dict[str, CommandHandlerCallback] = {}
-        self._published_keywords: set[str] = set()
-
-    def declare_published_keyword(self, keyword_id: str):
-        """Declare that this device publishes a keyword."""
-        self._published_keywords.add(keyword_id)
 
     @override
     def on_enable(self, func: Callable[[], None]):

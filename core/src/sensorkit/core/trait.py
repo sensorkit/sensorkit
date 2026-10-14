@@ -1,14 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Device trait infrastructure.
+"""Entity traits and device archetypes.
 
-Traits are high-level interfaces that describe device capabilities by specifying
-which commands a device must implement. They use structural typing: a device matches
-a trait if it implements all required commands.
-
-Two variants exist:
-  - Trait: a device can satisfy many; specifies only required commands.
-  - Archetype (subclass of Trait): a device should match at most one; additionally
-    supports required and optional sub-traits, and optional commands.
+Traits match device commands or declared keyword publications. An entity can
+satisfy multiple traits. Archetypes describe a device category with required
+and optional traits and commands.
 """
 
 from __future__ import annotations
@@ -20,7 +15,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sensorkit.core.device import DeviceCommand
-    from sensorkit.core.entity import DeviceDetails
+    from sensorkit.core.entity import DeviceDetails, EntityDetails
 
 # Global registries, auto-populated by declare_trait() and declare_archetype().
 _trait_registry: set[Trait] = set()
@@ -29,7 +24,7 @@ _archetype_registry: set[Archetype] = set()
 
 @dataclass(frozen=True, eq=False)
 class Trait:
-    """A named set of required commands and/or keywords that a device may structurally satisfy."""
+    """A named set of required device commands or keyword publications."""
 
     name: str
     required_commands: tuple[type[DeviceCommand], ...] = ()
@@ -43,18 +38,23 @@ class Trait:
         """Return all keyword IDs required by this trait."""
         return frozenset(self.required_keywords)
 
-    def match(self, details: DeviceDetails) -> bool:
-        """Return True if the given device details satisfy this trait's commands and keywords."""
-        commands = self.effective_command_ids()
+    def match(self, details: EntityDetails | None) -> bool:
+        """Return whether the advertised capabilities satisfy this trait."""
+        # Entity metadata imports the trait helpers.
+        from sensorkit.core.entity import DeviceDetails
 
-        if not (commands <= details.supported_commands):
+        if details is None:
             return False
 
-        # FIXME: Devices cannot declare the keywords they publish, so a trait matched by its
-        #        commands is trusted to publish its keywords. A trait without commands still
-        #        requires declared keywords.
+        commands = self.effective_command_ids()
+
         if commands:
-            return True
+            # Command-based traits trust devices to publish required keywords.
+            match details:
+                case DeviceDetails(supported_commands=supported):
+                    return commands <= supported
+                case _:
+                    return False
 
         return self.effective_keyword_ids() <= details.published_keywords
 
@@ -107,7 +107,7 @@ def declare_trait(
     required_commands: tuple[type[DeviceCommand], ...] = (),
     required_keywords: tuple[str, ...] = (),
 ) -> Trait:
-    """Declare a device trait and add it to the global registry."""
+    """Declare an entity trait and add it to the registry."""
     trait = Trait(
         name=name,
         required_commands=required_commands,
@@ -166,12 +166,12 @@ def get_registered_archetypes() -> frozenset[Archetype]:
 
 
 def match_traits(
-    details: DeviceDetails,
+    details: EntityDetails | None,
     traits: Iterable[Trait] | None = None,
     *,
     exclude_archetypes: bool = False,
 ) -> list[Trait]:
-    """Return all traits from the given iterable that the device satisfies."""
+    """Return traits satisfied by the entity's advertised capabilities."""
     if traits is None:
         traits = _trait_registry
 

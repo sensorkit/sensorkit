@@ -13,7 +13,7 @@ from loguru import logger
 from sensorkit.backend.base import Entity, KVError
 from sensorkit.backend.event import Event
 from sensorkit.backend.request import CallContext
-from sensorkit.core.entity import EntityInfo
+from sensorkit.core.entity import EntityDetails, EntityInfo
 from sensorkit.core.executor import TaskFactoryFunc, TaskingLoop
 from sensorkit.core.impl.entity import EntityImpl
 from sensorkit.core.program import (
@@ -361,4 +361,9 @@ class ProgramImpl(EntityImpl, ProgramInterface):
 
     @override
     def entity_info(self) -> EntityInfo:
-        return EntityInfo(entity_type="program", details=None)
+        return EntityInfo(
+            entity_type="program",
+            details=EntityDetails(
+                published_keywords=frozenset(self._published_keywords),
+            ),
+        )

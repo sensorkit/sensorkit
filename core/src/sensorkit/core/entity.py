@@ -35,14 +35,18 @@ if TYPE_CHECKING:
 type EntityType = Literal["generic", "device", "controller", "program"]
 
 
-class DeviceDetails(BaseModel):
+class EntityDetails(BaseModel):
+    """Capabilities advertised by an entity."""
+
+    published_keywords: frozenset[str] = frozenset()
+    """Identifiers of keywords this entity can publish."""
+
+
+class DeviceDetails(EntityDetails):
     """Device info."""
 
     supported_commands: frozenset[str]
     """Identifiers of each command supported by this device."""
-
-    published_keywords: frozenset[str]
-    """Identifiers of each keyword this device declares it publishes."""
 
     @functools.cached_property
     def archetype(self):
@@ -53,7 +57,7 @@ class DeviceDetails(BaseModel):
         return match_traits(self, exclude_archetypes=True)
 
 
-class ControllerDetails(BaseModel):
+class ControllerDetails(EntityDetails):
     """Controller info."""
 
     supported_tasks: list[str]
@@ -67,7 +71,7 @@ class EntityInfo(BaseModel):
     """Keyword describing an entity's type and capability details, stored in the KV backend."""
 
     entity_type: EntityType
-    details: DeviceDetails | ControllerDetails | None
+    details: DeviceDetails | ControllerDetails | EntityDetails | None
 
 
 class EntityBase:
@@ -354,6 +358,14 @@ class EntityInterface(ABC):
     @abstractmethod
     def sensorkit(self) -> SensorKit:
         """Return the SensorKit instance backing this entity."""
+        ...
+
+    @abstractmethod
+    def declare_published_keyword(self, keyword_id: str) -> None:
+        """Declare a keyword this entity can publish.
+
+        After attachment, call `publish_entity_info()` to advertise changes.
+        """
         ...
 
     @property

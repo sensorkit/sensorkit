@@ -506,6 +506,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         return EntityInfo(
             entity_type="controller",
             details=ControllerDetails(
+                published_keywords=frozenset(self._published_keywords),
                 supported_tasks=[t.__name__ for t in self._task_handlers.keys()],
                 controlled_devices=list(self._devices.keys()),
             ),

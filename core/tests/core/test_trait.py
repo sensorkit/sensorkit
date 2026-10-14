@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for the device trait infrastructure."""
+"""Tests for entity traits and device archetypes."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import asyncio
 
 import pytest
 
-from sensorkit.core.entity import DeviceDetails
+from sensorkit.core.entity import ControllerDetails, DeviceDetails, EntityDetails
 from sensorkit.core.trait import (
     Archetype,
     Trait,
@@ -89,6 +89,52 @@ class TestKeywordMatching:
         arch = declare_archetype("t_kw_arch", required_commands=(Init,), required_traits=(provider,))
         details = DeviceDetails(supported_commands={"Init"}, published_keywords=frozenset())
         assert arch.match(details)
+
+
+class TestEntityMatching:
+    @pytest.mark.parametrize(
+        "details, expected",
+        [
+            (EntityDetails(published_keywords={"ResultA", "ResultB"}), True),
+            (EntityDetails(published_keywords={"ResultA"}), False),
+            (EntityDetails(), False),
+            (None, False),
+        ],
+    )
+    def test_keyword_trait_matches_entity_details(self, details, expected):
+        t = Trait("provider", required_keywords=("ResultA", "ResultB"))
+        assert t.match(details) is expected
+
+    @pytest.mark.parametrize(
+        "details",
+        [
+            EntityDetails(published_keywords={"KwA"}),
+            DeviceDetails(supported_commands=frozenset(), published_keywords={"KwA"}),
+            ControllerDetails(
+                supported_tasks=[], controlled_devices=[], published_keywords={"KwA"}
+            ),
+        ],
+    )
+    def test_keyword_trait_matches_any_entity_type(self, details):
+        t = Trait("provider", required_keywords=("KwA",))
+        assert t.match(details)
+
+    @pytest.mark.parametrize(
+        "details",
+        [
+            EntityDetails(published_keywords={"KwA"}),
+            ControllerDetails(
+                supported_tasks=[], controlled_devices=[], published_keywords={"KwA"}
+            ),
+        ],
+    )
+    def test_command_trait_rejects_nondevice(self, details):
+        t = Trait("stoppable", required_commands=(Stop,), required_keywords=("KwA",))
+        assert not t.match(details)
+
+    def test_empty_trait_rejects_missing_details(self):
+        assert Trait("empty").match(EntityDetails())
+        assert not Trait("empty").match(None)
 
 
 class TestArchetypeMatching:
@@ -173,6 +219,13 @@ class TestMatchHelpers:
         assert t1 in matched
         assert t2 in matched
         assert t3 not in matched
+
+    def test_match_traits_entity_details(self):
+        provider = Trait("t_mh_provider", required_keywords=("KwA",))
+        stoppable = Trait("t_mh_stoppable", required_commands=(Stop,))
+        details = EntityDetails(published_keywords={"KwA"})
+        assert match_traits(details, [provider, stoppable]) == [provider]
+        assert match_traits(None, [provider, stoppable]) == []
 
     def test_match_archetype(self):
         can_stop = declare_trait("t_mh_cs", required_commands=(Stop,))

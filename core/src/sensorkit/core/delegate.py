@@ -39,6 +39,10 @@ class EntityDelegate(EntityInterface):
         ...
 
     @override
+    def declare_published_keyword(self, keyword_id: str) -> None:
+        return self.delegate_target.declare_published_keyword(keyword_id)
+
+    @override
     async def kv_put_model(self, model: BaseModel):
         return await self.delegate_target.kv_put_model(model)
 
