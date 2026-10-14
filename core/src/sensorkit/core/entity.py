@@ -273,7 +273,11 @@ class EntityClient(EntityBase):
 
 
 class EntityRef[T: EntityClient = EntityClient]:
-    """A serializable reference to an entity client."""
+    """A serializable reference to an entity client.
+
+    Model fields accept a name, `None` for an unset reference, or an instance of the
+    declared reference class. Existing instances retain their resolved client.
+    """
 
     name: str | None
 
@@ -336,20 +340,22 @@ class EntityRef[T: EntityClient = EntityClient]:
 
     @classmethod
     def __get_pydantic_core_schema__(cls, _source_type, handler):
-        # Treat this reference as a string-like value.
+        def validate_ref(obj):
+            match obj:
+                case str() | None:
+                    return cls(name=obj)
+                case cls():
+                    return obj
+                case _:
+                    raise ValueError(f"Expected an entity name, None, or {cls.__name__}")
+
         return handler(
             Annotated[
                 str,
-                PlainValidator(lambda obj: cls(name=obj) if isinstance(obj, str) else obj),
-                PlainSerializer(lambda obj: obj.name),
+                PlainValidator(validate_ref, json_schema_input_type=str | None),
+                PlainSerializer(lambda obj: obj.name, return_type=str | None),
             ]
         )
-
-    @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, handler):
-        schema = handler(core_schema)
-        schema["type"] = "string"
-        return schema
 
 
 class EntityInterface(ABC):

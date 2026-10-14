@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import sensorkit.api as sk
 from sensorkit.backend.event import Event
@@ -102,6 +102,101 @@ def test_entity_ref_equality(kit):
     assert resolved == EntityRef("e1")
 
     assert len({EntityRef("e1"), SubRef("e1"), resolved}) == 1
+
+
+@pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
+@pytest.mark.parametrize("name", ["entity", ""])
+def test_entity_ref_name_round_trip(ref_type, name):
+    adapter = TypeAdapter(ref_type)
+    ref = adapter.validate_python(name)
+    restored = adapter.validate_json(adapter.dump_json(ref))
+
+    assert type(ref) is ref_type
+    assert ref.name == name
+    assert type(restored) is ref_type
+    assert restored == ref
+
+
+@pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
+def test_entity_ref_validation_preserves_resolved_instance(ref_type, kit):
+    ref = ref_type("entity")
+    ref.resolve(kit)
+    client = ref.require()
+
+    validated = TypeAdapter(ref_type).validate_python(ref)
+
+    assert validated is ref
+    assert validated.require() is client
+
+
+@pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
+def test_entity_ref_unset_round_trip(ref_type):
+    adapter = TypeAdapter(ref_type)
+    unset = ref_type()
+
+    assert adapter.validate_python(unset) is unset
+    assert adapter.dump_json(unset) == b"null"
+
+    restored = adapter.validate_json(b"null")
+    assert type(restored) is ref_type
+    assert restored.name is None
+    assert restored.get() is None
+
+    validated = adapter.validate_python(None)
+    assert type(validated) is ref_type
+    assert validated.name is None
+
+
+@pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
+def test_optional_entity_ref_preserves_none(ref_type):
+    adapter = TypeAdapter(ref_type | None)
+
+    assert adapter.validate_python(None) is None
+    assert adapter.validate_json(adapter.dump_json(None)) is None
+
+
+def test_entity_ref_accepts_subclasses():
+    class SensorControllerRef(sk.ControllerRef):
+        pass
+
+    controller = SensorControllerRef("controller")
+
+    assert TypeAdapter(EntityRef).validate_python(controller) is controller
+    assert TypeAdapter(sk.ControllerRef).validate_python(controller) is controller
+
+
+@pytest.mark.parametrize("ref_type", [sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
+def test_entity_ref_rejects_other_reference_types(ref_type):
+    adapter = TypeAdapter(ref_type)
+
+    for other_type in (EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef):
+        if other_type is ref_type:
+            continue
+
+        with pytest.raises(ValidationError, match=ref_type.__name__):
+            adapter.validate_python(other_type("entity"))
+
+
+@pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
+@pytest.mark.parametrize("value", [5, True, 1.5, b"entity", {}, [], object()])
+def test_entity_ref_rejects_invalid_python_values(ref_type, value):
+    with pytest.raises(ValidationError, match=ref_type.__name__):
+        TypeAdapter(ref_type).validate_python(value)
+
+
+@pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
+@pytest.mark.parametrize("value", [b"5", b"true", b"{}", b"[]"])
+def test_entity_ref_rejects_invalid_json_values(ref_type, value):
+    with pytest.raises(ValidationError, match=ref_type.__name__):
+        TypeAdapter(ref_type).validate_json(value)
+
+
+@pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_entity_ref_json_schema(ref_type, mode):
+    schema = TypeAdapter(ref_type).json_schema(mode=mode)
+
+    assert {variant["type"] for variant in schema["anyOf"]} == {"string", "null"}
 
 
 @pytest.mark.asyncio
