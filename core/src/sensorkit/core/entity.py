@@ -8,7 +8,13 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Annotated, Literal, overload
 
 from loguru import logger
-from pydantic import BaseModel, PlainSerializer, PlainValidator, ValidationError
+from pydantic import (
+    BaseModel,
+    PlainSerializer,
+    PlainValidator,
+    StringConstraints,
+    ValidationError,
+)
 
 from sensorkit.backend.base import Entity
 from sensorkit.backend.event import Event, EventMultiplexer, EventStreamConsumer
@@ -275,8 +281,8 @@ class EntityClient(EntityBase):
 class EntityRef[T: EntityClient = EntityClient]:
     """A serializable reference to an entity client.
 
-    Model fields accept a name, `None` for an unset reference, or an instance of the
-    declared reference class. Existing instances retain their resolved client.
+    Model fields accept a nonempty name or a named instance of the declared class.
+    Optional fields also accept `None`. Existing instances retain their resolved client.
     """
 
     name: str | None
@@ -342,18 +348,21 @@ class EntityRef[T: EntityClient = EntityClient]:
     def __get_pydantic_core_schema__(cls, _source_type, handler):
         def validate_ref(obj):
             match obj:
-                case str() | None:
+                case str() if obj:
                     return cls(name=obj)
-                case cls():
+                case cls(name=str(name)) if name:
                     return obj
+                case str() | cls() | None:
+                    raise ValueError("A nonempty entity name is required")
                 case _:
-                    raise ValueError(f"Expected an entity name, None, or {cls.__name__}")
+                    raise ValueError(f"Expected an entity name or {cls.__name__}")
 
+        name_type = Annotated[str, StringConstraints(min_length=1)]
         return handler(
             Annotated[
                 str,
-                PlainValidator(validate_ref, json_schema_input_type=str | None),
-                PlainSerializer(lambda obj: obj.name, return_type=str | None),
+                PlainValidator(validate_ref, json_schema_input_type=name_type),
+                PlainSerializer(lambda obj: obj.name, return_type=name_type),
             ]
         )
 

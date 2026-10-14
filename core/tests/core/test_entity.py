@@ -105,14 +105,13 @@ def test_entity_ref_equality(kit):
 
 
 @pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
-@pytest.mark.parametrize("name", ["entity", ""])
-def test_entity_ref_name_round_trip(ref_type, name):
+def test_entity_ref_name_round_trip(ref_type):
     adapter = TypeAdapter(ref_type)
-    ref = adapter.validate_python(name)
+    ref = adapter.validate_python("entity")
     restored = adapter.validate_json(adapter.dump_json(ref))
 
     assert type(ref) is ref_type
-    assert ref.name == name
+    assert ref.name == "entity"
     assert type(restored) is ref_type
     assert restored == ref
 
@@ -130,21 +129,24 @@ def test_entity_ref_validation_preserves_resolved_instance(ref_type, kit):
 
 
 @pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
-def test_entity_ref_unset_round_trip(ref_type):
-    adapter = TypeAdapter(ref_type)
-    unset = ref_type()
+@pytest.mark.parametrize("value", [None, ""])
+def test_entity_ref_rejects_missing_name(ref_type, value):
+    with pytest.raises(ValidationError, match="nonempty entity name"):
+        TypeAdapter(ref_type).validate_python(value)
 
-    assert adapter.validate_python(unset) is unset
-    assert adapter.dump_json(unset) == b"null"
 
-    restored = adapter.validate_json(b"null")
-    assert type(restored) is ref_type
-    assert restored.name is None
-    assert restored.get() is None
+@pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
+@pytest.mark.parametrize("name", [None, "", 5, b"entity"])
+def test_entity_ref_rejects_unnamed_instance(ref_type, name):
+    with pytest.raises(ValidationError, match="nonempty entity name"):
+        TypeAdapter(ref_type).validate_python(ref_type(name))
 
-    validated = adapter.validate_python(None)
-    assert type(validated) is ref_type
-    assert validated.name is None
+
+@pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
+@pytest.mark.parametrize("value", [b"null", b'""'])
+def test_entity_ref_rejects_missing_json_name(ref_type, value):
+    with pytest.raises(ValidationError, match="nonempty entity name"):
+        TypeAdapter(ref_type).validate_json(value)
 
 
 @pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
@@ -153,6 +155,13 @@ def test_optional_entity_ref_preserves_none(ref_type):
 
     assert adapter.validate_python(None) is None
     assert adapter.validate_json(adapter.dump_json(None)) is None
+
+
+@pytest.mark.parametrize("ref_type", [EntityRef, sk.DeviceRef, sk.ControllerRef, sk.ProgramRef])
+@pytest.mark.parametrize("name", [None, ""])
+def test_optional_entity_ref_rejects_unnamed_instance(ref_type, name):
+    with pytest.raises(ValidationError, match="nonempty entity name"):
+        TypeAdapter(ref_type | None).validate_python(ref_type(name))
 
 
 def test_entity_ref_accepts_subclasses():
@@ -196,7 +205,13 @@ def test_entity_ref_rejects_invalid_json_values(ref_type, value):
 def test_entity_ref_json_schema(ref_type, mode):
     schema = TypeAdapter(ref_type).json_schema(mode=mode)
 
-    assert {variant["type"] for variant in schema["anyOf"]} == {"string", "null"}
+    assert schema["type"] == "string"
+    assert schema["minLength"] == 1
+
+    optional_schema = TypeAdapter(ref_type | None).json_schema(mode=mode)
+    variants = {variant["type"]: variant for variant in optional_schema["anyOf"]}
+    assert set(variants) == {"string", "null"}
+    assert variants["string"]["minLength"] == 1
 
 
 @pytest.mark.asyncio
