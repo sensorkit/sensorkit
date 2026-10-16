@@ -132,7 +132,11 @@ async def main() -> None:
             server.should_exit = True
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _stop)
+        try:
+            loop.add_signal_handler(sig, _stop)
+        except NotImplementedError:
+            # Windows event loops don't support loop signal handlers.
+            signal.signal(sig, lambda *_: _stop())
 
     await asyncio.gather(*(server.serve() for server in servers))
 
