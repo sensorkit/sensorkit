@@ -135,6 +135,20 @@ class TestPersistedState:
         assert restored.state == UDLState()
 
 
+class TestGenerateWindow:
+    @pytest.mark.asyncio
+    async def test_no_task_before_window_opens(self, program):
+        now = datetime.now(UTC)
+        await program.queue.push_task(tle_request(start_time=now + timedelta(minutes=5)))
+
+        gen = program.generate()
+        assert await gen.asend(None) is None
+        await gen.aclose()
+
+        assert len(program.queue) == 1
+        assert responses(program) == []
+
+
 class TestCollectedResponseActualTimes:
     @pytest.mark.asyncio
     async def test_collected_response_uses_task_execution_times(self, program):

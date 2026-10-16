@@ -91,6 +91,58 @@ class TestTaskQueuePop:
         result = await queue.pop_task()
         assert result.id == "valid"
 
+    @pytest.mark.asyncio
+    async def test_pop_holds_request_until_window_opens(self, queue, program_impl):
+        now = datetime.now(UTC)
+        request = tle_request(
+            start_time=now + timedelta(minutes=5),
+            end_time=now + timedelta(minutes=6),
+        )
+
+        await queue.push_task(request)
+
+        assert await queue.pop_task() is None
+        assert len(queue) == 1
+
+        (offer,) = program_impl.get_offers()
+        assert offer.begin == request.start_time
+
+    @pytest.mark.asyncio
+    async def test_pop_returns_opened_window_before_later_one(self, queue):
+        now = datetime.now(UTC)
+        opened = tle_request(id="opened", start_time=now - timedelta(seconds=1))
+        later = tle_request(id="later", start_time=now + timedelta(minutes=5))
+
+        await queue.push_task(later)
+        await queue.push_task(opened)
+
+        assert (await queue.pop_task()).id == "opened"
+        assert await queue.pop_task() is None
+        assert [task.id for task in queue.iter()] == ["later"]
+
+    @pytest.mark.asyncio
+    async def test_pop_after_held_request_removed(self, queue, program_impl):
+        now = datetime.now(UTC)
+        await queue.push_task(tle_request(id="held", start_time=now + timedelta(minutes=5)))
+
+        assert await queue.pop_task() is None
+        assert await queue.remove_task("held") is True
+
+        assert await queue.pop_task() is None
+        assert program_impl.get_offers() == []
+
+    @pytest.mark.asyncio
+    async def test_pop_request_scheduled_ahead_of_held_one(self, queue):
+        now = datetime.now(UTC)
+        await queue.push_task(tle_request(id="held", start_time=now + timedelta(minutes=5)))
+
+        assert await queue.pop_task() is None
+
+        await queue.push_task(tle_request(id="ahead", start_time=now - timedelta(seconds=1)))
+
+        assert (await queue.pop_task()).id == "ahead"
+        assert [task.id for task in queue.iter()] == ["held"]
+
 
 class TestTaskQueueRemove:
     @pytest.mark.asyncio

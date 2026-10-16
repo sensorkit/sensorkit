@@ -41,7 +41,7 @@ class TaskQueue:
             await self._update_offers()
 
     async def pop_task(self) -> CollectRequestFull | None:
-        """Remove and return the next available CollectRequest."""
+        """Remove and return the next CollectRequest whose window has opened."""
         async with self._lock:
             now = datetime.now(UTC)
 
@@ -52,8 +52,9 @@ class TaskQueue:
                 if self._on_expired:
                     await self._on_expired(expired)
 
-            # Return next valid task
-            if self.tasks:
+            # Tasks are sorted by start time, so a head that hasn't started means none have. The
+            # executor polls again, so the request is popped once its window opens.
+            if self.tasks and (self.tasks[0].start_time or now) <= now:
                 task = self.tasks.pop(0)
                 self._executing = task
                 await self._update_offers()
