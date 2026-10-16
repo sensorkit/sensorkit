@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import ssl
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -65,7 +66,28 @@ class UDLEndpointConfig(BaseModel):
     # Path to certs-based auth files (alternative to username/password)
     client_cert: str | None = None
     client_key: str | None = None
-    client_verify: bool = Field(default=True)
+    client_verify: bool | str = Field(
+        default=True,
+        description=(
+            "Verify the server certificate. A path names a CA bundle to trust in place of the "
+            "system store, e.g. a private CA or the server's own pinned certificate."
+        ),
+    )
+
+    def tls_options(self) -> dict[str, Any]:
+        """HTTP client TLS settings for server verification and the client certificate."""
+        cert = (self.client_cert, self.client_key) if self.client_cert and self.client_key else None
+
+        if not isinstance(self.client_verify, str):
+            return {"verify": self.client_verify, "cert": cert}
+
+        # httpx drops `cert` when `verify` is a path, so one context carries both.
+        context = ssl.create_default_context(cafile=self.client_verify)
+
+        if cert:
+            context.load_cert_chain(*cert)
+
+        return {"verify": context}
 
 
 class UDLAPIConfig(UDLEndpointConfig):

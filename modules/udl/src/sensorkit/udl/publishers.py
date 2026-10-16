@@ -213,18 +213,13 @@ class SkyImageryPublisher:
         endpoint = self._program.config.api.upload or self._program.config.api
         url = self._get_upload_url(endpoint)
 
-        if endpoint.client_cert and endpoint.client_key:
-            client_kwargs = {
-                "cert": (endpoint.client_cert, endpoint.client_key),
-                "verify": endpoint.client_verify,
-            }
-        else:
-            client_kwargs = {"verify": endpoint.client_verify}
-            if self._program._upload_username:
-                client_kwargs["auth"] = (
-                    self._program._upload_username,
-                    self._program._upload_password,
-                )
+        client_kwargs = endpoint.tls_options()
+
+        if not (endpoint.client_cert and endpoint.client_key) and self._program._upload_username:
+            client_kwargs["auth"] = (
+                self._program._upload_username,
+                self._program._upload_password,
+            )
 
         async with httpx.AsyncClient(timeout=endpoint.upload_timeout, **client_kwargs) as http:
             resp = await http.post(

@@ -224,11 +224,7 @@ class UDLProgram:
     ) -> AsyncUnifieddatalibrary:
         """Create a `udl_sdk` client."""
         use_certs = self._use_certs(endpoint)
-        http_client = httpx.AsyncClient(
-            verify=endpoint.client_verify,
-            cert=(endpoint.client_cert, endpoint.client_key) if use_certs else None,
-            timeout=endpoint.timeout,
-        )
+        http_client = httpx.AsyncClient(timeout=endpoint.timeout, **endpoint.tls_options())
 
         if use_certs:
             return AsyncUnifieddatalibrary(
