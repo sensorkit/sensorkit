@@ -100,6 +100,11 @@ class UDLState(BaseModel):
     # uploading before a service interruption are continued.
     publish_progress: Dict[str, _PublishProgress] = Field(default_factory=dict)
 
+    # Maps a frame's file name to the id set on its SkyImagery record, so the
+    # EOObservations from that frame (minutes later, possibly across a restart)
+    # can reference it as idSkyImagery.
+    sky_imagery_ids: Dict[str, str] = Field(default_factory=dict)
+
 
 @sk.declare_program
 class UDLProgram:
@@ -175,7 +180,11 @@ class UDLProgram:
             # Save publish progress
             now = datetime.now(UTC)
             self.state.resolved_collect_requests = {k: v for k, v in self.state.resolved_collect_requests.items() if v > now}
-            for cache in (self.state.collect_request_ids, self.state.publish_progress):
+            for cache in (
+                self.state.collect_request_ids,
+                self.state.publish_progress,
+                self.state.sky_imagery_ids,
+            ):
                 while len(cache) > _STATE_CACHE_CAP:
                     cache.pop(next(iter(cache)))
             await self.program.kv_put_model(self.state)
