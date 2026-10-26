@@ -251,13 +251,15 @@ class TestOrbitTargets:
         assert targets == ["33333", "11111"]
 
     @pytest.mark.asyncio
-    async def test_orbit_member_tasked_without_list_management(self, orbit_program, monkeypatch):
+    async def test_orbit_member_tasked_without_list_management(
+        self, orbit_program, monkeypatch, until
+    ):
         monkeypatch.setattr(
             "sensorkit.otto.tles.position",
             lambda **kwargs: (45.0, 180.0, True, 1.0),
         )
         gen = asyncio.create_task(orbit_program.generate_tasks())
-        await asyncio.sleep(0.1)
+        await until(lambda: len(orbit_program.task_queue) > 0)
         gen.cancel()
 
         queued = await orbit_program.task_queue.pop_task()
@@ -553,7 +555,7 @@ class TestEphemerisCoversTheBlock:
     """The fetched ephemeris must span every task it is attached to."""
 
     @pytest.mark.asyncio
-    async def test_window_ends_at_the_last_task_deadline(self, horizons_program):
+    async def test_window_ends_at_the_last_task_deadline(self, horizons_program, until):
         """Ephemeris stop == the final queued task's end_time.
 
         One ephemeris is shared by the whole block of tasks generated for an
@@ -577,7 +579,7 @@ class TestEphemerisCoversTheBlock:
         fetch = AsyncMock(return_value=_horizons_samples(datetime.now(UTC)))
         with patch("sensorkit.otto.horizons.fetch_ephemeris", fetch):
             gen = asyncio.create_task(horizons_program.generate_tasks())
-            await asyncio.sleep(0.1)
+            await until(lambda: len(horizons_program.task_queue) == 8)
             gen.cancel()
 
         # 2 filters x 2 exposures x 2 binnings
@@ -661,19 +663,21 @@ class TestStarListManagement:
     """A star always comes back, so it must never be permanently blacklisted."""
 
     @pytest.mark.asyncio
-    async def test_set_star_graylists_rather_than_blacklists(self, star_program, monkeypatch):
+    async def test_set_star_graylists_rather_than_blacklists(
+        self, star_program, monkeypatch, until
+    ):
         # Below the floor and west of the meridian: setting
         monkeypatch.setattr(star_program, "_object_position", lambda obj: (5.0, 270.0, False, 3.0))
         star_program.config.collect.scan_mode = False
 
         gen = asyncio.create_task(star_program.generate_tasks())
-        await asyncio.sleep(0.1)
+        await until(lambda: not star_program.state.whitelist)
         gen.cancel()
 
         assert star_program.state == OttoState(graylist=["Vega"])
 
     @pytest.mark.asyncio
-    async def test_set_satellite_still_blacklists(self, orbit_program, monkeypatch):
+    async def test_set_satellite_still_blacklists(self, orbit_program, monkeypatch, until):
         """The diurnal-return exemption must not change satellite behaviour."""
         orbit_program.state.whitelist = ["25544"]
         orbit_program.stars = {}
@@ -684,7 +688,7 @@ class TestStarListManagement:
         )
 
         gen = asyncio.create_task(orbit_program.generate_tasks())
-        await asyncio.sleep(0.1)
+        await until(lambda: not orbit_program.state.whitelist)
         gen.cancel()
 
         assert orbit_program.state == OttoState(blacklist=["25544"])
@@ -754,7 +758,7 @@ class TestDiurnalReturnExemption:
 
     @pytest.mark.asyncio
     async def test_set_horizons_object_graylists_rather_than_blacklists(
-        self, horizons_program, monkeypatch
+        self, horizons_program, monkeypatch, until
     ):
         # Below the floor and west of the meridian: setting — but an asteroid
         # is back tomorrow night, so blacklisting would lose it forever
@@ -766,7 +770,7 @@ class TestDiurnalReturnExemption:
         horizons_program.tles = {}
 
         gen = asyncio.create_task(horizons_program.generate_tasks())
-        await asyncio.sleep(0.1)
+        await until(lambda: not horizons_program.state.whitelist)
         gen.cancel()
 
         assert horizons_program.state == OttoState(graylist=["433"])
