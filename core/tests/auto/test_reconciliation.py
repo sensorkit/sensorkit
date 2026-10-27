@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 
 from sensorkit.auto.lifecycle import ControllerLifecycle, LifecycleStep
-from sensorkit.auto.procedures import ControllerIndeterminate, ControllerOffline
+from sensorkit.auto.procedures import ControllerFailure, ControllerIndeterminate, ControllerOffline
 from sensorkit.auto.reactor import RecoveryState
 from sensorkit.backend.request import CallError
 from sensorkit.common.keyword import KeywordDict
@@ -138,12 +138,13 @@ async def register_idle_program(kit, service_context, name: str):
 def test_repeated_failure_calls_for_recovery():
     """One failure delays a retry, and a second calls for recovery without delay."""
     recovery_state = RecoveryState(retry_delay=5.0)
-    recovery_state.record_failure(100.0)
+    recovery_state.record_failure(100.0, ControllerFailure("first"))
 
     assert recovery_state.waiting(101.0) == 105.0
     assert not recovery_state.recovery_due
 
-    recovery_state.record_failure(106.0)
+    recovery_state.begin_procedure()
+    recovery_state.record_failure(106.0, ControllerFailure("second"))
 
     assert recovery_state.recovery_due
     assert recovery_state.waiting(106.0) is None
@@ -1435,3 +1436,77 @@ async def test_program_interrupt_waits_for_pending_init(kit, service_context, co
 
     assert not cancelled.is_set()
     assert ran[0] == "prog_b"
+
+
+def test_procedure_counts_one_failure():
+    """Multiple detections of one controller failure retain the first error and count once."""
+    recovery_state = RecoveryState()
+    first = ControllerFailure("left OPERATE")
+    recovery_state.record_failure(0.0, first)
+    recovery_state.record_failure(1.0, ControllerFailure("tasking failed"))
+
+    assert recovery_state.failures == 1
+    assert recovery_state.failure is first
+
+    # A new procedure clears the diagnosis but keeps the count.
+    recovery_state.begin_procedure()
+
+    assert recovery_state.failure is None
+    assert recovery_state.failures == 1
+
+
+@pytest.mark.parametrize("settled_for", [10.0, 900.0])
+def test_stable_period_restarts_failure_count(settled_for):
+    """A confirmed state held for the stable period starts a fresh failure count."""
+    recovery_state = RecoveryState(stable_period=900.0)
+    recovery_state.record_failure(0.0, ControllerFailure("first"))
+    recovery_state.begin_procedure()
+
+    # Confirming the state again does not forget the failure.
+    recovery_state.set_settled(True, 10.0)
+    recovery_state.set_settled(True, 20.0)
+
+    assert recovery_state.failures == 1
+
+    recovery_state.record_failure(10.0 + settled_for, ControllerFailure("second"))
+
+    assert recovery_state.recovery_due is (settled_for < 900.0)
+
+
+def test_unsettled_time_does_not_reset_failure_count():
+    """Time outside a settled interval cannot erase an earlier failure."""
+    recovery_state = RecoveryState(stable_period=900.0)
+    recovery_state.record_failure(0.0, ControllerFailure("first"))
+    recovery_state.begin_procedure()
+    recovery_state.set_settled(True, 10.0)
+    recovery_state.set_settled(False, 20.0)
+    recovery_state.record_failure(1000.0, ControllerFailure("second"))
+
+    assert recovery_state.recovery_due
+
+
+def test_completed_stable_period_is_credited_when_leaving():
+    """Leaving a settled state preserves an earned reset and credits it only once."""
+    recovery_state = RecoveryState(stable_period=900.0)
+    recovery_state.record_failure(0.0, ControllerFailure("first"))
+    recovery_state.begin_procedure()
+    recovery_state.set_settled(True, 10.0)
+    recovery_state.set_settled(False, 910.0)
+
+    assert recovery_state.failures == 0
+    assert recovery_state.settled_at is None
+
+    recovery_state.record_failure(1000.0, ControllerFailure("second"))
+    recovery_state.set_settled(False, 2000.0)
+
+    assert recovery_state.failures == 1
+
+
+def test_procedure_boundary_preserves_settled_interval():
+    """Replacing a procedure without a state change preserves continuous settled time."""
+    recovery_state = RecoveryState()
+    recovery_state.set_settled(True, 10.0)
+    recovery_state.begin_procedure()
+    recovery_state.set_settled(True, 20.0)
+
+    assert recovery_state.settled_at == 10.0
