@@ -386,14 +386,14 @@ class ControllerRef(EntityRef[ControllerClient]):
 
 
 class ControllerStateUnknown(Exception):
-    """Controller state is unavailable because observation is not ready or has ended."""
+    """Controller state is unavailable because monitoring is not ready or has ended."""
 
 
 class ControllerMonitor:
-    """Continuously observe the state a controller reports.
+    """Continuously monitor controller state.
 
-    A monitor has one observation lifetime. Create another to observe again after
-    failure or stop. Observation health does not prove the controller is alive.
+    Create another monitor to resume after failure or stop.
+    A healthy monitor does not prove the controller is online.
     """
 
     def __init__(self, controller: ControllerClient):
@@ -411,7 +411,7 @@ class ControllerMonitor:
         self._startup_complete = asyncio.Event()
 
     async def start(self, *, timeout: float = 10.0) -> None:
-        """Start observation and wait for the first valid state.
+        """Start monitoring controller state and wait for the first valid state.
 
         A state that does not exist yet is awaited until created.
 
@@ -422,7 +422,7 @@ class ControllerMonitor:
             ValueError: If `timeout` is not positive and finite.
             RuntimeError: If the monitor was already started.
             TimeoutError: If no valid state arrives in time.
-            ControllerStateUnknown: If observation fails or stops first.
+            ControllerStateUnknown: If state monitoring fails or stops first.
         """
         if not (math.isfinite(timeout) and timeout > 0):
             raise ValueError(f"timeout must be positive and finite, got {timeout}")
@@ -436,7 +436,7 @@ class ControllerMonitor:
             async with asyncio.timeout(timeout):
                 await self._startup_complete.wait()
         except TimeoutError:
-            error = TimeoutError(f"{self.controller.entity} state not observed in {timeout} s")
+            error = TimeoutError(f"{self.controller.entity} state not received in {timeout} s")
             self._fail(error)
             await self._abandon(error)
         except asyncio.CancelledError as e:
@@ -448,7 +448,7 @@ class ControllerMonitor:
             await self._abandon(e)
 
     async def stop(self) -> None:
-        """Stop observation and wait until its subscription is released.
+        """Stop monitoring controller state and wait until its subscription is released.
 
         Repeated calls join the same cleanup. Before the first start, this does nothing.
         Subscription cleanup failures propagate to the caller.
@@ -461,27 +461,34 @@ class ControllerMonitor:
         """Copy of the latest controller state.
 
         Raises:
-            ControllerStateUnknown: If observation is not ready, failed, or stopped.
+            ControllerStateUnknown: If state monitoring is not ready, failed, or stopped.
         """
         return self._healthy_state().model_copy(deep=True)
+
+    def healthy(self) -> bool:
+        """Whether valid controller state is available and monitoring has not ended.
+
+        This does not check whether the controller is online.
+        """
+        return self._state is not None and not self._observer.closed
 
     @property
     def operating_state(self) -> ControllerOperatingState:
         """Copy of the latest operating state.
 
         Raises:
-            ControllerStateUnknown: If observation is not ready, failed, or stopped.
+            ControllerStateUnknown: If state monitoring is not ready, failed, or stopped.
         """
         return self._healthy_state().operating_state.model_copy(deep=True)
 
     @property
     def last_state(self) -> ControllerState | None:
-        """Copy of the last state received, including after observation ends."""
+        """Copy of the last state received, including after monitoring ends."""
         return None if self._state is None else self._state.model_copy(deep=True)
 
     @property
     def error(self) -> Exception | None:
-        """The first observation failure, retained after shutdown."""
+        """The first state monitoring failure, retained after shutdown."""
         return self._error
 
     @contextlib.contextmanager
@@ -494,20 +501,20 @@ class ControllerMonitor:
     ) -> Iterator[asyncio.Queue[ControllerOperatingState]]:
         """Subscribe to changes of operating state, target, or lifecycle context.
 
-        Subscribers share each report and must not modify it. The queue shuts down
-        when observation fails or stops, or on overflow with the `close` policy.
+        Subscribers share each state update and must not modify it. The queue shuts down
+        when monitoring fails or stops, or on overflow with the `close` policy.
 
         Args:
-            initial_value: Whether to queue the current report first.
-            maxsize: Bound on queued reports.
+            initial_value: Whether to queue the current state first.
+            maxsize: Bound on queued state updates.
             overflow: Handling of a full queue. `close` shuts down this queue only.
-                `drop_oldest` discards its oldest report.
+                `drop_oldest` discards its oldest state update.
 
         Yields:
             The subscriber queue, unsubscribed on exit.
 
         Raises:
-            ControllerStateUnknown: If observation is not ready, failed, or stopped.
+            ControllerStateUnknown: If state monitoring is not ready, failed, or stopped.
             ValueError: If `maxsize` or `overflow` is invalid.
         """
         self._healthy_state()
@@ -518,7 +525,7 @@ class ControllerMonitor:
             yield queue
 
     def _healthy_state(self) -> ControllerState:
-        """Return the cached state, or raise if observation is unavailable."""
+        """Return the cached state, or raise if the monitor is unhealthy."""
         if self._state is not None and not self._observer.closed:
             return self._state
 
@@ -531,7 +538,7 @@ class ControllerMonitor:
                 reason = "failed"
 
         raise ControllerStateUnknown(
-            f"{self.controller.entity} state is unknown because observation {reason}"
+            f"{self.controller.entity} state is unknown because monitoring {reason}"
         ) from self._error
 
     async def _read(self):
@@ -545,7 +552,7 @@ class ControllerMonitor:
             raise RuntimeError(f"{self.controller.entity} state stream ended")
         except asyncio.CancelledError as e:
             if self._teardown is None:
-                failure = RuntimeError(f"{self.controller.entity} state observation canceled")
+                failure = RuntimeError(f"{self.controller.entity} state monitoring canceled")
                 failure.__cause__ = e
                 self._fail(failure)
 
@@ -571,7 +578,7 @@ class ControllerMonitor:
         self._startup_complete.set()
 
     def _fail(self, error: Exception):
-        """Record the first failure and end observation."""
+        """Record the first failure and stop monitoring controller state."""
         if self._error is None:
             self._error = error
 

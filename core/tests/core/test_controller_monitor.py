@@ -52,6 +52,8 @@ async def next_report(changes: asyncio.Queue[ControllerOperatingState]):
 
 def assert_unavailable(monitor: ControllerMonitor) -> ControllerStateUnknown:
     """Assert every healthy accessor raises and return the state accessor's exception."""
+    assert not monitor.healthy()
+
     with pytest.raises(ControllerStateUnknown):
         _ = monitor.operating_state
 
@@ -68,7 +70,7 @@ def assert_unavailable(monitor: ControllerMonitor) -> ControllerStateUnknown:
 
 
 @pytest.mark.asyncio
-async def test_start_observes_current_state(kit, controller_impl):
+async def test_start_receives_current_state(kit, controller_impl):
     client = kit.controller(controller_impl.entity)
     monitor = ControllerMonitor(client)
 
@@ -80,7 +82,8 @@ async def test_start_observes_current_state(kit, controller_impl):
     try:
         stored = await client.kv_get_model(ControllerState)
 
-        # A reported UNKNOWN is valid observed state.
+        # UNKNOWN is a valid controller state.
+        assert monitor.healthy()
         assert monitor.operating_state.current == UNKNOWN
         assert monitor.state.model_dump() == stored.model_dump()
         assert monitor.last_state.model_dump() == stored.model_dump()
@@ -318,7 +321,7 @@ async def test_reports_are_shared_apart_from_state(controller_impl, monitor, unt
 
 
 @pytest.mark.asyncio
-async def test_invalid_update_fails_observation(kit, controller_impl, monitor):
+async def test_invalid_update_fails_monitoring(kit, controller_impl, monitor):
     with monitor.state_changes() as changes:
         await next_report(changes)
         await kit.backend.key_value(controller_impl.entity).update("ControllerState", b"{}")
@@ -371,7 +374,7 @@ async def test_stop_during_readiness(kit, delay):
 
 
 @pytest.mark.asyncio
-async def test_start_cancellation_stops_observation(kit):
+async def test_start_cancellation_stops_monitoring(kit):
     monitor = ControllerMonitor(kit.controller(ABSENT))
     starting = asyncio.create_task(monitor.start(timeout=10.0))
     await asyncio.sleep(0.1)
