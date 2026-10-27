@@ -17,6 +17,9 @@ __pycache__/
 /coverage-report/
 /.pytest_cache
 /.vscode
+/scratch/
+/complexipy-results.*
+/sensorkit.log
 
 # Other
 .DS_Store
