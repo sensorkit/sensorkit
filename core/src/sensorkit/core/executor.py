@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable
 
+import uuid_utils.compat as uuid
 from loguru import logger
 
 from sensorkit.backend.request import Call, CallError, CallRejected
@@ -14,11 +15,14 @@ from sensorkit.common.aio import cleanup_future, defer_cancellation, interruptib
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.controller import (
     ControllerClient,
+    ControllerMonitor,
     ExecuteResponseMessage,
+    InternalControllerState,
     TaskExecutionResult,
     TaskExecutionState,
 )
 from sensorkit.core.entity import EventsNotSubscribed
+from sensorkit.core.program import TaskingFault, TaskingLoopState, TaskingStage
 from sensorkit.core.task import Task, TaskContextMap, TaskExecution, TaskSubmission
 
 type TaskFactoryResult = Task | TaskSubmission | None
@@ -28,7 +32,10 @@ type TaskFactoryFunc = Callable[
     | AsyncGenerator[TaskFactoryResult, TaskExecution]
     | TaskFactoryResult,
 ]
-type TaskChangeCallback = Callable[[TaskExecution | None], Coroutine[Any, Any, None]]
+type TaskingChangeCallback = Callable[
+    [TaskingLoopState, TaskExecutionState | None], Coroutine[Any, Any, None]
+]
+"""Receive session progress and the accepted execution's latest state event."""
 
 
 class NoTaskAvailable(Exception):
@@ -380,7 +387,11 @@ class TaskCall:
 
 
 class TaskingLoop:
-    """Produce tasks for one controller and track the last call through finalization."""
+    """Produce tasks while a controller reports OPERATE.
+
+    Each loop owns one session and its final task call. Faults end task production and
+    retain their origin and failed stage through cleanup.
+    """
 
     def __init__(
         self,
@@ -389,15 +400,20 @@ class TaskingLoop:
         contexts: TaskContextMap,
         task_group: asyncio.TaskGroup,
         *,
-        on_task_change: TaskChangeCallback | None = None,
+        on_tasking_change: TaskingChangeCallback | None = None,
     ):
         self.controller = controller
         self.task_factory: TaskFactoryFunc = factory_func
         self.contexts = contexts
         self._task_group = task_group
-        # Notify the program when a task starts or completes normally.
-        # On failure or abort, the program clears tasking state after loop finalization.
-        self._on_task_change = on_task_change
+        self._on_tasking_change = on_tasking_change
+        self.loop_state = TaskingLoopState(session_id=uuid.uuid7(), stage="factory")
+        """Current operation and any terminal fault."""
+        self.execution_state: TaskExecutionState | None = None
+        """Latest controller report for this session's execution."""
+        self._published: tuple[TaskingLoopState, TaskExecutionState | None] | None = None
+        self._publication_lock = asyncio.Lock()
+        self._monitor = ControllerMonitor(controller)
         self._aio_task: asyncio.Task | None = None
         self._stop_requested = asyncio.Event()
         self.finalized = False
@@ -405,6 +421,7 @@ class TaskingLoop:
         self.unresolved = False
         """Whether the last call could not confirm task acceptance or completion."""
         self._call: TaskCall | None = None
+        self._publisher: asyncio.Task[None] | None = None
         self._finalization: asyncio.Task | None = None
 
     def start(self):
@@ -439,13 +456,18 @@ class TaskingLoop:
 
     def request_stop(self, *, abort: bool = False):
         """Stop producing tasks, optionally canceling the factory and aborting the current task."""
+        # Record cleanup intent before canceling work.
         self._stop_requested.set()
 
         if abort:
-            self._cancel_producer()
+            self._end_work()
 
-            if self._call is not None:
-                self._call.abort()
+    def _end_work(self):
+        """Cancel task production and request an execution abort."""
+        self._cancel_producer()
+
+        if self._call is not None:
+            self._call.abort()
 
     def _producer_done(self) -> bool:
         return self._aio_task is None or self._aio_task.done()
@@ -453,6 +475,79 @@ class TaskingLoop:
     def _cancel_producer(self):
         if self._aio_task is not None and not self._aio_task.cancelling():
             self._aio_task.cancel()
+
+    def _advance(self, stage: TaskingStage, task_type: str | None = None):
+        """Change the current operation while the session is healthy."""
+        if self.loop_state.fault is None:
+            self.loop_state = TaskingLoopState(
+                session_id=self.loop_state.session_id, stage=stage, task_type=task_type
+            )
+
+    def _fail(
+        self,
+        fault: TaskingFault,
+        error: BaseException | str,
+        *,
+        stage: TaskingStage | None = None,
+    ):
+        """Retain the first fault ending this session."""
+        state = self.loop_state
+
+        if isinstance(error, BaseException):
+            error = f"{type(error).__name__}: {error}"
+
+        if state.fault is not None:
+            logger.warning(f"Tasking {self.controller.entity} also failed ({error})")
+            return
+
+        stage = state.stage if stage is None else stage
+        logger.error(f"Tasking {self.controller.entity} failed during {stage} ({error})")
+
+        self.loop_state = TaskingLoopState(
+            session_id=state.session_id,
+            stage=stage,
+            task_type=state.task_type,
+            fault=fault,
+            error=error,
+        )
+
+    def _classify(self, call: TaskCall):
+        """Classify a failed controller call.
+
+        Requested aborts retain the session's existing outcome.
+        """
+        if self.loop_state.fault is not None:
+            return
+
+        match error := call.error():
+            case None | TaskFailed(aborted=True):
+                return
+            case CallRejected():
+                self._fail("controller", error, stage="dispatch")
+            case TaskOutcomeUnknown() if call.execution is None:
+                self._fail("controller", error, stage="dispatch")
+            case _:
+                self._fail("controller", error, stage="execution")
+
+    async def _publish_tasking_state(self):
+        """Publish changes to session progress and execution state."""
+        if self._on_tasking_change is None:
+            return
+
+        async with self._publication_lock:
+            snapshot = (self.loop_state, self.execution_state)
+
+            if snapshot == self._published:
+                return
+
+            try:
+                await self._on_tasking_change(*snapshot)
+            except Exception as e:
+                logger.opt(exception=e).warning(
+                    f"Could not report {self.controller.entity} tasking"
+                )
+            else:
+                self._published = snapshot
 
     def _resolve_context(self, submission: TaskSubmission) -> KeywordDict | None:
         """Merge the factory-supplied context with the per-task-type context bundle."""
@@ -479,12 +574,74 @@ class TaskingLoop:
 
         return default
 
-    async def _tasking_loop(self):
-        # Task calls follow their executions through the controller's events.
-        await self.controller.subscribe_events()
+    async def _run(self):
+        # Publish session identity before task production.
+        await self._publish_tasking_state()
 
+        try:
+            await self._supervised()
+        except Exception as e:
+            self._fail("program", e)
+        finally:
+            try:
+                await self._monitor.stop()
+            except Exception as e:
+                logger.opt(exception=e).warning(
+                    f"{self.controller.entity} observation release failed"
+                )
+
+    async def _supervised(self):
+        """Run task production under controller observation."""
+        try:
+            # Subscribe before starting calls that depend on execution events.
+            await self.controller.subscribe_events()
+            await self._monitor.start()
+            current = self._monitor.operating_state.current
+        except Exception as e:
+            self._fail("controller", e)
+            return
+
+        if current != InternalControllerState.OPERATE:
+            self._fail("controller", f"{self.controller.entity} reported {current}")
+            return
+
+        with self._monitor.state_changes(initial_value=False) as changes:
+            supervisor = asyncio.create_task(self._supervise(changes))
+
+            try:
+                await self._produce()
+            finally:
+                supervisor.cancel()
+                await asyncio.wait((supervisor,))
+
+    async def _supervise(self, changes: asyncio.Queue):
+        """End task production if the controller leaves OPERATE."""
+        while True:
+            try:
+                current = (await changes.get()).current
+            except asyncio.QueueShutDown:
+                error = f"{self.controller.entity} observation ended ({self._monitor.error!r})"
+                break
+
+            if current != InternalControllerState.OPERATE:
+                error = f"{self.controller.entity} reported {current}"
+                break
+
+        # Ignore departures caused by requested cleanup.
+        if self._stop_requested.is_set():
+            return
+
+        self._fail("controller", error)
+        self._end_work()
+        await asyncio.shield(self._publish_tasking_state())
+
+    async def _produce(self):
         while not self._stop_requested.is_set():
-            # Source the next task from the factory.
+            # Clear the previous execution before starting another factory attempt.
+            self.execution_state = None
+            self._advance("factory")
+            await self._publish_tasking_state()
+
             try:
                 agen, submission = await _invoke_factory(self.task_factory)
             except NoTaskAvailable:
@@ -492,36 +649,35 @@ class TaskingLoop:
                     await asyncio.wait_for(self._stop_requested.wait(), timeout=5.0)
 
                 continue
+            except Exception as e:
+                self._fail("program", e)
+                return
 
             if self._stop_requested.is_set():
                 await self._throw(agen, asyncio.CancelledError())
                 return
 
-            # Dispatch and run it. A fatal error ends the loop.
+            # Continue task production only after successful dispatch and handling.
             if not await self._dispatch(agen, submission):
                 return
-
-    async def _run(self):
-        try:
-            await self._tasking_loop()
-        except Exception as e:
-            logger.opt(exception=e).error(f"Task factory failed for {self.controller.entity}")
 
     async def _dispatch(
         self,
         agen: AsyncGenerator[TaskFactoryResult, TaskExecution] | None,
         submission: TaskSubmission,
     ) -> bool:
-        """Dispatch a single task and run it to completion.
+        """Execute one factory submission and its program handling.
 
         Returns:
-            True if the task completed (success, or a failure the factory handled without
-            re-raising); False if a fatal error occurred and the loop should stop.
+            Whether execution and program handling completed successfully.
         """
         task = submission.task
         context = self._resolve_context(submission)
         expiry_time = self._resolve_expiry(submission)
         ttl = (expiry_time - datetime.now(UTC)).total_seconds() if expiry_time else None
+
+        self._advance("dispatch", task.task_type)
+        await self._publish_tasking_state()
 
         logger.info(
             f"Dispatching {task.task_type} ({type(task).__name__}) to {self.controller.entity}"
@@ -537,53 +693,105 @@ class TaskingLoop:
         except asyncio.CancelledError as e:
             # Interrupted tasking aborts the execution once the controller accepts it.
             call.abort()
+            self._publish_execution(call)
             await self._throw(agen, e)
             return False
         except Exception as e:
-            logger.error(f"Failed to dispatch {task.task_type} to {self.controller.entity}: {e!r}")
+            self._fail("controller", e)
+            self._publish_execution(call)
+            await self._publish_tasking_state()
             await self._throw(agen, e)
             return False
 
-        try:
-            await self._notify_task_change(execution)
+        publisher = self._publish_execution(call)
 
-            async with asyncio.timeout(ttl):
-                # Resume the factory with the running execution (task_id now known). It may await
-                # the execution to consume the result and run post-task logic.
+        try:
+            async with asyncio.timeout(ttl) as deadline:
+                # Resumed generator code can run before execution ends.
                 if agen is not None:
+                    self._advance("post_task", task.task_type)
+                    await self._publish_tasking_state()
                     resumed, agen = agen, None
                     await _resume_factory(resumed, execution)
 
-                # Wait for completion if the factory did not await the execution.
-                # A factory that handled a completed call's error allows tasking to continue.
                 if not call.future().done():
+                    self._advance("execution", task.task_type)
+                    await self._publish_tasking_state()
                     await asyncio.shield(call.future())
         except (Exception, asyncio.CancelledError) as e:
-            # The program clears tasking state after loop finalization.
             logger.opt(exception=e).debug(f"Tasking ended during {execution.task_id}")
-            call.abort()
+            self._end_task(call, e, expired=deadline.expired())
+            await self._publish_tasking_state()
             await self._throw(agen, e)
             return False
 
+        # Check the execution outcome independently of generator handling.
+        await asyncio.wait((publisher,))
+
+        if self.loop_state.fault is not None:
+            return False
+
         self._call = None
-        await self._notify_task_change(None)
+        self._publisher = None
         logger.info(f"Finished {task.task_type} ({type(task).__name__})")
 
         return True
 
-    async def _notify_task_change(self, execution: TaskExecution | None):
-        """Signal the owner that the currently running task changed, if a callback is registered."""
-        if self._on_task_change is not None:
-            await self._on_task_change(execution)
+    def _end_task(self, call: TaskCall, error: BaseException, *, expired: bool):
+        """Record a terminal fault before aborting the execution."""
+        # Classify established execution failure before program handling errors.
+        self._classify(call)
 
-    @staticmethod
+        match error:
+            case _ if expired and not call.future().done():
+                self._fail("controller", f"{call.task.task_type} expired", stage="execution")
+            case asyncio.CancelledError():
+                # Cleanup preserves any fault already recorded.
+                pass
+            case _ if error is call.error():
+                pass
+            case _:
+                self._fail("program", error)
+
+        call.abort()
+
+    def _publish_execution(self, call: TaskCall) -> asyncio.Task[None] | None:
+        """Start publishing state events for the accepted execution."""
+        if call.execution is None:
+            return None
+
+        self._publisher = asyncio.create_task(self._publish_execution_states(call))
+        self._publisher.add_done_callback(cleanup_future)
+
+        return self._publisher
+
+    async def _publish_execution_states(self, call: TaskCall):
+        """Publish execution state changes and any terminal controller fault."""
+        async for state in call.execution_states():
+            self.execution_state = state
+            await self._publish_tasking_state()
+
+        await asyncio.wait((call.future(),))
+        self._classify(call)
+        await self._publish_tasking_state()
+
     async def _throw(
-        agen: AsyncGenerator[TaskFactoryResult, TaskExecution] | None, e: BaseException
+        self, agen: AsyncGenerator[TaskFactoryResult, TaskExecution] | None, e: BaseException
     ):
-        """Send an error to a factory suspended at its first task."""
-        if agen is not None:
-            with contextlib.suppress(BaseException):
-                await agen.athrow(e)
+        """Resume a suspended factory with an exception."""
+        if agen is None:
+            return
+
+        try:
+            await agen.athrow(e)
+        except Exception as error:
+            # Keep factory cleanup errors as secondary diagnostics.
+            if error is not e and not isinstance(error, StopAsyncIteration):
+                logger.warning(
+                    f"Task factory cleanup failed for {self.controller.entity} ({error!r})"
+                )
+        except BaseException:
+            pass
 
     async def _finalize(self):
         if self._aio_task is not None:
@@ -594,5 +802,12 @@ class TaskingLoop:
             await asyncio.wait((call.future(),))
             self.unresolved = isinstance(call.error(), TaskOutcomeUnknown)
 
+        if self._publisher is not None:
+            await asyncio.wait((self._publisher,))
+
+        # Retry fault publication interrupted by cancellation.
+        await self._publish_tasking_state()
+
         self._call = None
+        self._publisher = None
         self.finalized = True

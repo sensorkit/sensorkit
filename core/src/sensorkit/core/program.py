@@ -6,23 +6,33 @@ import collections
 import contextlib
 import functools
 from abc import abstractmethod
+from collections.abc import Generator
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
+import uuid_utils.compat as uuid
 from intervaltree import Interval
 from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 
-from sensorkit.backend.event import Event
-from sensorkit.backend.request import declare_long_request, declare_request
-from sensorkit.common.aio import AsyncObserver
+from sensorkit.backend.base import KeyNotFound
+from sensorkit.backend.event import Event, EventSubscription
+from sensorkit.backend.request import CallError, declare_long_request, declare_request
+from sensorkit.common.aio import AsyncObserver, cleanup_future
 from sensorkit.common.keyword import declare_keyword
+from sensorkit.core.controller import TaskExecutionState
 from sensorkit.core.entity import EntityClient, EntityInterface, EntityRef
-from sensorkit.core.executor import TaskFactoryFunc
-from sensorkit.core.task import TaskContextMap, TaskExecution
+from sensorkit.core.task import TaskContextMap
 
 if TYPE_CHECKING:
     from sensorkit.core.client import SensorKit
+    from sensorkit.core.executor import TaskFactoryFunc
+
+type TaskingStage = Literal["factory", "dispatch", "execution", "post_task"]
+"""Operations within a tasking session."""
+
+type TaskingFault = Literal["controller", "program"]
+"""Fault origins for program tasking."""
 
 
 class OfferInterval(Interval):
@@ -54,31 +64,47 @@ class ProgramActiveState(Event):
     contexts: TaskContextMap = Field(default_factory=TaskContextMap)
 
 
-class ProgramTaskingState(Event):
-    """Event indicating the Task a Program is currently executing, if any.
+class TaskingLoopState(BaseModel):
+    """Current operation and terminal fault for a tasking session.
 
-    Carries the full `TaskExecution` envelope (not just an id) so observers see the same task shape
-    the controller publishes on its `TaskExecutionState`, including the controller-minted
-    `task_id`. `None` while the program is between tasks or idle.
+    A fault retains the failed stage while the session ends.
     """
-    executing_task: TaskExecution | None = None
+
+    session_id: uuid.UUID
+    stage: TaskingStage
+    task_type: str | None = None
+    """Task type supplied by the factory."""
+    fault: TaskingFault | None = None
+    error: str | None = None
+
+
+class ProgramTaskingState(Event):
+    """Program session progress and controller execution reports."""
+
+    loop_state: TaskingLoopState | None = None
+    """Known tasking session, if any."""
+    execution_state: TaskExecutionState | None = None
+    """Controller report for the accepted execution.
+
+    Cleared before each factory attempt and retained when the session ends.
+    """
 
     @model_validator(mode="before")
     @classmethod
     def _migrate_legacy_executing_task(cls, data: Any) -> Any:
-        """Upgrade state persisted before the executing task carried a full `TaskExecution`.
+        """Normalize legacy tasking reports.
 
-        The pre-split `ProgramTaskingStatus` recorded only `executing_task_id` — a bare task id.
-        A bare id cannot be rehydrated into a `TaskExecution` envelope, so a legacy id collapses to
-        `executing_task=None` (equivalent to "idle"); observers of the old shape only ever saw the
-        id, which the program re-publishes the moment it next dispatches a task.
+        Full executions retain their reported running state. Bare task IDs provide no
+        execution state. Legacy reports carry no session identity.
         """
-        if not isinstance(data, dict) or "executing_task" in data:
+        if not isinstance(data, dict) or not {"executing_task", "executing_task_id"} & data.keys():
             return data
 
-        if "executing_task_id" in data:
-            data = {k: v for k, v in data.items() if k != "executing_task_id"}
-            data["executing_task"] = None
+        legacy = data.get("executing_task")
+        data = {k: v for k, v in data.items() if k not in ("executing_task", "executing_task_id")}
+
+        if legacy is not None and "execution_state" not in data:
+            data["execution_state"] = {"executing": True, "execution": legacy}
 
         return data
 
@@ -131,17 +157,271 @@ class ProgramActiveStateRequest(BaseModel):
     """Request that a Program activate or deactivate tasking of the target Controller."""
     action: Literal["start", "stop", "abort"]
     contexts: TaskContextMap = Field(default_factory=TaskContextMap)
+    session_id: uuid.UUID | None = None
+    """Target session for stop or abort, or None for the current session.
+
+    An ended target succeeds without affecting a later session.
+    """
 
     def active_state(self):
         """Return True if the requested action is 'start', False otherwise."""
         return True if self.action == "start" else False
 
 
+class ProgramActiveStateResponse(BaseModel):
+    """Session selected by a successful start acceptance."""
+
+    session_id: uuid.UUID
+
+
 set_active_state_request = declare_long_request(
     "set_active_state",
     message=ProgramActiveStateRequest,
+    response=ProgramActiveStateResponse,
 )
 """Control the active state of a Program."""
+
+
+class TaskingError(Exception):
+    """Program tasking startup failed or could not be confirmed."""
+
+    def __init__(self, *args, session_id: uuid.UUID):
+        super().__init__(*args)
+        self.session_id = session_id
+        """Server-selected session."""
+
+
+class TaskingStartupFailed(TaskingError):
+    """The program explicitly returned a startup failure for an accepted session."""
+
+
+class ProgramTaskingMonitor:
+    """Observe progress and retain the outcome of one program tasking session.
+
+    Ordered program tasking events associate untagged events with their preceding session.
+    The selected session's fault and ending remain available after its live report is cleared.
+
+    Use a context manager or close the monitor to release observation.
+    """
+
+    def __init__(
+        self,
+        session_id: uuid.UUID,
+        subscription: EventSubscription,
+        initial: ProgramState | None,
+    ):
+        """Take ownership of a subscription and bind it to a known session.
+
+        Closing the monitor closes the subscription.
+
+        Args:
+            session_id: Session identified by the program.
+            subscription: Event subscription opened before the initial state read.
+            initial: Program state observed before selecting the session.
+        """
+        self.session_id = session_id
+        self.loop_state: TaskingLoopState | None = None
+        """Latest progress with the first session fault retained."""
+        self.execution_state: TaskExecutionState | None = None
+        """Controller report for the selected session's execution."""
+        self.ending: ProgramActiveState | None = None
+        """Inactive event ending the selected session."""
+        self._events = subscription.queue
+        self._subscription = subscription
+        self._current: uuid.UUID | None = None
+        self._current_after = 0
+
+        # Seed observation before processing the buffered history.
+        if initial is not None:
+            self._observe(initial.tasking_state)
+
+    @property
+    def fault(self) -> TaskingLoopState | None:
+        """Retained terminal fault, if reported."""
+        state = self.loop_state
+        return state if state is not None and state.fault is not None else None
+
+    def read_events(self):
+        """Process available program events in order."""
+        while not self._events.empty():
+            self._observe(self._events.get_nowait())
+
+    async def wait(self):
+        """Wait for a session fault or ending.
+
+        Cancellation leaves unread events available for cleanup.
+
+        Raises:
+            QueueShutDown: If the monitor is closed first.
+        """
+        self.read_events()
+
+        while self.fault is None and self.ending is None:
+            self._observe(await self._events.get())
+
+    def close(self):
+        """Close observation and wake pending waiters."""
+        self._subscription.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def _observe(self, event: Event):
+        """Update the selected session from one ordered event."""
+        if self.ending is not None:
+            return
+
+        match event:
+            case ProgramTaskingState(loop_state=TaskingLoopState() as state):
+                self._current = state.session_id
+                self._current_after = event.event_id.int
+
+                if state.session_id == self.session_id:
+                    self._report(state, event.execution_state)
+            case ProgramTaskingState() if (
+                self._current == self.session_id and event.event_id.int > self._current_after
+            ):
+                # Keep the final execution report after the live session clears.
+                self.execution_state = event.execution_state
+            case ProgramActiveState(active=True, stopping=False) if (
+                event.event_id.int > self._current_after
+            ):
+                # The next report identifies the newly active session.
+                self._current = None
+                self._current_after = event.event_id.int
+            case ProgramActiveState(active=False) if (
+                self._current == self.session_id and event.event_id.int > self._current_after
+            ):
+                self.ending = event
+
+    def _report(self, state: TaskingLoopState, execution_state: TaskExecutionState | None):
+        if self.fault is None:
+            self.loop_state = state
+
+        self.execution_state = execution_state
+
+
+class ProgramActivation:
+    """Start program tasking or reuse a matching active session.
+
+    Await this object to prepare and send the start request, then receive the session
+    monitor after startup is confirmed. Repeated sends and awaits use the same request.
+
+    Call `prepare()` before checking conditions that must hold at dispatch.
+    Once prepared, `send()` sends the request before its first suspension.
+    """
+
+    def __init__(self, program: ProgramClient, contexts: TaskContextMap):
+        """Create an activation without subscribing or sending a request.
+
+        Args:
+            program: The program to activate.
+            contexts: Task contexts supplied to the program.
+        """
+        self.program = program
+        self.contexts = contexts
+        self.monitor: ProgramTaskingMonitor | None = None
+        """The accepted session's monitor, retained if startup fails or cannot be confirmed."""
+        self._subscription: EventSubscription | None = None
+        self._initial: ProgramState | None = None
+        self._prepared = False
+        self._start: asyncio.Task[ProgramTaskingMonitor] | None = None
+
+    async def prepare(self):
+        """Subscribe to program events and read state without sending the start request.
+
+        If preparation fails or is canceled, it releases its subscription and can be retried.
+
+        Raises:
+            RuntimeError: If preparation is already in progress.
+        """
+        if self._prepared:
+            return
+
+        if self._subscription is not None:
+            raise RuntimeError("Activation is already preparing")
+
+        await self.program.subscribe_events()
+        self._subscription = self.program.get_event_mux().subscribe_all()
+
+        try:
+            # Buffer events received while reading state and starting tasking.
+            with contextlib.suppress(KeyNotFound):
+                self._initial = await self.program.kv_get_model(ProgramState)
+        except BaseException:
+            self._subscription.close()
+            self._subscription = None
+            raise
+
+        self._prepared = True
+
+    async def send(self) -> ProgramTaskingMonitor:
+        """Send the start request and return the session monitor after startup is confirmed.
+
+        Preparation runs automatically if needed. Canceling a waiter leaves the request
+        running. The caller must close the monitor when observation ends.
+
+        Raises:
+            CallRejected: If the program rejects activation.
+            TaskingStartupFailed: If the program explicitly returns a startup failure.
+            TaskingError: If startup cannot be confirmed after acceptance.
+            CallError: If the acceptance response omits the session ID.
+        """
+        if self._start is None:
+            # A prepared request goes out before this call first suspends.
+            self._start = asyncio.eager_task_factory(
+                asyncio.get_running_loop(), self._send_start_request()
+            )
+            self._start.add_done_callback(cleanup_future)
+
+        return await asyncio.shield(self._start)
+
+    def __await__(self) -> Generator[Any, None, ProgramTaskingMonitor]:
+        return self.send().__await__()
+
+    def close(self):
+        """Release the event subscription without stopping program tasking."""
+        if self.monitor is not None:
+            self.monitor.close()
+        elif self._subscription is not None:
+            self._subscription.close()
+
+    async def _send_start_request(self) -> ProgramTaskingMonitor:
+        await self.prepare()
+
+        call = self.program.call(
+            set_active_state_request,
+            ProgramActiveStateRequest(action="start", contexts=self.contexts),
+        )
+
+        try:
+            response = await call.invoke()
+
+            if response is None:
+                raise CallError(f"{self.program.entity} accepted tasking without a session")
+        except BaseException:
+            self._subscription.close()
+            raise
+
+        self.monitor = ProgramTaskingMonitor(response.session_id, self._subscription, self._initial)
+
+        try:
+            await call
+        except CallError as e:
+            raise TaskingStartupFailed(
+                f"{self.program.entity} failed to start tasking ({e})",
+                session_id=response.session_id,
+            ) from e
+        except Exception as e:
+            raise TaskingError(
+                f"{self.program.entity} did not confirm tasking ({e})",
+                session_id=response.session_id,
+            ) from e
+
+        return self.monitor
 
 
 class ProgramClient(EntityClient):
@@ -167,33 +447,43 @@ class ProgramClient(EntityClient):
             )
         )
 
-    async def start_tasking(self, contexts: TaskContextMap | None = None):
-        """Request that the Program begin tasking the target Controller."""
-        await self.call(
-            set_active_state_request,
-            ProgramActiveStateRequest(action="start", contexts=contexts or TaskContextMap()),
-        )
+    def start_tasking(self, contexts: TaskContextMap | None = None) -> ProgramActivation:
+        """Create an awaitable request to start or reuse program tasking.
 
-    async def stop_tasking(self):
+        Await it to receive the accepted session's monitor after startup is confirmed.
+        A matching active session keeps its identity and current execution.
+
+        Args:
+            contexts: Task contexts supplied to the program.
+        """
+        return ProgramActivation(self, contexts or TaskContextMap())
+
+    async def stop_tasking(self, session_id: uuid.UUID | None = None):
         """Stop producing tasks and wait for the program's current controller task to end.
 
+        Args:
+            session_id: The session to stop, or None for the current session.
+
         Raises:
             CallError: If the program cannot confirm that its controller task ended.
         """
         await self.call(
             set_active_state_request,
-            ProgramActiveStateRequest(action="stop"),
+            ProgramActiveStateRequest(action="stop", session_id=session_id),
         )
 
-    async def abort_tasking(self):
+    async def abort_tasking(self, session_id: uuid.UUID | None = None):
         """Stop producing tasks, abort the program's current controller task, and await its end.
+
+        Args:
+            session_id: The session to abort, or None for the current session.
 
         Raises:
             CallError: If the program cannot confirm that its controller task ended.
         """
         await self.call(
             set_active_state_request,
-            ProgramActiveStateRequest(action="abort"),
+            ProgramActiveStateRequest(action="abort", session_id=session_id),
         )
 
     async def wait_until_tasking_stops(self):

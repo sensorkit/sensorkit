@@ -632,7 +632,8 @@ async def test_matching_tasking_is_adopted(kit, service_context, controller, ini
 
     program = await register_program(kit, service_context, "prog1", ran)
     await controller.set_internal_state(OPERATE)
-    await program.start_tasking()
+    tasking = await program.start_tasking()
+    tasking.close()
 
     async with asyncio.timeout(5.0):
         await collect_started.wait()
@@ -643,9 +644,11 @@ async def test_matching_tasking_is_adopted(kit, service_context, controller, ini
 
         await until(lambda: lifecycle.step == LifecycleStep.TASKING)
         await asyncio.sleep(0.2)
+        state = await program.kv_get_model(ProgramState)
 
         assert not collect_aborted.is_set()
         assert ran == ["prog1"]
+        assert state.tasking_state.loop_state.session_id == tasking.session_id
 
         # Ending the adopted tasking aborts its running collect.
         lifecycle.set_demand_state(STANDBY, interrupt=True)
@@ -682,7 +685,13 @@ async def test_other_tasking_is_aborted(kit, service_context, controller, inits,
             raise
 
     program = await register_program(kit, service_context, "prog1")
-    await program.start_tasking()
+
+    # Establish OPERATE with a lifecycle context that differs from demand.
+    other = KeywordDict()
+    other.set_value("dome", "closed")
+    await controller.set_internal_state(OPERATE, context=other)
+    (await program.start_tasking()).close()
+    await until(lambda: collects == 1)
 
     async with started(ControllerLifecycle(), kit) as lifecycle:
         lifecycle.enable()

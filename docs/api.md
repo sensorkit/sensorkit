@@ -250,7 +250,35 @@ Adds:
 
 ### `ProgramClient`
 
-Adds: `enable(target_controller)` / `disable()`, `start_tasking(contexts=None)`, `stop_tasking()` (graceful), `abort_tasking()` (immediate), `wait_until_tasking_stops()`, and `tasking_change_events()`. The agent is the usual caller of these; the CLI and your own tooling can use them too.
+Adds: `enable(target_controller)` / `disable()`, `start_tasking(contexts=None)`, `stop_tasking(session_id=None)` (graceful), `abort_tasking(session_id=None)` (immediate), `wait_until_tasking_stops()`, and `tasking_change_events()`. The agent is the usual caller of these; the CLI and your own tooling can use them too.
+
+`start_tasking()` creates a `ProgramActivation` without sending a request.
+Await it to send the request and receive a `ProgramTaskingMonitor` after startup is confirmed.
+If the requested contexts match active tasking, activation returns a monitor for that existing session.
+
+```python
+monitor = await program.start_tasking(contexts)
+```
+
+To check demand immediately before dispatch, finish preparation before calling `send()`.
+Once prepared, `send()` sends the start request before its first suspension.
+
+```python
+activation = program.start_tasking(contexts)
+await activation.prepare()
+check_demand()
+monitor = await activation.send()
+```
+
+Repeated calls to `send()` and repeated awaits use the same start request.
+Canceling a waiter leaves that request running.
+If startup fails after acceptance, `activation.monitor` retains the accepted session's monitor.
+
+Close the monitor or activation when observation ends, or use the monitor as a context manager.
+Closing either releases the event subscription without stopping tasking.
+The monitor retains the session's first fault and the event that marks it inactive.
+Pass `monitor.session_id` to `stop_tasking()` or `abort_tasking()` to stop that session.
+A request for an ended session succeeds without stopping a later session.
 
 ---
 

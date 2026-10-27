@@ -24,7 +24,7 @@ from sensorkit.backend.request import Call
 from sensorkit.core.controller import ControllerState
 from sensorkit.core.device import DeviceState
 from sensorkit.core.entity import DeviceDetails, EntityInfo
-from sensorkit.core.program import ProgramState
+from sensorkit.core.program import ProgramState, TaskingError, TaskingStartupFailed
 from sensorkit.webapi.forwarder import (
     Forwarder,
     KeyValueForwarder,
@@ -115,6 +115,17 @@ def _error_handler():
         raise HTTPException(status_code=503, detail="Endpoint unavailable") from err
     except BackendError as err:
         raise HTTPException(status_code=503, detail="Backend not available") from err
+    except TaskingStartupFailed as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    except TaskingError as err:
+        match err.__cause__:
+            case TimeoutError():
+                raise HTTPException(status_code=504, detail="Request timed out") from err
+            case _:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Program tasking startup could not be confirmed",
+                ) from err
     except sk.CallError as err:
         raise HTTPException(status_code=409, detail=str(err)) from err
     except TimeoutError as err:
@@ -526,7 +537,12 @@ class WebAPI:
         async def activate_program(program_id: str):
             """Start tasking for a program."""
             with _error_handler():
-                await self.kit.program(program_id).start_tasking()
+                activation = self.kit.program(program_id).start_tasking()
+
+                try:
+                    await activation
+                finally:
+                    activation.close()
 
             return _status_ok()
 

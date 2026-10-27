@@ -7,12 +7,15 @@ from _contextvars import ContextVar
 from datetime import datetime
 from typing import Any, Callable, ClassVar, override
 
+import uuid_utils.compat as uuid
 from intervaltree import IntervalTree
 from loguru import logger
 
 from sensorkit.backend.base import Entity, KVError
 from sensorkit.backend.event import Event
 from sensorkit.backend.request import CallContext
+from sensorkit.common.aio import scoped_waiter
+from sensorkit.core.controller import TaskExecutionState
 from sensorkit.core.entity import EntityDetails, EntityInfo
 from sensorkit.core.executor import TaskFactoryFunc, TaskingLoop, TaskOutcomeUnknown
 from sensorkit.core.impl.entity import EntityImpl
@@ -20,16 +23,18 @@ from sensorkit.core.program import (
     OfferInterval,
     ProgramActiveState,
     ProgramActiveStateRequest,
+    ProgramActiveStateResponse,
     ProgramEnableState,
     ProgramEnableStateRequest,
     ProgramInterface,
     ProgramOffering,
     ProgramState,
     ProgramTaskingState,
+    TaskingLoopState,
     set_active_state_request,
     set_enable_state_request,
 )
-from sensorkit.core.task import TaskContextMap, TaskExecution
+from sensorkit.core.task import TaskContextMap
 
 
 class ProgramOffers:
@@ -124,6 +129,13 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             logger.debug("initializing program state")
             await self.kv_put_model(self._state)
 
+        if self._state.tasking_state.loop_state is not None:
+            # A restarted program has no live tasking session.
+            await self._update_state(
+                "tasking_state",
+                ProgramTaskingState(execution_state=self._state.tasking_state.execution_state),
+            )
+
         if self._state.active_state.active:
             # Our last known state was tasking. We aren't going to automatically start tasking,
             # but we can emit an event indicating the previous tasking state stopped, giving
@@ -157,14 +169,21 @@ class ProgramImpl(EntityImpl, ProgramInterface):
         self._task_factory = func
         return func
 
-    async def _start_loop(self, contexts: TaskContextMap):
+    async def _start_loop(
+        self, contexts: TaskContextMap, call: CallContext[None, ProgramActiveStateResponse]
+    ):
         logger.debug(f"starting tasking loop with {contexts=}")
+        reported = asyncio.Event()
 
-        async def _on_task_change(execution: TaskExecution | None):
-            # Publish the program's current tasking state as the loop starts/finishes each task.
+        async def _on_tasking_change(
+            loop_state: TaskingLoopState, execution_state: TaskExecutionState | None
+        ):
             await self._update_state(
-                "tasking_state", ProgramTaskingState(executing_task=execution)
+                "tasking_state",
+                ProgramTaskingState(loop_state=loop_state, execution_state=execution_state),
+                loop=loop,
             )
+            reported.set()
 
         # Create the tasking loop.
         self._task_loop = TaskingLoop(
@@ -174,9 +193,12 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             factory_func=self._task_factory,
             contexts=contexts,
             task_group=self.task_group,
-            on_task_change=_on_task_change,
+            on_tasking_change=_on_tasking_change,
         )
         loop = self._task_loop
+
+        # Return identity before starting work that can finish immediately.
+        call.accept(response=ProgramActiveStateResponse(session_id=loop.loop_state.session_id))
 
         # Create the finalizer before starting task production so even an immediate exit is handled.
         # Release it after publishing the active state to keep state events in order.
@@ -191,14 +213,15 @@ class ProgramImpl(EntityImpl, ProgramInterface):
 
             await loop.finalize()
 
-            # Failure or abort may leave a published execution after task production ends.
-            if self._state.tasking_state.executing_task is not None:
-                await self._update_state("tasking_state", ProgramTaskingState())
+            # Retain the final execution report when clearing the session.
+            await self._update_state(
+                "tasking_state", ProgramTaskingState(execution_state=loop.execution_state)
+            )
 
             await self._update_state(
                 "active_state",
                 ProgramActiveState(active=False, origin="request")
-                if loop.stop_requested
+                if loop.stop_requested and loop.loop_state.fault is None
                 else ProgramActiveState(active=False, origin="error"),
             )
             logger.info(f"Tasking loop exiting by {self._state.active_state.origin}")
@@ -208,18 +231,27 @@ class ProgramImpl(EntityImpl, ProgramInterface):
 
         self._task_finalizer = self.task_group.create_task(_finalize_loop())
 
-        # Publish the active state before allowing the finalizer to publish the inactive state.
-        with self.enter_context():
-            logger.info("Starting tasking loop")
-            aio_task = self._task_loop.start()
+        # Active state precedes the session report that identifies its owner.
+        try:
+            await self._update_state(
+                "active_state",
+                ProgramActiveState(active=True, origin="request", contexts=contexts),
+            )
+        except BaseException:
+            loop.request_stop(abort=True)
+            raise
+        finally:
+            with self.enter_context():
+                logger.info("Starting tasking loop")
+                aio_task = loop.start()
 
-        await self._update_state(
-            "active_state",
-            ProgramActiveState(active=True, origin="request", contexts=contexts),
-        )
+            queue.put_nowait(aio_task)
 
-        # Tell the finalizer about the loop task.
-        queue.put_nowait(aio_task)
+        async with scoped_waiter(reported.wait()) as publication:
+            await asyncio.wait((publication, aio_task), return_when=asyncio.FIRST_COMPLETED)
+
+        if not reported.is_set():
+            raise TaskOutcomeUnknown("Tasking ended before publishing its session")
 
     async def _stop_loop(self, loop: TaskingLoop | None, *, abort: bool = False):
         if loop is None or self._task_loop is not loop:
@@ -280,10 +312,19 @@ class ProgramImpl(EntityImpl, ProgramInterface):
                 # Call the disable hook.
                 await self._call_with_context(self._disable_hooks)
 
+    def _targeted_loop(self, session_id: uuid.UUID | None) -> TaskingLoop | None:
+        """Select the current loop only when it matches the requested target."""
+        loop = self._task_loop
+
+        if loop is None or session_id in (None, loop.loop_state.session_id):
+            return loop
+
+        return None
+
     async def _set_active_state(
         self,
         request: ProgramActiveStateRequest,
-        call: CallContext[None],
+        call: CallContext[None, ProgramActiveStateResponse],
     ):
         with self.enter_context():
             logger.info(f"Requested to {request.action} the tasking loop")
@@ -298,7 +339,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
 
             return
 
-        loop = self._task_loop
+        loop = self._targeted_loop(request.session_id)
         call.accept()
 
         try:
@@ -320,7 +361,11 @@ class ProgramImpl(EntityImpl, ProgramInterface):
         else:
             await call.succeed(result=None)
 
-    async def _start_tasking(self, request: ProgramActiveStateRequest, call: CallContext[None]):
+    async def _start_tasking(
+        self,
+        request: ProgramActiveStateRequest,
+        call: CallContext[None, ProgramActiveStateResponse],
+    ):
         loop = self._task_loop
         finalizer = self._task_finalizer
 
@@ -344,12 +389,16 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             call.reject(reason="Program is already active with different contexts")
             return
 
-        call.accept()
+        if self._state.active_state.active:
+            # Idempotent activation keeps the existing session.
+            session = self._task_loop.loop_state.session_id
+            call.accept(response=ProgramActiveStateResponse(session_id=session))
+            await call.succeed(result=None)
+            return
 
         try:
-            if not self._state.active_state.active:
-                with self.enter_context():
-                    await self._start_loop(request.contexts)
+            with self.enter_context():
+                await self._start_loop(request.contexts, call)
         except Exception as e:
             with self.enter_context():
                 logger.exception("Error setting active state")

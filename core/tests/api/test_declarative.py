@@ -36,6 +36,7 @@ from sensorkit.backend.request import (
     declare_long_request,
     declare_request,
 )
+from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.impl.device import DeviceImpl
@@ -508,7 +509,8 @@ async def test_declared_program():
         await cli.enable("test_controller")
         await enable_done.wait()
         assert not task_factory_called.is_set() and not disable_done.is_set()
-        await cli.start_tasking()
+        await ctrl.impl.set_internal_state(InternalControllerState.OPERATE)
+        (await cli.start_tasking()).close()
         await task_factory_called.wait()
         assert not disable_done.is_set()
         await cli.disable()

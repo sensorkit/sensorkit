@@ -225,6 +225,7 @@ async def tasking(kit, service_context):
         yield CollectTask()
 
     await kit.controller("ctrl1").enable()
+    await controller.set_internal_state(OPERATE)
     await kit.program("prog1").enable("ctrl1")
 
     try:

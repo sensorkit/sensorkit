@@ -11,8 +11,10 @@ import pytest_asyncio
 import uuid_utils.compat as uuid
 from pydantic import BaseModel, TypeAdapter
 
-from sensorkit.backend.request import CallContext, declare_long_request, declare_request
+from sensorkit.backend.request import CallContext, CallEvent, declare_long_request, declare_request
+from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.device import Abort
+from sensorkit.core.program import ProgramActiveStateResponse, set_active_state_request
 from sensorkit.core.task import CollectTask, InitTask, TaskExecution
 from sensorkit.webapi.fastapi import WebAPI, WebAPIConfig
 from sensorkit.webapi.forwarder import SKRecord
@@ -506,6 +508,7 @@ async def test_activate_deactivate_program(webapi_setup):
 
     await client.post("/program/myprogram/enable?controller_id=mycontroller")
     await kit.controller("mycontroller").enable()
+    await controller.set_internal_state(InternalControllerState.OPERATE)
 
     resp = await client.post("/program/myprogram/activate")
     assert resp.status_code == 200
@@ -517,6 +520,58 @@ async def test_activate_deactivate_program(webapi_setup):
     resp = await client.post("/program/myprogram/deactivate")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "status", "detail"),
+    [
+        ("startup", 409, "Startup failed"),
+        ("timeout", 504, "Request timed out"),
+        ("invalid_progress", 503, "Program tasking startup could not be confirmed"),
+    ],
+)
+async def test_activation_errors_return_http_status(webapi_setup, entity_impl, failure, status, detail):
+    """Program startup errors return diagnostic HTTP responses and release event subscriptions."""
+    kit, _, _, _, _, _, client = webapi_setup
+    event_mux = kit.program(entity_impl.entity).get_event_mux()
+    subscriptions = event_mux._all_queues.copy()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def start(msg, call):
+        call.accept(response=ProgramActiveStateResponse(session_id=uuid.uuid7()))
+
+        try:
+            match failure:
+                case "startup":
+                    await call.fail("Startup failed")
+                    return
+                case "timeout":
+                    await call.progress(0.05)
+                case "invalid_progress":
+                    # A running update without a deadline cannot confirm startup.
+                    await entity_impl.emit_event(CallEvent(call_id=call.call_id, good_until=None))
+
+            await release.wait()
+            await call.succeed(result=None)
+        finally:
+            finished.set()
+
+    await entity_impl.handle_request(set_active_state_request, start)
+
+    try:
+        async with asyncio.timeout(5.0):
+            response = await client.post(f"/program/{entity_impl.entity}/activate")
+
+        assert response.status_code == status
+        assert detail in response.json()["detail"]
+        assert event_mux._all_queues == subscriptions
+    finally:
+        release.set()
+
+        async with asyncio.timeout(5.0):
+            await finished.wait()
 
 
 # ---------------------------------------------------------------------------
