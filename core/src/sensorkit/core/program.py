@@ -6,7 +6,7 @@ import collections
 import contextlib
 import functools
 from abc import abstractmethod
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Generator
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
@@ -16,7 +16,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, model_validator
 
 from sensorkit.backend.base import KeyNotFound
-from sensorkit.backend.event import Event, EventSubscription
+from sensorkit.backend.event import Event
 from sensorkit.backend.request import CallError, declare_long_request, declare_request
 from sensorkit.common.aio import AsyncObserver, cleanup_future
 from sensorkit.common.keyword import declare_keyword
@@ -201,39 +201,58 @@ class ProgramTaskingMonitor:
     Ordered program tasking events associate untagged events with their preceding session.
     The selected session's fault and ending remain available after its live report is cleared.
 
+    Construction starts buffering events. Bind to the accepted session before consuming them.
     Use a context manager or close the monitor to release observation.
     """
 
-    def __init__(
-        self,
-        session_id: uuid.UUID,
-        subscription: EventSubscription,
-        initial: ProgramState | None,
-    ):
-        """Take ownership of a subscription and bind it to a known session.
-
-        Closing the monitor closes the subscription.
+    def __init__(self, program: ProgramClient):
+        """Buffer program events before reading initial state or starting tasking.
 
         Args:
-            session_id: Session identified by the program.
-            subscription: Event subscription opened before the initial state read.
-            initial: Program state observed before selecting the session.
+            program: Program with an active event subscription.
         """
-        self.session_id = session_id
+        self._session_id: uuid.UUID | None = None
         self.loop_state: TaskingLoopState | None = None
         """Latest progress with the first session fault retained."""
         self.execution_state: TaskExecutionState | None = None
         """Controller report for the selected session's execution."""
         self.ending: ProgramActiveState | None = None
         """Inactive event ending the selected session."""
-        self._events = subscription.queue
-        self._subscription = subscription
+        self._subscription = program.get_event_mux().subscribe(
+            ProgramTaskingState, ProgramActiveState
+        )
         self._current: uuid.UUID | None = None
         self._current_after = 0
 
-        # Seed observation before processing the buffered history.
+    def bind(self, session_id: uuid.UUID, initial: ProgramState | None = None):
+        """Select a session and seed observation before processing buffered events.
+
+        Args:
+            session_id: Session identified by the program.
+            initial: Program state observed before starting tasking.
+
+        Raises:
+            RuntimeError: If the monitor is already bound.
+        """
+        if self._session_id is not None:
+            raise RuntimeError("Program tasking monitor is already bound")
+
+        self._session_id = session_id
+
         if initial is not None:
             self._observe(initial.tasking_state)
+
+    @property
+    def session_id(self) -> uuid.UUID:
+        """The selected session.
+
+        Raises:
+            RuntimeError: If the monitor is not bound.
+        """
+        if self._session_id is None:
+            raise RuntimeError("Program tasking monitor is not bound")
+
+        return self._session_id
 
     @property
     def fault(self) -> TaskingLoopState | None:
@@ -241,10 +260,47 @@ class ProgramTaskingMonitor:
         state = self.loop_state
         return state if state is not None and state.fault is not None else None
 
-    def read_events(self):
-        """Process available program events in order."""
-        while not self._events.empty():
-            self._observe(self._events.get_nowait())
+    def read_events(self) -> list[ProgramTaskingState]:
+        """Process buffered events and return the selected session's tasking states.
+
+        Raises:
+            RuntimeError: If the monitor is not bound.
+        """
+        if self._session_id is None:
+            raise RuntimeError("Program tasking monitor is not bound")
+
+        states = []
+
+        for event in self._subscription.drain():
+            if (state := self._observe(event)) is not None:
+                states.append(state)
+
+        return states
+
+    async def events(self) -> AsyncIterator[ProgramTaskingState]:
+        """Yield selected-session tasking states until a fault or ending is observed.
+
+        Consume with one iterator or waiter at a time. Cancellation leaves unread events
+        available for cleanup. Initial snapshot state is not yielded.
+
+        Raises:
+            RuntimeError: If the monitor is not bound.
+            QueueShutDown: If observation closes before a session outcome is known.
+        """
+        if self._session_id is None:
+            raise RuntimeError("Program tasking monitor is not bound")
+
+        if self.fault is not None or self.ending is not None:
+            return
+
+        async for event in self._subscription:
+            if (state := self._observe(event)) is not None:
+                yield state
+
+            if self.fault is not None or self.ending is not None:
+                return
+
+        raise asyncio.QueueShutDown("Program tasking monitor closed before its outcome")
 
     async def wait(self):
         """Wait for a session fault or ending.
@@ -252,12 +308,11 @@ class ProgramTaskingMonitor:
         Cancellation leaves unread events available for cleanup.
 
         Raises:
+            RuntimeError: If the monitor is not bound.
             QueueShutDown: If the monitor is closed first.
         """
-        self.read_events()
-
-        while self.fault is None and self.ending is None:
-            self._observe(await self._events.get())
+        async for _ in self.events():
+            pass
 
     def close(self):
         """Close observation and wake pending waiters."""
@@ -269,7 +324,7 @@ class ProgramTaskingMonitor:
     def __exit__(self, *_):
         self.close()
 
-    def _observe(self, event: Event):
+    def _observe(self, event: Event) -> ProgramTaskingState | None:
         """Update the selected session from one ordered event."""
         if self.ending is not None:
             return
@@ -281,11 +336,13 @@ class ProgramTaskingMonitor:
 
                 if state.session_id == self.session_id:
                     self._report(state, event.execution_state)
+                    return event
             case ProgramTaskingState() if (
                 self._current == self.session_id and event.event_id.int > self._current_after
             ):
                 # Keep the final execution report after the live session clears.
                 self.execution_state = event.execution_state
+                return event
             case ProgramActiveState(active=True, stopping=False) if (
                 event.event_id.int > self._current_after
             ):
@@ -325,7 +382,7 @@ class ProgramActivation:
         self.contexts = contexts
         self.monitor: ProgramTaskingMonitor | None = None
         """The accepted session's monitor, retained if startup fails or cannot be confirmed."""
-        self._subscription: EventSubscription | None = None
+        self._monitor: ProgramTaskingMonitor | None = None
         self._initial: ProgramState | None = None
         self._prepared = False
         self._start: asyncio.Task[ProgramTaskingMonitor] | None = None
@@ -341,19 +398,19 @@ class ProgramActivation:
         if self._prepared:
             return
 
-        if self._subscription is not None:
+        if self._monitor is not None:
             raise RuntimeError("Activation is already preparing")
 
         await self.program.subscribe_events()
-        self._subscription = self.program.get_event_mux().subscribe_all()
+        self._monitor = ProgramTaskingMonitor(self.program)
 
         try:
             # Buffer events received while reading state and starting tasking.
             with contextlib.suppress(KeyNotFound):
                 self._initial = await self.program.kv_get_model(ProgramState)
         except BaseException:
-            self._subscription.close()
-            self._subscription = None
+            self._monitor.close()
+            self._monitor = None
             raise
 
         self._prepared = True
@@ -384,10 +441,8 @@ class ProgramActivation:
 
     def close(self):
         """Release the event subscription without stopping program tasking."""
-        if self.monitor is not None:
-            self.monitor.close()
-        elif self._subscription is not None:
-            self._subscription.close()
+        if self._monitor is not None:
+            self._monitor.close()
 
     async def _send_start_request(self) -> ProgramTaskingMonitor:
         await self.prepare()
@@ -403,10 +458,11 @@ class ProgramActivation:
             if response is None:
                 raise CallError(f"{self.program.entity} accepted tasking without a session")
         except BaseException:
-            self._subscription.close()
+            self._monitor.close()
             raise
 
-        self.monitor = ProgramTaskingMonitor(response.session_id, self._subscription, self._initial)
+        self._monitor.bind(response.session_id, self._initial)
+        self.monitor = self._monitor
 
         try:
             await call

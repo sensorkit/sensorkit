@@ -15,6 +15,7 @@ from sensorkit.core.controller import (
     ControllerState,
     ExecuteRequestMessage,
     ExecuteResponseMessage,
+    ExecutionStateStream,
     InternalControllerState,
     abort_task_request,
     execute_task_request,
@@ -103,6 +104,38 @@ async def test_call_yields_its_execution_states(kit, controller_impl):
 
     assert [state.execution.task_id for state in states] == [execution.task_id] * 2
     assert states[0].executing and states[0].finished is None
+    assert states[-1].finished is not None
+
+
+@pytest.mark.asyncio
+async def test_execution_stream_binds_once_after_buffering(kit, controller_impl):
+    @controller_impl.task_handler(InitTask)
+    async def init(task):
+        pass
+
+    client = await subscribed(kit.controller(controller_impl.entity))
+    stream = ExecutionStateStream(client)
+
+    try:
+        with pytest.raises(RuntimeError, match="not bound"):
+            await anext(aiter(stream))
+
+        call = TaskCall(client, InitTask())
+        async with following(call), asyncio.timeout(5.0):
+            execution = await call.send()
+            await call.future()
+
+        stream.bind(execution)
+        with pytest.raises(RuntimeError, match="already bound"):
+            stream.bind(execution)
+
+        stream.close()
+        states = [state async for state in stream]
+    finally:
+        stream.close()
+
+    assert [state.execution.task_id for state in states] == [execution.task_id] * 2
+    assert states[0].executing
     assert states[-1].finished is not None
 
 

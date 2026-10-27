@@ -112,6 +112,62 @@ async def test_event_multiplexer_all_events():
 
 
 @pytest.mark.asyncio
+async def test_selected_subscription_keeps_cross_type_order():
+    mux = EventMultiplexer()
+    first = SampleEvent1(value=1)
+    second = SampleEvent2(name="second")
+    ignored = SampleEvent3(flag=True)
+    last = SampleEvent1(value=2)
+
+    with mux.subscribe(SampleEvent1, SampleEvent2, SampleEvent1) as subscription:
+        for event in (first, second, ignored, last):
+            await mux.parse_event(event.model_dump_json().encode())
+
+        assert subscription.drain() == [first, second, last]
+        assert subscription.drain() == []
+
+
+@pytest.mark.asyncio
+async def test_selected_subscription_close_preserves_only_queued_events():
+    mux = EventMultiplexer()
+    subscription = mux.subscribe(SampleEvent1, SampleEvent2)
+    first = SampleEvent1(value=1)
+    second = SampleEvent2(name="second")
+
+    with mux.subscribe(SampleEvent2) as other:
+        for event in (first, second):
+            await mux.parse_event(event.model_dump_json().encode())
+
+        subscription.close()
+        subscription.close()
+
+        for event in (first, second):
+            await mux.parse_event(event.model_dump_json().encode())
+
+        assert [event async for event in subscription] == [first, second]
+        assert subscription.drain() == []
+        assert other.drain() == [second, second]
+
+
+@pytest.mark.asyncio
+async def test_canceled_subscription_read_keeps_subscription_open():
+    mux = EventMultiplexer()
+    event = SampleEvent1(value=1)
+
+    with mux.subscribe(SampleEvent1) as subscription:
+        iterator = aiter(subscription)
+        reader = asyncio.create_task(anext(iterator))
+        await asyncio.sleep(0)
+        reader.cancel()
+        await asyncio.wait((reader,))
+
+        assert reader.cancelled()
+
+        await mux.parse_event(event.model_dump_json().encode())
+        assert await anext(aiter(subscription)) == event
+
+
+@pytest.mark.asyncio
 async def test_event_subscription_close_preserves_buffer():
     """Closing preserves ordered events and leaves other subscribers active."""
     mux = EventMultiplexer()
@@ -154,14 +210,18 @@ async def test_event_subscription_context():
 
 
 @pytest.mark.asyncio
-async def test_event_subscription_close_wakes_waiter():
+@pytest.mark.parametrize("iterate", [False, True])
+async def test_event_subscription_close_wakes_waiter(iterate):
     """Closing wakes a reader waiting on an empty queue."""
     mux = EventMultiplexer()
     subscription = mux.subscribe_all()
 
     async def read():
-        with pytest.raises(asyncio.QueueShutDown):
-            await subscription.queue.get()
+        if iterate:
+            assert [event async for event in subscription] == []
+        else:
+            with pytest.raises(asyncio.QueueShutDown):
+                await subscription.queue.get()
 
     async with asyncio.TaskGroup() as tasks:
         waiter = tasks.create_task(read())

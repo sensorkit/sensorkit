@@ -1424,6 +1424,99 @@ async def test_idempotent_start_acknowledges_the_session(kit, service_context, l
 
 
 @pytest.mark.asyncio
+async def test_monitor_binds_once_without_yielding_snapshot(kit, entity_impl):
+    client = kit.program(entity_impl.entity)
+    await client.subscribe_events()
+    selected = TaskingLoopState(session_id=uuid.uuid7(), stage="factory")
+    initial = ProgramState(
+        enable_state=ProgramEnableState(enabled=True, controller="ctrl1"),
+        active_state=ProgramActiveState(active=True, origin="request"),
+        tasking_state=ProgramTaskingState(loop_state=selected),
+    )
+
+    with ProgramTaskingMonitor(client) as monitor:
+        with pytest.raises(RuntimeError, match="not bound"):
+            monitor.read_events()
+        with pytest.raises(RuntimeError, match="not bound"):
+            await anext(monitor.events())
+        with pytest.raises(RuntimeError, match="not bound"):
+            _ = monitor.session_id
+
+        monitor.bind(selected.session_id, initial)
+
+        assert monitor.session_id == selected.session_id
+        assert monitor.loop_state == selected
+        assert monitor.read_events() == []
+
+        with pytest.raises(RuntimeError, match="already bound"):
+            monitor.bind(uuid.uuid7())
+
+        monitor.close()
+        with pytest.raises(asyncio.QueueShutDown):
+            await anext(monitor.events())
+
+
+@pytest.mark.asyncio
+async def test_monitor_iteration_retains_buffered_cleanup_events(kit, entity_impl):
+    selected = TaskingLoopState(session_id=uuid.uuid7(), stage="factory")
+    first = ProgramTaskingState(loop_state=selected)
+    fault = ProgramTaskingState(
+        loop_state=selected.model_copy(update={"fault": "program", "error": "fault"})
+    )
+    clear = ProgramTaskingState()
+
+    async def start(msg, call):
+        call.accept(response=ProgramActiveStateResponse(session_id=selected.session_id))
+        await entity_impl.emit_event(ProgramActiveState(active=True, origin="request"))
+        for event in (first, fault, clear):
+            await entity_impl.emit_event(event)
+        await entity_impl.emit_event(ProgramActiveState(active=False, origin="error"))
+        await call.succeed(result=None)
+
+    await entity_impl.handle_request(set_active_state_request, start)
+
+    async with asyncio.timeout(5.0):
+        with await kit.program(entity_impl.entity).start_tasking() as monitor:
+            assert [state async for state in monitor.events()] == [first, fault]
+            assert monitor.fault == fault.loop_state
+            assert monitor.ending is None
+
+            assert monitor.read_events() == [clear]
+            assert monitor.ending.origin == "error"
+            assert monitor.read_events() == []
+            assert [state async for state in monitor.events()] == []
+
+
+@pytest.mark.asyncio
+async def test_monitor_iteration_keeps_session_end_order(kit, entity_impl):
+    selected = TaskingLoopState(session_id=uuid.uuid7(), stage="factory")
+    replacement = TaskingLoopState(session_id=uuid.uuid7(), stage="factory")
+    first = ProgramTaskingState(loop_state=selected)
+    clear = ProgramTaskingState()
+
+    async def start(msg, call):
+        call.accept(response=ProgramActiveStateResponse(session_id=selected.session_id))
+        for event in (
+            first,
+            clear,
+            ProgramActiveState(active=False, origin="request"),
+            ProgramTaskingState(loop_state=replacement),
+        ):
+            await entity_impl.emit_event(event)
+        await call.succeed(result=None)
+
+    await entity_impl.handle_request(set_active_state_request, start)
+
+    async with asyncio.timeout(5.0):
+        with await kit.program(entity_impl.entity).start_tasking() as monitor:
+            assert [state async for state in monitor.events()] == [first, clear]
+            assert monitor.ending.origin == "request"
+            assert monitor.loop_state == selected
+            assert monitor.fault is None
+            assert monitor.read_events() == []
+
+
+@pytest.mark.asyncio
 async def test_monitor_ignores_other_sessions(kit, entity_impl, until):
     """Unrelated session history does not change the selected outcome."""
     earlier = TaskingLoopState(session_id=uuid.uuid7(), stage="factory")

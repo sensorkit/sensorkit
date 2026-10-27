@@ -277,6 +277,17 @@ If startup fails after acceptance, `activation.monitor` retains the accepted ses
 Close the monitor or activation when observation ends, or use the monitor as a context manager.
 Closing either releases the event subscription without stopping tasking.
 The monitor retains the session's first fault and the event that marks it inactive.
+Use `monitor.events()` to iterate its session's `ProgramTaskingState` events in order.
+Iteration ends when a fault or inactive state is observed.
+The initial snapshot is available through the monitor's properties and is not yielded.
+`monitor.read_events()` processes buffered events immediately and returns the selected session's tasking states.
+Use one iterator or waiter at a time, and drain buffered events after that consumer stops.
+Cancellation leaves unread events available for cleanup.
+
+Constructing `ProgramTaskingMonitor(program)` directly starts buffering events.
+Call `bind(session_id, initial=None)` before consuming them.
+Activation performs construction and binding automatically.
+
 Pass `monitor.session_id` to `stop_tasking()` or `abort_tasking()` to stop that session.
 A request for an ended session succeeds without stopping a later session.
 

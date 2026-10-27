@@ -5,7 +5,8 @@ import asyncio
 import collections
 import contextlib
 import itertools
-from typing import TYPE_CHECKING, ClassVar, override
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, ClassVar, Unpack, override
 
 import uuid_utils.compat as uuid
 from loguru import logger
@@ -45,17 +46,44 @@ class UnknownEvent(Event, extra="allow"):
 
 
 class EventSubscription:
-    """Own an event queue and its registration."""
+    """Own one ordered event queue and its registrations.
 
-    def __init__(self, subscribers: set[asyncio.Queue[Event]]):
+    Closing preserves buffered events for iteration or draining. Canceling an iterator leaves
+    the subscription open. Multiple consumers share the queue.
+    """
+
+    def __init__(self, *subscriber_sets: set[asyncio.Queue[Event]]):
         self.queue: asyncio.Queue[Event] = asyncio.Queue()
-        self._subscribers = subscribers
-        subscribers.add(self.queue)
+        self._subscriber_sets = subscriber_sets
+
+        for subscribers in subscriber_sets:
+            subscribers.add(self.queue)
 
     def close(self):
         """Unsubscribe and wake waiters, preserving queued events."""
-        self._subscribers.discard(self.queue)
+        for subscribers in self._subscriber_sets:
+            subscribers.discard(self.queue)
+
         self.queue.shutdown()
+
+    async def __aiter__(self) -> AsyncIterator[Event]:
+        """Yield events in arrival order until the subscription is closed and drained."""
+        while True:
+            try:
+                event = await self.queue.get()
+            except asyncio.QueueShutDown:
+                return
+            yield event
+
+    def drain(self) -> list[Event]:
+        """Remove and return all buffered events in arrival order."""
+        events = []
+
+        while True:
+            try:
+                events.append(self.queue.get_nowait())
+            except (asyncio.QueueEmpty, asyncio.QueueShutDown):
+                return events
 
     def __enter__(self):
         return self
@@ -96,6 +124,15 @@ class EventMultiplexer:
     def subscribe_all(self) -> EventSubscription:
         """Subscribe to all events until the subscription is closed."""
         return EventSubscription(self._all_queues)
+
+    def subscribe(
+        self,
+        *event_types: Unpack[tuple[type[Event], *tuple[type[Event], ...]]],
+    ) -> EventSubscription:
+        """Subscribe to one or more event types through one ordered queue."""
+        return EventSubscription(
+            *(self._single_queues[event_type.model_tag()] for event_type in event_types)
+        )
 
     @contextlib.contextmanager
     def event_queue(self, event: type[Event]):

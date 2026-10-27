@@ -389,19 +389,22 @@ class ExecutionStateStream:
     def __init__(self, controller: ControllerClient):
         self.execution: TaskExecution | None = None
         """The execution whose state events are yielded."""
-        self._subscription = contextlib.ExitStack()
-        self._states = self._subscription.enter_context(
-            controller.get_event_mux().event_queue(TaskExecutionState)
-        )
+        self._subscription = controller.get_event_mux().subscribe(TaskExecutionState)
 
     def bind(self, execution: TaskExecution):
-        """Select the execution whose state events are yielded."""
+        """Select the execution whose state events are yielded.
+
+        Raises:
+            RuntimeError: If the stream is already bound.
+        """
+        if self.execution is not None:
+            raise RuntimeError("Execution state stream is already bound")
+
         self.execution = execution
 
     def close(self):
         """Stop receiving state events, leaving buffered events readable."""
         self._subscription.close()
-        self._states.shutdown()
 
     async def __aiter__(self) -> AsyncIterator[TaskExecutionState]:
         """Yield state events for the bound execution.
@@ -414,14 +417,12 @@ class ExecutionStateStream:
 
         task_id = self.execution.task_id
 
-        while True:
-            try:
-                state = await self._states.get()
-            except asyncio.QueueShutDown:
-                return
-
-            if state.execution is not None and state.execution.task_id == task_id:
-                yield state
+        async for state in self._subscription:
+            match state:
+                case TaskExecutionState(execution=execution) if (
+                    execution is not None and execution.task_id == task_id
+                ):
+                    yield state
 
 
 class ControllerRef(EntityRef[ControllerClient]):
