@@ -5,7 +5,7 @@ import asyncio
 import contextlib
 import math
 from abc import abstractmethod
-from collections.abc import Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum, auto
@@ -376,6 +376,52 @@ class ControllerClient(EntityClient):
                 return event
 
         raise RuntimeError("stream ended unexpectedly")
+
+
+class ExecutionStateStream:
+    """Stream state events for one execution, including events received before it is known.
+
+    The stream buffers a controller's state events from creation. Once bound to an execution,
+    iteration yields that execution's events in arrival order. After closing, iteration ends once
+    the buffered events are consumed. Multiple iterators share the buffer.
+    """
+
+    def __init__(self, controller: ControllerClient):
+        self.execution: TaskExecution | None = None
+        """The execution whose state events are yielded."""
+        self._subscription = contextlib.ExitStack()
+        self._states = self._subscription.enter_context(
+            controller.get_event_mux().event_queue(TaskExecutionState)
+        )
+
+    def bind(self, execution: TaskExecution):
+        """Select the execution whose state events are yielded."""
+        self.execution = execution
+
+    def close(self):
+        """Stop receiving state events, leaving buffered events readable."""
+        self._subscription.close()
+        self._states.shutdown()
+
+    async def __aiter__(self) -> AsyncIterator[TaskExecutionState]:
+        """Yield state events for the bound execution.
+
+        Raises:
+            RuntimeError: If no execution is bound.
+        """
+        if self.execution is None:
+            raise RuntimeError("Execution state stream is not bound")
+
+        task_id = self.execution.task_id
+
+        while True:
+            try:
+                state = await self._states.get()
+            except asyncio.QueueShutDown:
+                return
+
+            if state.execution is not None and state.execution.task_id == task_id:
+                yield state
 
 
 class ControllerRef(EntityRef[ControllerClient]):

@@ -94,7 +94,7 @@ async def test_call_yields_its_execution_states(kit, controller_impl):
         pass
 
     client = await subscribed(kit.controller(controller_impl.entity))
-    call = TaskCall(client, InitTask())
+    call = TaskCall(client, InitTask(), observe=True)
 
     async with following(call), asyncio.timeout(5.0):
         execution = await call.send()
@@ -104,7 +104,23 @@ async def test_call_yields_its_execution_states(kit, controller_impl):
     assert [state.execution.task_id for state in states] == [execution.task_id] * 2
     assert states[0].executing and states[0].finished is None
     assert states[-1].finished is not None
-    assert call.execution_state is states[-1]
+
+
+@pytest.mark.asyncio
+async def test_unobserved_call_has_no_execution_states(kit, controller_impl):
+    @controller_impl.task_handler(InitTask)
+    async def init(task):
+        pass
+
+    client = await subscribed(kit.controller(controller_impl.entity))
+    call = TaskCall(client, InitTask())
+
+    async with following(call), asyncio.timeout(5.0):
+        await call.send()
+        await call.future()
+
+    with pytest.raises(RuntimeError):
+        call.execution_states()
 
 
 @pytest.mark.asyncio
@@ -120,7 +136,7 @@ async def test_call_ignores_other_execution_states(kit, controller_impl):
             await release.wait()
 
     client = await subscribed(kit.controller(controller_impl.entity))
-    call = TaskCall(client, InitTask())
+    call = TaskCall(client, InitTask(), observe=True)
 
     try:
         async with following(call), asyncio.timeout(5.0):
@@ -140,26 +156,26 @@ async def test_call_ignores_other_execution_states(kit, controller_impl):
 
 
 @pytest.mark.asyncio
-async def test_closed_call_keeps_following_its_execution(kit, controller_impl, gated_init):
+async def test_closed_states_keep_following_the_execution(kit, controller_impl, gated_init):
     """Closing state observation leaves the task running and its result available."""
     entered, cancelled, release = gated_init
     client = await subscribed(kit.controller(controller_impl.entity))
-    call = TaskCall(client, InitTask())
+    call = TaskCall(client, InitTask(), observe=True)
 
     async with following(call), asyncio.timeout(5.0):
         await call.send()
         await entered.wait()
         await asyncio.sleep(0.05)
-        call.close()
-        observed = call.execution_state
+        call.execution_states().close()
         states = [state async for state in call.execution_states()]
 
         release.set()
         await call.future()
+        later = [state async for state in call.execution_states()]
 
     assert not cancelled.is_set()
-    assert states and states[-1] is observed and observed.executing
-    assert call.execution_state is observed
+    assert states and states[-1].executing
+    assert not later
     assert call.error() is None
 
 

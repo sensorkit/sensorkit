@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncGenerator, AsyncIterator, Coroutine
+from collections.abc import AsyncGenerator, Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable
 
@@ -17,6 +17,7 @@ from sensorkit.core.controller import (
     ControllerClient,
     ControllerMonitor,
     ExecuteResponseMessage,
+    ExecutionStateStream,
     InternalControllerState,
     TaskExecutionResult,
     TaskExecutionState,
@@ -129,8 +130,7 @@ class TaskCall:
     Rejection confirms that the task did not run. After acceptance, the execution's end event
     confirms success or failure. Missing acceptance or completion leaves the call unresolved.
 
-    The call buffers controller state events for its accepted execution.
-    Observation ends when the call completes or `close()` is called.
+    An observing call streams state events for its execution until the call completes.
     """
 
     def __init__(
@@ -141,6 +141,7 @@ class TaskCall:
         context: KeywordDict | None = None,
         expiry_time: datetime | None = None,
         interrupt: bool = False,
+        observe: bool = False,
     ):
         """Create a call without sending it.
 
@@ -150,27 +151,23 @@ class TaskCall:
             context: Optional keyword context to attach to the execution.
             expiry_time: Optional time after which the execution should be considered expired.
             interrupt: Whether to interrupt any task currently in progress.
+            observe: Whether to stream state events for the execution.
         """
         self.controller = controller
         self.task = task
         self.context = context
         self.expiry_time = expiry_time
         self.interrupt = interrupt
+        self.observe = observe
         self.execution: TaskExecution | None = None
         """The execution the controller identified, if any."""
-        self.execution_state: TaskExecutionState | None = None
-        """Latest `TaskExecutionState` event for the accepted execution."""
         loop = asyncio.get_running_loop()
         self._outcome: asyncio.Future[TaskExecutionResult] = loop.create_future()
         self._outcome.add_done_callback(cleanup_future)
         self._abort = asyncio.Event()
         self._sent = False
         self._follower: asyncio.Task[TaskExecutionResult] | None = None
-        self._subscription = contextlib.ExitStack()
-        self._received_states: asyncio.Queue[TaskExecutionState] | None = None
-        self._accepted_states: asyncio.Queue[TaskExecutionState] = asyncio.Queue()
-        self._observing = True
-        self._observer: asyncio.Task[None] | None = None
+        self._states: ExecutionStateStream | None = None
 
     async def send(self) -> TaskExecution:
         """Send the request and wait until the controller accepts the task.
@@ -196,8 +193,10 @@ class TaskCall:
 
         self._sent = True
 
-        # Buffer state events until acceptance identifies the execution.
-        self._received_states = self._subscription.enter_context(mux.event_queue(TaskExecutionState))
+        if self.observe:
+            # Buffer state events until acceptance identifies the execution.
+            self._states = ExecutionStateStream(self.controller)
+
         call = self.controller.execute_task(
             self.task, context=self.context, expiry_time=self.expiry_time, interrupt=self.interrupt
         )
@@ -207,7 +206,7 @@ class TaskCall:
         except CallRejected as e:
             # A rejection reply can still identify the execution it declined.
             if call.response is not None:
-                self.execution = call.response.execution
+                self._identify(call.response.execution)
 
             self._settle_outcome(error=e)
             raise
@@ -226,74 +225,44 @@ class TaskCall:
             raise error
 
         execution = call.response.execution
-        self.execution = execution
+        self._identify(execution)
 
         # Holders of the execution await the outcome without canceling it.
         shared = asyncio.shield(self._outcome)
         shared.add_done_callback(cleanup_future)
         execution.bind_result(shared)
 
-        # Queue buffered events for the accepted execution before reading new events.
-        self._select_received()
-        self._observer = asyncio.create_task(self._observe_states())
-        self._observer.add_done_callback(cleanup_future)
-
         self._follower = asyncio.create_task(self._follow(call, execution))
         self._follower.add_done_callback(self._settle)
 
         return execution
 
-    async def execution_states(self) -> AsyncIterator[TaskExecutionState]:
-        """Yield state events for the accepted execution in arrival order.
+    def execution_states(self) -> ExecutionStateStream:
+        """Return the state event stream for the identified execution.
 
-        When the call completes or observation closes, iteration ends after yielding the
-        buffered events. Multiple iterators share the buffer. Each event is yielded only once.
+        Iteration ends once the call completes and buffered events are consumed.
+
+        Raises:
+            RuntimeError: If the call does not observe execution states or was not sent.
         """
-        while True:
-            try:
-                yield await self._accepted_states.get()
-            except asyncio.QueueShutDown:
-                return
+        if self._states is None:
+            raise RuntimeError("Task call does not observe execution states")
 
-    def close(self):
-        """Release the subscription to execution state events without aborting the task.
+        return self._states
 
-        Result tracking continues. Buffered state events remain available for iteration.
-        """
-        self._select_received()
-        self._observing = False
-        self._subscription.close()
-        self._accepted_states.shutdown()
+    def _identify(self, execution: TaskExecution | None):
+        self.execution = execution
 
-        if self._observer is not None:
-            self._observer.cancel()
-
-    def _select_received(self):
-        """Queue buffered events whose task ID matches the accepted execution."""
-        if self.execution is None or self._received_states is None:
-            return
-
-        while self._observing and not self._received_states.empty():
-            self._select(self._received_states.get_nowait())
-
-    def _select(self, state: TaskExecutionState):
-        if not self._observing or state.execution is None:
-            return
-
-        if state.execution.task_id == self.execution.task_id:
-            self.execution_state = state
-            self._accepted_states.put_nowait(state)
-
-    async def _observe_states(self):
-        while True:
-            self._select(await self._received_states.get())
+        if execution is not None and self._states is not None:
+            self._states.bind(execution)
 
     def _settle_outcome(
         self, result: TaskExecutionResult | None = None, *, error: BaseException | None = None
     ):
         """Release state observation and complete the result future."""
         # Keep buffered state events available after completing the result future.
-        self.close()
+        if self._states is not None:
+            self._states.close()
 
         if self._outcome.done():
             return
@@ -683,7 +652,9 @@ class TaskingLoop:
             f"Dispatching {task.task_type} ({type(task).__name__}) to {self.controller.entity}"
         )
 
-        call = TaskCall(self.controller, task, context=context, expiry_time=expiry_time)
+        call = TaskCall(
+            self.controller, task, context=context, expiry_time=expiry_time, observe=True
+        )
         self._call = call
 
         # Deliver dispatch errors to the suspended factory so its error handling and cleanup run.
