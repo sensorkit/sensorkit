@@ -47,6 +47,7 @@ from sensorkit.std import (
 )
 from sensorkit.thesky.device import (
     CommandNotSupportedError,
+    DomeCommandInProgressError,
     MountCommandInProgressError,
     ProcessAbortedError,
     ScriptBusyError,
@@ -739,6 +740,11 @@ class TheSkyTelescope(TheSkyDevice):
         ("A Mount command is already in progress"), which leaves the latch stuck
         forever and _wait_for_mount hanging. Retry the slew until it is *accepted*
         (bounded by config.timeout), then wait for it to settle.
+
+        With the dome slaved, the settle wait can instead latch on error 123 ("A
+        Dome command is already in progress"): IsSlewComplete/IsTracking keep
+        returning it even after the dome stops, and TheSky stops slaving the dome
+        meanwhile. Sending the same slew again clears it (#55), so do that.
         """
         resp = await self.execute(
             """
@@ -757,11 +763,14 @@ class TheSkyTelescope(TheSkyDevice):
                         sky6RASCOMTele.SlewToRaDec({ra:0.6f}, {dec:0.6f}, "object");
                         """
                     )
+                    await self._wait_for_mount(tracking=True)
                     break
                 except MountCommandInProgressError:
                     await asyncio.sleep(0.1)
-
-        await self._wait_for_mount(tracking=True)
+                except DomeCommandInProgressError:
+                    # 123 latch (#55): the next pass re-sends the slew to clear it
+                    logger.debug("settle latched on TheSky error 123; re-sending slew")
+                    await asyncio.sleep(0.1)
 
     async def _publish_telescope_status(self):
         try:
