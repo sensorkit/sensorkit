@@ -86,6 +86,84 @@ async def test_call_follows_execution_to_its_result(kit, controller_impl):
 
 
 @pytest.mark.asyncio
+async def test_call_yields_its_execution_states(kit, controller_impl):
+    """State events remain in order when execution finishes before acceptance returns."""
+
+    @controller_impl.task_handler(InitTask)
+    async def init(task):
+        pass
+
+    client = await subscribed(kit.controller(controller_impl.entity))
+    call = TaskCall(client, InitTask())
+
+    async with following(call), asyncio.timeout(5.0):
+        execution = await call.send()
+        await call.future()
+        states = [state async for state in call.execution_states()]
+
+    assert [state.execution.task_id for state in states] == [execution.task_id] * 2
+    assert states[0].executing and states[0].finished is None
+    assert states[-1].finished is not None
+    assert call.execution_state is states[-1]
+
+
+@pytest.mark.asyncio
+async def test_call_ignores_other_execution_states(kit, controller_impl):
+    """An interrupted call yields only state events for its own execution."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    @controller_impl.task_handler(InitTask)
+    async def init(task):
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+
+    client = await subscribed(kit.controller(controller_impl.entity))
+    call = TaskCall(client, InitTask())
+
+    try:
+        async with following(call), asyncio.timeout(5.0):
+            execution = await call.send()
+            await entered.wait()
+            await client.execute_task(InitTask(), interrupt=True)
+
+            with contextlib.suppress(TaskFailed):
+                await call.future()
+
+            states = [state async for state in call.execution_states()]
+    finally:
+        release.set()
+
+    assert {state.execution.task_id for state in states} == {execution.task_id}
+    assert states[-1].finished is not None
+
+
+@pytest.mark.asyncio
+async def test_closed_call_keeps_following_its_execution(kit, controller_impl, gated_init):
+    """Closing state observation leaves the task running and its result available."""
+    entered, cancelled, release = gated_init
+    client = await subscribed(kit.controller(controller_impl.entity))
+    call = TaskCall(client, InitTask())
+
+    async with following(call), asyncio.timeout(5.0):
+        await call.send()
+        await entered.wait()
+        await asyncio.sleep(0.05)
+        call.close()
+        observed = call.execution_state
+        states = [state async for state in call.execution_states()]
+
+        release.set()
+        await call.future()
+
+    assert not cancelled.is_set()
+    assert states and states[-1] is observed and observed.executing
+    assert call.execution_state is observed
+    assert call.error() is None
+
+
+@pytest.mark.asyncio
 async def test_send_requires_subscribed_events(kit, controller_impl, gated_init):
     entered, _, _ = gated_init
     call = TaskCall(kit.controller(controller_impl.entity), InitTask())
