@@ -14,17 +14,24 @@ from typing import TYPE_CHECKING, ClassVar, Literal, final, override
 from loguru import logger
 
 from sensorkit.backend.base import Entity, KeyNotFound
-from sensorkit.backend.request import Call, CallError, CallRejected
+from sensorkit.backend.request import CallRejected
 from sensorkit.common.aio import cleanup_future, defer_cancellation, interruptible_wait
 from sensorkit.common.keyword import KeywordDict
-from sensorkit.core.controller import ControllerState, InternalControllerState
+from sensorkit.core.controller import (
+    ControllerState,
+    ControllerStateUnknown,
+    InternalControllerState,
+)
 from sensorkit.core.entity import EntityClient
 from sensorkit.core.executor import TaskCall, TaskFailed, TaskOutcomeUnknown
 from sensorkit.core.program import (
-    ProgramActiveStateRequest,
+    ProgramActivation,
+    ProgramActiveState,
     ProgramClient,
     ProgramState,
-    set_active_state_request,
+    TaskingError,
+    TaskingLoopState,
+    TaskingStartupFailed,
 )
 from sensorkit.core.task import (
     InitTask,
@@ -36,7 +43,7 @@ from sensorkit.core.task import (
 )
 
 if TYPE_CHECKING:
-    from sensorkit.auto.reactor import ControllerReactor
+    from sensorkit.auto.supervisor import ControllerStateSupervisor
 
 LIFECYCLE_TASK_TYPES: dict[InternalControllerState, str] = {
     InternalControllerState.OPERATE: "init",
@@ -125,19 +132,20 @@ class LifecycleProcedure(ABC):
     abort_budget: ClassVar[float] = 15.0
     """Time limit in seconds for each abort cleanup stage."""
 
-    state_reads: ClassVar[int] = 3
-    """Attempts to read the controller state after a task execution ends."""
+    expects_target: ClassVar[bool] = True
+    """Whether lifecycle task dispatch establishes a TRANSITION expectation."""
 
-    state_read_delay: ClassVar[float] = 0.5
-    """Seconds between attempts to read the controller state."""
-
-    def __init__(self, reactor: ControllerReactor, demand: DemandState):
-        self.reactor = reactor
+    def __init__(self, supervisor: ControllerStateSupervisor, demand: DemandState):
+        self.supervisor = supervisor
         self.demand = demand
+        self.step = LifecycleStep.WAIT
+        """The lifecycle operation in progress."""
         self.interrupt: Literal["stop", "abort"] | None = None
         """The most severe interruption requested."""
         self.achieved = False
         """Whether this procedure confirmed the required controller state and lifecycle context."""
+        self.commanded = False
+        """Whether this procedure's own lifecycle task established the confirmed state."""
         self.unresolved = False
         """Whether tracked tasks, cleanup futures, or program tasking may still be active."""
         self.cleanup_errors: list[BaseException] = []
@@ -150,12 +158,15 @@ class LifecycleProcedure(ABC):
     @final
     def start(self):
         """Schedule the procedure."""
+        if not self.expects_target:
+            self.supervisor.invalidate()
+
         self._task = asyncio.create_task(self._run())
 
     async def _run(self):
         logger.debug(f"{type(self).__name__} starting")
 
-        controller = self.reactor.controller
+        controller = self.supervisor.controller
 
         try:
             # Check the controller's lease before starting procedure logic.
@@ -253,7 +264,8 @@ class LifecycleProcedure(ABC):
         The task may have changed state before the monitor received the update.
         """
         if any(self._ended(call) for call in self._calls):
-            await self._read_state()
+            with contextlib.suppress(ControllerFailure, ControllerStateUnknown):
+                await self.supervisor.refresh()
 
     def _failure(self) -> BaseException | None:
         """Return the primary failure of a finished procedure."""
@@ -297,10 +309,9 @@ class LifecycleProcedure(ABC):
     def may_dispatch(self) -> bool:
         """Return whether the procedure may start another operation.
 
-        Interruption, disabled control, or failed monitoring prevents further operations.
-        A changed demand also prevents them unless this is a recovery procedure.
+        Interruption or unhealthy state supervision prevents further operations.
         """
-        return self.interrupt is None and self.reactor.may_dispatch(self)
+        return self.interrupt is None and self.supervisor.healthy()
 
     def _check_dispatch(self):
         """Raise cancellation if the procedure may not start another operation."""
@@ -324,27 +335,6 @@ class LifecycleProcedure(ABC):
         """Return whether a call's execution is known to have ended."""
         return call.future().done() and isinstance(call.error(), TaskFailed | None)
 
-    async def _read_state(self) -> ControllerState | None:
-        """Refresh the reactor's controller state, retrying failed reads."""
-        controller = self.reactor.controller
-
-        for attempt in range(1, self.state_reads + 1):
-            try:
-                state = await controller.kv_get_model(ControllerState)
-            except Exception as e:
-                logger.warning(f"Could not read {controller.entity} state ({e!r})")
-            else:
-                self.reactor.observe(state.operating_state)
-                return state
-
-            # An abort request ends the retries early.
-            if attempt < self.state_reads and self.interrupt != "abort":
-                await asyncio.sleep(self.state_read_delay)
-            else:
-                break
-
-        return None
-
     async def run_task(
         self,
         task: Task,
@@ -353,6 +343,9 @@ class LifecycleProcedure(ABC):
         timeout: float | None = None,
     ) -> ControllerState:
         """Execute and track a lifecycle task, interrupting any controller task in progress.
+
+        Outside recovery, the supervisor expects a transition from dispatch until it verifies
+        the result. Any other outcome leaves the expected state unknown.
 
         Args:
             task: The lifecycle task to execute.
@@ -368,55 +361,65 @@ class LifecycleProcedure(ABC):
                 read afterward.
             ControllerIndeterminate: If the execution may still be running.
         """
-        controller = self.reactor.controller
+        controller = self.supervisor.controller
         await self._prepare(controller)
 
         call = TaskCall(controller, task, context=context, interrupt=True)
         self._calls.append(call)
 
-        # Send before yielding so demand cannot change between validation and dispatch.
+        if self.expects_target:
+            self.supervisor.expect_transition()
+
+        # Dispatch before yielding after the interruption check.
         # Keep waiting for acceptance if procedure logic is interrupted.
         sent = asyncio.eager_task_factory(asyncio.get_running_loop(), call.send())
         sent.add_done_callback(cleanup_future)
 
-        # Read dispatch failures from the call's shared result below.
-        with contextlib.suppress(CallRejected, TaskOutcomeUnknown):
-            await asyncio.shield(sent)
+        try:
+            # Read dispatch failures from the call's shared result below.
+            with contextlib.suppress(CallRejected, TaskOutcomeUnknown):
+                await asyncio.shield(sent)
 
-        if await interruptible_wait((call.future(),), timeout=timeout):
-            call.abort()
-            await interruptible_wait((call.future(),), timeout=self.abort_budget)
+            if await interruptible_wait((call.future(),), timeout=timeout):
+                call.abort()
+                await interruptible_wait((call.future(),), timeout=self.abort_budget)
 
-        state = await self._read_state() if self._ended(call) else None
-        error = call.error()
+            error = call.error()
 
-        # Remove resolved calls before reporting their result to avoid duplicate cleanup errors.
-        if call.future().done() and not isinstance(error, TaskOutcomeUnknown):
-            self._calls.remove(call)
+            # Remove resolved calls before raising their result to avoid duplicate cleanup errors.
+            if call.future().done() and not isinstance(error, TaskOutcomeUnknown):
+                self._calls.remove(call)
 
-        match error:
-            case None if not call.future().done():
-                raise ControllerIndeterminate(f"{task.task_type} execution may still be running")
-            case None if state is None:
-                # An older report must not stand in for the state the task left.
-                raise ControllerFailure(f"Controller state unread after {task.task_type}")
-            case None:
-                return state
-            case CallRejected():
-                raise ProcedureError(f"{task.task_type} task rejected") from error
-            case TaskFailed(aborted=True):
-                raise ControllerFailure(f"{task.task_type} task aborted") from error
-            case TaskFailed():
-                raise ControllerFailure(f"{task.task_type} task failed") from error
-            case _:
-                raise ControllerIndeterminate(
-                    f"{task.task_type} execution may still be running"
-                ) from error
+            match error:
+                case None if not call.future().done():
+                    raise ControllerIndeterminate(
+                        f"{task.task_type} execution may still be running"
+                    )
+                case None if self.expects_target:
+                    return await self.confirm_state(task.target_state(), context, commanded=True)
+                case None if (state := task.target_state()) is not None:
+                    return await self.supervisor.verify(state, context)
+                case None:
+                    return await self.supervisor.refresh()
+                case CallRejected():
+                    raise ProcedureError(f"{task.task_type} task rejected") from error
+                case TaskFailed(aborted=True):
+                    raise ControllerFailure(f"{task.task_type} task aborted") from error
+                case TaskFailed():
+                    raise ControllerFailure(f"{task.task_type} task failed") from error
+                case _:
+                    raise ControllerIndeterminate(
+                        f"{task.task_type} execution may still be running"
+                    ) from error
+        except BaseException:
+            self.supervisor.invalidate()
+            raise
 
     async def run_unless_achieved(self, task: Task):
-        """Run a lifecycle task unless the controller already reports its target state.
+        """Run a lifecycle task unless the controller is known to be settled at its target state.
 
         Both the state and demanded lifecycle context must match, with no transition pending.
+        Matching controller state alone is not enough after a failure or an unconfirmed task.
 
         Raises:
             ProcedureError: If the task request is rejected.
@@ -428,27 +431,30 @@ class LifecycleProcedure(ABC):
         self._check_dispatch()
 
         # Controllers should also skip work that is already done, but the agent does not rely on it.
-        if self.reactor.observed().matches(state, context):
-            self.confirm_state(state, context, commanded=False)
+        if self.supervisor.settled(state, context):
+            await self.confirm_state(state, context, commanded=False)
             return
 
-        reported = await self.run_task(task, context=context)
+        await self.run_task(task, context=context)
 
-        if not reported.operating_state.matches(state, context):
-            raise ControllerFailure(f"Controller did not report {state} after {task.task_type}")
-
-        self.confirm_state(state, context, commanded=True)
-
-    def confirm_state(self, state: InternalControllerState, context: KeywordDict, *, commanded: bool):
-        """Record that the controller reports the required state and lifecycle context.
+    async def confirm_state(
+        self,
+        state: InternalControllerState,
+        context: KeywordDict | None = None,
+        *,
+        commanded: bool,
+    ) -> ControllerState:
+        """Verify and record the required controller state and lifecycle context.
 
         Args:
-            state: The reported state.
-            context: The reported lifecycle context.
+            state: The required state.
+            context: The required lifecycle context, or None for an empty context.
             commanded: Whether this procedure's own lifecycle task established the state.
         """
+        snapshot = await self.supervisor.confirm(state, context)
         self.achieved = True
-        self.reactor.record_achieved_state(state, context, commanded=commanded)
+        self.commanded |= commanded
+        return snapshot
 
     @abstractmethod
     async def state_logic(self):
@@ -529,39 +535,49 @@ class LifecycleProcedure(ABC):
 class OperateProcedure(LifecycleProcedure):
     """Achieve OPERATE and supervise program tasking.
 
-    Cleanup stops or aborts program tasking that this procedure started or adopted.
+    Cleanup targets the session started or acknowledged by this procedure.
     Returning from state logic leaves tasking for the next procedure to adopt or abort.
+
+    Each procedure owns one tasking session. The session's first reported fault remains the
+    procedure's failure through cleanup.
     """
 
     activation_timeout: ClassVar[float] = 5.0
     """Seconds to wait for program tasking to start."""
 
-    def __init__(self, reactor: ControllerReactor, demand: DemandState):
-        super().__init__(reactor, demand)
-        self._activation: asyncio.Task[None] | None = None
+    def __init__(self, supervisor: ControllerStateSupervisor, demand: DemandState):
+        super().__init__(supervisor, demand)
+        self._activation: ProgramActivation | None = None
         self._ends_tasking = False
 
     @override
+    def _failure(self) -> BaseException | None:
+        if (fault := self._tasking_fault()) is not None:
+            return self._fault_error(fault)
+
+        return super()._failure()
+
+    @override
     async def state_logic(self):
-        controller = str(self.reactor.controller.entity)
+        controller = str(self.supervisor.controller.entity)
         program = self.demand.program
 
-        self.reactor.step = LifecycleStep.INIT
+        self.step = LifecycleStep.INIT
         await self._reconcile_existing_tasking()
 
-        # Adoption skips activation because the program is already tasking with matching contexts.
-        adopted = self._ends_tasking
+        # Matching tasking has already been acknowledged by activation.
+        adopted = self._activation is not None
 
         logger.info(f"Preparing to operate ({controller})")
         await self.run_unless_achieved(InitTask())
 
         # Maintain OPERATE while waiting for a program demand.
         if program is None:
-            self.reactor.step = LifecycleStep.WAIT
+            self.step = LifecycleStep.WAIT
             logger.info(f"Waiting for a program for tasking ({controller})")
             await asyncio.sleep(float("inf"))
 
-        self.reactor.step = LifecycleStep.TASKING
+        self.step = LifecycleStep.TASKING
 
         if adopted:
             logger.info(f"Resuming {program.entity} tasking ({controller})")
@@ -571,14 +587,12 @@ class OperateProcedure(LifecycleProcedure):
 
         logger.info(f"Controller is operating ({controller})")
 
-        # Tasking may end because of an error, an external stop request, or a program restart.
-        stop_event = await program.wait_until_tasking_stops()
+        # Follow session faults, external stop requests, and program restarts.
+        stop_event = await self._tasking_ended()
 
-        match stop_event and stop_event.origin:
-            case None:
-                raise ProcedureError("Failed to start tasking")
+        match stop_event.origin:
             case "error":
-                # Program errors count toward controller recovery.
+                # Unclassified legacy errors count toward controller recovery.
                 logger.error(f"Error reported ({controller})")
                 raise ControllerFailure("Program reported error")
             case "init":
@@ -586,7 +600,7 @@ class OperateProcedure(LifecycleProcedure):
                 logger.warning(f"Active program restarted ({controller})")
 
                 # Pause briefly, then return for replacement.
-                self.reactor.step = LifecycleStep.WAIT
+                self.step = LifecycleStep.WAIT
                 await asyncio.sleep(3)
             case "request":
                 logger.info(f"Tasking stopped by request ({controller})")
@@ -594,26 +608,78 @@ class OperateProcedure(LifecycleProcedure):
 
     @override
     async def stop_logic(self):
-        # Wait for the start request to finish before sending stop.
-        if self._activation is not None:
-            await asyncio.wait((self._activation,))
-
-        if self._ends_tasking:
-            await self.demand.program.stop_tasking()
-            self._ends_tasking = False
+        await self._end_tasking(abort=False)
 
     @override
     async def abort_logic(self):
-        if self._activation is not None:
-            await asyncio.wait((self._activation,))
-
         try:
-            if self._ends_tasking:
-                await self.demand.program.abort_tasking()
-                self._ends_tasking = False
+            await self._end_tasking(abort=True)
         finally:
             # A failed abort leaves no confirmation that program tasking stopped.
             self.unresolved |= self._ends_tasking
+
+    async def _end_tasking(self, *, abort: bool):
+        """Wait for startup, then stop or abort the accepted session."""
+        activation = self._activation
+
+        if activation is None:
+            return
+
+        try:
+            await activation
+        except Exception as e:
+            self._classify_activation_failure(e)
+
+        try:
+            if not self._ends_tasking:
+                return
+
+            # Cleanup requires the identity returned by acceptance.
+            if activation.monitor is None:
+                self.unresolved = True
+                return
+
+            program = self.demand.program
+            end = program.abort_tasking if abort else program.stop_tasking
+            await end(activation.monitor.session_id)
+            self._ends_tasking = False
+        finally:
+            # Read any session fault preceding the cleanup reply.
+            if activation.monitor is not None:
+                activation.monitor.read_events()
+
+    @staticmethod
+    def _fault_error(state: TaskingLoopState) -> ProcedureError:
+        """Convert a session fault to a procedure failure."""
+        operation = state.stage if state.task_type is None else f"{state.task_type} {state.stage}"
+        message = f"Tasking failed during {operation} ({state.error})"
+
+        match state.fault:
+            case "controller":
+                return ControllerFailure(message)
+            case _:
+                return ProcedureError(message)
+
+    def _tasking_fault(self) -> TaskingLoopState | None:
+        """Return the owned session's first reported fault, if any."""
+        if self._activation is None or (monitor := self._activation.monitor) is None:
+            return None
+
+        return monitor.fault
+
+    async def _tasking_ended(self) -> ProgramActiveState:
+        """Wait for the owned session to end or report a fault.
+
+        Raises:
+            ProcedureError: If the session reported a fault.
+        """
+        monitor = self._activation.monitor
+        await monitor.wait()
+
+        if (fault := monitor.fault) is not None:
+            raise self._fault_error(fault)
+
+        return monitor.ending
 
     async def _reconcile_existing_tasking(self):
         """Adopt the demanded program's active tasking, or abort it.
@@ -622,7 +688,7 @@ class OperateProcedure(LifecycleProcedure):
         reports the required state and lifecycle context. Otherwise, abort the program's tasking.
 
         Raises:
-            ProcedureError: If tasking could not be aborted.
+            ProcedureError: If existing tasking could not be acknowledged or ended.
         """
         program = self.demand.program
 
@@ -638,43 +704,49 @@ class OperateProcedure(LifecycleProcedure):
             return
 
         enabled_on = tasking.enable_state.controller
+        session = tasking.tasking_state.loop_state
 
         if (
             not tasking.active_state.stopping
+            and (session is None or session.fault is None)
             and enabled_on is not None
-            and Entity.at(enabled_on) == self.reactor.controller.entity
+            and Entity.at(enabled_on) == self.supervisor.controller.entity
             and tasking.active_state.contexts == (self.demand.contexts or TaskContextMap())
-            and self.reactor.observed().matches(self.demand.state, self.demand.lifecycle_context())
+            and self.supervisor.settled(self.demand.state, self.demand.lifecycle_context())
         ):
-            self._ends_tasking = True
+            await self.activate_tasking(adopt=True)
             return
 
         await self._prepare(program)
 
+        # Reconcile current tasking before taking responsibility for a session.
         try:
             async with asyncio.timeout(self.abort_budget):
                 await program.abort_tasking()
         except Exception as e:
             raise ProcedureError(f"Could not abort {program.entity} tasking") from e
 
-    async def activate_tasking(self):
-        """Start program tasking and take responsibility for stopping it during cleanup.
+    async def activate_tasking(self, *, adopt: bool = False):
+        """Activate tasking and retain its identity for cleanup.
 
-        Abort any running controller task first so the controller can accept program tasks.
-        Cleanup waits for the start request before stopping or aborting tasking. If the request
-        result is unknown, tasking may start later and is marked unresolved.
+        New activation clears running controller work first. Adoption preserves the matching
+        session's execution. Cleanup waits for activation and targets its returned session ID.
+        Uncertain acceptance or completion leaves tasking unresolved.
+
+        Args:
+            adopt: Whether existing tasking already matches demand.
 
         Raises:
             ControllerFailure: If a running execution could not be aborted.
             ProcedureError: If tasking did not start in time.
         """
         program = self.demand.program
-        controller = self.reactor.controller
+        controller = self.supervisor.controller
 
         if self._activation is not None:
             raise RuntimeError("Tasking was already activated")
 
-        if (execution := self.reactor.running_execution()) is not None:
+        if not adopt and (execution := self.supervisor.running_execution()) is not None:
             await self._prepare(controller)
 
             try:
@@ -686,57 +758,54 @@ class OperateProcedure(LifecycleProcedure):
             except Exception as e:
                 raise ControllerFailure(f"Could not abort {execution.task.task_type} task") from e
 
-        await self._prepare(program)
-        call = program.call(
-            set_active_state_request,
-            ProgramActiveStateRequest(
-                action="start", contexts=self.demand.contexts or TaskContextMap()
-            ),
-        )
-        self._ends_tasking = True
+        activation = program.start_tasking(self.demand.contexts)
 
-        # Send before yielding so demand cannot change between validation and dispatch.
-        # Keep waiting for the reply if procedure logic is interrupted.
-        self._activation = asyncio.eager_task_factory(
-            asyncio.get_running_loop(), self._activated(program, call)
-        )
-        self._activation.add_done_callback(cleanup_future)
+        try:
+            # Keep a sent start request alive for cleanup if activation times out.
+            async with asyncio.timeout(self.activation_timeout) as deadline:
+                await activation.prepare()
 
-        # A timeout leaves the start request running so cleanup can wait for its result.
-        if await interruptible_wait((self._activation,), timeout=self.activation_timeout):
-            raise ProcedureError("Tasking did not start in time")
+                # Prevent dispatch if procedure cancellation is already pending.
+                if self.future().cancelling():
+                    raise asyncio.CancelledError()
 
-        if (error := self._activation.exception()) is not None:
-            raise ProcedureError("Failed to start tasking") from error
+                # Recheck demand after preparation and send before yielding.
+                self._check_dispatch()
+                self._activation = activation
+                self._ends_tasking = True
+                self.future().add_done_callback(lambda _: activation.close())
+                await activation.send()
+        except Exception as e:
+            if deadline.expired():
+                raise ProcedureError("Tasking did not start in time") from e
 
-    async def _activated(self, program: ProgramClient, call: Call[None]):
-        """Send an activation request and follow it to its result."""
-        accepted = False
+            cause = e if self._activation is None else self._classify_activation_failure(e)
+            raise ProcedureError("Failed to start tasking") from cause
+        finally:
+            if self._activation is None:
+                activation.close()
 
-        # Read request failures from the shared result below.
-        with contextlib.suppress(Exception):
-            await call.invoke()
-            accepted = True
-
-        # Keep the shared result available if this wait is interrupted.
-        result = call.get_future()
-        await asyncio.wait((result,))
-
-        error = asyncio.CancelledError() if result.cancelled() else result.exception()
+    def _classify_activation_failure(self, error: Exception) -> Exception:
+        """Classify an activation failure and update cleanup requirements."""
+        program = self.demand.program.entity
 
         match error:
-            case None:
-                return
             case CallRejected():
-                # Explicit rejection leaves tasking inactive.
+                # A rejected start needs no session cleanup.
                 self._ends_tasking = False
-                raise error
-            case CallError() if accepted:
-                # The program finished handling the request, so the stop logic can end tasking.
-                raise error
+                return error
+            case TaskingStartupFailed():
+                # A failure response confirms that the start handler finished.
+                return error
+            case TaskingError():
+                message = f"{program} did not confirm tasking"
             case _:
-                self.unresolved = True
-                raise ControllerIndeterminate(f"{program.entity} may start tasking later") from error
+                message = f"{program} may start tasking later"
+
+        self.unresolved = True
+        indeterminate = ControllerIndeterminate(message)
+        indeterminate.__cause__ = error
+        return indeterminate
 
 
 class StandbyProcedure(LifecycleProcedure):
@@ -744,14 +813,14 @@ class StandbyProcedure(LifecycleProcedure):
 
     @override
     async def state_logic(self):
-        controller = str(self.reactor.controller.entity)
+        controller = str(self.supervisor.controller.entity)
 
-        self.reactor.step = LifecycleStep.STANDBY
+        self.step = LifecycleStep.STANDBY
 
         logger.info(f"Entering standby mode ({controller})")
         await self.run_unless_achieved(StandbyTask())
 
-        self.reactor.step = LifecycleStep.WAIT
+        self.step = LifecycleStep.WAIT
 
         logger.info(f"Controller is idle in standby ({controller})")
         await asyncio.sleep(float("inf"))
@@ -762,14 +831,14 @@ class ShutdownProcedure(LifecycleProcedure):
 
     @override
     async def state_logic(self):
-        controller = str(self.reactor.controller.entity)
+        controller = str(self.supervisor.controller.entity)
 
-        self.reactor.step = LifecycleStep.SHUTDOWN
+        self.step = LifecycleStep.SHUTDOWN
 
         logger.info(f"Commencing shutdown ({controller})")
         await self.run_unless_achieved(ShutdownTask())
 
-        self.reactor.step = LifecycleStep.WAIT
+        self.step = LifecycleStep.WAIT
 
         logger.info(f"Controller is shut down ({controller})")
         await asyncio.sleep(float("inf"))
@@ -778,9 +847,11 @@ class ShutdownProcedure(LifecycleProcedure):
 class RecoverProcedure(LifecycleProcedure):
     """Run one recovery attempt, or an emergency shutdown once attempts are exhausted.
 
-    Recovery can start from and leave any reported state. The reactor schedules attempts and
-    evaluates demand again after each one.
+    Recovery can start from and leave any reported state, so it leaves the expected state
+    unknown. The reactor schedules attempts and evaluates demand again after each one.
     """
+
+    expects_target = False
 
     recover_timeout: ClassVar[float] = 120.0
     """Seconds before a recovery attempt is aborted."""
@@ -788,8 +859,14 @@ class RecoverProcedure(LifecycleProcedure):
     shutdown_timeout: ClassVar[float] = 240.0
     """Seconds before an emergency shutdown is aborted."""
 
-    def __init__(self, reactor: ControllerReactor, demand: DemandState, *, emergency: bool):
-        super().__init__(reactor, demand)
+    def __init__(
+        self,
+        supervisor: ControllerStateSupervisor,
+        demand: DemandState,
+        *,
+        emergency: bool,
+    ):
+        super().__init__(supervisor, demand)
         self.emergency = emergency
         """Whether this attempt is an emergency shutdown."""
         self.recovered = False
@@ -797,27 +874,21 @@ class RecoverProcedure(LifecycleProcedure):
 
     @override
     async def state_logic(self):
-        controller = str(self.reactor.controller.entity)
+        controller = str(self.supervisor.controller.entity)
 
         if self.emergency:
-            self.reactor.step = LifecycleStep.SHUTDOWN
+            self.step = LifecycleStep.SHUTDOWN
             task = ShutdownTask()
-            state = task.target_state()
-            context = self.demand.lifecycle_context(state)
+            context = self.demand.lifecycle_context(task.target_state())
 
             logger.warning(f"Failed to recover, attempting shutdown ({controller})")
-            reported = await self.run_task(task, context=context, timeout=self.shutdown_timeout)
-
-            if not reported.operating_state.matches(state, context):
-                raise ControllerFailure(
-                    f"Controller did not report {state} after emergency shutdown"
-                )
+            await self.run_task(task, context=context, timeout=self.shutdown_timeout)
 
             # Emergency shutdown leaves control disabled pending operator intervention.
             logger.info(f"Emergency shutdown succeeded ({controller})")
             raise ControllerUnrecoverable("Emergency shutdown")
 
-        self.reactor.step = LifecycleStep.RECOVER
+        self.step = LifecycleStep.RECOVER
 
         logger.info(f"Attempting recovery ({controller})")
         await self.run_task(RecoverTask(), timeout=self.recover_timeout)

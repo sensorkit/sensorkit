@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 from typing import ClassVar, Literal, overload
 
 from loguru import logger
@@ -17,6 +16,7 @@ from sensorkit.auto.procedures import (
     StandbyProcedure,
 )
 from sensorkit.auto.reactor import ControllerReactor, RecoveryState
+from sensorkit.auto.supervisor import ControllerStateSupervisor
 from sensorkit.common.aio import defer_cancellation
 from sensorkit.core.controller import ControllerClient, ControllerMonitor, InternalControllerState
 from sensorkit.core.program import ProgramClient
@@ -26,9 +26,9 @@ from sensorkit.core.task import TaskContextMap
 class ControllerLifecycle:
     """Maintain the demanded controller state and restart failed reactors.
 
-    Each reactor starts a new controller monitor and runs while the lifecycle is enabled.
-    Monitor failures and offline controllers trigger a restart after an increasing delay.
-    Demand, enablement, and recovery state persist across restarts.
+    Each session starts a controller monitor and a state supervisor, then runs a reactor while
+    the lifecycle is enabled. Observation failures and offline controllers trigger a restart
+    after an increasing delay. Demand, enablement, and recovery state persist across restarts.
     """
 
     procedures: ClassVar[dict[InternalControllerState, type[LifecycleProcedure]]] = {
@@ -50,23 +50,24 @@ class ControllerLifecycle:
     def __init__(
         self,
         *,
-        external_change_delay: float = 30.0,
+        transition_grace: float = 10.0,
         recovery_state: RecoveryState | None = None,
     ):
         """Create a lifecycle that does nothing until started and enabled.
 
         Args:
-            external_change_delay: Seconds to wait before restoring the demanded state and
-                lifecycle context after an external change. Zero disables the wait.
+            transition_grace: Maximum seconds of disagreement with the expected state during
+                a commanded lifecycle transition. Time in TRANSITION does not count toward
+                this limit.
             recovery_state: Failure counts and retry and recovery timing, retained across restarts.
 
         Raises:
-            ValueError: If `external_change_delay` is negative or not finite.
+            ValueError: If `transition_grace` is not positive.
         """
-        if not (math.isfinite(external_change_delay) and external_change_delay >= 0):
-            raise ValueError(f"external_change_delay must be nonnegative, got {external_change_delay}")
+        if not transition_grace > 0:
+            raise ValueError(f"transition_grace must be positive, got {transition_grace}")
 
-        self.external_change_delay = external_change_delay
+        self.transition_grace = transition_grace
         self.recovery_state = RecoveryState() if recovery_state is None else recovery_state
         self.last_error: BaseException | None = None
         """The most recent reactor failure, retained across restarts."""
@@ -107,7 +108,7 @@ class ControllerLifecycle:
         self._enabled.set()
 
     def disable(self):
-        """Prevent any further demand commands and abort the current procedure."""
+        """Withdraw demand and request interruption of the current procedure."""
         self._enabled.clear()
         self._demand = DemandState(state=None)
         self._wake()
@@ -192,18 +193,24 @@ class ControllerLifecycle:
             delay = min(delay * 2, self.restart_delay_max)
 
     async def _session(self) -> tuple[Exception | None, bool]:
-        """Run one reactor.
+        """Run a reactor with its monitor and state supervisor.
 
         Returns:
             The reactor's failure, if any, and whether it ever commanded the demanded state.
         """
         monitor = ControllerMonitor(self.controller)
+        supervisor = None
         reactor = None
 
         try:
             await monitor.start()
 
-            reactor = ControllerReactor(self, monitor)
+            supervisor = ControllerStateSupervisor(
+                monitor, self.recovery_state, transition_grace=self.transition_grace
+            )
+            await supervisor.start()
+
+            reactor = ControllerReactor(self, supervisor)
             self._reactor = reactor
             await reactor.run()
         except ControllerUnrecoverable as e:
@@ -215,12 +222,21 @@ class ControllerLifecycle:
         finally:
             self._reactor = None
 
-            # Keep monitor cleanup failures from propagating to the caller's task group.
+            # Keep state monitoring cleanup failures from propagating to the caller's task group.
             try:
-                await defer_cancellation(monitor.stop())
+                await self._release(monitor, supervisor)
             except Exception as e:
                 logger.opt(exception=e).error(
-                    f"{self.controller.entity} observation release failed"
+                    f"{self.controller.entity} state monitoring cleanup failed"
                 )
 
         return None, reactor is not None and reactor.achieved_once
+
+    @staticmethod
+    async def _release(monitor: ControllerMonitor, supervisor: ControllerStateSupervisor | None):
+        """Stop the supervisor, then the monitor, completing both despite cancellation."""
+        try:
+            if supervisor is not None:
+                await defer_cancellation(supervisor.stop())
+        finally:
+            await defer_cancellation(monitor.stop())

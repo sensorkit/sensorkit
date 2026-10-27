@@ -6,21 +6,26 @@ import contextlib
 
 import pytest
 import pytest_asyncio
+import uuid_utils.compat as uuid
 
 from sensorkit.auto.lifecycle import ControllerLifecycle
 from sensorkit.auto.procedures import (
     ControllerFailure,
+    DemandState,
     LifecycleProcedure,
     LifecycleStep,
     OperateProcedure,
     ProcedureError,
+    RecoverProcedure,
 )
-from sensorkit.auto.reactor import ControllerReactor
+from sensorkit.auto.reactor import ControllerReactor, RecoveryState
+from sensorkit.auto.supervisor import ControllerStateSupervisor
 from sensorkit.backend.request import declare_request
 from sensorkit.core.controller import ControllerMonitor, InternalControllerState
 from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.program import (
     ProgramActiveStateRequest,
+    ProgramActiveStateResponse,
     ProgramClient,
     ProgramState,
     set_active_state_request,
@@ -29,13 +34,14 @@ from sensorkit.core.task import CollectTask, InitTask
 
 OPERATE = InternalControllerState.OPERATE
 STANDBY = InternalControllerState.STANDBY
+UNKNOWN = InternalControllerState.UNKNOWN
 
 
 class GatedProcedure(LifecycleProcedure):
     """Run procedure logic with a controlled outcome."""
 
-    def __init__(self, reactor: ControllerReactor):
-        super().__init__(reactor, reactor.lifecycle.demand_state)
+    def __init__(self, supervisor: ControllerStateSupervisor):
+        super().__init__(supervisor, DemandState(OPERATE))
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.outcome: Exception | None = None
@@ -51,8 +57,8 @@ class GatedProcedure(LifecycleProcedure):
 class HookedProcedure(GatedProcedure):
     """Record the cleanup logic that runs, holding stop logic until released."""
 
-    def __init__(self, reactor: ControllerReactor):
-        super().__init__(reactor)
+    def __init__(self, supervisor: ControllerStateSupervisor):
+        super().__init__(supervisor)
         self.ran: list[str] = []
         self.stopping = asyncio.Event()
         self.stop_release = asyncio.Event()
@@ -73,8 +79,8 @@ class HookedProcedure(GatedProcedure):
 class ShieldingProcedure(LifecycleProcedure):
     """Await work shielded from interruption."""
 
-    def __init__(self, reactor: ControllerReactor, work: asyncio.Future[None]):
-        super().__init__(reactor, reactor.lifecycle.demand_state)
+    def __init__(self, supervisor: ControllerStateSupervisor, work: asyncio.Future[None]):
+        super().__init__(supervisor, DemandState(OPERATE))
         self.started = asyncio.Event()
         self.work = work
 
@@ -104,21 +110,66 @@ class InitProcedure(LifecycleProcedure):
         await self.run_task(InitTask())
 
 
+class CommandProcedure(LifecycleProcedure):
+    """Initialize unless the controller is known to be settled at OPERATE."""
+
+    async def state_logic(self):
+        await self.run_unless_achieved(InitTask())
+
+
+class PausedRecovery(RecoverProcedure):
+    """Hold recovery logic before it dispatches a task."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def state_logic(self):
+        self.entered.set()
+        await self.release.wait()
+        await super().state_logic()
+
+
 class TaskingProcedure(OperateProcedure):
     """Activate tasking, then fail if told to."""
 
-    def __init__(self, reactor: ControllerReactor):
-        super().__init__(reactor, reactor.lifecycle.demand_state)
+    def __init__(self, supervisor: ControllerStateSupervisor, program: ProgramClient):
+        super().__init__(supervisor, DemandState(OPERATE, program=program))
         self.release = asyncio.Event()
         self.outcome: Exception | None = None
 
     async def state_logic(self):
-        self.reactor.step = LifecycleStep.TASKING
+        self.step = LifecycleStep.TASKING
         await self.activate_tasking()
         await self.release.wait()
 
         if self.outcome is not None:
             raise self.outcome
+
+
+class GatedProgramClient(ProgramClient):
+    """Hold the external state read during activation preparation."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.reading = asyncio.Event()
+        self.release_read = asyncio.Event()
+        self.finished_read = asyncio.Event()
+        self.read_error: Exception | None = None
+
+    async def kv_get_model(self, model):
+        self.reading.set()
+
+        try:
+            await self.release_read.wait()
+
+            if self.read_error is not None:
+                raise self.read_error
+
+            return await super().kv_get_model(model)
+        finally:
+            self.finished_read.set()
 
 
 async def finish(procedure: LifecycleProcedure):
@@ -146,32 +197,32 @@ async def program_inactive(kit, name: str) -> bool:
 
 @pytest_asyncio.fixture
 async def observing(kit):
-    """Return a factory for reactors monitoring a controller under an OPERATE demand.
+    """Return a factory for started state supervisors of a controller.
 
-    Reactor loops remain stopped so only the procedures under test send requests.
+    No reactor runs, so only the procedures under test send requests.
     """
-    monitors: list[ControllerMonitor] = []
+    started: list[tuple[ControllerMonitor, ControllerStateSupervisor]] = []
 
-    async def observe(controller: str, program: ProgramClient | None = None) -> ControllerReactor:
-        lifecycle = ControllerLifecycle()
-        lifecycle.enable()
-        lifecycle.set_demand_state(OPERATE, program=program)
+    async def observe(controller: str) -> ControllerStateSupervisor:
         monitor = ControllerMonitor(kit.controller(controller))
         await monitor.start()
-        monitors.append(monitor)
-        return ControllerReactor(lifecycle, monitor)
+        supervisor = ControllerStateSupervisor(monitor, RecoveryState(), transition_grace=10.0)
+        await supervisor.start()
+        started.append((monitor, supervisor))
+        return supervisor
 
     yield observe
 
-    for monitor in monitors:
+    for monitor, supervisor in started:
+        await supervisor.stop()
         await monitor.stop()
 
 
 @pytest_asyncio.fixture
 async def proc(controller_impl, observing):
-    reactor = await observing(controller_impl.entity)
+    supervisor = await observing(controller_impl.entity)
 
-    async with running(GatedProcedure(reactor)) as procedure:
+    async with running(GatedProcedure(supervisor)) as procedure:
         async with asyncio.timeout(5.0):
             await procedure.started.wait()
 
@@ -277,9 +328,9 @@ async def test_requested_abort_is_not_an_error(proc):
 @pytest.mark.asyncio
 async def test_interruption_before_first_step(controller_impl, observing):
     """A procedure interrupted before its first step never runs its logic."""
-    reactor = await observing(controller_impl.entity)
+    supervisor = await observing(controller_impl.entity)
 
-    async with running(GatedProcedure(reactor)) as procedure:
+    async with running(GatedProcedure(supervisor)) as procedure:
         procedure.request_abort()
         await finish(procedure)
 
@@ -292,9 +343,9 @@ async def test_interruption_before_first_step(controller_impl, observing):
 
 @pytest_asyncio.fixture
 async def hooked(controller_impl, observing):
-    reactor = await observing(controller_impl.entity)
+    supervisor = await observing(controller_impl.entity)
 
-    async with running(HookedProcedure(reactor)) as procedure:
+    async with running(HookedProcedure(supervisor)) as procedure:
         async with asyncio.timeout(5.0):
             await procedure.started.wait()
 
@@ -374,10 +425,10 @@ async def test_failed_logic_runs_stop_logic(hooked):
 @pytest.mark.asyncio
 async def test_stop_waits_for_shielded_work(controller_impl, observing):
     """A graceful stop waits for shielded work without canceling it."""
-    reactor = await observing(controller_impl.entity)
+    supervisor = await observing(controller_impl.entity)
     work = asyncio.get_running_loop().create_future()
 
-    async with running(ShieldingProcedure(reactor, work)) as procedure:
+    async with running(ShieldingProcedure(supervisor, work)) as procedure:
         async with asyncio.timeout(5.0):
             await procedure.started.wait()
 
@@ -397,10 +448,10 @@ async def test_stop_waits_for_shielded_work(controller_impl, observing):
 @pytest.mark.asyncio
 async def test_abort_cancels_shielded_work(controller_impl, observing):
     """An abort cancels shielded work."""
-    reactor = await observing(controller_impl.entity)
+    supervisor = await observing(controller_impl.entity)
     work = asyncio.get_running_loop().create_future()
 
-    async with running(ShieldingProcedure(reactor, work)) as procedure:
+    async with running(ShieldingProcedure(supervisor, work)) as procedure:
         async with asyncio.timeout(5.0):
             await procedure.started.wait()
 
@@ -418,9 +469,9 @@ async def test_abort_cancels_shielded_work(controller_impl, observing):
 async def test_call_survives_interrupted_waiter(controller_impl, gated_init, observing):
     """Graceful cleanup waits for a task after its procedure logic is interrupted."""
     entered, _, release = gated_init
-    reactor = await observing(controller_impl.entity)
+    supervisor = await observing(controller_impl.entity)
 
-    async with running(InitProcedure(reactor, reactor.lifecycle.demand_state)) as procedure:
+    async with running(InitProcedure(supervisor, DemandState(OPERATE))) as procedure:
         async with asyncio.timeout(5.0):
             await entered.wait()
 
@@ -450,10 +501,10 @@ async def test_failure_during_cleanup_is_reported(controller_impl, observing):
         await release.wait()
         raise RuntimeError("init failed")
 
-    reactor = await observing(controller_impl.entity)
+    supervisor = await observing(controller_impl.entity)
 
     try:
-        async with running(InitProcedure(reactor, reactor.lifecycle.demand_state)) as procedure:
+        async with running(InitProcedure(supervisor, DemandState(OPERATE))) as procedure:
             async with asyncio.timeout(5.0):
                 await entered.wait()
 
@@ -477,8 +528,8 @@ async def test_interruption_during_send_keeps_the_reply(service_context, observi
     async def init(task):
         pass
 
-    reactor = await observing("gated")
-    procedure = InitProcedure(reactor, reactor.lifecycle.demand_state)
+    supervisor = await observing("gated")
+    procedure = InitProcedure(supervisor, DemandState(OPERATE))
 
     async with running(procedure):
         async with asyncio.timeout(5.0):
@@ -493,19 +544,115 @@ async def test_interruption_during_send_keeps_the_reply(service_context, observi
     assert not procedure.achieved
 
 
-@pytest.mark.asyncio
-async def test_superseding_demand_blocks_next_operation(controller_impl, gated_init, observing):
-    """A newer demand blocks a procedure's next request before the procedure is interrupted."""
-    entered, _, _ = gated_init
-    reactor = await observing(controller_impl.entity)
-    procedure = InitProcedure(reactor, reactor.lifecycle.demand_state)
+# Expected state
 
-    async with running(procedure):
-        reactor.lifecycle.set_demand_state(STANDBY)
+
+@pytest_asyncio.fixture
+async def init_count(controller_impl):
+    """Count initialization tasks."""
+    count = [0]
+
+    @controller_impl.task_handler(InitTask)
+    async def init(task):
+        count[0] += 1
+
+    return count
+
+
+@pytest.mark.asyncio
+async def test_command_confirms_expected_state(controller_impl, init_count, observing):
+    """A verified lifecycle task sets the expected state to its target."""
+    supervisor = await observing(controller_impl.entity)
+
+    async with running(CommandProcedure(supervisor, DemandState(OPERATE))) as procedure:
+        await finish(procedure)
+
+    assert procedure.commanded
+    assert supervisor.expected == OPERATE
+    assert init_count[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_expectation_requires_command(
+    controller_impl, init_count, observing, until
+):
+    """A matching report does not skip the lifecycle task while the expected state is unknown."""
+    await controller_impl.set_internal_state(OPERATE)
+    supervisor = await observing(controller_impl.entity)
+    await until(lambda: supervisor.expected == OPERATE)
+    supervisor.invalidate()
+
+    async with running(CommandProcedure(supervisor, DemandState(OPERATE))) as procedure:
+        await finish(procedure)
+
+    assert procedure.commanded
+    assert init_count[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_interrupted_command_leaves_expectation_unknown(
+    controller_impl, gated_init, observing
+):
+    """A lifecycle task that finishes after interruption does not confirm its target."""
+    entered, _, release = gated_init
+    supervisor = await observing(controller_impl.entity)
+
+    async with running(CommandProcedure(supervisor, DemandState(OPERATE))) as procedure:
+        async with asyncio.timeout(5.0):
+            await entered.wait()
+
+        assert supervisor.expected == InternalControllerState.TRANSITION
+
+        # Graceful cleanup lets the init succeed.
+        procedure.request_stop()
+        release.set()
         await finish(procedure)
 
     assert procedure.error() is None
-    assert not entered.is_set()
+    assert not procedure.achieved
+    assert supervisor.expected == UNKNOWN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("emergency", [False, True])
+async def test_recovery_is_exempt_before_dispatch(controller_impl, observing, emergency):
+    """Recovery permits state changes from synchronous startup through task preparation."""
+    await controller_impl.set_internal_state(OPERATE)
+    supervisor = await observing(controller_impl.entity)
+    recovery_state = supervisor.recovery_state
+    now = asyncio.get_running_loop().time()
+    recovery_state.record_failure(now, ControllerFailure("first"))
+    recovery_state.begin_procedure()
+    recovery_state.record_failure(now, ControllerFailure("second"))
+    lifecycle = ControllerLifecycle(recovery_state=recovery_state)
+    lifecycle.enable()
+    lifecycle.set_demand_state(OPERATE, program=None)
+    reactor = ControllerReactor(lifecycle, supervisor)
+    procedure = PausedRecovery(supervisor, lifecycle.demand_state, emergency=emergency)
+
+    try:
+        reactor._start(procedure)
+
+        # The exemption is active before the procedure's task gets its first turn.
+        assert supervisor.expected == UNKNOWN
+
+        async with asyncio.timeout(5.0):
+            await procedure.entered.wait()
+
+            with supervisor.state_changes() as changes:
+                await controller_impl.set_internal_state(STANDBY)
+
+                while (await changes.get()).current != STANDBY:
+                    pass
+
+        reactor._evaluate()
+
+        assert procedure.interrupt is None
+        assert recovery_state.failures == 2
+        assert recovery_state.failure is None
+    finally:
+        procedure.release.set()
+        await reactor._release()
 
 
 # Program tasking
@@ -536,13 +683,60 @@ async def test_activation_failure_preserves_ownership_uncertainty(
 
     await entity_impl.handle_request(request, activate)
     await service_context.register_controller("ctrl1")
-    reactor = await observing("ctrl1", kit.program(entity_impl.entity))
+    supervisor = await observing("ctrl1")
 
-    async with running(TaskingProcedure(reactor)) as procedure:
+    async with running(TaskingProcedure(supervisor, kit.program(entity_impl.entity))) as procedure:
         await finish(procedure)
 
     assert procedure.error() is not None
     assert procedure.unresolved is (failure != "rejected")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["failed", "interrupted"])
+async def test_cleanup_targets_the_accepted_session(
+    kit, service_context, entity_impl, observing, failure
+):
+    """Cleanup targets the accepted session when startup fails."""
+    session_id = uuid.uuid7()
+    requests: list[tuple[str, uuid.UUID | None]] = []
+    accepted = asyncio.Event()
+    release = asyncio.Event()
+
+    async def activate(msg, call):
+        requests.append((msg.action, msg.session_id))
+        call.accept(response=ProgramActiveStateResponse(session_id=session_id))
+
+        if msg.action == "start":
+            accepted.set()
+            await release.wait()
+
+            if failure == "failed":
+                await call.fail("Start failed")
+                return
+
+        await call.succeed(result=None)
+
+    await entity_impl.handle_request(set_active_state_request, activate)
+    await service_context.register_controller("ctrl1")
+    supervisor = await observing("ctrl1")
+
+    async with running(TaskingProcedure(supervisor, kit.program(entity_impl.entity))) as procedure:
+        async with asyncio.timeout(5.0):
+            await accepted.wait()
+
+        # Interrupt after acceptance while startup is pending.
+        if failure == "interrupted":
+            procedure.request_abort()
+
+        release.set()
+        await finish(procedure)
+
+    cleanup = "stop" if failure == "failed" else "abort"
+
+    assert requests == [("start", None), (cleanup, session_id)]
+    assert (procedure.error() is None) is (failure == "interrupted")
+    assert procedure.unresolved is False
 
 
 @pytest.mark.asyncio
@@ -551,7 +745,7 @@ async def test_failed_tasking_abort_is_unresolved(kit, service_context, entity_i
     activated = asyncio.Event()
 
     async def activate(msg, call):
-        call.accept()
+        call.accept(response=ProgramActiveStateResponse(session_id=uuid.uuid7()))
 
         if msg.action == "abort":
             raise RuntimeError("Abort failed")
@@ -561,9 +755,9 @@ async def test_failed_tasking_abort_is_unresolved(kit, service_context, entity_i
 
     await entity_impl.handle_request(set_active_state_request, activate)
     await service_context.register_controller("ctrl1")
-    reactor = await observing("ctrl1", kit.program(entity_impl.entity))
+    supervisor = await observing("ctrl1")
 
-    async with running(TaskingProcedure(reactor)) as procedure:
+    async with running(TaskingProcedure(supervisor, kit.program(entity_impl.entity))) as procedure:
         async with asyncio.timeout(5.0):
             await activated.wait()
 
@@ -578,13 +772,13 @@ async def test_failed_tasking_abort_is_unresolved(kit, service_context, entity_i
 async def test_interrupted_activation_stops_tasking(kit, tasking, when, observing):
     """Abort cleanup waits for a pending start request before aborting program tasking."""
     started, cancelled, _ = tasking
-    reactor = await observing("ctrl1", kit.program("prog1"))
+    supervisor = await observing("ctrl1")
 
-    async with running(TaskingProcedure(reactor)) as procedure:
+    async with running(TaskingProcedure(supervisor, kit.program("prog1"))) as procedure:
         async with asyncio.timeout(5.0):
             if when == "activating":
                 # The logic is waiting on activation, which has not run yet.
-                while reactor.step != LifecycleStep.TASKING:
+                while procedure.step != LifecycleStep.TASKING:
                     await asyncio.sleep(0)
             else:
                 await started.wait()
@@ -601,21 +795,50 @@ async def test_interrupted_activation_stops_tasking(kit, tasking, when, observin
 
 
 @pytest.mark.asyncio
-async def test_superseded_activation_sends_nothing(kit, tasking, observing):
-    """A newer demand blocks tasking activation before the procedure is interrupted."""
+@pytest.mark.parametrize("change", ["stop", "abort", "cancel"])
+async def test_preparation_invalidation_prevents_activation(kit, tasking, observing, change):
+    """Invalidation during a state read prevents dispatch without unresolved work."""
     started, _, _ = tasking
-    reactor = await observing("ctrl1", kit.program("prog1"))
-    procedure = TaskingProcedure(reactor)
+    client = GatedProgramClient(kit, kit.program("prog1").entity)
+    supervisor = await observing("ctrl1")
 
-    async with running(procedure):
+    async with running(TaskingProcedure(supervisor, client)) as procedure:
         async with asyncio.timeout(5.0):
-            while reactor.step != LifecycleStep.TASKING:
-                await asyncio.sleep(0)
+            await client.reading.wait()
 
-        reactor.lifecycle.set_demand_state(STANDBY)
-        await finish(procedure)
+            match change:
+                case "stop":
+                    procedure.request_stop()
+                case "abort":
+                    procedure.request_abort()
+                case "cancel":
+                    procedure.cancel()
+
+            client.release_read.set()
+            await client.finished_read.wait()
+            await finish(procedure)
 
     assert procedure.error() is None
+    assert not procedure.unresolved
+    assert not started.is_set()
+    assert await program_inactive(kit, "prog1")
+
+
+@pytest.mark.asyncio
+async def test_preparation_failure_creates_no_cleanup_obligation(kit, tasking, observing):
+    """A failed initial read cannot leave tasking that was never requested unresolved."""
+    started, _, _ = tasking
+    client = GatedProgramClient(kit, kit.program("prog1").entity)
+    client.read_error = RuntimeError("Program state unavailable")
+    client.release_read.set()
+    supervisor = await observing("ctrl1")
+
+    async with running(TaskingProcedure(supervisor, client)) as procedure:
+        await finish(procedure)
+
+    assert isinstance(procedure.error(), ProcedureError)
+    assert procedure.error().__cause__ is client.read_error
+    assert not procedure.unresolved
     assert not started.is_set()
     assert await program_inactive(kit, "prog1")
 
@@ -624,8 +847,8 @@ async def test_superseded_activation_sends_nothing(kit, tasking, observing):
 async def test_failed_procedure_stops_tasking(kit, tasking, observing):
     """Failed logic escalates to a graceful stop of the tasking it activated."""
     started, _, release = tasking
-    reactor = await observing("ctrl1", kit.program("prog1"))
-    procedure = TaskingProcedure(reactor)
+    supervisor = await observing("ctrl1")
+    procedure = TaskingProcedure(supervisor, kit.program("prog1"))
     procedure.outcome = RuntimeError("logic failed")
 
     async with running(procedure):
@@ -645,9 +868,9 @@ async def test_failed_procedure_stops_tasking(kit, tasking, observing):
 async def test_completed_procedure_leaves_tasking(kit, tasking, observing):
     """Logic that returns leaves its tasking for the next procedure."""
     started, cancelled, _ = tasking
-    reactor = await observing("ctrl1", kit.program("prog1"))
+    supervisor = await observing("ctrl1")
 
-    async with running(TaskingProcedure(reactor)) as procedure:
+    async with running(TaskingProcedure(supervisor, kit.program("prog1"))) as procedure:
         async with asyncio.timeout(5.0):
             await started.wait()
 
@@ -667,9 +890,9 @@ async def test_completed_procedure_leaves_tasking(kit, tasking, observing):
 async def test_cancelled_procedure_leaves_tasking(kit, tasking, observing):
     """Canceling a procedure leaves its program tasking running for the next procedure."""
     started, cancelled, _ = tasking
-    reactor = await observing("ctrl1", kit.program("prog1"))
+    supervisor = await observing("ctrl1")
 
-    async with running(TaskingProcedure(reactor)) as procedure:
+    async with running(TaskingProcedure(supervisor, kit.program("prog1"))) as procedure:
         async with asyncio.timeout(5.0):
             await started.wait()
 

@@ -8,6 +8,7 @@ import contextlib
 
 import pytest
 import pytest_asyncio
+import uuid_utils.compat as uuid
 
 from sensorkit.auto.lifecycle import ControllerLifecycle, LifecycleStep
 from sensorkit.auto.procedures import ControllerFailure, ControllerIndeterminate, ControllerOffline
@@ -22,9 +23,11 @@ from sensorkit.core.controller import (
 )
 from sensorkit.core.program import (
     ProgramActiveState,
+    ProgramActiveStateResponse,
     ProgramEnableState,
     ProgramState,
     ProgramTaskingState,
+    TaskingLoopState,
     set_active_state_request,
 )
 from sensorkit.core.task import (
@@ -148,6 +151,80 @@ def test_repeated_failure_calls_for_recovery():
 
     assert recovery_state.recovery_due
     assert recovery_state.waiting(106.0) is None
+
+
+def test_procedure_counts_one_failure():
+    """Multiple detections of one controller failure retain the first error and count once."""
+    recovery_state = RecoveryState()
+    first = ControllerFailure("left OPERATE")
+    recovery_state.record_failure(0.0, first)
+    recovery_state.record_failure(1.0, ControllerFailure("tasking failed"))
+
+    assert recovery_state.failures == 1
+    assert recovery_state.failure is first
+
+    # A new procedure clears the diagnosis but keeps the count.
+    recovery_state.begin_procedure()
+
+    assert recovery_state.failure is None
+    assert recovery_state.failures == 1
+
+
+@pytest.mark.parametrize("settled_for", [10.0, 900.0])
+def test_stable_period_restarts_failure_count(settled_for):
+    """A confirmed state held for the stable period starts a fresh failure count."""
+    recovery_state = RecoveryState(stable_period=900.0)
+    recovery_state.record_failure(0.0, ControllerFailure("first"))
+    recovery_state.begin_procedure()
+
+    # Confirming the state again does not forget the failure.
+    recovery_state.set_settled(True, 10.0)
+    recovery_state.set_settled(True, 20.0)
+
+    assert recovery_state.failures == 1
+
+    recovery_state.record_failure(10.0 + settled_for, ControllerFailure("second"))
+
+    assert recovery_state.recovery_due is (settled_for < 900.0)
+
+
+def test_unsettled_time_does_not_reset_failure_count():
+    """Time outside a settled interval cannot erase an earlier failure."""
+    recovery_state = RecoveryState(stable_period=900.0)
+    recovery_state.record_failure(0.0, ControllerFailure("first"))
+    recovery_state.begin_procedure()
+    recovery_state.set_settled(True, 10.0)
+    recovery_state.set_settled(False, 20.0)
+    recovery_state.record_failure(1000.0, ControllerFailure("second"))
+
+    assert recovery_state.recovery_due
+
+
+def test_completed_stable_period_is_credited_when_leaving():
+    """Leaving a settled state preserves an earned reset and credits it only once."""
+    recovery_state = RecoveryState(stable_period=900.0)
+    recovery_state.record_failure(0.0, ControllerFailure("first"))
+    recovery_state.begin_procedure()
+    recovery_state.set_settled(True, 10.0)
+    recovery_state.set_settled(False, 910.0)
+
+    assert recovery_state.failures == 0
+    assert recovery_state.settled_at is None
+
+    recovery_state.record_failure(1000.0, ControllerFailure("second"))
+    recovery_state.set_settled(False, 2000.0)
+
+    assert recovery_state.failures == 1
+
+
+def test_procedure_boundary_preserves_settled_interval():
+    """Replacing a procedure without a state change preserves continuous settled time."""
+    recovery_state = RecoveryState()
+    recovery_state.set_settled(True, 10.0)
+    recovery_state.begin_procedure()
+    recovery_state.set_settled(True, 20.0)
+
+    assert recovery_state.settled_at == 10.0
 
 
 def test_exhausted_attempts_call_for_emergency_shutdown():
@@ -754,7 +831,7 @@ async def test_failed_postcondition_does_not_start_tasking(
         lifecycle.set_demand_state(OPERATE, contexts=contexts, program=program)
 
         # Each mismatch is a controller failure, so the second one recovers.
-        await until(lambda: lifecycle.step == LifecycleStep.RECOVER)
+        await until(lambda: lifecycle.recovery_state.recovery_due)
 
         state = await program.kv_get_model(ProgramState)
         reported = (await operating(kit)).operating_state
@@ -973,169 +1050,137 @@ async def test_shutdown_after_recovery_reconnects(kit, controller, until):
 
 
 @pytest.mark.asyncio
-async def test_hold_keeps_expiry_for_same_key(kit, controller, inits, until):
-    """Further external changes do not extend the delay while demand stays unchanged."""
-    loop = asyncio.get_running_loop()
+async def test_context_change_is_restored_without_failure(kit, controller, inits, until):
+    """A changed lifecycle context is restored at once and is not a controller failure."""
+    lifecycle = ControllerLifecycle(recovery_state=RecoveryState(retry_delay=30.0))
 
-    async with started(ControllerLifecycle(external_change_delay=1.0), kit) as lifecycle:
+    async with started(lifecycle, kit):
         lifecycle.enable()
         lifecycle.set_demand_state(OPERATE, program=None)
         await until(lambda: inits[0] == 1 and lifecycle.step == LifecycleStep.WAIT)
-        await until(lambda: reports(kit, OPERATE))
 
-        held_at = loop.time()
-        await controller.set_internal_state(STANDBY)
-
-        # Another external context change wakes the reactor without changing demand.
-        await asyncio.sleep(0.5)
         other = KeywordDict()
         other.set_value("dome", "closed")
-        await controller.set_internal_state(STANDBY, context=other)
+        await controller.set_internal_state(OPERATE, context=other)
 
-        await until(lambda: inits[0] == 2)
-        elapsed = loop.time() - held_at
+        # A counted failure would wait out the retry delay.
+        await until(lambda: inits[0] == 2, timeout=5.0)
+        await until(lambda: reports(kit, OPERATE))
 
-    assert 0.9 <= elapsed < 1.4
-
-
-@pytest.mark.asyncio
-async def test_hold_restarts_for_changed_key(kit, service_context, controller, inits, until):
-    """Changing the demanded program restarts the delay after an external change."""
-    loop = asyncio.get_running_loop()
-    prog_a = await register_idle_program(kit, service_context, "prog_a")
-    prog_b = await register_idle_program(kit, service_context, "prog_b")
-
-    async with started(ControllerLifecycle(external_change_delay=1.0), kit) as lifecycle:
-        lifecycle.enable()
-        lifecycle.set_demand_state(OPERATE, program=prog_a)
-        await until(lambda: lifecycle.step == LifecycleStep.TASKING)
-
-        held_at = loop.time()
-        await controller.set_internal_state(STANDBY)
-
-        await asyncio.sleep(0.5)
-        lifecycle.set_demand_state(OPERATE, program=prog_b)
-
-        # The delay for the original demand would have expired by now.
-        await asyncio.sleep(0.7)
-        assert inits[0] == 1
-
-        await until(lambda: inits[0] == 2)
-        elapsed = loop.time() - held_at
-
-    assert elapsed >= 1.4
+    assert lifecycle.recovery_state.failures == 0
 
 
 @pytest.mark.asyncio
-async def test_hold_survives_demand_change_during_cleanup(
+async def test_context_change_stops_tasking_gracefully(
     kit, service_context, controller, inits, until
 ):
-    """Changing context during cleanup preserves the need to delay restoring demand."""
-    loop = asyncio.get_running_loop()
+    """A changed lifecycle context waits for the running collect before restoring demand."""
     collect_started = asyncio.Event()
+    collect_aborted = asyncio.Event()
     collect_release = asyncio.Event()
 
     @controller.task_handler(CollectTask)
     async def collect(task):
         collect_started.set()
-        await collect_release.wait()
+
+        try:
+            await collect_release.wait()
+        except asyncio.CancelledError:
+            collect_aborted.set()
+            raise
 
     program = await register_program(kit, service_context, "prog1")
-    context = KeywordDict()
-    context.set_value("dome", "closed")
-    contexts = TaskContextMap(by_type={"init": context})
 
-    async with started(
-        ControllerLifecycle(external_change_delay=1.0), kit, collect_release
-    ) as lifecycle:
+    async with started(ControllerLifecycle(), kit, collect_release) as lifecycle:
         lifecycle.enable()
         lifecycle.set_demand_state(OPERATE, program=program)
 
         async with asyncio.timeout(5.0):
             await collect_started.wait()
 
-        # Tasking stops gracefully after the external change, waiting for the collect.
-        await controller.set_internal_state(STANDBY)
-        await asyncio.sleep(0.1)
+        other = KeywordDict()
+        other.set_value("dome", "open")
+        await controller.set_internal_state(OPERATE, context=other)
+        await asyncio.sleep(0.2)
 
-        # Demand changes its lifecycle context while cleanup runs.
-        lifecycle.set_demand_state(OPERATE, contexts=contexts, program=program)
-        await asyncio.sleep(0.1)
-        released_at = loop.time()
-        collect_release.set()
-
-        await asyncio.sleep(0.5)
         assert inits[0] == 1
 
+        collect_release.set()
         await until(lambda: inits[0] == 2)
-        elapsed = loop.time() - released_at
 
-    assert elapsed >= 0.9
+    assert not collect_aborted.is_set()
+    assert lifecycle.recovery_state.failures == 0
 
 
 @pytest.mark.asyncio
-async def test_expired_hold_does_not_restart_after_interrupted_init(
-    kit, service_context, controller, until
-):
-    """A program switch after hold expiry restores demand without another external change."""
-    entered = asyncio.Event()
-    cancelled = asyncio.Event()
-    release = asyncio.Event()
-    inits = 0
+async def test_state_departure_is_not_repaired_by_a_report(kit, controller, inits, until):
+    """A later matching observation cannot replace a new command after a state departure."""
+    lifecycle = ControllerLifecycle(recovery_state=RecoveryState(retry_delay=0.3))
 
-    @controller.task_handler(InitTask)
-    async def init(task):
-        nonlocal inits
-        inits += 1
-
-        if inits == 2:
-            entered.set()
-
-            try:
-                await release.wait()
-            except asyncio.CancelledError:
-                cancelled.set()
-                raise
-
-    program = await register_idle_program(kit, service_context, "prog1")
-
-    async with started(ControllerLifecycle(external_change_delay=1.0), kit, release) as lifecycle:
+    async with started(lifecycle, kit):
         lifecycle.enable()
         lifecycle.set_demand_state(OPERATE, program=None)
-        await until(lambda: inits == 1 and lifecycle.step == LifecycleStep.WAIT)
+        await until(lambda: inits[0] == 1 and lifecycle.step == LifecycleStep.WAIT)
+
+        await controller.set_internal_state(STANDBY)
+        await until(lambda: lifecycle.recovery_state.failures == 1)
+
+        # The controller reports the demanded state again before the retry.
+        await controller.set_internal_state(OPERATE)
+        await until(lambda: inits[0] == 2)
+        await until(lambda: lifecycle.step == LifecycleStep.WAIT)
+
+    assert lifecycle.recovery_state.failures == 1
+
+
+@pytest.mark.asyncio
+async def test_repeated_departures_reach_recovery(kit, controller, inits, until):
+    """Departures separated by successful initialization still escalate to recovery."""
+    recoveries = 0
+
+    @controller.task_handler(RecoverTask)
+    async def recover(task):
+        nonlocal recoveries
+        recoveries += 1
+
+    lifecycle = ControllerLifecycle(recovery_state=quick_recovery_state())
+
+    async with started(lifecycle, kit):
+        lifecycle.enable()
+        lifecycle.set_demand_state(OPERATE, program=None)
+
+        await until(lambda: inits[0] == 1 and lifecycle.step == LifecycleStep.WAIT)
         await until(lambda: reports(kit, OPERATE))
         await controller.set_internal_state(STANDBY)
 
-        async with asyncio.timeout(5.0):
-            await entered.wait()
+        # Initialization succeeds between the two departures.
+        await until(lambda: inits[0] == 2 and lifecycle.step == LifecycleStep.WAIT)
+        await until(lambda: reports(kit, OPERATE))
+        await controller.set_internal_state(STANDBY)
 
-        lifecycle.set_demand_state(OPERATE, program=program, interrupt=True)
-
-        async with asyncio.timeout(5.0):
-            await cancelled.wait()
-
-        await until(lambda: inits == 3, timeout=0.7)
-        await until(lambda: lifecycle.step == LifecycleStep.TASKING)
+        await until(lambda: recoveries == 1)
+        await until(lambda: inits[0] == 3 and lifecycle.step == LifecycleStep.WAIT)
 
 
 @pytest.mark.asyncio
-async def test_shutdown_bypasses_hold(kit, controller, inits, until):
-    """Shutdown does not wait for an out-of-band hold."""
+async def test_shutdown_bypasses_retry_delay(kit, controller, inits, until):
+    """Shutdown does not wait for the retry delay after a controller failure."""
     shutdown_ran = asyncio.Event()
 
     @controller.task_handler(ShutdownTask)
     async def shutdown(task):
         shutdown_ran.set()
 
-    async with started(ControllerLifecycle(external_change_delay=30.0), kit) as lifecycle:
+    lifecycle = ControllerLifecycle(recovery_state=RecoveryState(retry_delay=30.0))
+
+    async with started(lifecycle, kit):
         lifecycle.enable()
         lifecycle.set_demand_state(OPERATE, program=None)
         await until(lambda: inits[0] == 1 and lifecycle.step == LifecycleStep.WAIT)
         await until(lambda: reports(kit, OPERATE))
 
         await controller.set_internal_state(STANDBY)
-        await until(lambda: reports(kit, STANDBY))
-        await asyncio.sleep(0.1)
+        await until(lambda: lifecycle.recovery_state.failures == 1)
 
         lifecycle.set_demand_state(SHUTDOWN)
 
@@ -1225,7 +1270,7 @@ async def test_unconfirmed_tasking_stop_restarts_reactor(kit, controller, entity
                 tasking_state=ProgramTaskingState(),
             )
         )
-        call.accept()
+        call.accept(response=ProgramActiveStateResponse(session_id=uuid.uuid7()))
         await call.succeed(result=None)
         activated.set()
 
@@ -1386,6 +1431,146 @@ async def test_cancelled_stop_propagates(kit, controller, lingering_init):
         assert controller.task_running()
 
 
+# Tasking session faults
+
+
+@pytest.mark.asyncio
+async def test_leaving_operate_during_tasking_counts_once(
+    kit, service_context, controller, inits, until
+):
+    """Controller observation and program reporting count one session fault."""
+    collects = 0
+    collect_aborted = asyncio.Event()
+
+    @controller.task_handler(CollectTask)
+    async def collect(task):
+        nonlocal collects
+        collects += 1
+
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            collect_aborted.set()
+            raise
+
+    program = await register_program(kit, service_context, "prog1")
+    recovery_state = RecoveryState(retry_delay=0.05)
+    lifecycle = ControllerLifecycle(recovery_state=recovery_state)
+
+    async with started(lifecycle, kit):
+        lifecycle.enable()
+        lifecycle.set_demand_state(OPERATE, program=program)
+        await until(lambda: collects == 1)
+
+        # Leaving OPERATE aborts tasking at once.
+        await controller.set_internal_state(STANDBY)
+
+        async with asyncio.timeout(5.0):
+            await collect_aborted.wait()
+
+        # Restore demand after one retry without recounting the program report.
+        await until(lambda: collects == 2)
+        await asyncio.sleep(0.2)
+
+    assert recovery_state.failures == 1
+    assert inits[0] == 2
+
+
+@pytest.mark.asyncio
+async def test_leaving_operate_without_a_report_is_a_fault(
+    kit, controller, inits, entity_impl, until
+):
+    """Controller observation ends tasking even when the program is silent."""
+    starts = 0
+
+    async def set_active_state(msg, call):
+        nonlocal starts
+        call.accept(response=ProgramActiveStateResponse(session_id=uuid.uuid7()))
+        active = msg.action == "start"
+        starts += active
+        await entity_impl.emit_event(ProgramActiveState(active=active, origin="request"))
+        await call.succeed(result=None)
+
+    await entity_impl.handle_request(set_active_state_request, set_active_state)
+    await entity_impl.kv_put_model(
+        ProgramState(
+            enable_state=ProgramEnableState(enabled=True, controller="ctrl1"),
+            active_state=ProgramActiveState(active=False, origin="init"),
+            tasking_state=ProgramTaskingState(),
+        )
+    )
+    recovery_state = RecoveryState(retry_delay=0.05)
+    lifecycle = ControllerLifecycle(recovery_state=recovery_state)
+
+    async with started(lifecycle, kit):
+        lifecycle.enable()
+        lifecycle.set_demand_state(OPERATE, program=kit.program(entity_impl.entity))
+        await until(lambda: starts == 1 and lifecycle.step == LifecycleStep.TASKING)
+
+        await controller.set_internal_state(STANDBY)
+        await until(lambda: inits[0] == 2 and starts == 2)
+
+    assert recovery_state.failures == 1
+
+
+@pytest.mark.asyncio
+async def test_reports_count_only_for_the_owned_session(
+    kit, service_context, controller, inits, entity_impl, until
+):
+    """Only the owned session can report a terminal fault."""
+    stale = TaskingLoopState(session_id=uuid.uuid7(), stage="execution", task_type="collect")
+    session = TaskingLoopState(session_id=uuid.uuid7(), stage="factory")
+    activated = asyncio.Event()
+
+    async def set_active_state(msg, call):
+        call.accept(response=ProgramActiveStateResponse(session_id=session.session_id))
+
+        if msg.action == "start":
+            await entity_impl.emit_event(
+                ProgramTaskingState(
+                    loop_state=stale.model_copy(update={"fault": "controller", "error": "late"})
+                )
+            )
+            await entity_impl.emit_event(ProgramActiveState(active=True, origin="request"))
+            await entity_impl.emit_event(ProgramTaskingState(loop_state=session))
+            activated.set()
+        else:
+            await entity_impl.emit_event(ProgramTaskingState())
+            await entity_impl.emit_event(ProgramActiveState(active=False, origin="request"))
+
+        await call.succeed(result=None)
+
+    await entity_impl.handle_request(set_active_state_request, set_active_state)
+    await entity_impl.kv_put_model(
+        ProgramState(
+            enable_state=ProgramEnableState(enabled=True, controller="ctrl1"),
+            active_state=ProgramActiveState(active=False, origin="init"),
+            tasking_state=ProgramTaskingState(loop_state=stale),
+        )
+    )
+    recovery_state = RecoveryState()
+
+    async with started(ControllerLifecycle(recovery_state=recovery_state), kit) as lifecycle:
+        lifecycle.enable()
+        lifecycle.set_demand_state(OPERATE, program=kit.program(entity_impl.entity))
+
+        async with asyncio.timeout(5.0):
+            await activated.wait()
+
+        await asyncio.sleep(0.2)
+
+        assert lifecycle.step == LifecycleStep.TASKING
+        assert recovery_state.failures == 0
+
+        # Count the owned session fault once.
+        await entity_impl.emit_event(
+            ProgramTaskingState(
+                loop_state=session.model_copy(update={"fault": "controller", "error": "fault"})
+            )
+        )
+        await until(lambda: recovery_state.failures == 1)
+
+
 # Program interrupt policy
 
 
@@ -1436,77 +1621,3 @@ async def test_program_interrupt_waits_for_pending_init(kit, service_context, co
 
     assert not cancelled.is_set()
     assert ran[0] == "prog_b"
-
-
-def test_procedure_counts_one_failure():
-    """Multiple detections of one controller failure retain the first error and count once."""
-    recovery_state = RecoveryState()
-    first = ControllerFailure("left OPERATE")
-    recovery_state.record_failure(0.0, first)
-    recovery_state.record_failure(1.0, ControllerFailure("tasking failed"))
-
-    assert recovery_state.failures == 1
-    assert recovery_state.failure is first
-
-    # A new procedure clears the diagnosis but keeps the count.
-    recovery_state.begin_procedure()
-
-    assert recovery_state.failure is None
-    assert recovery_state.failures == 1
-
-
-@pytest.mark.parametrize("settled_for", [10.0, 900.0])
-def test_stable_period_restarts_failure_count(settled_for):
-    """A confirmed state held for the stable period starts a fresh failure count."""
-    recovery_state = RecoveryState(stable_period=900.0)
-    recovery_state.record_failure(0.0, ControllerFailure("first"))
-    recovery_state.begin_procedure()
-
-    # Confirming the state again does not forget the failure.
-    recovery_state.set_settled(True, 10.0)
-    recovery_state.set_settled(True, 20.0)
-
-    assert recovery_state.failures == 1
-
-    recovery_state.record_failure(10.0 + settled_for, ControllerFailure("second"))
-
-    assert recovery_state.recovery_due is (settled_for < 900.0)
-
-
-def test_unsettled_time_does_not_reset_failure_count():
-    """Time outside a settled interval cannot erase an earlier failure."""
-    recovery_state = RecoveryState(stable_period=900.0)
-    recovery_state.record_failure(0.0, ControllerFailure("first"))
-    recovery_state.begin_procedure()
-    recovery_state.set_settled(True, 10.0)
-    recovery_state.set_settled(False, 20.0)
-    recovery_state.record_failure(1000.0, ControllerFailure("second"))
-
-    assert recovery_state.recovery_due
-
-
-def test_completed_stable_period_is_credited_when_leaving():
-    """Leaving a settled state preserves an earned reset and credits it only once."""
-    recovery_state = RecoveryState(stable_period=900.0)
-    recovery_state.record_failure(0.0, ControllerFailure("first"))
-    recovery_state.begin_procedure()
-    recovery_state.set_settled(True, 10.0)
-    recovery_state.set_settled(False, 910.0)
-
-    assert recovery_state.failures == 0
-    assert recovery_state.settled_at is None
-
-    recovery_state.record_failure(1000.0, ControllerFailure("second"))
-    recovery_state.set_settled(False, 2000.0)
-
-    assert recovery_state.failures == 1
-
-
-def test_procedure_boundary_preserves_settled_interval():
-    """Replacing a procedure without a state change preserves continuous settled time."""
-    recovery_state = RecoveryState()
-    recovery_state.set_settled(True, 10.0)
-    recovery_state.begin_procedure()
-    recovery_state.set_settled(True, 20.0)
-
-    assert recovery_state.settled_at == 10.0

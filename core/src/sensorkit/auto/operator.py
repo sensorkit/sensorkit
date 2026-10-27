@@ -31,9 +31,11 @@ class ControllerConfig(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     estimated_startup_time: float = 0.0
     estimated_shutdown_time: float = 0.0
-    external_change_delay: float = Field(default=30.0, ge=0.0, allow_inf_nan=False)
-    """Seconds to wait before restoring the demanded state and lifecycle context after an
-    external change. Zero disables the wait."""
+    transition_grace: float = Field(default=10.0, gt=0.0)
+    """Maximum seconds of state mismatch during a commanded lifecycle transition.
+
+    Time in TRANSITION does not count toward this limit.
+    """
     modes: ModeList = Field(default_factory=list)
     constraints: list[Constraint] = Field(default_factory=list)
     tasking: list[ProgramConfig] = Field(default_factory=list)
@@ -108,7 +110,7 @@ class ControllerDriver:
         self.constraints = ConstraintManager(config.constraints)
 
         # Create the lifecycle object.
-        self.lifecycle = ControllerLifecycle(external_change_delay=config.external_change_delay)
+        self.lifecycle = ControllerLifecycle(transition_grace=config.transition_grace)
 
     async def start(
         self,

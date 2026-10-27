@@ -39,8 +39,8 @@ automation:
       # Used for schedule lookahead so the sensor is ready when a window opens
       estimated_startup_time: 60.0
 
-      # Seconds to wait before restoring the desired state after an external change
-      external_change_delay: 30.0
+      # Seconds a lifecycle task may disagree with reported state before it is a failure
+      transition_grace: 10.0
 
       modes:
         - name: nighttime
@@ -78,8 +78,8 @@ automation:
           priority: 3
 ```
 
-`external_change_delay` controls how long the agent waits before restoring the desired controller state and lifecycle context after an external change.
-It defaults to 30 seconds; set it to 0 to disable the wait.
+`transition_grace` bounds how long the controller may report an unexpected state while a lifecycle task sent by the agent runs.
+It defaults to 10 seconds.
 See [Controller state and tasking](#controller-state-and-tasking) for details.
 
 ---
@@ -195,6 +195,7 @@ sensorkit agent include MyProgram
 The agent compares the controller's reported state with the state chosen by the election.
 It also checks the lifecycle context, the keyword values attached to the Init, Standby, or Shutdown task.
 If both match and no transition is pending, the agent skips the lifecycle task.
+After a controller failure, a matching observation alone is not enough, and the agent sends the lifecycle task again.
 If a running lifecycle task is already transitioning to the desired state with the matching context, the agent waits up to five minutes or until that task expires, whichever comes first.
 When the agent sends a lifecycle task, it interrupts any running controller task.
 
@@ -209,16 +210,33 @@ Before starting a new tasking session, the agent aborts any running controller t
 The agent manages tasking sessions it starts or adopts, but does not stop other programs' sessions.
 Tasks from those sessions can still be interrupted on the controller.
 
-### External changes
+### Expected state
 
-If the controller unexpectedly changes a state or lifecycle context that the agent has confirmed, the agent stops its program tasking and waits for `external_change_delay` before restoring the desired state.
-This delay applies to changes outside the agent's pending lifecycle tasks.
-Shutdown and recovery bypass it.
+The agent tracks its expected state separately from observed controller state.
+On startup, the first settled observation sets the expectation, allowing the agent to adopt a controller that is already operating.
 
-While the controller's state or lifecycle context differs from the desired values, changing the desired state, lifecycle context, or selected program restarts the delay.
-Further controller changes alone do not extend it.
-The delay ends early if the controller reports the desired state and context.
-When the delay ends, the agent reevaluates the latest demand before sending tasks.
+When the agent sends a lifecycle task, it expects TRANSITION.
+The controller may keep reporting its previous state for up to `transition_grace`, for example while it aborts an interrupted task.
+Observing TRANSITION clears the mismatch deadline, and the task may then run as long as its own timeout allows.
+If the controller reports the target state before the task result arrives, a new `transition_grace` period starts.
+The agent expects the target state once the task succeeds and a fresh state read confirms it.
+The agent does not need to observe TRANSITION for a fast task.
+
+Outside a lifecycle task, a controller that leaves the expected state has failed.
+A state mismatch that lasts longer than `transition_grace` during a lifecycle task is also a failure.
+Either case counts one controller failure, aborts the current procedure, and sets the local expectation to UNKNOWN.
+A matching observation alone does not restore that expectation.
+A program fault reported for the same incident does not count again.
+
+A changed lifecycle context alone is not a failure.
+The agent stops its program tasking gracefully and restores the desired context without delay.
+
+Recovery runs with an UNKNOWN expectation and may leave the controller in any state.
+The next successful lifecycle task establishes a settled expectation.
+Shutdown bypasses the retry delay after a failure.
+
+Two failures trigger recovery even if a lifecycle task succeeded between them.
+The failure count starts over once a confirmed state has held for 15 minutes.
 
 ## CLI control
 

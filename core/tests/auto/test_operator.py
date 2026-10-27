@@ -47,22 +47,22 @@ async def reports(kit, state: InternalControllerState) -> bool:
     return operating.current == state and operating.target is None
 
 
-@pytest.mark.parametrize("delay", [-1.0, math.inf, math.nan])
-def test_invalid_external_change_delay_is_rejected(delay):
+@pytest.mark.parametrize("grace", [0.0, -1.0, -math.inf, math.nan])
+def test_invalid_transition_grace_is_rejected(grace):
     with pytest.raises(ValidationError):
-        ControllerConfig(external_change_delay=delay)
+        ControllerConfig(transition_grace=grace)
 
     with pytest.raises(ValueError):
-        ControllerLifecycle(external_change_delay=delay)
+        ControllerLifecycle(transition_grace=grace)
 
 
-@pytest.mark.parametrize("delay", [None, 0.0, 2.5])
-def test_external_change_delay_reaches_lifecycle(delay):
-    config = ControllerConfig() if delay is None else ControllerConfig(external_change_delay=delay)
+@pytest.mark.parametrize("grace", [None, 2.5, math.inf])
+def test_transition_grace_reaches_lifecycle(grace):
+    config = ControllerConfig() if grace is None else ControllerConfig(transition_grace=grace)
     config.name = "ctrl1"
     driver = ControllerDriver(config, ProgramDiscovery(), ProgramStateManager([]))
 
-    assert driver.lifecycle.external_change_delay == (30.0 if delay is None else delay)
+    assert driver.lifecycle.transition_grace == (10.0 if grace is None else grace)
 
 
 @pytest.mark.asyncio
