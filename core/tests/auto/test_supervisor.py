@@ -9,8 +9,8 @@ import contextlib
 import pytest
 import pytest_asyncio
 
+from sensorkit.auto.failure import FailureState
 from sensorkit.auto.procedures import ControllerFailure
-from sensorkit.auto.reactor import RecoveryState
 from sensorkit.auto.supervisor import ControllerStateSupervisor
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.controller import (
@@ -77,14 +77,14 @@ async def gated_init(controller):
 
 @contextlib.asynccontextmanager
 async def supervising(
-    kit, *, transition_grace: float = GRACE, recovery_state: RecoveryState | None = None
+    kit, *, transition_grace: float = GRACE, failure_state: FailureState | None = None
 ):
     """Start a monitor and supervisor for ctrl1, stopping both on exit."""
     monitor = ControllerMonitor(kit.controller("ctrl1"))
     await monitor.start()
     supervisor = ControllerStateSupervisor(
         monitor,
-        RecoveryState() if recovery_state is None else recovery_state,
+        FailureState() if failure_state is None else failure_state,
         transition_grace=transition_grace,
     )
     await supervisor.start()
@@ -137,7 +137,7 @@ async def test_start_waits_for_processed_state(kit, controller, cancel):
     monitor = ControllerMonitor(kit.controller("ctrl1"))
     await monitor.start()
     supervisor = PausedSupervisor(
-        monitor, RecoveryState(), transition_grace=GRACE, pause_at=STANDBY
+        monitor, FailureState(), transition_grace=GRACE, pause_at=STANDBY
     )
     starting = asyncio.create_task(supervisor.start())
 
@@ -217,7 +217,7 @@ async def test_queued_transition_cannot_replace_confirmed_state(
     monitor = ControllerMonitor(kit.controller("ctrl1"))
     await monitor.start()
     supervisor = PausedSupervisor(
-        monitor, RecoveryState(), transition_grace=GRACE, pause_at=TRANSITION
+        monitor, FailureState(), transition_grace=GRACE, pause_at=TRANSITION
     )
     call = None
 
@@ -246,7 +246,7 @@ async def test_queued_transition_cannot_replace_confirmed_state(
         assert supervisor.state.current == OPERATE
         assert supervisor.expected == OPERATE
         assert not supervisor.failed.is_set()
-        assert supervisor.recovery_state.failures == 0
+        assert supervisor.failure_state.failures == 0
     finally:
         release_init.set()
         supervisor.release.set()
@@ -292,7 +292,7 @@ async def test_unanswered_transition_fails_after_grace(kit, controller, until):
 
         assert GRACE <= elapsed < GRACE + 0.5
         assert supervisor.expected == UNKNOWN
-        assert supervisor.recovery_state.failures == 1
+        assert supervisor.failure_state.failures == 1
 
 
 @pytest.mark.asyncio
@@ -322,7 +322,7 @@ async def test_long_transition_is_not_a_failure(kit, controller, gated_init, unt
         await asyncio.sleep(1.5 * GRACE)
 
         assert not supervisor.failed.is_set()
-        assert supervisor.recovery_state.failures == 0
+        assert supervisor.failure_state.failures == 0
 
 
 @pytest.mark.asyncio
@@ -356,7 +356,7 @@ async def test_unconfirmed_target_fails_after_grace(kit, controller, gated_init,
 
     assert GRACE - 0.2 <= elapsed < GRACE + 0.5
     assert supervisor.expected == UNKNOWN
-    assert supervisor.recovery_state.failures == 1
+    assert supervisor.failure_state.failures == 1
 
 
 @pytest.mark.asyncio
@@ -379,7 +379,7 @@ async def test_skipped_transition_keeps_first_deadline(kit, controller, until):
         elapsed = loop.time() - expected_at
 
     assert GRACE <= elapsed < 1.4 * GRACE
-    assert supervisor.recovery_state.failures == 1
+    assert supervisor.failure_state.failures == 1
 
 
 @pytest.mark.asyncio
@@ -411,7 +411,7 @@ async def test_leaving_settled_conditions_ends_interval(kit, controller, change)
     await controller.set_internal_state(OPERATE)
 
     async with supervising(kit) as supervisor:
-        assert supervisor.recovery_state.settled_at is not None
+        assert supervisor.failure_state.settled_at is not None
 
         match change:
             case "transition":
@@ -426,7 +426,7 @@ async def test_leaving_settled_conditions_ends_interval(kit, controller, change)
                 async with asyncio.timeout(5.0):
                     await supervisor.failed.wait()
 
-        assert supervisor.recovery_state.settled_at is None
+        assert supervisor.failure_state.settled_at is None
 
 
 @pytest.mark.asyncio
@@ -435,11 +435,11 @@ async def test_reconfirmation_preserves_settled_interval(kit, controller):
     await controller.set_internal_state(OPERATE)
 
     async with supervising(kit) as supervisor:
-        settled = supervisor.recovery_state.settled_at
-        supervisor.recovery_state.begin_procedure()
+        settled = supervisor.failure_state.settled_at
+        supervisor.failure_state.begin_procedure()
         await supervisor.confirm(OPERATE)
 
-        assert supervisor.recovery_state.settled_at == settled
+        assert supervisor.failure_state.settled_at == settled
 
 
 @pytest.mark.asyncio
@@ -455,15 +455,11 @@ async def test_long_transition_preserves_failure_history(kit, controller):
         raise RuntimeError("Initialization failed")
 
     await controller.set_internal_state(OPERATE)
-    recovery_state = RecoveryState(stable_period=0.05)
+    failure_state = FailureState(stable_period=0.05)
 
-    async with supervising(
-        kit, transition_grace=0.05, recovery_state=recovery_state
-    ) as supervisor:
-        recovery_state.record_failure(
-            asyncio.get_running_loop().time(), ControllerFailure("first")
-        )
-        recovery_state.begin_procedure()
+    async with supervising(kit, transition_grace=0.05, failure_state=failure_state) as supervisor:
+        failure_state.record_failure(asyncio.get_running_loop().time(), ControllerFailure("first"))
+        failure_state.begin_procedure()
         await supervisor.confirm(OPERATE)
         supervisor.expect_transition()
         call = asyncio.ensure_future(kit.controller("ctrl1").execute_task(InitTask()))
@@ -471,13 +467,13 @@ async def test_long_transition_preserves_failure_history(kit, controller):
         try:
             async with asyncio.timeout(5.0):
                 await entered.wait()
-                await asyncio.sleep(2 * recovery_state.stable_period)
+                await asyncio.sleep(2 * failure_state.stable_period)
                 release.set()
                 await asyncio.gather(call, return_exceptions=True)
                 await supervisor.failed.wait()
 
-            assert recovery_state.failures == 2
-            assert recovery_state.recovery_due
+            assert failure_state.failures == 2
+            assert failure_state.recovery_due
         finally:
             release.set()
             await asyncio.gather(call, return_exceptions=True)
@@ -487,7 +483,7 @@ async def test_long_transition_preserves_failure_history(kit, controller):
 async def test_departure_counts_one_failure(kit, controller, until):
     """Leaving a settled expected state counts once, regardless of later state updates."""
     async with settled_at(kit, controller, OPERATE, until) as supervisor:
-        recovery_state = supervisor.recovery_state
+        failure_state = supervisor.failure_state
 
         with supervisor.state_changes() as changes:
             await controller.set_internal_state(STANDBY)
@@ -498,12 +494,12 @@ async def test_departure_counts_one_failure(kit, controller, until):
             assert supervisor.expected == UNKNOWN
 
             # Another observer detecting the same incident does not count it again.
-            recovery_state.record_failure(0.0, ControllerFailure("tasking failed"))
+            failure_state.record_failure(0.0, ControllerFailure("tasking failed"))
             await controller.set_internal_state(ERROR)
             await compared(changes, ERROR)
 
-    assert recovery_state.failures == 1
-    assert "left operate" in str(recovery_state.failure)
+    assert failure_state.failures == 1
+    assert "left operate" in str(failure_state.failure)
 
 
 @pytest.mark.asyncio
@@ -533,7 +529,7 @@ async def test_context_change_is_not_a_failure(kit, controller, until):
     other.set_value("dome", "closed")
 
     async with settled_at(kit, controller, OPERATE, until) as supervisor:
-        settled = supervisor.recovery_state.settled_at
+        settled = supervisor.failure_state.settled_at
 
         with supervisor.state_changes() as changes:
             await controller.set_internal_state(OPERATE, context=other)
@@ -541,7 +537,7 @@ async def test_context_change_is_not_a_failure(kit, controller, until):
 
         assert supervisor.expected == OPERATE
         assert supervisor.settled(OPERATE, other)
-        assert supervisor.recovery_state.settled_at == settled
+        assert supervisor.failure_state.settled_at == settled
         assert not supervisor.failed.is_set()
 
 
@@ -560,7 +556,7 @@ async def test_unknown_expectation_accepts_any_report(kit, controller, until):
         await asyncio.sleep(1.5 * GRACE)
 
         assert not supervisor.failed.is_set()
-        assert supervisor.recovery_state.failures == 0
+        assert supervisor.failure_state.failures == 0
 
 
 # Lifetime
@@ -572,7 +568,7 @@ async def test_start_fails_when_monitor_has_stopped(kit, controller):
     monitor = ControllerMonitor(kit.controller("ctrl1"))
     await monitor.start()
     await monitor.stop()
-    supervisor = ControllerStateSupervisor(monitor, RecoveryState(), transition_grace=GRACE)
+    supervisor = ControllerStateSupervisor(monitor, FailureState(), transition_grace=GRACE)
 
     try:
         async with asyncio.timeout(5.0):
@@ -593,7 +589,7 @@ async def test_stop_ends_notifications(kit, controller):
     await monitor.start()
 
     try:
-        supervisor = ControllerStateSupervisor(monitor, RecoveryState(), transition_grace=GRACE)
+        supervisor = ControllerStateSupervisor(monitor, FailureState(), transition_grace=GRACE)
         await supervisor.start()
 
         with supervisor.state_changes() as changes:
@@ -636,4 +632,4 @@ async def test_monitor_failure_ends_supervision(kit, controller, until):
         with pytest.raises(ControllerStateUnknown):
             _ = supervisor.state
 
-    assert supervisor.recovery_state.failures == 0
+    assert supervisor.failure_state.failures == 0

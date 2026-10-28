@@ -8,6 +8,7 @@ import pytest
 import pytest_asyncio
 import uuid_utils.compat as uuid
 
+from sensorkit.auto.failure import FailureState
 from sensorkit.auto.lifecycle import ControllerLifecycle
 from sensorkit.auto.procedures import (
     ControllerFailure,
@@ -18,7 +19,7 @@ from sensorkit.auto.procedures import (
     ProcedureError,
     RecoverProcedure,
 )
-from sensorkit.auto.reactor import ControllerReactor, RecoveryState
+from sensorkit.auto.reactor import ControllerReactor
 from sensorkit.auto.supervisor import ControllerStateSupervisor
 from sensorkit.backend.request import declare_request
 from sensorkit.core.controller import ControllerMonitor, InternalControllerState
@@ -206,7 +207,7 @@ async def observing(kit):
     async def observe(controller: str) -> ControllerStateSupervisor:
         monitor = ControllerMonitor(kit.controller(controller))
         await monitor.start()
-        supervisor = ControllerStateSupervisor(monitor, RecoveryState(), transition_grace=10.0)
+        supervisor = ControllerStateSupervisor(monitor, FailureState(), transition_grace=10.0)
         await supervisor.start()
         started.append((monitor, supervisor))
         return supervisor
@@ -615,44 +616,53 @@ async def test_interrupted_command_leaves_expectation_unknown(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("emergency", [False, True])
-async def test_recovery_is_exempt_before_dispatch(controller_impl, observing, emergency):
+async def test_recovery_is_exempt_before_dispatch(kit, controller_impl, emergency):
     """Recovery permits state changes from synchronous startup through task preparation."""
     await controller_impl.set_internal_state(OPERATE)
-    supervisor = await observing(controller_impl.entity)
-    recovery_state = supervisor.recovery_state
-    now = asyncio.get_running_loop().time()
-    recovery_state.record_failure(now, ControllerFailure("first"))
-    recovery_state.begin_procedure()
-    recovery_state.record_failure(now, ControllerFailure("second"))
-    lifecycle = ControllerLifecycle(recovery_state=recovery_state)
-    lifecycle.enable()
-    lifecycle.set_demand_state(OPERATE, program=None)
-    reactor = ControllerReactor(lifecycle, supervisor)
-    procedure = PausedRecovery(supervisor, lifecycle.demand_state, emergency=emergency)
+    lifecycle = ControllerLifecycle()
+    async with contextlib.AsyncExitStack() as cleanup:
+        monitor = ControllerMonitor(kit.controller(controller_impl.entity))
+        await monitor.start()
+        cleanup.push_async_callback(monitor.stop)
+        supervisor = ControllerStateSupervisor(
+            monitor, lifecycle.failure_state, transition_grace=10.0
+        )
+        await supervisor.start()
+        cleanup.push_async_callback(supervisor.stop)
 
-    try:
-        reactor._start(procedure)
+        failure_state = lifecycle.failure_state
+        now = asyncio.get_running_loop().time()
+        failure_state.record_failure(now, ControllerFailure("first"))
+        failure_state.begin_procedure()
+        failure_state.record_failure(now, ControllerFailure("second"))
+        lifecycle.enable()
+        lifecycle.set_demand_state(OPERATE, program=None)
+        reactor = ControllerReactor(lifecycle, supervisor)
+        procedure = PausedRecovery(supervisor, lifecycle.demand_state, emergency=emergency)
 
-        # The exemption is active before the procedure's task gets its first turn.
-        assert supervisor.expected == UNKNOWN
+        try:
+            reactor._start(procedure)
 
-        async with asyncio.timeout(5.0):
-            await procedure.entered.wait()
+            # The exemption is active before the procedure's task gets its first turn.
+            assert supervisor.expected == UNKNOWN
 
-            with supervisor.state_changes() as changes:
-                await controller_impl.set_internal_state(STANDBY)
+            async with asyncio.timeout(5.0):
+                await procedure.entered.wait()
 
-                while (await changes.get()).current != STANDBY:
-                    pass
+                with supervisor.state_changes() as changes:
+                    await controller_impl.set_internal_state(STANDBY)
 
-        reactor._evaluate()
+                    while (await changes.get()).current != STANDBY:
+                        pass
 
-        assert procedure.interrupt is None
-        assert recovery_state.failures == 2
-        assert recovery_state.failure is None
-    finally:
-        procedure.release.set()
-        await reactor._release()
+            reactor._evaluate()
+
+            assert procedure.interrupt is None
+            assert failure_state.failures == 2
+            assert failure_state.failure is None
+        finally:
+            procedure.release.set()
+            await reactor._release()
 
 
 # Program tasking

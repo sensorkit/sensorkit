@@ -23,7 +23,7 @@ from sensorkit.core.controller import (
 from sensorkit.core.task import TaskExecution
 
 if TYPE_CHECKING:
-    from sensorkit.auto.reactor import RecoveryState
+    from sensorkit.auto.failure import FailureState
 
 SETTLED_STATES = frozenset(
     {
@@ -64,7 +64,7 @@ class ControllerStateSupervisor:
     def __init__(
         self,
         monitor: ControllerMonitor,
-        recovery_state: RecoveryState,
+        failure_state: FailureState,
         *,
         transition_grace: float,
     ):
@@ -72,7 +72,7 @@ class ControllerStateSupervisor:
 
         Args:
             monitor: A controller monitor whose start method has completed.
-            recovery_state: Failure history shared across reactor restarts.
+            failure_state: Failure history shared across reactor restarts.
             transition_grace: Seconds a commanded transition may go without the controller
                 reporting the expected state.
 
@@ -83,13 +83,13 @@ class ControllerStateSupervisor:
             raise ValueError(f"transition_grace must be positive, got {transition_grace}")
 
         self.controller = monitor.controller
-        self.recovery_state = recovery_state
+        self.failure_state = failure_state
         self.transition_grace = transition_grace
         self.failed = asyncio.Event()
         """Set when a controller failure is detected or supervision ends.
 
         A new expectation clears this event while supervision is running. Failure history
-        remains in `RecoveryState`. Once supervision ends, the event remains set.
+        remains in `FailureState`. Once supervision ends, the event remains set.
         """
         self._monitor = monitor
         self._observer: AsyncObserver[ControllerOperatingState] = AsyncObserver()
@@ -303,7 +303,7 @@ class ControllerStateSupervisor:
     def _update_settled(self, now: float):
         """Update settled time from controller state, expectation, and monitor health."""
         actual = self._observed_state
-        self.recovery_state.set_settled(
+        self.failure_state.set_settled(
             self.healthy()
             and self._expected in SETTLED_STATES
             and actual.current == self._expected
@@ -401,5 +401,5 @@ class ControllerStateSupervisor:
         logger.error(message)
         self._expected = InternalControllerState.UNKNOWN
         self._deadline = None
-        self.recovery_state.record_failure(now, ControllerFailure(message))
+        self.failure_state.record_failure(now, ControllerFailure(message))
         self.failed.set()

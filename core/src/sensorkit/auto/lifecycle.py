@@ -6,6 +6,7 @@ from typing import ClassVar, Literal, overload
 
 from loguru import logger
 
+from sensorkit.auto.failure import FailureState
 from sensorkit.auto.procedures import (
     ControllerUnrecoverable,
     DemandState,
@@ -15,7 +16,7 @@ from sensorkit.auto.procedures import (
     ShutdownProcedure,
     StandbyProcedure,
 )
-from sensorkit.auto.reactor import ControllerReactor, RecoveryState
+from sensorkit.auto.reactor import ControllerReactor
 from sensorkit.auto.supervisor import ControllerStateSupervisor
 from sensorkit.common.aio import defer_cancellation
 from sensorkit.core.controller import ControllerClient, ControllerMonitor, InternalControllerState
@@ -28,7 +29,7 @@ class ControllerLifecycle:
 
     Each session starts a controller monitor and a state supervisor, then runs a reactor while
     the lifecycle is enabled. Observation failures and offline controllers trigger a restart
-    after an increasing delay. Demand, enablement, and recovery state persist across restarts.
+    after an increasing delay. Demand, enablement, and failure state persist across restarts.
     """
 
     procedures: ClassVar[dict[InternalControllerState, type[LifecycleProcedure]]] = {
@@ -51,7 +52,6 @@ class ControllerLifecycle:
         self,
         *,
         transition_grace: float = 10.0,
-        recovery_state: RecoveryState | None = None,
     ):
         """Create a lifecycle that does nothing until started and enabled.
 
@@ -59,7 +59,6 @@ class ControllerLifecycle:
             transition_grace: Maximum seconds of disagreement with the expected state during
                 a commanded lifecycle transition. Time in TRANSITION does not count toward
                 this limit.
-            recovery_state: Failure counts and retry and recovery timing, retained across restarts.
 
         Raises:
             ValueError: If `transition_grace` is not positive.
@@ -68,7 +67,7 @@ class ControllerLifecycle:
             raise ValueError(f"transition_grace must be positive, got {transition_grace}")
 
         self.transition_grace = transition_grace
-        self.recovery_state = RecoveryState() if recovery_state is None else recovery_state
+        self.failure_state = FailureState()
         self.last_error: BaseException | None = None
         """The most recent reactor failure, retained across restarts."""
         self._demand = DemandState(state=None)
@@ -206,7 +205,9 @@ class ControllerLifecycle:
             await monitor.start()
 
             supervisor = ControllerStateSupervisor(
-                monitor, self.recovery_state, transition_grace=self.transition_grace
+                monitor,
+                self.failure_state,
+                transition_grace=self.transition_grace,
             )
             await supervisor.start()
 

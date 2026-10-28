@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
@@ -30,141 +29,25 @@ if TYPE_CHECKING:
     from sensorkit.auto.supervisor import ControllerStateSupervisor
 
 
-@dataclass(slots=True)
-class RecoveryState:
-    """Track controller failures and schedule retries, recovery, and emergency shutdown.
-
-    Two failures trigger recovery unless the controller stayed settled for the stable period
-    between them. Exhausting recovery attempts triggers an emergency shutdown. Each procedure
-    counts at most one failure, so one incident seen by several observers counts once.
-    """
-
-    retry_delay: float = 5.0
-    """Seconds before retrying after a failure."""
-    recovery_attempts: int = 6
-    """Recovery attempts before an emergency shutdown."""
-    attempt_delay: float = 20.0
-    """Seconds between failed recovery attempts."""
-    cycle_delay: float = 120.0
-    """Seconds after a failed emergency shutdown before recovery resumes."""
-    stable_period: float = 900.0
-    """Seconds a confirmed state must hold before a new failure starts a fresh count."""
-    failures: int = field(default=0, init=False)
-    """Failures counted toward recovery. Successful recovery resets this to one."""
-    attempts: int = field(default=0, init=False)
-    """Failed recovery attempts in the current recovery cycle."""
-    retry_at: float | None = field(default=None, init=False)
-    """Earliest event loop time for the next retry or recovery attempt."""
-    failure: BaseException | None = field(default=None, init=False)
-    """First controller failure counted for the current procedure, if any."""
-    settled_at: float | None = field(default=None, init=False)
-    """Event loop time when the current settled interval began."""
-
-    @property
-    def recovery_due(self) -> bool:
-        """Whether the next command is a recovery attempt."""
-        return self.failures >= 2
-
-    @property
-    def emergency_due(self) -> bool:
-        """Whether the next recovery attempt is an emergency shutdown."""
-        return self.attempts >= self.recovery_attempts
-
-    def waiting(self, now: float) -> float | None:
-        """Return the pending retry deadline in event loop time, or None if no delay remains."""
-        if self.retry_at is not None and now < self.retry_at:
-            return self.retry_at
-
-        return None
-
-    def begin_procedure(self):
-        """Clear the current procedure's failure without clearing accumulated counts."""
-        self.failure = None
-
-    def record_initial_error(self):
-        """Count a controller error found at startup once, without delaying the first command."""
-        if self.failures == 0:
-            self.failures = 1
-            self.settled_at = None
-
-    def record_failure(self, now: float, error: BaseException):
-        """Record and count the first controller failure for the current procedure."""
-        if self.failure is not None:
-            return
-
-        self.failure = error
-        self.set_settled(False, now)
-        self.failures += 1
-
-        # Only the first failure schedules a retry delay.
-        if not self.recovery_due:
-            self.retry_at = now + self.retry_delay
-
-    def set_settled(self, settled: bool, now: float):
-        """Track continuous settled time and reset failure counts when earned."""
-        if settled:
-            if self.settled_at is None:
-                self.settled_at = now
-            return
-
-        if self.settled_at is not None:
-            if now - self.settled_at >= self.stable_period:
-                self.failures = 0
-            self.settled_at = None
-
-    def delay_retry(self, now: float):
-        """Delay the next command without counting a controller failure."""
-        self.retry_at = now + self.retry_delay
-
-    def record_recovery(self, now: float):
-        """Record a successful recovery.
-
-        Another failure before the stable period ends triggers recovery again.
-        """
-        self.failures = 1
-        self.attempts = 0
-        self.retry_at = now + self.retry_delay
-
-    def record_failed_attempt(self, now: float):
-        """Count a failed recovery attempt."""
-        self.attempts += 1
-
-        # Exhausted attempts fall back to emergency shutdown without waiting.
-        if not self.emergency_due:
-            self.retry_at = now + self.attempt_delay
-
-    def record_failed_emergency(self, now: float):
-        """Resume recovery attempts after a delay."""
-        self.attempts = 0
-        self.retry_at = now + self.cycle_delay
-
-    def clear(self):
-        """Reset escalation counters and timing after emergency shutdown."""
-        self.failures = 0
-        self.attempts = 0
-        self.retry_at = None
-        self.settled_at = None
-
-
 class ControllerReactor:
     """Run lifecycle procedures one at a time while a state supervisor monitors the controller.
 
     Each procedure finishes cleanup before its replacement starts. A controller failure aborts
-    the current procedure, and demand is reconciled again after its cleanup. Recovery state
-    persists in the lifecycle.
+    the current procedure, and demand is reconciled again after its cleanup. Failure counts
+    and retry timing survive reactor restarts.
     """
 
     def __init__(self, lifecycle: ControllerLifecycle, supervisor: ControllerStateSupervisor):
         """Create a reactor for a started supervisor.
 
         Args:
-            lifecycle: The lifecycle supplying demand, enablement, and recovery state.
+            lifecycle: The lifecycle supplying demand, enablement, and failure state.
             supervisor: A started supervisor for the controller.
         """
         self.lifecycle = lifecycle
         self.supervisor = supervisor
         self.controller = supervisor.controller
-        self.recovery_state = lifecycle.recovery_state
+        self.failure_state = lifecycle.failure_state
         self.achieved_once = False
         """Whether a procedure commanded the demanded state during this reactor's lifetime."""
         self._wake = asyncio.Event()
@@ -192,7 +75,7 @@ class ControllerReactor:
             ControllerUnrecoverable: If an emergency shutdown succeeded.
         """
         if self.supervisor.state.current == InternalControllerState.ERROR:
-            self.recovery_state.record_initial_error()
+            self.failure_state.record_initial_error()
 
         try:
             with self.supervisor.state_changes() as changes:
@@ -297,7 +180,7 @@ class ControllerReactor:
         if not self.lifecycle.enabled or demand.state is None:
             return "abort"
 
-        if self.recovery_state.failure is not None:
+        if self.failure_state.failure is not None:
             return "abort"
 
         # Recovery may be needed to reach any demand, including shutdown.
@@ -324,22 +207,22 @@ class ControllerReactor:
     def _dispatch(self, demand: DemandState, actual: ControllerOperatingState) -> float | None:
         """Start recovery or the demanded procedure, or return the deadline delaying it."""
         now = asyncio.get_running_loop().time()
-        recovery_state = self.recovery_state
+        failure_state = self.failure_state
 
         # Recovery handles running tasks in its procedure.
-        if recovery_state.recovery_due:
-            if (until := recovery_state.waiting(now)) is not None:
+        if failure_state.recovery_due:
+            if (until := failure_state.waiting(now)) is not None:
                 return until
 
             logger.error(f"{self.controller.entity} failed repeatedly, starting recovery")
             self._start(
-                RecoverProcedure(self.supervisor, demand, emergency=recovery_state.emergency_due)
+                RecoverProcedure(self.supervisor, demand, emergency=failure_state.emergency_due)
             )
             return None
 
         # Shutdown bypasses retry delays.
         if demand.state != InternalControllerState.SHUTDOWN:
-            if (until := recovery_state.waiting(now)) is not None:
+            if (until := failure_state.waiting(now)) is not None:
                 return until
 
         if (until := self._settling(demand, actual, now)) is not None:
@@ -392,13 +275,13 @@ class ControllerReactor:
         """
         error = procedure.error()
         now = asyncio.get_running_loop().time()
-        recovery_state = self.recovery_state
+        failure_state = self.failure_state
         self.achieved_once |= procedure.commanded
 
         if procedure.unresolved:
             raise ControllerIndeterminate(
                 "Procedure cleanup could not confirm that controller work stopped"
-            ) from recovery_state.failure or error
+            ) from failure_state.failure or error
 
         match procedure, error:
             case _, ControllerOffline():
@@ -408,35 +291,35 @@ class ControllerReactor:
                 logger.critical(
                     f"{self.controller.entity} requires operator intervention after emergency shutdown"
                 )
-                recovery_state.clear()
+                failure_state.clear()
                 raise error
             case RecoverProcedure(recovered=True), _:
-                recovery_state.record_recovery(now)
+                failure_state.record_recovery(now)
             case RecoverProcedure(), None:
                 # An interrupted attempt changes nothing.
                 pass
             case RecoverProcedure(emergency=True), _:
                 logger.opt(exception=error).error(f"Emergency shutdown failed: {error}")
-                recovery_state.record_failed_emergency(now)
+                failure_state.record_failed_emergency(now)
             case RecoverProcedure(), _:
                 logger.opt(exception=error).error(f"Recovery attempt failed: {error}")
-                recovery_state.record_failed_attempt(now)
+                failure_state.record_failed_attempt(now)
             case _, None:
                 pass
-            case _ if recovery_state.failure is not None:
+            case _ if failure_state.failure is not None:
                 # This controller failure was already counted and its retry scheduled.
-                logger.error(f"Controller lifecycle error: {recovery_state.failure} ({error})")
+                logger.error(f"Controller lifecycle error: {failure_state.failure} ({error})")
             case _, ControllerFailure():
                 logger.error(f"Controller lifecycle error: {error}")
-                recovery_state.record_failure(now, error)
+                failure_state.record_failure(now, error)
             case _:
                 logger.opt(exception=error).error(f"Lifecycle procedure error: {error}")
-                recovery_state.delay_retry(now)
+                failure_state.delay_retry(now)
 
     def _start(self, procedure: LifecycleProcedure):
         self._procedure = procedure
-        self.recovery_state.begin_procedure()
-        self.recovery_state.retry_at = None
+        self.failure_state.begin_procedure()
+        self.failure_state.retry_at = None
         procedure.start()
 
     async def _release(self):
