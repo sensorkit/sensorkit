@@ -180,7 +180,7 @@ class ControllerReactor:
         if not self.lifecycle.enabled or demand.state is None:
             return "abort"
 
-        if self.failure_state.failure is not None:
+        if self.failure_state.error is not None:
             return "abort"
 
         # Recovery may be needed to reach any demand, including shutdown.
@@ -281,7 +281,7 @@ class ControllerReactor:
         if procedure.unresolved:
             raise ControllerIndeterminate(
                 "Procedure cleanup could not confirm that controller work stopped"
-            ) from failure_state.failure or error
+            ) from failure_state.error or error
 
         match procedure, error:
             case _, ControllerOffline():
@@ -306,9 +306,9 @@ class ControllerReactor:
                 failure_state.record_failed_attempt(now)
             case _, None:
                 pass
-            case _ if failure_state.failure is not None:
+            case _ if failure_state.error is not None:
                 # This controller failure was already counted and its retry scheduled.
-                logger.error(f"Controller lifecycle error: {failure_state.failure} ({error})")
+                logger.error(f"Controller lifecycle error: {failure_state.error} ({error})")
             case _, ControllerFailure():
                 logger.error(f"Controller lifecycle error: {error}")
                 failure_state.record_failure(now, error)
@@ -319,7 +319,6 @@ class ControllerReactor:
     def _start(self, procedure: LifecycleProcedure):
         self._procedure = procedure
         self.failure_state.begin_procedure()
-        self.failure_state.retry_at = None
         procedure.start()
 
     async def _release(self):

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -165,12 +167,12 @@ def test_procedure_counts_one_failure():
     failure_state.record_failure(1.0, ControllerFailure("tasking failed"))
 
     assert failure_state.failures == 1
-    assert failure_state.failure is first
+    assert failure_state.error is first
 
     # A new procedure clears the diagnosis but keeps the count.
     failure_state.begin_procedure()
 
-    assert failure_state.failure is None
+    assert failure_state.error is None
     assert failure_state.failures == 1
 
 
@@ -213,7 +215,7 @@ def test_completed_stable_period_is_credited_when_leaving():
     failure_state.set_settled(False, 910.0)
 
     assert failure_state.failures == 0
-    assert failure_state.settled_at is None
+    assert failure_state.snapshot(910.0).settled_at is None
 
     failure_state.record_failure(1000.0, ControllerFailure("second"))
     failure_state.set_settled(False, 2000.0)
@@ -224,11 +226,15 @@ def test_completed_stable_period_is_credited_when_leaving():
 def test_procedure_boundary_preserves_settled_interval():
     """Replacing a procedure without a state change preserves continuous settled time."""
     failure_state = FailureState()
-    failure_state.set_settled(True, 10.0)
+    utc_start = datetime.now(UTC)
+    monotonic_start = time.monotonic()
+    failure_state.set_settled(True, monotonic_start)
     failure_state.begin_procedure()
-    failure_state.set_settled(True, 20.0)
+    failure_state.set_settled(True, monotonic_start + 10.0)
 
-    assert failure_state.settled_at == 10.0
+    snapshot = failure_state.snapshot(monotonic_start + 10.0)
+
+    assert abs(snapshot.settled_at - utc_start) < timedelta(milliseconds=100)
 
 
 def test_exhausted_attempts_call_for_emergency_shutdown():

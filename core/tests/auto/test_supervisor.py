@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import datetime
 
 import pytest
 import pytest_asyncio
@@ -27,6 +28,11 @@ UNKNOWN = InternalControllerState.UNKNOWN
 TRANSITION = InternalControllerState.TRANSITION
 
 GRACE = 1.0
+
+
+def settled_since(failure_state: FailureState) -> datetime | None:
+    """Return the settled interval's start in UTC."""
+    return failure_state.snapshot(asyncio.get_running_loop().time()).settled_at
 
 
 class PausedSupervisor(ControllerStateSupervisor):
@@ -411,7 +417,7 @@ async def test_leaving_settled_conditions_ends_interval(kit, controller, change)
     await controller.set_internal_state(OPERATE)
 
     async with supervising(kit) as supervisor:
-        assert supervisor.failure_state.settled_at is not None
+        assert settled_since(supervisor.failure_state) is not None
 
         match change:
             case "transition":
@@ -426,7 +432,7 @@ async def test_leaving_settled_conditions_ends_interval(kit, controller, change)
                 async with asyncio.timeout(5.0):
                     await supervisor.failed.wait()
 
-        assert supervisor.failure_state.settled_at is None
+        assert settled_since(supervisor.failure_state) is None
 
 
 @pytest.mark.asyncio
@@ -435,11 +441,12 @@ async def test_reconfirmation_preserves_settled_interval(kit, controller):
     await controller.set_internal_state(OPERATE)
 
     async with supervising(kit) as supervisor:
-        settled = supervisor.failure_state.settled_at
+        before = supervisor.failure_state.model_copy()
+        assert settled_since(supervisor.failure_state) is not None
         supervisor.failure_state.begin_procedure()
         await supervisor.confirm(OPERATE)
 
-        assert supervisor.failure_state.settled_at == settled
+        assert supervisor.failure_state == before
 
 
 @pytest.mark.asyncio
@@ -499,7 +506,7 @@ async def test_departure_counts_one_failure(kit, controller, until):
             await compared(changes, ERROR)
 
     assert failure_state.failures == 1
-    assert "left operate" in str(failure_state.failure)
+    assert "left operate" in str(failure_state.error)
 
 
 @pytest.mark.asyncio
@@ -529,7 +536,8 @@ async def test_context_change_is_not_a_failure(kit, controller, until):
     other.set_value("dome", "closed")
 
     async with settled_at(kit, controller, OPERATE, until) as supervisor:
-        settled = supervisor.failure_state.settled_at
+        before = supervisor.failure_state.model_copy()
+        assert settled_since(supervisor.failure_state) is not None
 
         with supervisor.state_changes() as changes:
             await controller.set_internal_state(OPERATE, context=other)
@@ -537,7 +545,7 @@ async def test_context_change_is_not_a_failure(kit, controller, until):
 
         assert supervisor.expected == OPERATE
         assert supervisor.settled(OPERATE, other)
-        assert supervisor.failure_state.settled_at == settled
+        assert supervisor.failure_state == before
         assert not supervisor.failed.is_set()
 
 

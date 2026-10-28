@@ -148,7 +148,7 @@ sensorkit agent scheduling {on|off} [-e AGENT]
 sensorkit agent exclude PROGRAM [-e AGENT]
 sensorkit agent include PROGRAM [-e AGENT]
 
-# Full status: switches, votes, elected state, upcoming schedule
+# Full status: switches, votes, elected state, upcoming schedule, lifecycle and constraint state
 sensorkit agent status [-e AGENT]
 ```
 

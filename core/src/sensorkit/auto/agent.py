@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from typing import Annotated, Any, Literal
 
 from loguru import logger
 from pydantic import AfterValidator, BaseModel, Field
 
 import sensorkit.api as sk
+from sensorkit.auto.constraint import ConstraintState
+from sensorkit.auto.lifecycle import LifecycleState
 from sensorkit.auto.operator import ControllerConfig, VirtualOperator
 from sensorkit.auto.scheduler import Schedule
 from sensorkit.core.task import TaskContextOverlay
@@ -148,16 +151,51 @@ class AgentSchedulerState(sk.Event):
         return self.model_copy(update=dict(schedule=schedule))
 
 
+class ControllerRuntimeState(BaseModel):
+    """Observed lifecycle and constraint state of one controller."""
+    lifecycle: LifecycleState
+    constrained: bool
+    """Whether the constraints currently vote against operation."""
+    constraints: list[ConstraintState]
+    """Per-constraint state in config order."""
+
+
+class AgentRuntimeState(sk.Event):
+    """Observed per-controller runtime state, sampled at the event time.
+
+    Persisted observations do not initialize lifecycle counters or timing.
+    """
+    controllers: dict[str, ControllerRuntimeState] = Field(default_factory=dict)
+
+    @classmethod
+    def sample(cls, operator: VirtualOperator):
+        """Return a detached sample of each controller driven by *operator*."""
+        # Evaluate retry deadlines against one reference for all controllers.
+        monotonic = asyncio.get_running_loop().time()
+
+        return cls(
+            controllers={
+                name: ControllerRuntimeState(
+                    lifecycle=driver.lifecycle.status(monotonic),
+                    constrained=driver.constraints.is_constrained(),
+                    constraints=copy.deepcopy(list(driver.constraints.entries)),
+                )
+                for name, driver in operator.drivers.items()
+            },
+        )
+
+
 class AgentState(sk.EventSourcedState):
-    """Persisted agent state combining operating and scheduler sub-states."""
+    """Persisted agent state combining operating, scheduler, and runtime sub-states."""
     operating_state: AgentOperatingState
     scheduler_state: AgentSchedulerState
+    runtime_state: AgentRuntimeState = Field(default_factory=AgentRuntimeState)
 
     async def apply_to_operator(self, operator: VirtualOperator, configs: ControllerConfigMap):
-        """Push this state into the VirtualOperator: programs, overrides, and lifecycle gates.
+        """Apply program gates, demand overrides, and lifecycle gates to the operator.
 
-        Reads only from this instance, so call it on a consistent snapshot (see update's
-        return_snapshot) when concurrent updates are possible.
+        Call this on a consistent snapshot when updates may run concurrently.
+        Use `update` with `return_snapshot=True` to obtain one.
         """
         if self.scheduler_state.scheduling_enabled:
             await operator.programs.global_enable()
@@ -231,6 +269,9 @@ async def agent_service(service: sk.Service):
     operator = VirtualOperator(config.controllers.values())
     await state.apply_to_operator(operator, config.controllers)
 
+    # Replace the previous process's runtime state before startup waits on controllers.
+    await state.update(service.context, AgentRuntimeState.sample(operator))
+
     # Start the virtual operator.
     with service.context.enter_context():
         await operator.start(client=service.client, task_group=service.context.task_group)
@@ -276,6 +317,7 @@ async def agent_service(service: sk.Service):
                     }
                 ),
                 state.operating_state.derive_for_status(votes=operator.election.evaluate()),
+                AgentRuntimeState.sample(operator),
             )
 
             await asyncio.sleep(1)

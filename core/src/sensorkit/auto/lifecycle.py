@@ -5,8 +5,9 @@ import asyncio
 from typing import ClassVar, Literal, overload
 
 from loguru import logger
+from pydantic import BaseModel
 
-from sensorkit.auto.failure import FailureState
+from sensorkit.auto.failure import FailureState, FailureStateSnapshot
 from sensorkit.auto.procedures import (
     ControllerUnrecoverable,
     DemandState,
@@ -22,6 +23,17 @@ from sensorkit.common.aio import defer_cancellation
 from sensorkit.core.controller import ControllerClient, ControllerMonitor, InternalControllerState
 from sensorkit.core.program import ProgramClient
 from sensorkit.core.task import TaskContextMap
+
+
+class LifecycleState(BaseModel):
+    """Observed state of one controller lifecycle."""
+
+    step: LifecycleStep
+    """The lifecycle step in progress."""
+    failure_state: FailureStateSnapshot
+    """Failure counts, current procedure failure, and retry and recovery timing."""
+    last_reactor_error: str | None
+    """The most recent reactor failure, retained across restarts."""
 
 
 class ControllerLifecycle:
@@ -126,6 +138,20 @@ class ControllerLifecycle:
     def step(self) -> LifecycleStep:
         """The current lifecycle step, or WAIT when no reactor is running."""
         return LifecycleStep.WAIT if self._reactor is None else self._reactor.step
+
+    def status(self, monotonic: float) -> LifecycleState:
+        """Return a detached snapshot of the lifecycle state.
+
+        Args:
+            monotonic: The shared monotonic reference for evaluating retry deadlines.
+        """
+        error = self.last_error
+
+        return LifecycleState(
+            step=self.step,
+            failure_state=self.failure_state.snapshot(monotonic),
+            last_reactor_error=None if error is None else f"{type(error).__name__}: {error}",
+        )
 
     @overload
     def set_demand_state(

@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
+from datetime import UTC, datetime
+
 import asyncclick as click
 
-from sensorkit.auto.agent import AgentControllerInfo, AgentState
+from sensorkit.auto.agent import AgentControllerInfo, AgentState, ControllerRuntimeState
 from sensorkit.cli.utils import entity_option, with_kit
 
 
@@ -128,12 +130,22 @@ async def status(kit, entity: str):
         f"{'Global Control:':<18} {'ON' if state.operating_state.global_control_enabled else 'OFF'}"
     )
     click.echo(
-        f"{'Scheduling:':<18} {'ON' if state.scheduler_state.scheduling_enabled else 'OFF'}\n"
+        f"{'Scheduling:':<18} {'ON' if state.scheduler_state.scheduling_enabled else 'OFF'}"
     )
+
+    # An empty runtime event has no observation time to display.
+    runtime = state.runtime_state
+    sampled = datetime.fromtimestamp(runtime.timestamp() / 1000, UTC)
+
+    if runtime.controllers:
+        click.echo(f"{'Runtime sampled:':<18} {sampled.isoformat()}")
+
+    click.echo()
 
     if state.operating_state.controllers:
         for i, (name, info) in enumerate(state.operating_state.controllers.items(), 1):
             _print_controller_info(i, name, info, state)
+            _print_runtime_state(runtime.controllers.get(name), sampled)
             click.echo()
     else:
         click.echo("No controllers registered in agent.\n")
@@ -186,3 +198,49 @@ def _print_controller_info(i: int, name: str, info: AgentControllerInfo, state: 
         )
     else:
         click.echo("  No schedule present.")
+
+
+def _print_runtime_state(runtime: ControllerRuntimeState | None, sampled: datetime):
+    click.echo()
+
+    if runtime is None:
+        click.echo("  Runtime state:   UNAVAILABLE")
+        return
+
+    lifecycle = runtime.lifecycle
+    failures = lifecycle.failure_state
+    recovery = f"{failures.attempts} of {failures.recovery_attempts} failed attempts"
+
+    if failures.emergency_due:
+        recovery += ", emergency shutdown due"
+    elif failures.recovery_due:
+        recovery += ", recovery due"
+
+    click.echo(f"  Lifecycle step:  {lifecycle.step.upper()}")
+    click.echo(
+        f"  Failures:        {failures.failures} of {failures.recover_after_failures}"
+        " before recovery"
+    )
+    click.echo(f"  Recovery:        {recovery}")
+
+    if failures.retry_at is not None:
+        click.echo(f"  Retry at:        {failures.retry_at.isoformat()}")
+
+    if failures.settled_at is not None:
+        settled = max(0.0, (sampled - failures.settled_at).total_seconds())
+        click.echo(f"  Settled for:     {settled:.0f} of {failures.stable_period:.0f} s")
+
+    if failures.failure is not None:
+        click.echo(f"  Procedure failure:  {failures.failure}")
+
+    if lifecycle.last_reactor_error is not None:
+        click.echo(f"  Last reactor error: {lifecycle.last_reactor_error}")
+
+    click.echo(f"  Constrained:     {'YES' if runtime.constrained else 'NO'}")
+
+    for constraint in runtime.constraints:
+        reason = f" ({constraint.reason})" if constraint.reason else ""
+        click.echo(f"    - {constraint.kind}: {constraint.state.upper()}{reason}")
+
+        if constraint.details is not None:
+            click.echo(f"      {constraint.details.model_dump_json()}")

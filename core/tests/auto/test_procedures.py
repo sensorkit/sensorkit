@@ -659,7 +659,7 @@ async def test_recovery_is_exempt_before_dispatch(kit, controller_impl, emergenc
 
             assert procedure.interrupt is None
             assert failure_state.failures == 2
-            assert failure_state.failure is None
+            assert failure_state.error is None
         finally:
             procedure.release.set()
             await reactor._release()

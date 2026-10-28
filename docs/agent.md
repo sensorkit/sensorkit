@@ -238,6 +238,17 @@ Shutdown bypasses the retry delay after a failure.
 Two failures trigger recovery even if a lifecycle task succeeded between them.
 The failure count starts over once a confirmed state has held for 15 minutes.
 
+### Runtime status
+
+The agent publishes each controller's lifecycle step, failure counts, and constraint states about once a second.
+`sensorkit agent status` shows them with the sample time, and `GET /agent/state` returns them in `runtime_state`.
+The status includes recovery progress, the pending retry time, and how long the controller has stayed settled.
+It shows the current procedure's failure separately from the last lifecycle restart error.
+Constraints appear in config order with their reason and details.
+
+A restarted agent starts with fresh failure counts and replaces the previous process's status before it waits for controllers.
+A controller without a published status shows as unavailable rather than as having no failures.
+
 ## CLI control
 
 Three independent switches gate autonomy, all persisted across restarts:
@@ -261,7 +272,7 @@ sensorkit agent override MySensor up
 sensorkit agent override MySensor down
 sensorkit agent override MySensor none
 
-# Inspect everything: switches, votes, elections, and the near-term schedule
+# Inspect everything: switches, votes, elections, the near-term schedule, and runtime status
 sensorkit agent status
 ```
 
