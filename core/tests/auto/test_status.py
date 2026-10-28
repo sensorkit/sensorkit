@@ -391,7 +391,7 @@ async def test_control_requests_do_not_apply_runtime_state(entity_impl):
 
 
 @pytest.mark.asyncio
-async def test_agent_startup_replaces_stored_runtime_state(backend, kit, service_context):
+async def test_agent_startup_replaces_stored_runtime_state(backend, kit, service_context, until):
     agent = kit.entity("agent")
     stale = stale_runtime_state()
     await agent.kv_put_model(AgentConfig(controllers={"ctrl1": ControllerConfig()}))
@@ -412,7 +412,12 @@ async def test_agent_startup_replaces_stored_runtime_state(backend, kit, service
             initial = await anext(stream)
 
             assert not service.running.done()
-            assert (await agent.kv_get_model(AgentState)).runtime_state == initial
+
+            # The snapshot follows the event.
+            async def stored() -> bool:
+                return (await agent.kv_get_model(AgentState)).runtime_state == initial
+
+            await until(stored)
 
             lifecycle = initial.controllers["ctrl1"].lifecycle
             assert lifecycle.step == LifecycleStep.WAIT
