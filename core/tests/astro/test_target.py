@@ -182,6 +182,19 @@ def test_sample_altaz_series_icrs():
     assert len(set(round(a, 2) for a in alts)) > 1
 
 
+def test_sample_altaz_series_tle():
+    """TLETarget returns varying altaz across time grid."""
+    target = TLETarget(tle=_ISS_TLE)
+    print(type(target.tle))
+    loc = _NYC.to_astropy()
+    times = [datetime(2024, 6, 21, h, tzinfo=UTC) for h in range(0, 24, 6)]
+    series = sample_altaz_series(target, loc, times)
+    assert len(series) == len(times)
+    # Alt/az should vary across 6-hour intervals due to target motion.
+    alts = [alt for alt, _ in series]
+    assert len(set(round(a, 2) for a in alts)) > 1
+
+
 def test_sample_altaz_series_ephemeris():
     """EphemerisTarget maps precomputed ICRF RA/Dec samples to alt/az per time."""
 

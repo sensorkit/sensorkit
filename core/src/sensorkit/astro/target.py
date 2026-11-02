@@ -585,6 +585,8 @@ def sample_altaz_series(
 
         case TLETarget():
             tle = satkit.TLE.from_lines(target.tle.to_list())
+            if isinstance(tle, list):
+                tle = tle[0]
             for dt in times:
                 t_ast = Time(dt, scale="utc")
                 t_sk = satkit.time.from_datetime(dt)
