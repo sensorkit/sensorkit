@@ -152,6 +152,8 @@ class NATSBackendImpl(BackendImpl):
             )
         except nats.errors.NoRespondersError as e:
             raise UnregisteredResponder(target) from e
+        except nats.errors.TimeoutError:
+            raise
         except nats.errors.Error as e:
             raise BackendError() from e
 

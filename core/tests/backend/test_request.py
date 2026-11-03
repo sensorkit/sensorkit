@@ -717,3 +717,28 @@ async def test_long_request_age_starts_when_sent(holding_kit, holding_backend):
         holding_backend.streams_released.set()
 
         assert (await call).val == 3
+
+
+# ---- reply timeout ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unanswered_request_times_out(kit):
+    """A call whose reply does not arrive in time raises a TimeoutError."""
+    async with asyncio.timeout(1.0):
+        sc = await kit.register_service("testservice", "0.1.0")
+
+    request = declare_request("foo", response=Response)
+    release = asyncio.Event()
+
+    async def foo_req(msg: None) -> Response:
+        await release.wait()
+        return Response(val=1)
+
+    await sc.handle_request(request, foo_req)
+
+    async with asyncio.timeout(5.0):
+        with pytest.raises(TimeoutError):
+            await kit.entity(sc.entity).call(request).invoke(timeout=1.0)
+
+    release.set()
