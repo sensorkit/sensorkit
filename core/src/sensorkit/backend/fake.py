@@ -21,6 +21,7 @@ from sensorkit.backend.base import (
     Subject,
     UnregisteredResponder,
 )
+from sensorkit.common.aio import cleanup_future
 
 type Trie[K, V] = pygtrie.Trie | MutableMapping[K, V]
 
@@ -163,6 +164,7 @@ class FakeBackendImpl(BackendImpl):
 
     def __init__(self):
         self._req: dict[Subject, RequestCallback] = {}
+        self._handling: set[asyncio.Task[bytes]] = set()
         self._kv: FakeBroker[tuple[str, ...], KVEntry] = FakeBroker()
         self._kv_ttls: dict[Subject, float] = {}
         self._kv_expirers: dict[Subject, asyncio.Task] = {}
@@ -174,7 +176,13 @@ class FakeBackendImpl(BackendImpl):
         if target not in self._req:
             raise UnregisteredResponder(target)
 
-        return await asyncio.create_task(self._req[target](payload))
+        # A delivered request runs to completion even once its caller stops waiting, as over NATS.
+        handling = asyncio.create_task(self._req[target](payload))
+        self._handling.add(handling)
+        handling.add_done_callback(self._handling.discard)
+        handling.add_done_callback(cleanup_future)
+
+        return await asyncio.shield(handling)
 
     @override
     async def request_listen(self, target: Subject, func: RequestCallback):
