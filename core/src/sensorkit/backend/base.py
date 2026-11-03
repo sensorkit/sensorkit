@@ -18,6 +18,18 @@ from pydantic import BaseModel
 class Backend:
     """Exposes a system backend implementation."""
 
+    REPLY_TIMEOUT: ClassVar[float] = 1.0
+    """Seconds a caller waits for the reply to a request.
+
+    Callers cannot extend it, so an unresponsive peer surfaces as an error rather than a longer
+    wait. Work that takes longer belongs in a long-running request, whose progress events show
+    that the handler is alive.
+    """
+
+    # TODO: Measure transit time and peer clock offset in the backend rather than assuming a margin.
+    REPLY_MARGIN: ClassVar[float] = 0.1
+    """Seconds of the reply budget reserved for reply transit and peer clock disagreement."""
+
     def __init__(self, impl: BackendImpl):
         self.impl = impl
 
@@ -109,6 +121,24 @@ class BackendError(Exception):
     """Indicates a backend communication error."""
 
 
+class ReplyTimeout(BackendError, TimeoutError):
+    """Raised when the reply to a request does not arrive within the reply budget.
+
+    The handler may still have received and run the request.
+
+    Args:
+        subject: The request subject.
+        elapsed: Seconds the caller actually waited.
+    """
+
+    def __init__(self, subject: Subject, elapsed: float):
+        super().__init__(
+            f"no reply from {subject} within {Backend.REPLY_TIMEOUT} s (waited {elapsed:.1f} s)"
+        )
+        self.elapsed = elapsed
+        """Seconds the caller actually waited. Well past the budget, the caller itself stalled."""
+
+
 class RemoteRequestError(BackendError):
     """Indicates an error raised in the remote request handler."""
     MAGIC: ClassVar[bytes] = b"ERR\0"
@@ -161,9 +191,18 @@ class RequestResponseContext(BaseContext):
     async def invoke(self, name: str, payload: bytes):
         """Send a request to the named subject and return the response bytes.
 
-        Raises RemoteRequestError if the remote handler returned an encoded error.
+        Raises:
+            RemoteRequestError: if the remote handler returned an encoded error.
+            ReplyTimeout: if no reply arrives within the reply budget.
         """
-        res = await self.impl.request_invoke(self.entity.subject(name), payload)
+        subject = self.entity.subject(name)
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+
+        try:
+            res = await self.impl.request_invoke(subject, payload, Backend.REPLY_TIMEOUT)
+        except TimeoutError as e:
+            raise ReplyTimeout(subject, loop.time() - start) from e
 
         if err := RemoteRequestError.parse(name, res):
             logger.opt(lazy=True).debug(
@@ -389,8 +428,12 @@ class BackendImpl(ABC):
         """Notify the backend of a new service session. Optional method."""
 
     @abstractmethod
-    async def request_invoke(self, target: Subject, payload: bytes) -> bytes:
-        """Invoke a request."""
+    async def request_invoke(self, target: Subject, payload: bytes, timeout: float) -> bytes:
+        """Invoke a request.
+
+        Raises:
+            TimeoutError: if no reply arrives within timeout seconds. The handler keeps running.
+        """
 
     @abstractmethod
     async def request_listen(self, target: Subject, coro: RequestCallback):

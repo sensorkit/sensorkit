@@ -9,31 +9,29 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Coroutine, Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Callable, Literal, cast, final, override
+from typing import Any, Callable, ClassVar, Literal, cast, final, override
 
 from loguru import logger
 from pydantic import BaseModel
 
-from sensorkit.backend.base import RemoteRequestError, RequestResponseContext, StreamContext
+from sensorkit.backend.base import (
+    Backend,
+    RemoteRequestError,
+    RequestResponseContext,
+    StreamContext,
+)
 from sensorkit.backend.event import Event, EventMultiplexer
 from sensorkit.common.aio import cleanup_future, scoped_waiter
 
 type ReplyState = Literal["accepted", "rejected", "succeeded", "failed"]
-
-CALL_MAX_AGE = 1.0
-"""Seconds after sending past which a handler rejects a call.
-
-Callers wait only briefly for a reply, so a call this old has been delayed in transit, such as
-while the backend reconnects, and its caller has stopped waiting. Peer clocks must agree well
-within this margin.
-"""
 
 
 class CallRequest[P: BaseModel | None = Any](BaseModel):
     """The envelope a call is sent in.
 
     Carries when the call was sent alongside the caller's message, so the message model holds only
-    application data. A handler rejects a call that arrives too long after it was sent.
+    application data. A handler rejects a call it cannot answer within the caller's reply budget.
+    Peer clocks must agree within the reply margin.
 
     Left unparametrized, the message is kept as plain JSON data.
     """
@@ -41,6 +39,10 @@ class CallRequest[P: BaseModel | None = Any](BaseModel):
     """When the caller sent the call."""
     message: P | None = None
     """The caller's message, where the request declares one."""
+
+    def age(self) -> float:
+        """Return the seconds since the caller sent the call."""
+        return (datetime.now(UTC) - self.sent_at).total_seconds()
 
 
 class CallReply[R: BaseModel | None = Any](BaseModel):
@@ -93,7 +95,7 @@ class Call[R: BaseModel | None, V: BaseModel | None = R](Awaitable[V]):
         self._future.add_done_callback(cleanup_future)
 
     @final
-    async def _invoke(self, timeout: float, expected: ReplyState) -> CallReply[R]:
+    async def _invoke(self, expected: ReplyState) -> CallReply[R]:
         if self._sent:
             raise RuntimeError("Call has already been sent")
 
@@ -101,10 +103,7 @@ class Call[R: BaseModel | None, V: BaseModel | None = R](Awaitable[V]):
 
         # Stamp the call as it is sent, so no wait before sending counts against its age.
         request = CallRequest(sent_at=datetime.now(UTC), message=self._message)
-
-        # Send request and await the reply.
-        async with asyncio.timeout(timeout):
-            recv = await self._context.invoke(self._name, request.model_dump_json().encode())
+        recv = await self._context.invoke(self._name, request.model_dump_json().encode())
 
         reply = self._reply_type.model_validate_json(recv)
         self.response = reply.response
@@ -122,10 +121,14 @@ class Call[R: BaseModel | None, V: BaseModel | None = R](Awaitable[V]):
 
         return reply
 
-    async def invoke(self, timeout: float = 5.0):
-        """Send the request and populate the future with the response."""
+    async def invoke(self):
+        """Send the request and populate the future with the response.
+
+        Raises:
+            ReplyTimeout: if no reply arrives within the reply budget.
+        """
         try:
-            await self._invoke(timeout, "succeeded")
+            await self._invoke("succeeded")
             self._future.set_result(cast(V, self.response))
             return self.response
         except BaseException as e:
@@ -169,8 +172,8 @@ class CallHandler[P: BaseModel | None]:
     """Adapts a request handler to the backend's bytes in, bytes out contract.
 
     Every call gets a reply, including one whose handler raised. A request with no message type
-    passes None, keeping every handler the same arity. A call that arrives too long after it was
-    sent is rejected without running the handler, since its caller has stopped waiting.
+    passes None, keeping every handler the same arity. A call that arrives too late to be answered
+    within its caller's reply budget is rejected without running the handler.
     """
 
     def __init__(
@@ -189,15 +192,18 @@ class CallHandler[P: BaseModel | None]:
 
         try:
             request = self._request_type.model_validate_json(payload)
-            age = (datetime.now(UTC) - request.sent_at).total_seconds()
 
-            if age > CALL_MAX_AGE:
+            if (age := request.age()) > Backend.REPLY_TIMEOUT - Backend.REPLY_MARGIN:
                 logger.warning(f"Rejecting call received {age:.1f} s after it was sent")
                 reply = CallReply(
                     call_id=call_id, state="rejected", reason="call arrived too late"
                 )
             else:
                 reply = await self._run(call_id, request.message if self._message else None)
+
+                # The caller has stopped waiting, so anything the handler started runs unobserved.
+                if (age := request.age()) > Backend.REPLY_TIMEOUT:
+                    logger.warning(f"Replying to call {call_id} {age:.1f} s after it was sent")
         except Exception as e:
             logger.opt(exception=e).debug(f"Call {call_id} failed in its handler")
             error = RemoteRequestError.from_exception(e)
@@ -232,6 +238,9 @@ class CallEvent(Event):
 class LongCall[R: BaseModel | None, V: BaseModel | None](Call[R, V]):
     """A Call extension that supports long-running requests."""
 
+    FIRST_EVENT_TIMEOUT: ClassVar[float] = 10.0
+    """Seconds a caller waits for the first event of an accepted long-running call."""
+
     def __init__(
         self,
         context: RequestResponseContext,
@@ -264,7 +273,7 @@ class LongCall[R: BaseModel | None, V: BaseModel | None](Call[R, V]):
                 await asyncio.wait({self._task})
 
     @override
-    async def invoke(self, timeout: float = 10.0):
+    async def invoke(self):
         # Consume the event stream.
         context = contextlib.ExitStack()
         queue = context.enter_context(self._event_mux.event_queue(CallEvent))
@@ -273,7 +282,7 @@ class LongCall[R: BaseModel | None, V: BaseModel | None](Call[R, V]):
             await self._event_mux.wait_ready()
 
             # Execute the initial request-response communication.
-            reply = await self._invoke(timeout, "accepted")
+            reply = await self._invoke("accepted")
         except (asyncio.CancelledError, Exception) as e:
             context.close()
             self._future.set_exception(e)
@@ -288,7 +297,6 @@ class LongCall[R: BaseModel | None, V: BaseModel | None](Call[R, V]):
                 queue,
                 reply.call_id,
                 started,
-                timeout,
             )
         )
 
@@ -321,8 +329,9 @@ class LongCall[R: BaseModel | None, V: BaseModel | None](Call[R, V]):
         queue: asyncio.Queue[Event],
         response_id: uuid.UUID,
         started: asyncio.Event,
-        timeout: float,
     ) -> V:
+        timeout = self.FIRST_EVENT_TIMEOUT
+
         with context:
             while True:
                 async with asyncio.timeout(timeout):

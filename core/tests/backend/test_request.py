@@ -1,15 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
+import time
 from typing import override
 
 import pytest
 import pytest_asyncio
 from pydantic import BaseModel, ValidationError
 
-from sensorkit.backend.base import Backend, RemoteRequestError, Subject
+from sensorkit.backend.base import (
+    Backend,
+    RemoteRequestError,
+    ReplyTimeout,
+    Subject,
+)
 from sensorkit.backend.fake import FakeBackendImpl
 from sensorkit.backend.request import (
-    CALL_MAX_AGE,
     CallContext,
     CallError,
     CallRejected,
@@ -44,9 +49,9 @@ class HoldingBackendImpl(FakeBackendImpl):
         self.streams_released.set()
 
     @override
-    async def request_invoke(self, target: Subject, payload: bytes) -> bytes:
+    async def request_invoke(self, target: Subject, payload: bytes, timeout: float) -> bytes:
         await self.requests_released.wait()
-        return await super().request_invoke(target, payload)
+        return await super().request_invoke(target, payload, timeout)
 
     @override
     async def stream_consume(self, target: Subject, **kwargs):
@@ -634,7 +639,7 @@ async def test_request_delivered_late_is_rejected(holding_kit, holding_backend):
     async with asyncio.timeout(5.0):
         cli = holding_kit.entity(sc.entity)
         call = asyncio.create_task(cli.call(request, Message(foo="bar")).run_to_completion())
-        await asyncio.sleep(CALL_MAX_AGE + 0.2)
+        await asyncio.sleep(Backend.REPLY_TIMEOUT - Backend.REPLY_MARGIN + 0.2)
         holding_backend.requests_released.set()
 
         with pytest.raises(CallRejected, match="too late"):
@@ -663,7 +668,7 @@ async def test_long_request_delivered_late_is_rejected(holding_kit, holding_back
     async with asyncio.timeout(5.0):
         cli = holding_kit.entity(sc.entity)
         call = asyncio.create_task(cli.call(request).run_to_completion())
-        await asyncio.sleep(CALL_MAX_AGE + 0.2)
+        await asyncio.sleep(Backend.REPLY_TIMEOUT - Backend.REPLY_MARGIN + 0.2)
         holding_backend.requests_released.set()
 
         with pytest.raises(CallRejected, match="too late"):
@@ -689,7 +694,7 @@ async def test_request_delivered_promptly_after_a_delay_is_handled(holding_kit, 
     async with asyncio.timeout(5.0):
         cli = holding_kit.entity(sc.entity)
         call = asyncio.create_task(cli.call(request).run_to_completion())
-        await asyncio.sleep(CALL_MAX_AGE / 4)
+        await asyncio.sleep((Backend.REPLY_TIMEOUT - Backend.REPLY_MARGIN) / 4)
         holding_backend.requests_released.set()
 
         assert (await call).val == 7
@@ -713,7 +718,7 @@ async def test_long_request_age_starts_when_sent(holding_kit, holding_backend):
     async with asyncio.timeout(5.0):
         cli = holding_kit.entity(sc.entity)
         call = asyncio.create_task(cli.call(request).run_to_completion())
-        await asyncio.sleep(CALL_MAX_AGE + 0.2)
+        await asyncio.sleep(Backend.REPLY_TIMEOUT - Backend.REPLY_MARGIN + 0.2)
         holding_backend.streams_released.set()
 
         assert (await call).val == 3
@@ -722,9 +727,21 @@ async def test_long_request_age_starts_when_sent(holding_kit, holding_backend):
 # ---- reply timeout ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def short_reply_timeout():
+    """Shorten the reply budget, keeping it above the margin so handlers still accept calls."""
+    reply_timeout = Backend.REPLY_TIMEOUT
+    Backend.REPLY_TIMEOUT = Backend.REPLY_MARGIN + 0.1
+
+    try:
+        yield
+    finally:
+        Backend.REPLY_TIMEOUT = reply_timeout
+
+
 @pytest.mark.asyncio
-async def test_unanswered_request_times_out(kit):
-    """A call whose reply does not arrive in time raises a TimeoutError."""
+async def test_unanswered_request_times_out(kit, short_reply_timeout):
+    """A call whose reply does not arrive within the budget raises a TimeoutError."""
     async with asyncio.timeout(1.0):
         sc = await kit.register_service("testservice", "0.1.0")
 
@@ -738,14 +755,15 @@ async def test_unanswered_request_times_out(kit):
     await sc.handle_request(request, foo_req)
 
     async with asyncio.timeout(5.0):
-        with pytest.raises(TimeoutError):
-            await kit.entity(sc.entity).call(request).invoke(timeout=1.0)
+        with pytest.raises(TimeoutError) as raised:
+            await kit.entity(sc.entity).call(request)
 
+    assert isinstance(raised.value, ReplyTimeout)
     release.set()
 
 
 @pytest.mark.asyncio
-async def test_request_runs_on_after_its_caller_stops_waiting(kit):
+async def test_request_runs_on_after_its_caller_stops_waiting(kit, short_reply_timeout):
     """A delivered request runs to completion after its caller times out."""
     async with asyncio.timeout(1.0):
         sc = await kit.register_service("testservice", "0.1.0")
@@ -763,7 +781,36 @@ async def test_request_runs_on_after_its_caller_stops_waiting(kit):
 
     async with asyncio.timeout(5.0):
         with pytest.raises(TimeoutError):
-            await kit.entity(sc.entity).call(request).invoke(timeout=0.2)
+            await kit.entity(sc.entity).call(request)
 
         release.set()
         await finished.wait()
+
+
+@pytest.mark.asyncio
+async def test_reply_timeout_reports_a_stalled_caller(kit, short_reply_timeout):
+    """A caller whose own event loop stalls past the budget reports how long it actually waited."""
+    async with asyncio.timeout(1.0):
+        sc = await kit.register_service("testservice", "0.1.0")
+
+    request = declare_request("foo", response=Response)
+    release = asyncio.Event()
+
+    async def foo_req(msg: None) -> Response:
+        await release.wait()
+        return Response(val=1)
+
+    await sc.handle_request(request, foo_req)
+    stall = 0.5
+
+    async with asyncio.timeout(5.0):
+        # Block the loop from before the deadline until well after it.
+        loop = asyncio.get_running_loop()
+        loop.call_later(Backend.REPLY_TIMEOUT / 2, time.sleep, Backend.REPLY_TIMEOUT + stall)
+
+        with pytest.raises(ReplyTimeout) as raised:
+            await kit.entity(sc.entity).call(request)
+
+        release.set()
+
+    assert raised.value.elapsed >= Backend.REPLY_TIMEOUT + stall

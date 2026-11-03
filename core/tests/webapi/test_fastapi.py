@@ -11,6 +11,7 @@ import pytest_asyncio
 import uuid_utils.compat as uuid
 from pydantic import BaseModel, TypeAdapter
 
+from sensorkit.backend.base import Backend
 from sensorkit.backend.request import CallContext, CallEvent, declare_long_request, declare_request
 from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.device import Abort
@@ -209,12 +210,16 @@ async def test_entity_request_timeout_returns_504(webapi_setup):
         return msg
 
     await dev.handle_request(echo_request, handle_echo)
+    reply_timeout = Backend.REPLY_TIMEOUT
 
-    resp = await client.post(
-        "/entity/mydevice/request/echo",
-        params={"timeout": 0.1},
-        json={"value": "hello"},
-    )
+    # Stay above the margin so the handler still accepts the call.
+    Backend.REPLY_TIMEOUT = Backend.REPLY_MARGIN + 0.1
+
+    try:
+        resp = await client.post("/entity/mydevice/request/echo", json={"value": "hello"})
+    finally:
+        Backend.REPLY_TIMEOUT = reply_timeout
+
     assert resp.status_code == 504
 
     release.set()

@@ -144,11 +144,12 @@ class NATSBackendImpl(BackendImpl):
             raise BackendError() from e
 
     @override
-    async def request_invoke(self, target: Subject, payload: bytes):
+    async def request_invoke(self, target: Subject, payload: bytes, timeout: float):
         try:
             msg = await self._nc.request(
                 _subject_to_nats(Method.REQ, target),
                 payload,
+                timeout=timeout,
             )
         except nats.errors.NoRespondersError as e:
             raise UnregisteredResponder(target) from e

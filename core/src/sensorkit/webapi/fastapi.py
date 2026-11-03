@@ -6,7 +6,7 @@ from typing import Annotated, Any, Callable, Iterable
 
 import uuid_utils.compat as uuid
 import uvicorn
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from loguru import logger
@@ -18,6 +18,7 @@ from sensorkit.backend.base import (
     BackendError,
     KeyNotFound,
     RemoteRequestError,
+    ReplyTimeout,
     UnregisteredResponder,
 )
 from sensorkit.backend.request import Call
@@ -47,7 +48,6 @@ from sensorkit.webapi.security import (
 from sensorkit.webapi.serve import ProductInfo, ServeDataConfig, ServeHandler
 
 PRODUCT_LISTING_TIMEOUT = 10.0
-ENTITY_REQUEST_TIMEOUT = 5.0
 
 
 class WebAPIConfig(BaseModel):
@@ -113,6 +113,8 @@ def _error_handler():
         raise HTTPException(status_code=500, detail="Remote exception occurred") from err
     except UnregisteredResponder as err:
         raise HTTPException(status_code=503, detail="Endpoint unavailable") from err
+    except ReplyTimeout as err:
+        raise HTTPException(status_code=504, detail="Request timed out") from err
     except BackendError as err:
         raise HTTPException(status_code=503, detail="Backend not available") from err
     except TaskingStartupFailed as err:
@@ -350,7 +352,6 @@ class WebAPI:
             entity_id: str,
             request_name: str,
             message: Annotated[dict[str, Any] | None, Body()] = None,
-            timeout: Annotated[float, Query(gt=0)] = ENTITY_REQUEST_TIMEOUT,
         ):
             """Call a request on an entity, passing the message and response through as JSON.
 
@@ -365,7 +366,7 @@ class WebAPI:
             call = Call(context, request_name, message, RawPayload)
 
             with _error_handler():
-                response = await call.invoke(timeout)
+                response = await call.invoke()
 
             if response is None:
                 return Response(status_code=204)

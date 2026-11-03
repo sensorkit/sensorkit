@@ -172,7 +172,7 @@ class FakeBackendImpl(BackendImpl):
         self._sequence = 0
 
     @override
-    async def request_invoke(self, target: Subject, payload: bytes) -> bytes:
+    async def request_invoke(self, target: Subject, payload: bytes, timeout: float) -> bytes:
         if target not in self._req:
             raise UnregisteredResponder(target)
 
@@ -182,7 +182,7 @@ class FakeBackendImpl(BackendImpl):
         handling.add_done_callback(self._handling.discard)
         handling.add_done_callback(cleanup_future)
 
-        return await asyncio.shield(handling)
+        return await asyncio.wait_for(asyncio.shield(handling), timeout)
 
     @override
     async def request_listen(self, target: Subject, func: RequestCallback):
