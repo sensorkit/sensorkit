@@ -9,13 +9,10 @@ from sensorkit.otto import tles
 from sensorkit.otto.tles import _satellite
 from sensorkit.otto.utils import time_at
 
+from .data import line2_with_mean_motion
+
 LEO_LINE1 = "1 25544U 98067A   24100.50000000  .00016717  00000-0  10270-3 0  9002"
 LEO_LINE2 = "2 25544  51.6400 200.0000 0001234  90.0000 270.0000 15.49000000400000"
-
-
-def line2_with_mean_motion(mean_motion: float) -> str:
-    """A valid TLE line 2 with the given mean motion (columns 53-63)."""
-    return LEO_LINE2[:52] + f"{mean_motion:11.8f}" + LEO_LINE2[63:]
 
 
 class TestClassifyOrbit:

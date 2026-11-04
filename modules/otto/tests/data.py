@@ -17,6 +17,11 @@ ISS_TLE = TLE(
 )
 
 
+def line2_with_mean_motion(mean_motion: float) -> str:
+    """A valid TLE line 2 with the given mean motion (columns 53-63)."""
+    return ISS_TLE.line2[:52] + f"{mean_motion:11.8f}" + ISS_TLE.line2[63:]
+
+
 def make_config(**overrides) -> OttoConfig:
     """Create an OttoConfig with sensible defaults.
 

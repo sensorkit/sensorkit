@@ -19,7 +19,7 @@ from sensorkit.otto.stars import StarCache
 from sensorkit.otto.task_queue import TaskQueue
 from sensorkit.otto.utils import ObjectListManager, to_jd
 
-from .data import ISS_TLE, make_config, make_task
+from .data import ISS_TLE, line2_with_mean_motion, make_config, make_task
 
 
 def _resolved_execution():
@@ -676,23 +676,6 @@ class TestStarListManagement:
 
         assert star_program.state == OttoState(graylist=["Vega"])
 
-    @pytest.mark.asyncio
-    async def test_set_satellite_still_blacklists(self, orbit_program, monkeypatch, until):
-        """The diurnal-return exemption must not change satellite behaviour."""
-        orbit_program.state.whitelist = ["25544"]
-        orbit_program.stars = {}
-        orbit_program.tles["25544"] = {"line0": "0 25544"}
-        monkeypatch.setattr(
-            "sensorkit.otto.tles.position",
-            lambda **kwargs: (5.0, 270.0, False, 3.0),
-        )
-
-        gen = asyncio.create_task(orbit_program.generate_tasks())
-        await until(lambda: not orbit_program.state.whitelist)
-        gen.cancel()
-
-        assert orbit_program.state == OttoState(blacklist=["25544"])
-
 
 class TestStarResolution:
     @pytest.mark.asyncio
@@ -752,9 +735,33 @@ class TestStarResolution:
         assert star_program.stars == {}
 
 
-class TestDiurnalReturnExemption:
-    """Sources that set diurnally and return (stars, Horizons objects) graylist;
-    only a satellite whose pass has ended blacklists."""
+class TestSetObjectsGraylist:
+    """Every source comes back above the floor, so a setting object graylists."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "line2",
+        [
+            pytest.param(ISS_TLE.line2, id="leo"),
+            pytest.param(line2_with_mean_motion(2.0056), id="meo"),
+            pytest.param(line2_with_mean_motion(1.0027), id="geo"),
+            pytest.param(line2_with_mean_motion(1.2), id="heo"),
+        ],
+    )
+    async def test_set_satellite_graylists(self, orbit_program, monkeypatch, until, line2):
+        orbit_program.state.whitelist = ["25544"]
+        orbit_program.stars = {}
+        orbit_program.tles["25544"] = {"line0": "0 25544", "line2": line2}
+        monkeypatch.setattr(
+            "sensorkit.otto.tles.position",
+            lambda **kwargs: (5.0, 270.0, False, 3.0),
+        )
+
+        gen = asyncio.create_task(orbit_program.generate_tasks())
+        await until(lambda: not orbit_program.state.whitelist)
+        gen.cancel()
+
+        assert orbit_program.state == OttoState(graylist=["25544"])
 
     @pytest.mark.asyncio
     async def test_set_horizons_object_graylists_rather_than_blacklists(

@@ -17,11 +17,8 @@ supported features:
   pass).
 - **Visibility** — explicitly named objects (`task.tles`, `task.horizons`, and
   `task.stars`) move between a whitelist (visible now), a graylist (below the
-  altitude floor but rising; re-promoted periodically), and a blacklist (below
-  the floor and setting, or no ephemeris data). Stars and Horizons objects are
-  the exception: they set diurnally and return the following night, so on
-  setting they are graylisted rather than blacklisted; only a satellite whose
-  pass has ended is blacklisted. Lists are persisted across restarts. A future `TODO` item
+  altitude floor, rising or setting; re-promoted periodically), and a blacklist
+  (no ephemeris data). Lists are persisted across restarts. A future `TODO` item
   will populate these lists from object SNR as measured by SENPAI.
 - **Collection** — `track_mode` selects per-frame tracking: `rate` (follow the
   target throughout), `rate_sidereal` (append a sidereally tracked frame to an

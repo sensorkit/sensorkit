@@ -611,33 +611,15 @@ class OttoProgram:
                         continue
                     altitude, azimuth, rising, _hour_angle = result
 
-                    # Determine which list this object should be on
-                    if altitude < self.config.collect.altitude_min and not rising:
-                        if managed:
-                            # Stars and solar-system objects only ever set
-                            # diurnally and are back the next night, so they
-                            # graylist for re-promotion; a satellite whose
-                            # pass has ended blacklists.
-                            destination = (
-                                ListType.BLACKLIST
-                                if object in self.tles
-                                else ListType.GRAYLIST
-                            )
-                            await self.list_manager.move_object(
-                                object, ListType.WHITELIST, destination
-                            )
-                            logger.debug(
-                                f"object {object} {destination.value}ed (alt={altitude:.1f}°, az={azimuth:.1f}°, falling)"
-                            )
-                        continue
-
-                    if altitude < self.config.collect.altitude_min and rising:
+                    # Every source comes back above the floor, rising or
+                    # setting, so a low object graylists for re-promotion
+                    if altitude < self.config.collect.altitude_min:
                         if managed:
                             await self.list_manager.move_object(
                                 object, ListType.WHITELIST, ListType.GRAYLIST
                             )
                             logger.debug(
-                                f"object {object} graylisted (alt={altitude:.1f}°, az={azimuth:.1f}°, rising)"
+                                f"object {object} graylisted (alt={altitude:.1f}°, az={azimuth:.1f}°, {'rising' if rising else 'falling'})"
                             )
                         continue
 
