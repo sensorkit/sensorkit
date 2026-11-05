@@ -162,3 +162,92 @@ def test_task_reused_across_executions():
     assert first.task is second.task
     assert first.task == ProbeCollectTask(exposures=3)
     assert first.task != ProbeCollectTask(exposures=4)
+
+
+@pytest.mark.parametrize(
+    "submitted_context",
+    [None, KeywordDict(), KeywordDict({"positions": [[10], [20]]})],
+    ids=("snapshot", "empty", "nested"),
+)
+@pytest.mark.parametrize("model", [TaskExecution, TaskExecution[ProbeCollectTask]])
+def test_execution_submitted_context_round_trips(submitted_context, model):
+    execution = model(
+        task=ProbeCollectTask(exposures=3),
+        task_id=uuid.uuid7(),
+        controller_id="mycontroller",
+        context=KeywordDict({"frame": 1}),
+        submitted_context=submitted_context,
+    )
+
+    restored = model.model_validate_json(execution.model_dump_json())
+
+    expected = execution.context if submitted_context is None else submitted_context
+    assert execution.submitted_context == expected
+    assert restored.submitted_context == expected
+    assert restored.context == {"frame": 1}
+
+
+@pytest.mark.parametrize(
+    "context_fields",
+    [{}, {"context": None}, {"context": {}}],
+    ids=("omitted", "null", "empty"),
+)
+def test_execution_context_defaults(context_fields):
+    fields = {
+        "task": {"task_type": "collect"},
+        "task_id": str(uuid.uuid7()),
+        "controller_id": "mycontroller",
+        **context_fields,
+    }
+
+    executions = (
+        TaskExecution(**fields),
+        TaskExecution.model_validate_json(json.dumps(fields)),
+    )
+
+    for execution in executions:
+        assert execution.context == KeywordDict()
+        assert execution.submitted_context == KeywordDict()
+        assert execution.submitted_context is not execution.context
+
+
+@pytest.mark.parametrize(
+    "submitted_fields",
+    [{}, {"submitted_context": None}],
+    ids=("omitted", "null"),
+)
+def test_missing_submitted_context_snapshots_working_context(submitted_fields):
+    fields = {
+        "task": {"task_type": "collect"},
+        "task_id": str(uuid.uuid7()),
+        "controller_id": "mycontroller",
+        "context": {"positions": [[10], [20]]},
+        **submitted_fields,
+    }
+
+    executions = (
+        TaskExecution(**fields),
+        TaskExecution.model_validate_json(json.dumps(fields)),
+    )
+
+    for execution in executions:
+        execution.context["positions"][0].append(30)
+        assert execution.submitted_context["positions"] == [[10], [20]]
+
+
+@pytest.mark.parametrize(
+    "submitted",
+    [KeywordDict(), KeywordDict({"positions": [[10], [20]]})],
+    ids=("empty", "nested"),
+)
+def test_execution_retains_explicit_submitted_context(submitted):
+    execution = TaskExecution(
+        task=CollectTask(),
+        task_id=uuid.uuid7(),
+        controller_id="mycontroller",
+        context=KeywordDict({"frame": 1}),
+        submitted_context=submitted,
+    )
+
+    assert execution.submitted_context is submitted
+    assert execution.context == {"frame": 1}

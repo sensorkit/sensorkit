@@ -160,6 +160,11 @@ See [Observing programs](programs.md#standardcollecttask).
 
 `TaskSubmission` pairs a task with optional context and expiry.
 `TaskExecution[T]` carries the controller-minted identity, execution parameters, and a task of type `T`.
+When `submitted_context` is omitted or `None`, it defaults to a deep copy of `context`.
+An explicitly supplied mapping is retained without copying.
+Controller-created executions capture submitted context before adding task identity.
+When reading an envelope without a snapshot, the fallback captures its stored working context.
+The working `context` includes task identity and can change during execution.
 Executions returned by `ControllerClient.start_task` can be awaited for the final result.
 `TaskInfo` records task identity in data-pipeline context.
 

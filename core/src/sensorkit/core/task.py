@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import uuid
 from collections.abc import Generator
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, override
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, override
 
-from pydantic import BaseModel, BeforeValidator, Field, PrivateAttr, SerializeAsAny
+from pydantic import BaseModel, Field, PrivateAttr, SerializeAsAny, model_validator
 
 from sensorkit.common.keyword import KeywordDict, declare_keyword, validated_items
 from sensorkit.common.model import ModelRegistry, RegistryBaseModel
@@ -147,9 +148,8 @@ class TaskInfo(BaseModel):
 class TaskExecution[T: Task](BaseModel):
     """Execution envelope wrapping a `Task`.
 
-    Carries server-minted identity (`task_id`, `controller_id`) and client-supplied execution
-    parameters (`context`, `expiry_time`). This type is not user-extensible; the extensible
-    semantic definition is the embedded `task`.
+    Carries server-minted identity (`task_id`, `controller_id`), submitted context,
+    working context, and expiry. The embedded `task` defines the extensible task data.
 
     A handler annotated with `TaskExecution[T]` receives execution metadata and a task
     of type `T`. Controller-produced envelopes use the unparameterized model.
@@ -161,17 +161,26 @@ class TaskExecution[T: Task](BaseModel):
     task: SerializeAsAny[T]
     task_id: uuid.UUID
     controller_id: str
-    context: Annotated[
-        KeywordDict,
-        BeforeValidator(lambda v: KeywordDict() if v is None else v),
-        Field(default_factory=KeywordDict),
-    ]
+    context: KeywordDict = Field(default_factory=KeywordDict)
+    """Working context, including task identity and values added during execution."""
+    submitted_context: KeywordDict | None = None
+    """Submitted context, captured from `context` when omitted or None.
+
+    Explicit mappings are retained without copying.
+    """
     expiry_time: datetime | None = None
 
     # Live result future, bound only in the context that owns the in-flight call (the client
     # tasking loop today). Transient runtime state: excluded from serialization and equality, so a
     # deserialized execution carries no result future and is not awaitable.
     _result: asyncio.Future[TaskExecutionResult] | None = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _capture_submitted_context(self) -> Self:
+        if self.submitted_context is None:
+            self.submitted_context = copy.deepcopy(self.context)
+
+        return self
 
     def bind_result(self, result: asyncio.Future[TaskExecutionResult]) -> None:
         """Bind the live result future for this execution.
