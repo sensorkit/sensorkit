@@ -369,6 +369,7 @@ class FileAsyncWriter:
         self._file = file
         self._queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._drained = asyncio.Event()
+        self._drained.set()
         self._close_requested = False
 
     def start(self):
@@ -377,50 +378,28 @@ class FileAsyncWriter:
 
     async def _write_task(self):
         try:
-            while True:
-                # Get the next data chunk to write and write it.
-                data = await self._queue.get()
-                await self._file.write(data)
-                self._queue.task_done()
-
-                # Set the drained signal as appropriate.
-                if self._queue.empty():
-                    self._drained.set()
-        except Exception:
-            logger.exception("error writing to file")
-        finally:
-            # When we reach here, either:
-            #
-            # 1. The task was cancelled due a call to close() -- this is the happy path.
-            # 2. The task was cancelled externally, e.g. interpreter shutdown.
-            # 3. An error occurred while writing data.
-            #
-            # In all cases we want to try to close the file (which may be partially written in the
-            # error case) and move it to its target path.
-            self._close_requested = True
-
-            with contextlib.suppress(asyncio.QueueEmpty):
-                while data := self._queue.get_nowait():
+            # Write chunks until close() shuts down the queue and the backlog is written.
+            with contextlib.suppress(asyncio.QueueShutDown):
+                while True:
+                    data = await self._queue.get()
                     await self._file.write(data)
                     self._queue.task_done()
 
-            self._queue.shutdown()
+                    if self._queue.empty():
+                        self._drained.set()
+        finally:
+            # A failed write can leave an incomplete chunk. Discard the remaining
+            # queue before closing and publishing the partial file.
+            self._close_requested = True
+            self._queue.shutdown(immediate=True)
             self._drained.set()
 
-            try:
-                async with asyncio.timeout(5.0):
-                    logger.debug(f"closing file {self._target_path or self._path}")
-                    await self._file.close()
+            async with asyncio.timeout(5.0):
+                logger.debug(f"closing file {self._target_path or self._path}")
+                await self._file.close()
 
-                    if self._target_path:
-                        await asyncio.to_thread(
-                            os.rename,
-                            self._path,
-                            self._target_path,
-                        )
-            except BaseException as e:
-                final_path = self._target_path or self._path
-                logger.warning(f"error finalizing {final_path}: {str(e)}")
+                if self._target_path:
+                    await asyncio.to_thread(os.rename, self._path, self._target_path)
 
     def write(self, data: bytes):
         if self._close_requested:
@@ -430,17 +409,27 @@ class FileAsyncWriter:
         self._drained.clear()
 
     async def drain(self):
+        """Wait until queued writes finish or the writer stops.
+
+        Await `wait_closed` to observe write and finalization errors.
+        """
         await self._drained.wait()
 
     def close(self):
+        """Stop accepting data, then write the backlog and publish the file in the background."""
         self._close_requested = True
-
-        # We leverage task cancellation to trigger closing and finalization of the output file.
-        self._task.cancel()
+        self._queue.shutdown()
 
     def is_closing(self):
-        return self._close_requested and not self._task.done()
+        return self._close_requested
 
     async def wait_closed(self):
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._task
+        """Wait until the file is written and published.
+
+        Canceling the caller leaves finalization running.
+
+        Raises:
+            OSError: If writing, closing, or renaming the file failed.
+            TimeoutError: If closing and renaming the file took too long.
+        """
+        await asyncio.shield(self._task)

@@ -9,11 +9,13 @@ from loguru import logger
 
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import (
+    FileAsyncWriter,
     FileInfo,
     FileNameTemplate,
     ReadFile,
     WatchDirectory,
     WriteFile,
+    get_file_writer,
 )
 from sensorkit.data.graph import DataFlow, DataGraph
 from sensorkit.data.local import AppSink
@@ -316,3 +318,164 @@ async def test_read_file_waits_for_slow_writer():
                 await graph.stop()
         finally:
             await writer
+
+
+async def published_contents(path: pathlib.Path) -> bytes:
+    """Return the contents of a published file, checking its temporary file is gone."""
+    assert not await asyncio.to_thread(path.with_suffix(".tmp").exists)
+    return await asyncio.to_thread(path.read_bytes)
+
+
+@pytest.mark.asyncio
+async def test_file_writer_immediate_close(tmp_path):
+    """Closing a writer that never received data publishes an empty file."""
+    path = tmp_path / "empty.bin"
+    writer = await get_file_writer(path)
+    writer.close()
+
+    async with asyncio.timeout(5.0):
+        await writer.wait_closed()
+
+    assert writer.is_closing()
+    assert await published_contents(path) == b""
+
+
+@pytest.mark.asyncio
+async def test_file_writer_close_with_queued_data(tmp_path):
+    """Data queued and closed before the write task first runs is written and published."""
+    path = tmp_path / "queued.bin"
+    chunks = [b"chunk-%02d;" % i for i in range(10)]
+
+    writer = await get_file_writer(path)
+
+    for chunk in chunks:
+        writer.write(chunk)
+
+    writer.close()
+
+    with pytest.raises(RuntimeError):
+        writer.write(b"late")
+
+    async with asyncio.timeout(5.0):
+        await writer.wait_closed()
+
+    assert await published_contents(path) == b"".join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_file_writer_empty_drain(tmp_path):
+    """Draining a writer with nothing queued returns without waiting for data."""
+    path = tmp_path / "drain.bin"
+    writer = await get_file_writer(path)
+
+    async with asyncio.timeout(1.0):
+        await writer.drain()
+
+    writer.write(b"after drain")
+    writer.close()
+
+    async with asyncio.timeout(5.0):
+        await writer.wait_closed()
+
+    assert await published_contents(path) == b"after drain"
+
+
+@pytest.mark.asyncio
+async def test_file_writer_drain_between_writes(tmp_path):
+    """Writes separated by drains land in order, and the file is published on close."""
+    path = tmp_path / "ordinary.bin"
+    writer = await get_file_writer(path)
+
+    async with asyncio.timeout(5.0):
+        writer.write(b"first;")
+        await writer.drain()
+        assert not writer.is_closing()
+
+        writer.write(b"second;")
+        writer.write(b"third;")
+        await writer.drain()
+
+        writer.close()
+        await writer.wait_closed()
+
+    assert await published_contents(path) == b"first;second;third;"
+
+
+@pytest.mark.asyncio
+async def test_file_writer_cancelled_wait_closed(tmp_path):
+    """Canceling wait_closed leaves queued writes and file publication running."""
+    path = tmp_path / "cancelled.bin"
+    chunks = [b"chunk-%02d;" % i for i in range(10)]
+
+    writer = await get_file_writer(path)
+
+    for chunk in chunks:
+        writer.write(chunk)
+
+    writer.close()
+
+    waiter = asyncio.create_task(writer.wait_closed())
+    await asyncio.sleep(0)
+    waiter.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    async with asyncio.timeout(5.0):
+        await writer.wait_closed()
+
+    assert await published_contents(path) == b"".join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_file_writer_rename_failure(tmp_path):
+    """A rename that cannot publish the file is raised from wait_closed."""
+    path = tmp_path / "taken.bin"
+    await asyncio.to_thread(path.mkdir)
+
+    writer = await get_file_writer(path)
+    writer.write(b"data")
+    writer.close()
+
+    async with asyncio.timeout(5.0):
+        with pytest.raises(OSError):
+            await writer.wait_closed()
+
+    assert await asyncio.to_thread(path.is_dir)
+    assert await asyncio.to_thread(path.with_suffix(".tmp").read_bytes) == b"data"
+
+
+class FailingFile:
+    """An aiofile handle whose writes fail."""
+
+    def __init__(self):
+        self.closed = False
+
+    async def write(self, data: bytes):
+        raise OSError("disk full")
+
+    async def close(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_file_writer_write_failure(tmp_path):
+    """Write errors reach wait_closed after releasing the writer."""
+    file = FailingFile()
+    writer = FileAsyncWriter(tmp_path / "failing.bin", file)
+    writer.start()
+
+    writer.write(b"first")
+    writer.write(b"second")
+
+    async with asyncio.timeout(5.0):
+        await writer.drain()
+
+        with pytest.raises(OSError, match="disk full"):
+            await writer.wait_closed()
+
+    assert file.closed
+    assert writer.is_closing()
+
+    with pytest.raises(RuntimeError):
+        writer.write(b"late")
