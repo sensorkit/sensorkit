@@ -92,6 +92,13 @@ class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
     mount_deinit_timeout: float = 60.0
     """Timeout in seconds for the mount deinitialization command."""
 
+    connect_timeout: float = 60.0
+    """Timeout in seconds for each Connect command.
+
+    Recovery reconnects every device before stopping any, so this and
+    `stop_timeout` share the time limit of one recovery attempt.
+    """
+
     stop_timeout: float = 30.0
     """Timeout in seconds for each Stop command."""
 
@@ -156,6 +163,7 @@ class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
             (SetFilter, self.filter_change_timeout),
             (ConfigureCameraSensor, self.camera_configure_timeout),
             (ChangeFocusPosition, self.focus_change_timeout),
+            (Connect, self.connect_timeout),
             (Stop, self.stop_timeout),
         )
 

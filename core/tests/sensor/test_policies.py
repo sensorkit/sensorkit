@@ -17,9 +17,10 @@ from collections.abc import Callable
 import pytest
 import yaml
 
+from sensorkit.auto.procedures import RecoverProcedure
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.definition import SensorDefinition
-from sensorkit.sensor.dispatch import Interruption
+from sensorkit.sensor.dispatch import ABORT_TIMEOUT_S, Interruption
 from sensorkit.sensor.execution import (
     ExecutionState,
     WorkflowError,
@@ -70,6 +71,7 @@ DEPLOYED_FIELDS = {
 
 ADDED_FIELDS = {
     "mount_deinit_timeout": (float, 60.0),
+    "connect_timeout": (float, 60.0),
     "stop_timeout": (float, 30.0),
     "follow_target_timeout": (float, 300.0),
     "filter_change_timeout": (float, 30.0),
@@ -1010,6 +1012,7 @@ def test_policy_deadlines_scope_by_trait_only_where_limits_differ():
         (("any", None), "SetFilter"): 30.0,
         (("any", None), "ConfigureCameraSensor"): 30.0,
         (("any", None), "ChangeFocusPosition"): 30.0,
+        (("any", None), "Connect"): 60.0,
         (("any", None), "Stop"): 30.0,
         (("any", None), None): 300.0,
     }
@@ -1121,3 +1124,72 @@ def test_an_explicit_timeout_still_wins(sensor):
 
     assert labeled(compiled(sensor, "init", POLICIES, definition).graph,
                      "dome.Init").timeout_s == 7.0
+
+
+# Recovery deadlines
+
+
+CUSTOM_CONNECT = SensorPolicies(connect_timeout=4.0)
+
+
+def test_a_stalled_connect_leaves_a_recovery_attempt_time_to_stop(sensor):
+    definition = compose_deadlines(definition_of(sensor), DEFAULTS.deadlines())
+    graph = compiled(sensor, "recover", DEFAULTS, definition).graph
+    deadlines = {label(graph, n.id).split(".")[1]: n.payload.timeout_s
+                 for n in graph.nodes}
+
+    assert deadlines == {"Connect": DEFAULTS.connect_timeout,
+                         "Stop": DEFAULTS.stop_timeout}
+
+    # Each phase may also wait out one unanswered Abort.
+    assert (DEFAULTS.connect_timeout + DEFAULTS.stop_timeout
+            + 2 * ABORT_TIMEOUT_S < RecoverProcedure.recover_timeout)
+
+
+@pytest.mark.parametrize(("authored", "overrides"), [
+    ((), {}),
+    ((DeadlineRule(target=("any", None), command="Connect", seconds=5.0),),
+     {"mount": 5.0, "dome": 5.0, "cover": 5.0, "cam": 5.0}),
+    ((DeadlineRule(target=("device", "cam"), command="Connect", seconds=6.0),),
+     {"cam": 6.0}),
+])
+def test_connect_deadlines_follow_the_policy_unless_authored(
+        sensor, devices, authored, overrides):
+    definition = compose_deadlines(definition_of(sensor, deadlines=authored),
+                                   CUSTOM_CONNECT.deadlines())
+    graph = compiled(sensor, "recover", CUSTOM_CONNECT, definition).graph
+
+    assert {d: labeled(graph, f"{d}.Connect").timeout_s for d in devices} == (
+        dict.fromkeys(devices, CUSTOM_CONNECT.connect_timeout) | overrides)
+
+
+STALLING = SensorPolicies(connect_timeout=0.2, stop_timeout=0.2)
+"""Recovery deadlines short enough that a stalled Connect ends within the
+case."""
+
+
+@pytest.mark.parametrize(("device", "abortable"), [
+    ("mount", True), ("cam", False)])
+@pytest.mark.asyncio
+async def test_recovery_stops_every_device_after_a_connect_stalls(
+        sensor, executor, rig, device, abortable):
+    definition = compose_deadlines(definition_of(sensor), STALLING.deadlines())
+    recover = compiled(sensor, "recover", STALLING, definition)
+    stalled = labeled(recover.graph, f"{device}.Connect")
+    rig[device].hold("Connect")
+
+    with pytest.raises(WorkflowError, match="Connect") as raised:
+        await finished(rig.start(executor.execute(recover)))
+
+    report = raised.value.report
+    (node, error), = report.run.causes
+
+    assert node.payload is stalled
+    assert isinstance(error, TimeoutError)
+    assert report.interruptions == {stalled: Interruption(
+        "acknowledged" if abortable else "unsupported")}
+
+    # The stall does not withhold the halt from any device.
+    assert stops(rig) == dict.fromkeys(rig.devices, 1)
+    assert {status(report.run, labeled(recover.graph, f"{d}.Stop"))
+            for d in rig.devices} == {"ok"}

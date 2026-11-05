@@ -68,6 +68,7 @@ All policies are optional; timeouts show their defaults.
 | `mount_init_timeout`                      | 30.0    | Seconds allowed for mount power-up/axis enable   |
 | `mount_home_timeout`                      | 300.0   | Seconds allowed for the homing sequence          |
 | `mount_deinit_timeout`                    | 60.0    | Seconds allowed for mount deinitialization       |
+| `connect_timeout`                         | 60.0    | Seconds allowed to connect a device              |
 | `stop_timeout`                            | 30.0    | Seconds allowed to stop a device                 |
 | `follow_target_timeout`                   | 300.0   | Seconds allowed to slew to and track a target    |
 | `filter_change_timeout`                   | 30.0    | Seconds allowed to change the filter             |
@@ -81,6 +82,9 @@ All policies are optional; timeouts show their defaults.
 | `concurrent_mount_and_mirror_cover_init`  | false   | Open mirror cover during mount init              |
 
 Unknown policy fields are rejected.
+A recovery attempt is aborted after 120 seconds.
+It connects every device before stopping any,
+so keep `connect_timeout` and `stop_timeout` together well under that limit.
 Altitude and Sun/Moon admission limits belong in tasking and automation;
 the sensor's policies control sequencing and command deadlines.
 
