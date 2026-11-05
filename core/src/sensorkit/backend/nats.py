@@ -12,6 +12,7 @@ import nats.js.errors
 import nats.micro
 from nats.aio.msg import Msg
 from nats.aio.subscription import Subscription
+from nats.js import JetStreamContext
 from nats.js.api import ConsumerConfig, DeliverPolicy, StreamConfig
 from nats.js.kv import KV_DEL, KV_PURGE, KeyValue
 
@@ -33,6 +34,8 @@ from sensorkit.backend.base import (
 from sensorkit.common.aio import cleanup_future
 
 SUBJECT_PREFIX = "sensorkit"
+STREAM_NAME = "sensorkit"
+KV_BUCKET = "sensorkit"
 DELETE_OPS = (KV_DEL, KV_PURGE)
 
 logging.getLogger("nats").setLevel(
@@ -90,6 +93,39 @@ def _kv_entry(entry: KeyValue.Entry, *, key: Subject | None = None):
     )
 
 
+async def _bind_stream(js: JetStreamContext) -> StreamConfig:
+    """Return the event stream, creating it with default limits if absent.
+
+    An existing stream keeps the limits an operator set on it, such as max_age.
+
+    Raises:
+        BackendError: If the stream omits the required subject filter.
+    """
+    subject = f"{Method.STR.with_prefix()}.>"
+
+    try:
+        info = await js.stream_info(STREAM_NAME)
+    except nats.js.errors.NotFoundError:
+        # Concurrent creators send identical configurations, which the server accepts.
+        info = await js.add_stream(name=STREAM_NAME, subjects=[subject])
+
+    if subject not in (info.config.subjects or ()):
+        raise BackendError(f"NATS stream {STREAM_NAME!r} does not capture {subject!r}")
+
+    return info.config
+
+
+async def _bind_key_value(js: JetStreamContext) -> KeyValue:
+    """Return the key-value bucket, creating it with default limits if absent."""
+    try:
+        return await js.key_value(KV_BUCKET)
+    except nats.js.errors.BucketNotFoundError:
+        # TODO: When limit_marker_ttl support is added to nats-py, watchers should be able to
+        #       detect key expiration.
+        # return await js.create_key_value(bucket=KV_BUCKET, limit_marker_ttl=1)
+        return await js.create_key_value(bucket=KV_BUCKET)
+
+
 class NATSBackendImpl(BackendImpl):
     """BackendImpl backed by a live NATS JetStream cluster."""
 
@@ -108,20 +144,17 @@ class NATSBackendImpl(BackendImpl):
         # Connect to the NATS broker.
         nc = await nats.connect(**kwargs)
 
-        # Create JetStream resources.
-        js = nc.jetstream()
-        info = await js.add_stream(
-            name="sensorkit",
-            subjects=[f"{Method.STR.with_prefix()}.>"],
-        )
-        # TODO: When limit_marker_ttl support is added to nats-py, watchers should be able to
-        #       detect key expiration.
-        #kv = await js.create_key_value(bucket="sensorkit", limit_marker_ttl=1)
-        kv = await js.create_key_value(bucket="sensorkit")
+        try:
+            js = nc.jetstream()
+            stream = await _bind_stream(js)
+            kv = await _bind_key_value(js)
+        except BaseException:
+            await nc.close()
+            raise
 
         return cls(
             client=nc,
-            stream=info.config,
+            stream=stream,
             key_value=kv,
         )
 

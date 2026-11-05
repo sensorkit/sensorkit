@@ -88,6 +88,11 @@ services:
 
     The `-js` flag enables JetStream. Without it NATS runs fine, but SensorKit can't create its streams or KV store — nothing will work.
 
+SensorKit creates the `sensorkit` event stream and the `sensorkit` KV bucket with default limits on first start.
+To set limits such as maximum message age, create or edit them with the [NATS CLI](https://github.com/nats-io/natscli).
+SensorKit keeps the settings of a stream or bucket that already exists.
+The event stream's subject list must include `sensorkit.stream.>`.
+
 ## Point SensorKit at NATS
 
 SensorKit reads the server address from the `NATS_URL` environment variable:
