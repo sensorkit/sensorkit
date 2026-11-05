@@ -1,9 +1,7 @@
 <div align="center">
   <p>
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sensorkit/sensorkit/main/docs/assets/sensorkit-horizontal-dark.svg">
-      <img src="https://raw.githubusercontent.com/sensorkit/sensorkit/main/docs/assets/sensorkit-horizontal-light.svg" alt="SensorKit" width="460">
-    </picture>
+    <img src="https://raw.githubusercontent.com/sensorkit/sensorkit/main/docs/assets/sensorkit-horizontal-light.svg#gh-light-mode-only" alt="SensorKit" width="460">
+    <img src="https://raw.githubusercontent.com/sensorkit/sensorkit/main/docs/assets/sensorkit-horizontal-dark.svg#gh-dark-mode-only" alt="SensorKit" width="460">
   </p>
 
 [![CI](https://img.shields.io/github/actions/workflow/status/sensorkit/sensorkit/ci.yml?branch=main&style=flat-square&logo=github&label=CI)](https://github.com/sensorkit/sensorkit/actions/workflows/ci.yml?query=branch%3Amain)
