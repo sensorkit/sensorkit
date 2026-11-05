@@ -9,7 +9,7 @@ This page covers the file format, how to load and update configuration, and the 
 A minimal but realistic example:
 
 ```yaml
-# yaml-language-server: $schema=https://sensorkit.github.io/main/config-schema.json
+# yaml-language-server: $schema=./sensorkit.schema.json
 version: 1
 
 sensorkit:
@@ -146,18 +146,22 @@ sensorkit go -c sensorkit.yaml -l
 
 ## Editor support
 
-SensorKit publishes a JSON Schema covering the core sections and every built-in module. Reference it from the top of your config file to get completion and inline validation as you edit. In VS Code, with the YAML extension installed:
-
-```yaml
-# yaml-language-server: $schema=https://sensorkit.github.io/main/config-schema.json
-version: 1
-```
-
-Sites running their own plugins can generate a schema that also covers the sections those plugins register:
+Generate a local JSON Schema from your installed SensorKit version to get completion and inline validation as you edit. From the directory containing `sensorkit.yaml`, run:
 
 ```bash
 sensorkit config schema -c sensorkit.yaml -o sensorkit.schema.json
 ```
+
+The schema covers the core sections and the sections registered by the modules imported for this run, including your own plugins. Install the extras your configuration uses and list the modules in `sensorkit.imports`. For example, the config above imports `sensorkit.alpaca.service` and `sensorkit.pwi4.service`, so generate its schema in an environment with `sensorkit[alpaca,pwi4]` installed. Resolve any import warnings before relying on the schema; an unavailable module's sections may be missing.
+
+Keep the generated schema beside `sensorkit.yaml` and reference it from the top of the config file. In VS Code, with the YAML extension installed:
+
+```yaml
+# yaml-language-server: $schema=./sensorkit.schema.json
+version: 1
+```
+
+The relative schema path is resolved from the YAML file. Regenerate the schema after changing the imported modules, upgrading SensorKit, or changing a plugin's configuration models. Schema generation imports those modules but does not load configuration into the backend; it does not need a running NATS server.
 
 `sensorkit config load -n` remains the full check, covering the cross-field rules the models enforce.
 
