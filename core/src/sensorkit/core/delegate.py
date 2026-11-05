@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, override
+from typing import TYPE_CHECKING, Any, Callable, overload, override
 
 from pydantic import BaseModel
 
@@ -11,6 +11,8 @@ from sensorkit.core.controller import (
     ControllerInterface,
     ExecutionHandlerCallback,
     InternalControllerState,
+    KnownControllerState,
+    LatchedControllerState,
     TaskHandlerCallback,
 )
 from sensorkit.core.device import DeviceCommand, DeviceInterface
@@ -151,14 +153,19 @@ class ControllerDelegate(EntityDelegate, ControllerInterface):
     def task_running(self) -> bool:
         return self.delegate_target.task_running()
 
+    @overload
+    async def report_state(self, state: KnownControllerState, context: KeywordDict): ...
+
+    @overload
+    async def report_state(self, state: LatchedControllerState): ...
+
     @override
-    async def set_internal_state(
+    async def report_state(
         self,
         state: InternalControllerState,
-        *,
         context: KeywordDict | None = None,
     ):
-        return await self.delegate_target.set_internal_state(state, context=context)
+        return await self.delegate_target.report_state(state, context)
 
 
 class DeviceDelegate(EntityDelegate, DeviceInterface):

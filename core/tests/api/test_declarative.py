@@ -36,6 +36,7 @@ from sensorkit.backend.request import (
     declare_long_request,
     declare_request,
 )
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.device import DeviceCommand
 from sensorkit.core.impl.controller import ControllerImpl
@@ -509,7 +510,7 @@ async def test_declared_program():
         await cli.enable("test_controller")
         await enable_done.wait()
         assert not task_factory_called.is_set() and not disable_done.is_set()
-        await ctrl.impl.set_internal_state(InternalControllerState.OPERATE)
+        await ctrl.impl.report_state(InternalControllerState.OPERATE, KeywordDict())
         (await cli.start_tasking()).close()
         await task_factory_called.wait()
         assert not disable_done.is_set()

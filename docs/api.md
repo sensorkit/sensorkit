@@ -318,6 +318,47 @@ Adds command-handler registration and enable/disable state (normally driven for 
 - `use_device(name, *, subscribe=[...])` — declare a device dependency, optionally subscribing to keyword types; returns a handle for sending commands and reading cached state.
 - `get_device(name)` / `all_devices()` — access attached devices.
 - `update_context(...)` — build a `Context` snapshot from live device keyword state (feeds FITS headers and pipeline expressions).
+- `report_state(state, context)` — report the observed operating state and its lifecycle input.
+
+A controller reports UNKNOWN when its service starts.
+The controller reports TRANSITION while a lifecycle task, including recovery, is pending or running.
+While it reports TRANSITION, it rejects other tasks even with `interrupt`.
+Only another lifecycle task or an abort can take over.
+
+UNKNOWN and ERROR latch until a lifecycle task succeeds.
+A failed lifecycle task latches ERROR, and one aborted after it starts latches UNKNOWN.
+Controllers can report UNKNOWN or ERROR to latch a fault without reporting known states.
+Reporting UNKNOWN or ERROR after a lifecycle handler returns and before settlement fails that task.
+A latch keeps the recorded lifecycle input for diagnosis.
+Reporting another state does not clear a latch.
+Restarted controllers begin at UNKNOWN.
+A persisted failure or interrupted transition keeps UNKNOWN latched until a lifecycle task succeeds.
+After a restart from a known state, an attach hook can report a known state for the agent to adopt.
+
+#### Controllers that report no known states
+
+A successful lifecycle task establishes its target state, with its submitted context as lifecycle input.
+The recorded input describes how that state was established.
+After the controller leaves that state, the input is retained only for diagnosis.
+These controllers rely on their handlers raising when a lifecycle task fails.
+
+#### Controllers that report known states
+
+A known state is reported with its lifecycle input, which replaces the state and input established by lifecycle tasks.
+A lifecycle task succeeds when its handler returns successfully and the latest reported state and input match its target and submitted context.
+If they do not yet match, the controller waits up to `confirmation_timeout` seconds after the handler returns.
+The default is five seconds.
+A controller that reports known states keeps them current, for example by polling the hardware or by reporting the target from its lifecycle handler.
+An execution handler can pass `execution.submitted_context` to `report_state` while changing its working `execution.context`.
+
+The agent skips a lifecycle task when the reported state and input already match demand.
+A controller must therefore be able to reconstruct the input it reports.
+Each input keyword must be read back from the hardware or be authoritative in software, for example held in memory by the controller.
+A controller that cannot reconstruct its input should do one of the following.
+
+- Report no known states.
+- Report UNKNOWN at startup.
+- Report a known state only if the controller has no input options for that state.
 
 ### `ProgramImpl`
 

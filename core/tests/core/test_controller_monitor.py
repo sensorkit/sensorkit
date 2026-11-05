@@ -50,6 +50,13 @@ async def next_report(changes: asyncio.Queue[ControllerOperatingState]):
     return report
 
 
+async def store_same_lifecycle_state(kit, monitor: ControllerMonitor):
+    """Store a new operating-state event with the same state, target and input."""
+    state = monitor.state
+    state.operating_state = state.operating_state.derive()
+    await kit.controller(monitor.controller.entity).kv_put_model(state)
+
+
 def assert_unavailable(monitor: ControllerMonitor) -> ControllerStateUnknown:
     """Assert every healthy accessor raises and return the state accessor's exception."""
     assert not monitor.healthy()
@@ -181,12 +188,12 @@ async def test_short_lived_changes_keep_order(controller_impl, monitor):
     with monitor.state_changes() as changes:
         assert (await next_report(changes)).current == UNKNOWN
 
-        for state in (OPERATE, UNKNOWN, OPERATE):
-            await controller_impl.set_internal_state(state)
+        for state in (OPERATE, STANDBY, OPERATE):
+            await controller_impl.report_state(state, KeywordDict())
 
         reports = [(await next_report(changes)).current for _ in range(3)]
 
-    assert reports == [OPERATE, UNKNOWN, OPERATE]
+    assert reports == [OPERATE, STANDBY, OPERATE]
 
 
 @pytest.mark.asyncio
@@ -195,24 +202,23 @@ async def test_lifecycle_input_changes_notify(kit, controller_impl, monitor):
     async def init(task: InitTask):
         pass
 
+    cli = kit.controller(controller_impl.entity)
+
     with monitor.state_changes(initial_value=False) as changes:
         async with asyncio.timeout(1.0):
-            await kit.controller(controller_impl.entity).execute_task(
-                InitTask(), context=lifecycle_input("open")
-            )
+            await cli.execute_task(InitTask(), context=lifecycle_input("open"))
+            await cli.execute_task(InitTask(), context=lifecycle_input("closed"))
 
-        await controller_impl.set_internal_state(OPERATE, context=lifecycle_input("closed"))
-        await controller_impl.set_internal_state(ERROR)
-        await controller_impl.set_internal_state(ERROR, context=lifecycle_input("open"))
+        await controller_impl.report_state(ERROR)
 
         reports = [await next_report(changes) for _ in range(5)]
 
     assert [(r.current, r.target, r.context) for r in reports] == [
         (TRANSITION, OPERATE, lifecycle_input("open")),
         (OPERATE, None, lifecycle_input("open")),
+        (TRANSITION, OPERATE, lifecycle_input("closed")),
         (OPERATE, None, lifecycle_input("closed")),
         (ERROR, None, lifecycle_input("closed")),
-        (ERROR, None, lifecycle_input("open")),
     ]
 
 
@@ -226,14 +232,14 @@ async def test_bookkeeping_refreshes_state_without_notifying(kit, controller_imp
 
         assert changes.empty()
 
-        # A new report of the same state, target and input.
+        # A new event with the same state, target and input.
         reported = monitor.operating_state.event_id
-        await controller_impl.set_internal_state(UNKNOWN)
+        await store_same_lifecycle_state(kit, monitor)
         await until(lambda: monitor.operating_state.event_id != reported, timeout=1.0)
 
         assert changes.empty()
 
-        await controller_impl.set_internal_state(STANDBY)
+        await controller_impl.report_state(STANDBY, KeywordDict())
 
         assert (await next_report(changes)).current == STANDBY
 
@@ -246,7 +252,7 @@ async def test_deletion_retains_state(kit, controller_impl, monitor):
 
         assert monitor.operating_state.current == UNKNOWN
 
-        await controller_impl.set_internal_state(OPERATE)
+        await controller_impl.report_state(OPERATE, KeywordDict())
 
         assert (await next_report(changes)).current == OPERATE
         assert monitor.error is None
@@ -256,8 +262,8 @@ async def test_deletion_retains_state(kit, controller_impl, monitor):
 async def test_new_subscriber_starts_at_latest_report(controller_impl, monitor):
     with monitor.state_changes() as first:
         await next_report(first)
-        await controller_impl.set_internal_state(OPERATE)
-        await controller_impl.set_internal_state(STANDBY)
+        await controller_impl.report_state(OPERATE, KeywordDict())
+        await controller_impl.report_state(STANDBY, KeywordDict())
 
         assert (await next_report(first)).current == OPERATE
         assert (await next_report(first)).current == STANDBY
@@ -270,7 +276,7 @@ async def test_new_subscriber_starts_at_latest_report(controller_impl, monitor):
 @pytest.mark.asyncio
 async def test_overflow_closes_only_slow_subscriber(controller_impl, monitor):
     with monitor.state_changes(maxsize=1) as slow, monitor.state_changes() as other:
-        await controller_impl.set_internal_state(OPERATE)
+        await controller_impl.report_state(OPERATE, KeywordDict())
 
         assert (await next_report(other)).current == UNKNOWN
         assert (await next_report(other)).current == OPERATE
@@ -286,8 +292,16 @@ async def test_overflow_closes_only_slow_subscriber(controller_impl, monitor):
 
 
 @pytest.mark.asyncio
-async def test_state_copies_are_isolated(controller_impl, monitor, until):
-    await controller_impl.set_internal_state(OPERATE, context=lifecycle_input("closed"))
+async def test_state_copies_are_isolated(kit, controller_impl, monitor, until):
+    @controller_impl.task_handler(InitTask)
+    async def init(task: InitTask):
+        pass
+
+    async with asyncio.timeout(1.0):
+        await kit.controller(controller_impl.entity).execute_task(
+            InitTask(), context=lifecycle_input("closed")
+        )
+
     await until(lambda: monitor.operating_state.current == OPERATE, timeout=1.0)
 
     monitor.state.operating_state.context.set_value("dome", "open")
@@ -299,7 +313,7 @@ async def test_state_copies_are_isolated(controller_impl, monitor, until):
 
 
 @pytest.mark.asyncio
-async def test_reports_are_shared_apart_from_state(controller_impl, monitor, until):
+async def test_reports_are_shared_apart_from_state(kit, controller_impl, monitor, until):
     with monitor.state_changes() as first, monitor.state_changes() as second:
         report = await next_report(first)
 
@@ -311,7 +325,7 @@ async def test_reports_are_shared_apart_from_state(controller_impl, monitor, unt
         assert monitor.operating_state.context == KeywordDict()
 
         reported = monitor.operating_state.event_id
-        await controller_impl.set_internal_state(UNKNOWN)
+        await store_same_lifecycle_state(kit, monitor)
         await until(lambda: monitor.operating_state.event_id != reported, timeout=1.0)
 
         assert first.empty()

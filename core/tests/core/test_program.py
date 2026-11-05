@@ -162,7 +162,7 @@ async def leased_controller(kit, service_context):
     kv = kit.backend.key_value(controller.entity)
 
     async with await Lease.acquire(kv, "EntityLease", 60, None) as lease:
-        await controller.set_internal_state(OPERATE)
+        await controller.report_state(OPERATE, KeywordDict())
         yield controller, lease
 
 
@@ -206,7 +206,7 @@ async def test_program_tasking(kit):
         sc = await kit.register_service("testservice", "0.1.0")
         controller = await sc.register_controller("mycontroller")
         program = await sc.register_program("myprogram")
-        await controller.set_internal_state(OPERATE)
+        await controller.report_state(OPERATE, KeywordDict())
 
     task_obj = CollectTask(task_id=uuid.uuid1(), controller_id="mycontroller")
     task_ran = False
@@ -285,7 +285,7 @@ async def test_session_reports_progress_in_order(kit, service_context, until):
     """Session progress and execution outcomes precede the terminal fault and ending."""
     controller = await service_context.register_controller("mycontroller")
     program = await service_context.register_program("myprogram")
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
     collects = 0
 
     @controller.task_handler(CollectTask)
@@ -564,7 +564,7 @@ async def test_tasking_requires_operate(kit, service_context, leased_controller,
     await client.enable(str(controller.entity))
 
     if when == "start":
-        await controller.set_internal_state(InternalControllerState.STANDBY)
+        await controller.report_state(InternalControllerState.STANDBY, KeywordDict())
 
     async with tasking_reports(client) as reports, asyncio.timeout(5.0):
         (await client.start_tasking()).close()
@@ -574,7 +574,7 @@ async def test_tasking_requires_operate(kit, service_context, leased_controller,
             await until(
                 lambda: any(r.loop_state and r.loop_state.stage == "post_task" for r in reports)
             )
-            await controller.set_internal_state(InternalControllerState.STANDBY)
+            await controller.report_state(InternalControllerState.STANDBY, KeywordDict())
 
         session = await ended(reports, until)
 
@@ -590,7 +590,7 @@ async def test_tasking_requires_operate(kit, service_context, leased_controller,
 async def test_program_reuses_task_instance(kit, service_context):
     controller = await service_context.register_controller("mycontroller")
     program = await service_context.register_program("myprogram")
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
 
     task_obj = CollectTask()
     executed: list[uuid.UUID] = []
@@ -628,7 +628,7 @@ async def test_program_abort_waits_for_controller_cleanup(kit, service_context, 
     """Aborting tasking returns only after the controller has ended the running task."""
     controller = await service_context.register_controller("mycontroller")
     program = await service_context.register_program("myprogram")
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
     entered = asyncio.Event()
     cleaning = asyncio.Event()
     release = asyncio.Event()
@@ -1126,7 +1126,7 @@ async def test_target_change_waits_for_cleanup(kit, service_context, leased_cont
     """Changing controllers waits for the current controller task's cleanup to finish."""
     original, _ = leased_controller
     replacement = await service_context.register_controller("replacement")
-    await replacement.set_internal_state(OPERATE)
+    await replacement.report_state(OPERATE, KeywordDict())
     program = await service_context.register_program("switch-program")
     entered = asyncio.Event()
     cleaning = asyncio.Event()
@@ -1248,7 +1248,7 @@ async def test_delayed_stop_cannot_stop_replacement_loop(
 async def test_enable_hook_gates_start_without_blocking_abort(kit, service_context):
     """An enable hook blocks new tasking while abort requests remain available."""
     controller = await service_context.register_controller("hook-controller")
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
     program = await service_context.register_program("hook-program")
     entered = asyncio.Event()
     release = asyncio.Event()

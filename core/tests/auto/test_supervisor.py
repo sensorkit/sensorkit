@@ -18,6 +18,7 @@ from sensorkit.core.controller import (
     ControllerMonitor,
     ControllerStateUnknown,
     InternalControllerState,
+    KnownControllerState,
 )
 from sensorkit.core.task import InitTask
 
@@ -66,7 +67,7 @@ async def controller(kit, service_context):
 
 @pytest_asyncio.fixture
 async def gated_init(controller):
-    """Register an init handler that runs until released."""
+    """Register an init handler that runs until released, then reports OPERATE."""
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -74,6 +75,8 @@ async def gated_init(controller):
     async def init(task):
         entered.set()
         await release.wait()
+
+        await controller.report_state(OPERATE, KeywordDict())
 
     try:
         yield entered, release
@@ -110,9 +113,9 @@ async def compared(changes: asyncio.Queue, state: InternalControllerState):
 
 
 @contextlib.asynccontextmanager
-async def settled_at(kit, controller, state: InternalControllerState, until):
+async def settled_at(kit, controller, state: KnownControllerState, until):
     """Set controller state and yield a supervisor once it expects that state."""
-    await controller.set_internal_state(state)
+    await controller.report_state(state, KeywordDict())
 
     async with supervising(kit) as supervisor:
         await until(lambda: supervisor.expected == state)
@@ -125,7 +128,7 @@ async def settled_at(kit, controller, state: InternalControllerState, until):
 @pytest.mark.asyncio
 async def test_start_processes_initial_state(kit, controller):
     """An initial settled controller state establishes the expectation for startup adoption."""
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
 
     async with supervising(kit) as supervisor:
         assert supervisor.expected == OPERATE
@@ -139,7 +142,7 @@ async def test_start_processes_initial_state(kit, controller):
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_start_waits_for_processed_state(kit, controller, cancel):
     """Startup waits for supervision, and cancellation stops it without stopping the monitor."""
-    await controller.set_internal_state(STANDBY)
+    await controller.report_state(STANDBY, KeywordDict())
     monitor = ControllerMonitor(kit.controller("ctrl1"))
     await monitor.start()
     supervisor = PausedSupervisor(
@@ -181,11 +184,11 @@ async def test_start_waits_for_processed_state(kit, controller, cancel):
 @pytest.mark.asyncio
 async def test_unsettled_report_seeds_nothing(kit, controller, until):
     """ERROR and UNKNOWN controller states leave the expectation unset."""
-    await controller.set_internal_state(ERROR)
+    await controller.report_state(ERROR)
 
     async with supervising(kit) as supervisor:
         with supervisor.state_changes() as changes:
-            await controller.set_internal_state(UNKNOWN)
+            await controller.report_state(UNKNOWN)
             await compared(changes, UNKNOWN)
 
         assert supervisor.expected is None
@@ -198,14 +201,14 @@ async def test_unsettled_report_seeds_nothing(kit, controller, until):
 @pytest.mark.asyncio
 async def test_infinite_grace_keeps_state_updates_and_stop_responsive(kit, controller):
     """An unlimited mismatch wait still processes controller updates and stops promptly."""
-    await controller.set_internal_state(STANDBY)
+    await controller.report_state(STANDBY, KeywordDict())
 
     async with asyncio.timeout(5.0):
         async with supervising(kit, transition_grace=float("inf")) as supervisor:
             supervisor.expect_transition()
 
             with supervisor.state_changes() as changes:
-                await controller.set_internal_state(OPERATE)
+                await controller.report_state(OPERATE, KeywordDict())
                 await compared(changes, OPERATE)
 
             assert supervisor.healthy()
@@ -219,7 +222,7 @@ async def test_queued_transition_cannot_replace_confirmed_state(
 ):
     """A fresh confirmation prevents an older queued transition from causing a failure."""
     entered, release_init = gated_init
-    await controller.set_internal_state(STANDBY)
+    await controller.report_state(STANDBY, KeywordDict())
     monitor = ControllerMonitor(kit.controller("ctrl1"))
     await monitor.start()
     supervisor = PausedSupervisor(
@@ -271,9 +274,18 @@ async def test_confirmation_verifies_state_and_context(kit, controller, state):
     context = KeywordDict()
     context.set_value("dome", "closed")
 
+    @controller.task_handler(InitTask)
+    async def init(task):
+        pass
+
     async with supervising(kit) as supervisor:
         supervisor.expect_transition()
-        await controller.set_internal_state(state, context=context)
+
+        # OPERATE is reached with lifecycle input other than the requested input.
+        if state == OPERATE:
+            await kit.controller("ctrl1").execute_task(InitTask(), context=context)
+        else:
+            await controller.report_state(STANDBY, context)
 
         with pytest.raises(ControllerFailure):
             await supervisor.confirm(OPERATE)
@@ -376,7 +388,7 @@ async def test_skipped_transition_keeps_first_deadline(kit, controller, until):
 
         with supervisor.state_changes() as changes:
             await asyncio.sleep(0.6 * GRACE)
-            await controller.set_internal_state(OPERATE)
+            await controller.report_state(OPERATE, KeywordDict())
             await compared(changes, OPERATE)
 
         async with asyncio.timeout(5.0):
@@ -396,7 +408,7 @@ async def test_skipped_transition_confirmed_in_time(kit, controller, until):
         supervisor.expect_transition()
 
         with supervisor.state_changes() as changes:
-            await controller.set_internal_state(OPERATE)
+            await controller.report_state(OPERATE, KeywordDict())
             await compared(changes, OPERATE)
 
         await supervisor.confirm(OPERATE)
@@ -414,7 +426,7 @@ async def test_skipped_transition_confirmed_in_time(kit, controller, until):
 @pytest.mark.parametrize("change", ["transition", "unknown", "stop", "monitor_failure"])
 async def test_leaving_settled_conditions_ends_interval(kit, controller, change):
     """Expected-state changes and unhealthy monitoring end settled time immediately."""
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
 
     async with supervising(kit) as supervisor:
         assert settled_since(supervisor.failure_state) is not None
@@ -438,7 +450,7 @@ async def test_leaving_settled_conditions_ends_interval(kit, controller, change)
 @pytest.mark.asyncio
 async def test_reconfirmation_preserves_settled_interval(kit, controller):
     """Starting another procedure and confirming the same state preserves settled time."""
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
 
     async with supervising(kit) as supervisor:
         before = supervisor.failure_state.model_copy()
@@ -461,7 +473,7 @@ async def test_long_transition_preserves_failure_history(kit, controller):
         await release.wait()
         raise RuntimeError("Initialization failed")
 
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
     failure_state = FailureState(stable_period=0.05)
 
     async with supervising(kit, transition_grace=0.05, failure_state=failure_state) as supervisor:
@@ -493,7 +505,7 @@ async def test_departure_counts_one_failure(kit, controller, until):
         failure_state = supervisor.failure_state
 
         with supervisor.state_changes() as changes:
-            await controller.set_internal_state(STANDBY)
+            await controller.report_state(STANDBY, KeywordDict())
             await compared(changes, STANDBY)
 
             # The supervisor compares the update before notifying subscribers.
@@ -502,7 +514,7 @@ async def test_departure_counts_one_failure(kit, controller, until):
 
             # Another observer detecting the same incident does not count it again.
             failure_state.record_failure(0.0, ControllerFailure("tasking failed"))
-            await controller.set_internal_state(ERROR)
+            await controller.report_state(ERROR)
             await compared(changes, ERROR)
 
     assert failure_state.failures == 1
@@ -515,9 +527,9 @@ async def test_unknown_is_not_repaired_by_a_report(kit, controller, until):
 
     async with settled_at(kit, controller, OPERATE, until) as supervisor:
         with supervisor.state_changes() as changes:
-            await controller.set_internal_state(STANDBY)
+            await controller.report_state(STANDBY, KeywordDict())
             await compared(changes, STANDBY)
-            await controller.set_internal_state(OPERATE)
+            await controller.report_state(OPERATE, KeywordDict())
             await compared(changes, OPERATE)
 
         assert supervisor.expected == UNKNOWN
@@ -540,7 +552,7 @@ async def test_context_change_is_not_a_failure(kit, controller, until):
         assert settled_since(supervisor.failure_state) is not None
 
         with supervisor.state_changes() as changes:
-            await controller.set_internal_state(OPERATE, context=other)
+            await controller.report_state(OPERATE, other)
             await compared(changes, OPERATE)
 
         assert supervisor.expected == OPERATE
@@ -557,8 +569,11 @@ async def test_unknown_expectation_accepts_any_report(kit, controller, until):
         supervisor.invalidate()
 
         with supervisor.state_changes() as changes:
-            for state in (UNKNOWN, ERROR, STANDBY):
-                await controller.set_internal_state(state)
+            await controller.report_state(STANDBY, KeywordDict())
+            await compared(changes, STANDBY)
+
+            for state in (UNKNOWN, ERROR):
+                await controller.report_state(state)
                 await compared(changes, state)
 
         await asyncio.sleep(1.5 * GRACE)
@@ -592,7 +607,7 @@ async def test_start_fails_when_monitor_has_stopped(kit, controller):
 @pytest.mark.asyncio
 async def test_stop_ends_notifications(kit, controller):
     """Stopping wakes subscribers and failure waiters, leaving the monitor running."""
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
     monitor = ControllerMonitor(kit.controller("ctrl1"))
     await monitor.start()
 

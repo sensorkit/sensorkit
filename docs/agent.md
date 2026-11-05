@@ -214,9 +214,11 @@ Tasks from those sessions can still be interrupted on the controller.
 
 The agent tracks its expected state separately from observed controller state.
 On startup, the first settled observation sets the expectation, allowing the agent to adopt a controller that is already operating.
+If the reported state and lifecycle input match demand, the agent runs no lifecycle task.
 
 When the agent sends a lifecycle task, it expects TRANSITION.
-The controller may keep reporting its previous state for up to `transition_grace`, for example while it aborts an interrupted task.
+The controller reports TRANSITION when it accepts the task, before any task it interrupts has finished stopping.
+The agent may still see the previous state for up to `transition_grace` until the TRANSITION update reaches it.
 Observing TRANSITION clears the mismatch deadline, and the task may then run as long as its own timeout allows.
 If the controller reports the target state before the task result arrives, a new `transition_grace` period starts.
 The agent expects the target state once the task succeeds and a fresh state read confirms it.
@@ -228,10 +230,12 @@ Either case counts one controller failure, aborts the current procedure, and set
 A matching observation alone does not restore that expectation.
 A program fault reported for the same incident does not count again.
 
-A changed lifecycle context alone is not a failure.
+A lifecycle context that differs from demand is not a failure.
+This happens when demand changes or when the agent adopts a reported state whose lifecycle input differs from demand.
 The agent stops its program tasking gracefully and restores the desired context without delay.
 
 Recovery runs with an UNKNOWN expectation and may leave the controller in any state.
+The controller reports TRANSITION with no target while recovery runs.
 The next successful lifecycle task establishes a settled expectation.
 Shutdown bypasses the retry delay after a failure.
 

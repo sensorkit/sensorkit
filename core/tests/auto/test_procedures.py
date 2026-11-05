@@ -22,6 +22,7 @@ from sensorkit.auto.procedures import (
 from sensorkit.auto.reactor import ControllerReactor
 from sensorkit.auto.supervisor import ControllerStateSupervisor
 from sensorkit.backend.request import declare_request
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.controller import ControllerMonitor, InternalControllerState
 from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.program import (
@@ -277,7 +278,7 @@ async def tasking(kit, service_context):
         yield CollectTask()
 
     await kit.controller("ctrl1").enable()
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
     await kit.program("prog1").enable("ctrl1")
 
     try:
@@ -578,7 +579,7 @@ async def test_unknown_expectation_requires_command(
     controller_impl, init_count, observing, until
 ):
     """A matching report does not skip the lifecycle task while the expected state is unknown."""
-    await controller_impl.set_internal_state(OPERATE)
+    await controller_impl.report_state(OPERATE, KeywordDict())
     supervisor = await observing(controller_impl.entity)
     await until(lambda: supervisor.expected == OPERATE)
     supervisor.invalidate()
@@ -618,7 +619,7 @@ async def test_interrupted_command_leaves_expectation_unknown(
 @pytest.mark.parametrize("emergency", [False, True])
 async def test_recovery_is_exempt_before_dispatch(kit, controller_impl, emergency):
     """Recovery permits state changes from synchronous startup through task preparation."""
-    await controller_impl.set_internal_state(OPERATE)
+    await controller_impl.report_state(OPERATE, KeywordDict())
     lifecycle = ControllerLifecycle()
     async with contextlib.AsyncExitStack() as cleanup:
         monitor = ControllerMonitor(kit.controller(controller_impl.entity))
@@ -650,7 +651,7 @@ async def test_recovery_is_exempt_before_dispatch(kit, controller_impl, emergenc
                 await procedure.entered.wait()
 
                 with supervisor.state_changes() as changes:
-                    await controller_impl.set_internal_state(STANDBY)
+                    await controller_impl.report_state(STANDBY, KeywordDict())
 
                     while (await changes.get()).current != STANDBY:
                         pass

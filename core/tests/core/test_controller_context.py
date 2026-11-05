@@ -27,6 +27,7 @@ from sensorkit.core.task import (
     ShutdownTask,
     StandbyTask,
     TaskExecution,
+    TaskInfo,
 )
 
 OPERATE = InternalControllerState.OPERATE
@@ -244,6 +245,121 @@ async def test_non_lifecycle_task_preserves_lifecycle_input(kit, controller, out
         assert state.context == option_context(open=True)
 
 
+@pytest.mark.asyncio
+async def test_reported_target_confirms_task_input(kit, controller):
+    async def run_init(execution: TaskExecution[InitTask]):
+        # Working context edits stay out of the lifecycle input.
+        execution.context.get(EnclosureOption).limits.append(90.0)
+        execution.context.set_value("offsets", None)
+        await controller.update_context(frame=1)
+        await controller.report_state(OPERATE, option_context(open=True))
+
+    controller.add_task_handler(InitTask, execution_callback=run_init)
+    cli = kit.controller("mycontroller")
+
+    async with asyncio.timeout(1.0):
+        # Once a known state is reported, the observed state must confirm each lifecycle task.
+        await controller.report_state(STANDBY, KeywordDict())
+        await cli.execute_task(InitTask(), context=option_context(open=True))
+        settled = await operating_state(cli)
+
+    assert settled.current == OPERATE
+    assert settled.target is None
+    assert settled.context == option_context(open=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["omitted", "empty", "nested"])
+async def test_handler_reports_input_after_working_context_changes(kit, controller, kind):
+    started = asyncio.Event()
+    can_finish = asyncio.Event()
+    received: list[TaskExecution] = []
+
+    async def run_init(execution: TaskExecution[InitTask]):
+        received.append(execution)
+
+        if option := execution.context.get(EnclosureOption):
+            option.limits.append(90.0)
+
+        execution.context.pop("offsets", None)
+        await controller.update_context(frame=1)
+        await controller.report_state(OPERATE, execution.submitted_context)
+        started.set()
+        await can_finish.wait()
+
+    controller.add_task_handler(InitTask, execution_callback=run_init)
+    cli = kit.controller("mycontroller")
+    expected = lifecycle_input(kind) or KeywordDict()
+
+    try:
+        async with asyncio.timeout(2.0):
+            await controller.report_state(STANDBY, KeywordDict())
+            call = cli.execute_task(InitTask(), context=lifecycle_input(kind))
+            accepted = (await call.invoke()).execution
+            await started.wait()
+            running = await cli.kv_get_model(ControllerState)
+            can_finish.set()
+            await call
+            settled = await cli.kv_get_model(ControllerState)
+    finally:
+        can_finish.set()
+
+    assert received[0].submitted_context == expected
+    assert received[0].submitted_context.get(TaskInfo) is None
+    assert received[0].context.get(TaskInfo) is not None
+    assert accepted.submitted_context == expected
+    assert running.execution_state.execution.submitted_context == expected
+    assert settled.execution_state.execution.submitted_context == expected
+    assert running.execution_state.context["frame"] == 1
+    assert settled.operating_state.current == OPERATE
+    assert settled.operating_state.context == expected
+
+
+@pytest.mark.asyncio
+async def test_handler_input_edits_do_not_change_confirmation_input(kit, controller):
+    async def run_init(execution: TaskExecution[InitTask]):
+        execution.submitted_context.get(EnclosureOption).limits.append(90.0)
+        await controller.report_state(OPERATE, execution.submitted_context)
+
+    controller.add_task_handler(InitTask, execution_callback=run_init)
+    controller.confirmation_timeout = 0.05
+    cli = kit.controller("mycontroller")
+
+    async with asyncio.timeout(2.0):
+        await controller.report_state(STANDBY, KeywordDict())
+
+        with pytest.raises(CallError):
+            await cli.execute_task(InitTask(), context=option_context(open=True))
+
+        failed = await cli.kv_get_model(ControllerState)
+
+    assert failed.operating_state.current == ERROR
+    assert failed.operating_state.context == option_context(open=True)
+    assert "did not report" in failed.execution_state.finished.error
+
+
+@pytest.mark.asyncio
+async def test_reported_input_must_match_task_input(kit, controller):
+    @controller.task_handler(InitTask)
+    async def run_init(_: InitTask):
+        await controller.report_state(OPERATE, option_context(open=False))
+
+    controller.confirmation_timeout = 0.05
+    cli = kit.controller("mycontroller")
+
+    async with asyncio.timeout(1.0):
+        await controller.report_state(STANDBY, KeywordDict())
+
+        with pytest.raises(CallError):
+            await cli.execute_task(InitTask(), context=option_context(open=True))
+
+        failed = await cli.kv_get_model(ControllerState)
+
+    assert failed.operating_state.current == ERROR
+    assert failed.operating_state.context == option_context(open=True)
+    assert "did not report" in failed.execution_state.finished.error
+
+
 # Recovery
 
 
@@ -258,7 +374,7 @@ async def test_non_lifecycle_task_preserves_lifecycle_input(kit, controller, out
         ("abort", UNKNOWN, False),
     ],
 )
-async def test_recovery_invalidates_achieved_state(kit, controller, outcome, expected, error):
+async def test_recovery_has_no_target(kit, controller, outcome, expected, error):
     established = option_context(open=True)
     reported = KeywordDict({"mode": "recovered"})
     cli = kit.controller("mycontroller")
@@ -276,7 +392,7 @@ async def test_recovery_invalidates_achieved_state(kit, controller, outcome, exp
 
         match outcome:
             case "report":
-                await controller.set_internal_state(OPERATE, context=reported)
+                await controller.report_state(OPERATE, reported)
             case "fail":
                 raise RuntimeError("mount unreachable")
             case "fail_silently":
@@ -305,8 +421,9 @@ async def test_recovery_invalidates_achieved_state(kit, controller, outcome, exp
 
         state = await cli.kv_get_model(ControllerState)
 
+    # Recovery does not establish its prior state again.
     [during] = observed
-    assert during.current == UNKNOWN
+    assert during.current == TRANSITION
     assert during.previous == OPERATE
     assert during.target is None
     assert during.context == established
@@ -323,41 +440,63 @@ async def test_recovery_invalidates_achieved_state(kit, controller, outcome, exp
 @pytest.mark.asyncio
 async def test_state_report_context(kit, controller):
     established = option_context(open=True)
-    replaced = KeywordDict({"mode": "fault"})
     explicit = option_context(open=False)
     cli = kit.controller("mycontroller")
-    reported: list[tuple[InternalControllerState, KeywordDict]] = []
+    published: list[tuple[InternalControllerState, KeywordDict]] = []
 
     @controller.task_handler(InitTask)
     async def run_init(_: InitTask):
         pass
 
-    async def report(state: InternalControllerState, context: KeywordDict | None = None):
-        await controller.set_internal_state(state, context=context)
+    async def record():
         operating = await operating_state(cli)
-        reported.append((operating.current, operating.context))
+        published.append((operating.current, operating.context))
 
     async with asyncio.timeout(1.0):
         await cli.execute_task(InitTask(), context=established)
 
-        await report(UNKNOWN)
-        await report(ERROR, replaced)
-        await report(OPERATE, established)
-        await report(OPERATE)
-        await report(STANDBY, explicit)
+        await controller.report_state(UNKNOWN)
+        await record()
+        await controller.report_state(ERROR)
+        await record()
+
+        # The latch hides observed known states until a lifecycle task succeeds.
+        await controller.report_state(OPERATE, established)
+        await record()
+        await cli.execute_task(InitTask(), context=established)
+        await record()
+
+        await controller.report_state(STANDBY, explicit)
+        await record()
+        await controller.report_state(STANDBY, KeywordDict())
+        await record()
+        await controller.report_state(STANDBY, explicit)
 
         # The recorded input is independent of the reporter's mapping.
         explicit.get(EnclosureOption).limits.append(90.0)
-        await report(ERROR)
+        await controller.report_state(ERROR)
+        await record()
 
-    assert reported == [
+    assert published == [
         (UNKNOWN, established),
-        (ERROR, replaced),
+        (ERROR, established),
+        (ERROR, established),
         (OPERATE, established),
-        (OPERATE, KeywordDict()),
         (STANDBY, option_context(open=False)),
+        (STANDBY, KeywordDict()),
         (ERROR, option_context(open=False)),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "context"),
+    [(OPERATE, None), (ERROR, KeywordDict())],
+    ids=("known_without_input", "latch_with_input"),
+)
+async def test_report_input_follows_state(controller, state, context):
+    with pytest.raises(ValueError):
+        await controller.report_state(state, context)
 
 
 # Restart and persistence

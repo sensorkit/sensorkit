@@ -9,7 +9,18 @@ from collections.abc import AsyncIterator, Coroutine, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum, auto
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Collection, Mapping, NoReturn, Self
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Collection,
+    Literal,
+    Mapping,
+    NoReturn,
+    Self,
+    overload,
+)
 
 import uuid_utils.compat as uuid
 from pydantic import BaseModel, Field, model_validator
@@ -36,9 +47,23 @@ class InternalControllerState(StrEnum):
     ERROR = auto()
     """A known failure prevents asserting an achieved lifecycle state."""
     UNKNOWN = auto()
-    """No achieved lifecycle contract is asserted."""
+    """No achieved operating state is established."""
     TRANSITION = auto()
     """A lifecycle task is changing the controller's operating state."""
+
+
+type KnownControllerState = Literal[
+    InternalControllerState.OPERATE,
+    InternalControllerState.STANDBY,
+    InternalControllerState.SHUTDOWN,
+]
+"""An achieved operating state, reported with its lifecycle input."""
+
+type LatchedControllerState = Literal[
+    InternalControllerState.UNKNOWN,
+    InternalControllerState.ERROR,
+]
+"""A state held until a lifecycle task succeeds."""
 
 
 class ControllerEnableState(Event):
@@ -141,7 +166,9 @@ class ControllerOperatingState(Event):
     context: KeywordDict = Field(default_factory=KeywordDict)
     """Lifecycle input for the current or most recent attempt.
 
-    Achieved states assert this contract. Other states retain it for diagnosis.
+    For an achieved state, this is the input the controller reported with it. If the
+    controller reports no known states, it is the input of the lifecycle task that
+    established the state. Other states retain the input for diagnosis.
     """
 
     NO_CHANGE: ClassVar[object] = object()
@@ -763,21 +790,44 @@ class ControllerInterface(EntityInterface):
         """Return True if a task is currently executing on this controller."""
         ...
 
+    @overload
+    async def report_state(self, state: KnownControllerState, context: KeywordDict): ...
+
+    @overload
+    async def report_state(self, state: LatchedControllerState): ...
+
     @abstractmethod
-    async def set_internal_state(
+    async def report_state(
         self,
         state: InternalControllerState,
-        *,
         context: KeywordDict | None = None,
     ):
-        """Report controller state and its lifecycle parameters.
+        """Report the observed controller state and its lifecycle input.
+
+        Report a known state only if its lifecycle input can be reconstructed. Each input
+        keyword must be read back from the hardware or be authoritative in software.
+        Otherwise, report a known state only if it has no lifecycle input options, or
+        report no known states. A controller can also report UNKNOWN at startup.
+
+        UNKNOWN and ERROR latch until a lifecycle task succeeds and keep the recorded input.
+        Reporting them while a lifecycle task handler runs does not change how the task
+        settles.
+
+        Reporting a known state replaces the state established by lifecycle task results.
+        From then on, a lifecycle task succeeds only once its handler returns successfully
+        and the observed state and input match its target and submitted context.
+        Reporting UNKNOWN or ERROR after the handler returns and before settlement
+        fails the task.
+        A known state reported while latched takes effect when the latch clears.
+
+        While a lifecycle task is pending or running, the controller publishes TRANSITION.
 
         Args:
-            state: The settled state.
-            context: Lifecycle input. Omission asserts empty input for an achieved state.
-                For UNKNOWN or ERROR, omission preserves the recorded input.
+            state: The observed state.
+            context: Lifecycle input of a known state. Omit it for UNKNOWN or ERROR.
 
         Raises:
-            ValueError: If TRANSITION is requested or a lifecycle task is running.
+            ValueError: If TRANSITION is requested, a known state omits its input, or
+                UNKNOWN or ERROR includes input.
         """
         ...

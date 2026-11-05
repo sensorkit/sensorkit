@@ -40,6 +40,7 @@ from sensorkit.core.task import (
     StandbyTask,
     TaskContextMap,
     TaskExecution,
+    TaskInfo,
 )
 
 OPERATE = InternalControllerState.OPERATE
@@ -109,6 +110,24 @@ async def inits(controller):
     @controller.task_handler(InitTask)
     async def init(task):
         count[0] += 1
+
+    return count
+
+
+@pytest_asyncio.fixture
+async def reporting_inits(controller):
+    """Count successful initialization tasks, each reporting OPERATE with its input."""
+    count = [0]
+
+    async def init(execution: TaskExecution[InitTask]):
+        count[0] += 1
+
+        # The controller holds the input in memory, so it can report it.
+        context = execution.context.copy()
+        context.pop(TaskInfo)
+        await controller.report_state(OPERATE, context)
+
+    controller.add_task_handler(InitTask, execution_callback=init)
 
     return count
 
@@ -418,11 +437,15 @@ async def test_same_demand_with_interrupt_escalates_cleanup(kit, controller):
 @pytest.mark.asyncio
 async def test_settled_controller_needs_no_command(kit, controller, inits, until):
     """A controller already reporting the demanded state and context needs no lifecycle task."""
-    await controller.set_internal_state(OPERATE)
+    context = KeywordDict()
+    context.set_value("dome", "open")
+    await controller.report_state(OPERATE, context)
 
     async with started(ControllerLifecycle(), kit) as lifecycle:
         lifecycle.enable()
-        lifecycle.set_demand_state(OPERATE, program=None)
+        lifecycle.set_demand_state(
+            OPERATE, contexts=TaskContextMap(by_type={"init": context}), program=None
+        )
 
         await until(lambda: lifecycle.step == LifecycleStep.WAIT)
         await asyncio.sleep(0.2)
@@ -448,7 +471,7 @@ async def test_failures_under_reported_state_escalate(
         recoveries += 1
 
     program = await register_program(kit, service_context, "prog1")
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
     lifecycle = quick_lifecycle()
 
     async with started(lifecycle, kit):
@@ -645,7 +668,7 @@ async def test_activation_aborts_running_task(kit, service_context, controller, 
 
             raise
 
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
     program = await register_program(kit, service_context, "prog1")
     external = asyncio.ensure_future(kit.controller("ctrl1").execute_task(CollectTask()))
 
@@ -683,7 +706,7 @@ async def test_settled_demand_leaves_running_task(kit, controller, until):
             cancelled.set()
             raise
 
-    await controller.set_internal_state(STANDBY)
+    await controller.report_state(STANDBY, KeywordDict())
     external = asyncio.ensure_future(kit.controller("ctrl1").execute_task(CollectTask()))
 
     async with asyncio.timeout(5.0):
@@ -699,6 +722,56 @@ async def test_settled_demand_leaves_running_task(kit, controller, until):
         assert not cancelled.is_set()
 
     await external
+
+
+@pytest.mark.asyncio
+async def test_slow_interrupted_cleanup_is_not_a_failure(kit, controller, until):
+    """A lifecycle task waiting on the cleanup of the task it interrupted is in transition."""
+    entered = asyncio.Event()
+    cleaning = asyncio.Event()
+    release = asyncio.Event()
+
+    @controller.task_handler(CollectTask)
+    async def collect(task):
+        entered.set()
+
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release.wait()
+
+    @controller.task_handler(StandbyTask)
+    async def standby(task):
+        await controller.report_state(STANDBY, KeywordDict())
+
+    await controller.report_state(OPERATE, KeywordDict())
+    external = asyncio.ensure_future(kit.controller("ctrl1").execute_task(CollectTask()))
+
+    async with asyncio.timeout(5.0):
+        await entered.wait()
+
+    lifecycle = ControllerLifecycle(transition_grace=0.05)
+    lifecycle.failure_state.retry_delay = 30.0
+
+    async with started(lifecycle, kit, release):
+        lifecycle.enable()
+        lifecycle.set_demand_state(STANDBY)
+
+        async with asyncio.timeout(5.0):
+            await cleaning.wait()
+
+        # Cleanup outlasts the grace period.
+        await asyncio.sleep(0.3)
+        release.set()
+
+        # A counted failure would wait out the retry delay.
+        await until(lambda: reports(kit, STANDBY), timeout=5.0)
+
+    with pytest.raises(CallError):
+        await external
+
+    assert lifecycle.failure_state.failures == 0
 
 
 @pytest.mark.asyncio
@@ -719,7 +792,7 @@ async def test_matching_tasking_is_adopted(kit, service_context, controller, ini
             raise
 
     program = await register_program(kit, service_context, "prog1", ran)
-    await controller.set_internal_state(OPERATE)
+    await controller.report_state(OPERATE, KeywordDict())
     tasking = await program.start_tasking()
     tasking.close()
 
@@ -750,7 +823,7 @@ async def test_matching_tasking_is_adopted(kit, service_context, controller, ini
 
 
 @pytest.mark.asyncio
-async def test_other_tasking_is_aborted(kit, service_context, controller, inits, until):
+async def test_other_tasking_is_aborted(kit, service_context, controller, reporting_inits, until):
     """Program tasking is aborted and restarted if the controller state does not match demand."""
     collects = 0
     first_aborted = asyncio.Event()
@@ -774,10 +847,10 @@ async def test_other_tasking_is_aborted(kit, service_context, controller, inits,
 
     program = await register_program(kit, service_context, "prog1")
 
-    # Establish OPERATE with a lifecycle context that differs from demand.
+    # Another client establishes OPERATE with a lifecycle context that differs from demand.
     other = KeywordDict()
     other.set_value("dome", "closed")
-    await controller.set_internal_state(OPERATE, context=other)
+    await kit.controller("ctrl1").execute_task(InitTask(), context=other)
     (await program.start_tasking()).close()
     await until(lambda: collects == 1)
 
@@ -791,7 +864,7 @@ async def test_other_tasking_is_aborted(kit, service_context, controller, inits,
 
         await until(lambda: lifecycle.step == LifecycleStep.TASKING)
 
-    assert inits[0] == 1
+    assert reporting_inits[0] == 2
 
 
 # Postconditions, retry, and recovery
@@ -866,6 +939,8 @@ async def test_one_retry_precedes_recovery(kit, controller, until):
         if inits == 1:
             raise RuntimeError("init failed")
 
+        await controller.report_state(OPERATE, KeywordDict())
+
     @controller.task_handler(RecoverTask)
     async def recover(task):
         recovered.set()
@@ -882,8 +957,8 @@ async def test_one_retry_precedes_recovery(kit, controller, until):
         await until(lambda: reports(kit, ERROR))
 
         # Repeated reports of the failure while the retry waits.
-        await controller.set_internal_state(UNKNOWN)
-        await controller.set_internal_state(ERROR)
+        await controller.report_state(UNKNOWN)
+        await controller.report_state(ERROR)
 
         await until(lambda: inits == 2)
         await until(lambda: reports(kit, OPERATE))
@@ -905,13 +980,15 @@ async def test_recovery_accepts_any_reported_state(kit, controller, until):
         if not recoveries:
             raise RuntimeError("init failed")
 
+        await controller.report_state(OPERATE, KeywordDict())
+
     @controller.task_handler(RecoverTask)
     async def recover(task):
         nonlocal recoveries
         recoveries += 1
 
         # Recovery from ERROR into a state nobody demanded.
-        await controller.set_internal_state(STANDBY)
+        await controller.report_state(STANDBY, KeywordDict())
 
     async with started(quick_lifecycle(), kit) as lifecycle:
         lifecycle.enable()
@@ -1069,22 +1146,27 @@ async def test_shutdown_after_recovery_reconnects(kit, controller, until):
 
 
 @pytest.mark.asyncio
-async def test_context_change_is_restored_without_failure(kit, controller, inits, until):
-    """A changed lifecycle context is restored at once and is not a controller failure."""
+async def test_adopted_context_mismatch_is_restored_without_failure(
+    kit, controller, reporting_inits, until
+):
+    """An adopted state without the demanded lifecycle context is restored without failure."""
+    context = KeywordDict()
+    context.set_value("dome", "open")
+    other = KeywordDict()
+    other.set_value("dome", "closed")
     lifecycle = ControllerLifecycle()
     lifecycle.failure_state.retry_delay = 30.0
 
+    await controller.report_state(OPERATE, other)
+
     async with started(lifecycle, kit):
         lifecycle.enable()
-        lifecycle.set_demand_state(OPERATE, program=None)
-        await until(lambda: inits[0] == 1 and lifecycle.step == LifecycleStep.WAIT)
-
-        other = KeywordDict()
-        other.set_value("dome", "closed")
-        await controller.set_internal_state(OPERATE, context=other)
+        lifecycle.set_demand_state(
+            OPERATE, contexts=TaskContextMap(by_type={"init": context}), program=None
+        )
 
         # A counted failure would wait out the retry delay.
-        await until(lambda: inits[0] == 2, timeout=5.0)
+        await until(lambda: reporting_inits[0] == 1, timeout=5.0)
         await until(lambda: reports(kit, OPERATE))
 
     assert lifecycle.failure_state.failures == 0
@@ -1094,7 +1176,7 @@ async def test_context_change_is_restored_without_failure(kit, controller, inits
 async def test_context_change_stops_tasking_gracefully(
     kit, service_context, controller, inits, until
 ):
-    """A changed lifecycle context waits for the running collect before restoring demand."""
+    """A changed lifecycle context in demand waits for the running collect before applying it."""
     collect_started = asyncio.Event()
     collect_aborted = asyncio.Event()
     collect_release = asyncio.Event()
@@ -1120,7 +1202,9 @@ async def test_context_change_stops_tasking_gracefully(
 
         other = KeywordDict()
         other.set_value("dome", "open")
-        await controller.set_internal_state(OPERATE, context=other)
+        lifecycle.set_demand_state(
+            OPERATE, contexts=TaskContextMap(by_type={"init": other}), program=program
+        )
         await asyncio.sleep(0.2)
 
         assert inits[0] == 1
@@ -1143,11 +1227,11 @@ async def test_state_departure_is_not_repaired_by_a_report(kit, controller, init
         lifecycle.set_demand_state(OPERATE, program=None)
         await until(lambda: inits[0] == 1 and lifecycle.step == LifecycleStep.WAIT)
 
-        await controller.set_internal_state(STANDBY)
+        await controller.report_state(STANDBY, KeywordDict())
         await until(lambda: lifecycle.failure_state.failures == 1)
 
         # The controller reports the demanded state again before the retry.
-        await controller.set_internal_state(OPERATE)
+        await controller.report_state(OPERATE, KeywordDict())
         await until(lambda: inits[0] == 2)
         await until(lambda: lifecycle.step == LifecycleStep.WAIT)
 
@@ -1155,7 +1239,7 @@ async def test_state_departure_is_not_repaired_by_a_report(kit, controller, init
 
 
 @pytest.mark.asyncio
-async def test_repeated_departures_reach_recovery(kit, controller, inits, until):
+async def test_repeated_departures_reach_recovery(kit, controller, reporting_inits, until):
     """Departures separated by successful initialization still escalate to recovery."""
     recoveries = 0
 
@@ -1170,17 +1254,17 @@ async def test_repeated_departures_reach_recovery(kit, controller, inits, until)
         lifecycle.enable()
         lifecycle.set_demand_state(OPERATE, program=None)
 
-        await until(lambda: inits[0] == 1 and lifecycle.step == LifecycleStep.WAIT)
+        await until(lambda: reporting_inits[0] == 1 and lifecycle.step == LifecycleStep.WAIT)
         await until(lambda: reports(kit, OPERATE))
-        await controller.set_internal_state(STANDBY)
+        await controller.report_state(STANDBY, KeywordDict())
 
         # Initialization succeeds between the two departures.
-        await until(lambda: inits[0] == 2 and lifecycle.step == LifecycleStep.WAIT)
+        await until(lambda: reporting_inits[0] == 2 and lifecycle.step == LifecycleStep.WAIT)
         await until(lambda: reports(kit, OPERATE))
-        await controller.set_internal_state(STANDBY)
+        await controller.report_state(STANDBY, KeywordDict())
 
         await until(lambda: recoveries == 1)
-        await until(lambda: inits[0] == 3 and lifecycle.step == LifecycleStep.WAIT)
+        await until(lambda: reporting_inits[0] == 3 and lifecycle.step == LifecycleStep.WAIT)
 
 
 @pytest.mark.asyncio
@@ -1201,7 +1285,7 @@ async def test_shutdown_bypasses_retry_delay(kit, controller, inits, until):
         await until(lambda: inits[0] == 1 and lifecycle.step == LifecycleStep.WAIT)
         await until(lambda: reports(kit, OPERATE))
 
-        await controller.set_internal_state(STANDBY)
+        await controller.report_state(STANDBY, KeywordDict())
         await until(lambda: lifecycle.failure_state.failures == 1)
 
         lifecycle.set_demand_state(SHUTDOWN)
@@ -1350,7 +1434,7 @@ async def test_reactor_runs_only_while_enabled(kit, service_context, controller,
         await until(lambda: lifecycle.step == LifecycleStep.WAIT)
         await until(lambda: tasking_inactive(kit, "prog1"))
 
-        await controller.set_internal_state(UNKNOWN)
+        await controller.report_state(UNKNOWN)
         lifecycle.set_demand_state(OPERATE, program=None)
         await asyncio.sleep(0.2)
 
@@ -1458,7 +1542,7 @@ async def test_cancelled_stop_propagates(kit, controller, lingering_init):
 
 @pytest.mark.asyncio
 async def test_leaving_operate_during_tasking_counts_once(
-    kit, service_context, controller, inits, until
+    kit, service_context, controller, reporting_inits, until
 ):
     """Controller observation and program reporting count one session fault."""
     collects = 0
@@ -1486,7 +1570,7 @@ async def test_leaving_operate_during_tasking_counts_once(
         await until(lambda: collects == 1)
 
         # Leaving OPERATE aborts tasking at once.
-        await controller.set_internal_state(STANDBY)
+        await controller.report_state(STANDBY, KeywordDict())
 
         async with asyncio.timeout(5.0):
             await collect_aborted.wait()
@@ -1496,12 +1580,12 @@ async def test_leaving_operate_during_tasking_counts_once(
         await asyncio.sleep(0.2)
 
     assert failure_state.failures == 1
-    assert inits[0] == 2
+    assert reporting_inits[0] == 2
 
 
 @pytest.mark.asyncio
 async def test_leaving_operate_without_a_report_is_a_fault(
-    kit, controller, inits, entity_impl, until
+    kit, controller, reporting_inits, entity_impl, until
 ):
     """Controller observation ends tasking even when the program is silent."""
     starts = 0
@@ -1531,8 +1615,8 @@ async def test_leaving_operate_without_a_report_is_a_fault(
         lifecycle.set_demand_state(OPERATE, program=kit.program(entity_impl.entity))
         await until(lambda: starts == 1 and lifecycle.step == LifecycleStep.TASKING)
 
-        await controller.set_internal_state(STANDBY)
-        await until(lambda: inits[0] == 2 and starts == 2)
+        await controller.report_state(STANDBY, KeywordDict())
+        await until(lambda: reporting_inits[0] == 2 and starts == 2)
 
     assert failure_state.failures == 1
 

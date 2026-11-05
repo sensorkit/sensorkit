@@ -13,6 +13,7 @@ from pydantic import BaseModel, TypeAdapter
 
 from sensorkit.backend.base import Backend
 from sensorkit.backend.request import CallContext, CallEvent, declare_long_request, declare_request
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.device import Abort
 from sensorkit.core.program import ProgramActiveStateResponse, set_active_state_request
@@ -513,7 +514,7 @@ async def test_activate_deactivate_program(webapi_setup):
 
     await client.post("/program/myprogram/enable?controller_id=mycontroller")
     await kit.controller("mycontroller").enable()
-    await controller.set_internal_state(InternalControllerState.OPERATE)
+    await controller.report_state(InternalControllerState.OPERATE, KeywordDict())
 
     resp = await client.post("/program/myprogram/activate")
     assert resp.status_code == 200
