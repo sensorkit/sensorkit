@@ -374,6 +374,154 @@ async def _run_manager_tasks(manager: ConstraintManager, **kwargs):
         await manager.start(task_group=tg, **kwargs)
 
 
+class ScriptedConstraint(Constraint):
+    """A constraint that runs the supplied `check` coroutine."""
+
+    kind: str = "scripted"
+
+    async def check_task(self, evaluator: ConstraintEvaluator, /, check, **kwargs):
+        await check(evaluator)
+
+
+async def check_raises(evaluator: ConstraintEvaluator):
+    raise RuntimeError("sensor offline")
+
+
+async def check_returns(evaluator: ConstraintEvaluator):
+    pass
+
+
+async def check_becomes_ready_then_raises(evaluator: ConstraintEvaluator):
+    evaluator.clear("all clear")
+    evaluator.ready()
+    raise RuntimeError("sensor offline")
+
+
+async def check_never_becomes_ready(evaluator: ConstraintEvaluator):
+    await asyncio.sleep(1000)
+
+
+@pytest.mark.asyncio
+async def test_check_error_before_ready_surfaces(ev_timeout):
+    """An exception before readiness propagates without waiting for the TTL."""
+    c = ScriptedConstraint()
+    manager = ConstraintManager([c])
+    tasks_before = asyncio.all_tasks()
+
+    with pytest.raises(RuntimeError, match="sensor offline"):
+        async with asyncio.timeout(2.0):
+            await manager._constraint_task(
+                0, c, ConstraintEvaluator(c, timeout=ev_timeout), check=check_raises
+            )
+
+    assert asyncio.all_tasks() == tasks_before
+
+
+@pytest.mark.asyncio
+async def test_check_return_before_ready_surfaces(ev_timeout):
+    """A check that returns before readiness ends the evaluator run promptly."""
+    c = ScriptedConstraint()
+    manager = ConstraintManager([c])
+    tasks_before = asyncio.all_tasks()
+
+    async with asyncio.timeout(2.0):
+        await manager._constraint_task(
+            0, c, ConstraintEvaluator(c, timeout=ev_timeout), check=check_returns
+        )
+
+    assert manager.entries[0].state == "not_ready"
+    assert asyncio.all_tasks() == tasks_before
+
+
+@pytest.mark.asyncio
+async def test_check_error_after_ready_applies_constraint_state(ev_timeout):
+    """The manager applies the last constraint state before propagating the check's exception."""
+    c = ScriptedConstraint()
+    manager = ConstraintManager([c])
+    tasks_before = asyncio.all_tasks()
+
+    with pytest.raises(RuntimeError, match="sensor offline"):
+        async with asyncio.timeout(2.0):
+            await manager._constraint_task(
+                0,
+                c,
+                ConstraintEvaluator(c, timeout=ev_timeout),
+                check=check_becomes_ready_then_raises,
+            )
+
+    assert manager.entries[0].state == "clear"
+    assert asyncio.all_tasks() == tasks_before
+
+
+@pytest.mark.asyncio
+async def test_check_timeout_before_ready_leaves_no_tasks(ev_timeout):
+    """A timeout before readiness cancels and joins the check and readiness tasks."""
+    c = ScriptedConstraint()
+    manager = ConstraintManager([c])
+    tasks_before = asyncio.all_tasks()
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.1):
+            await manager._constraint_task(
+                0, c, ConstraintEvaluator(c, timeout=ev_timeout), check=check_never_becomes_ready
+            )
+
+    assert asyncio.all_tasks() == tasks_before
+
+
+@pytest.mark.asyncio
+async def test_check_cancelled_before_ready_leaves_no_tasks(ev_timeout):
+    """Cancellation before readiness cancels and joins the check and readiness tasks."""
+    c = ScriptedConstraint()
+    manager = ConstraintManager([c])
+    tasks_before = asyncio.all_tasks()
+
+    run = asyncio.create_task(
+        manager._constraint_task(
+            0, c, ConstraintEvaluator(c, timeout=ev_timeout), check=check_never_becomes_ready
+        )
+    )
+    await asyncio.sleep(0.05)
+    run.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    assert asyncio.all_tasks() == tasks_before
+
+
+@pytest.mark.asyncio
+async def test_supervisor_restarts_promptly_after_early_check_error():
+    """A check that fails before readiness is retried after the restart delay."""
+    attempts = 0
+
+    async def check(evaluator: ConstraintEvaluator):
+        nonlocal attempts
+        attempts += 1
+
+        if attempts == 1:
+            raise RuntimeError("sensor offline")
+
+        evaluator.clear("all clear")
+        evaluator.ready()
+        await asyncio.sleep(1000)
+
+    manager = ConstraintManager([ScriptedConstraint(ttl=30.0)])
+    manager.CONSTRAINT_RESTART_DELAY = 0.1
+    task = asyncio.create_task(_run_manager_tasks(manager, check=check))
+
+    try:
+        async with asyncio.timeout(2.0):
+            while manager.entries[0].state != "clear":
+                await asyncio.sleep(0.01)
+
+        assert attempts == 2
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 @pytest.mark.asyncio
 async def test_supervisor_restart_preserves_hold(backend, monkeypatch):
     """A constraint active when its check_task restarts still holds on the first clear reading."""

@@ -398,11 +398,17 @@ class ConstraintManager:
 
         # Start the constraint check task.
         check_task = asyncio.create_task(constraint.check_task(evaluator, **kwargs))
+        ready_task = asyncio.create_task(evaluator.wait_ready())
         update_task: asyncio.Task | None = None
 
         try:
-            # Wait for the check task to signal that it is ready.
-            await evaluator.wait_ready()
+            # Wait for readiness or for the check to finish.
+            await asyncio.wait({ready_task, check_task}, return_when=asyncio.FIRST_COMPLETED)
+
+            if not evaluator.is_ready:
+                # Re-raise check task exception, if any.
+                check_task.result()
+                return
 
             # Read events emitted by the check task.
             while True:
@@ -421,8 +427,9 @@ class ConstraintManager:
                     check_task.result()
                     break
         finally:
-            aws = [evaluator.cleanup(), check_task]
+            aws = [evaluator.cleanup(), check_task, ready_task]
             check_task.cancel()
+            ready_task.cancel()
 
             if update_task:
                 update_task.cancel()
