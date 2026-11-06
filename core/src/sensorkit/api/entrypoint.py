@@ -87,6 +87,17 @@ class ShutdownSignal(Exception):
     """Raised to signal an orderly service shutdown across threads."""
 
 
+class ServiceExit(Exception):
+    """A service failure caused by a worker-thread exit.
+
+    The original exception is preserved as the cause.
+    """
+
+    def __init__(self, name: str, cause: BaseException):
+        super().__init__(f"Service {name} raised {type(cause).__name__}")
+        self.__cause__ = cause
+
+
 async def run_services(
     entrypoints: Mapping[str, ServiceEntrypoint],
     trap_signals: bool = True,
@@ -126,18 +137,21 @@ async def run_services(
         signal.signal(signal.SIGTERM, signal_shutdown)
 
     # Run all services, each in its own thread with its own event loop per invocation.
+    loops = [
+        asyncio.create_task(asyncio.to_thread(_service_loop, name, entrypoint, shutdown, **kwargs))
+        for name, entrypoint in entrypoints.items()
+    ]
+
     try:
+        # Keep service tasks alive until their threads finish shutting down.
         await asyncio.gather(
             asyncio.shield(asyncio.wrap_future(shutdown)),
-            *(
-                asyncio.to_thread(_service_loop, name, entrypoint, shutdown, **kwargs)
-                for name, entrypoint in entrypoints.items()
-            )
+            *(asyncio.shield(task) for task in loops),
         )
-    except Exception:
-        # Shut down other services.
+    finally:
+        # Shut down other services and wait for their teardown.
         signal_shutdown()
-        raise
+        await asyncio.gather(*loops, return_exceptions=True)
 
 
 def _restart_loop(
@@ -208,6 +222,10 @@ def _service_loop(
             except Exception as e:
                 logger.error(f"Service {name} exited due to {type(e).__name__}")
                 last_err = e
+            except BaseException as e:
+                # Wrap worker-thread exits so exhausted restarts cannot stop the main loop.
+                logger.error(f"Service {name} exited due to {type(e).__name__}")
+                last_err = ServiceExit(name, e)
     except ShutdownSignal as e:
         last_err = e
     except Exception as e:

@@ -4,18 +4,30 @@ import concurrent.futures
 import contextlib
 import os
 import signal
+import subprocess
+import sys
 import threading
+import time
+from pathlib import Path
 
 import pytest
 
 from sensorkit.api.declarative import Service
 from sensorkit.api.entrypoint import (
     ServiceEntrypoint,
+    ServiceExit,
     ShutdownSignal,
     _service_loop,
     run_services,
     service_entrypoint,
 )
+
+FAST_RESTARTS = {
+    "shutdown_timeout": 1.0,
+    "restart_backoff_min": 0.01,
+    "restart_backoff_max": 0.05,
+    "restart_backoff_random": 0.0,
+}
 
 
 def test_service_entrypoint_decorator():
@@ -272,3 +284,179 @@ async def test_run_services_shutdown():
     finally:
         signal.signal(signal.SIGINT, original_sigint)
         signal.signal(signal.SIGTERM, original_sigterm)
+
+
+# ---------------------------------------------------------------------------
+# Exits raised by service tasks
+#
+# Service loops run in executor threads to isolate exits from the test event loop.
+# ---------------------------------------------------------------------------
+
+
+async def raise_in_task(exc: BaseException):
+    """Raise from a child task, which stops the service event loop like a uvicorn exit."""
+
+    async def child():
+        raise exc
+
+    await asyncio.create_task(child())
+
+
+def test_service_loop_restarts_only_the_exiting_service():
+    """A SystemExit restarts its own service while the companion service keeps running."""
+    os.environ["SENSORKIT_BACKEND"] = "fake"
+    starts = {"exiting": 0, "companion": 0}
+    teardowns = []
+    exiting_restarted = threading.Event()
+    companion_running = threading.Event()
+
+    async def exiting(svc: Service):
+        starts["exiting"] += 1
+        await svc.start()
+
+        try:
+            if starts["exiting"] == 1:
+                await asyncio.to_thread(companion_running.wait, 5.0)
+                await raise_in_task(SystemExit(1))
+
+            exiting_restarted.set()
+            await svc.shutdown
+        finally:
+            teardowns.append("exiting")
+
+    async def companion(svc: Service):
+        starts["companion"] += 1
+        await svc.start()
+        companion_running.set()
+
+        try:
+            await svc.shutdown
+        finally:
+            teardowns.append("companion")
+
+    shutdown = concurrent.futures.Future()
+
+    with concurrent.futures.ThreadPoolExecutor(2) as executor:
+        loops = [
+            executor.submit(
+                _service_loop,
+                name,
+                ServiceEntrypoint(func=func, version="0.1.0"),
+                shutdown,
+                max_restarts=1,
+                **FAST_RESTARTS,
+            )
+            for name, func in (("exiting", exiting), ("companion", companion))
+        ]
+
+        try:
+            assert exiting_restarted.wait(10.0), "exiting service did not restart"
+            assert starts == {"exiting": 2, "companion": 1}
+            assert teardowns == ["exiting"]
+            assert not any(loop.done() for loop in loops)
+        finally:
+            # Unblocks the executor exit even if an assertion fails.
+            if not shutdown.done():
+                shutdown.set_result(None)
+
+        assert [loop.result(timeout=10.0) for loop in loops] == [None, None]
+
+    assert sorted(teardowns) == ["companion", "exiting", "exiting"]
+
+
+@pytest.mark.parametrize("max_restarts", [0, 1])
+@pytest.mark.parametrize("exit_type", [SystemExit, KeyboardInterrupt])
+def test_service_loop_exhausted_exit_raises_service_exit(max_restarts, exit_type):
+    """Exhausted restarts raise ServiceExit caused by the last exit, after its teardown."""
+    os.environ["SENSORKIT_BACKEND"] = "fake"
+    starts = 0
+    teardowns = 0
+
+    async def exiting(svc: Service):
+        nonlocal starts, teardowns
+        starts += 1
+        await svc.start()
+
+        try:
+            await raise_in_task(exit_type(starts))
+        finally:
+            teardowns += 1
+
+    shutdown = concurrent.futures.Future()
+
+    with concurrent.futures.ThreadPoolExecutor(1) as executor:
+        loop = executor.submit(
+            _service_loop,
+            "exiting",
+            ServiceEntrypoint(func=exiting, version="0.1.0"),
+            shutdown,
+            max_restarts=max_restarts,
+            **FAST_RESTARTS,
+        )
+
+        try:
+            error = loop.exception(timeout=10.0)
+            assert shutdown.done()
+        finally:
+            # Unblocks the executor exit even if the loop does not finish in time.
+            if not shutdown.done():
+                shutdown.set_result(None)
+
+    assert isinstance(error, ServiceExit)
+    assert isinstance(error.__cause__, exit_type)
+    assert error.__cause__.args == (max_restarts + 1,)
+    assert starts == teardowns == max_restarts + 1
+
+
+@pytest.mark.asyncio
+async def test_run_services_failure_waits_for_teardown():
+    """A terminal service failure propagates only after the other services are torn down."""
+    os.environ["SENSORKIT_BACKEND"] = "fake"
+    companion_running = threading.Event()
+    teardowns = []
+
+    async def failing(svc: Service):
+        await svc.start()
+        await asyncio.to_thread(companion_running.wait, 5.0)
+        raise RuntimeError("boom")
+
+    async def companion(svc: Service):
+        await svc.start()
+        companion_running.set()
+
+        try:
+            await svc.shutdown
+        finally:
+            # Blocks so teardown outlasts the failure handling on the main loop.
+            time.sleep(0.2)
+            teardowns.append("companion")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        async with asyncio.timeout(10.0):
+            await run_services(
+                {
+                    "failing": ServiceEntrypoint(func=failing, version="0.1.0"),
+                    "companion": ServiceEntrypoint(func=companion, version="0.1.0"),
+                },
+                trap_signals=False,
+                max_restarts=0,
+                shutdown_timeout=1.0,
+            )
+
+    assert teardowns == ["companion"]
+
+
+def test_main_thread_exit_waits_for_service_teardown():
+    """A main-thread SystemExit cancels run_services, which tears services down before exit."""
+    script = Path(__file__).with_name("main_thread_exit.py")
+
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        env=os.environ | {"SENSORKIT_BACKEND": "fake"},
+        capture_output=True,
+        text=True,
+        timeout=30.0,
+    )
+
+    assert result.returncode == 3, result.stderr
+    assert result.stdout.splitlines() == ["companion torn down"]
