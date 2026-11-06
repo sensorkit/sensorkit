@@ -622,13 +622,27 @@ class TaskingLoop:
                 self._fail("program", e)
                 return
 
-            if self._stop_requested.is_set():
-                await self._throw(agen, asyncio.CancelledError())
-                return
+            # The producer owns cleanup, even if the factory yields after an injected exception.
+            try:
+                if self._stop_requested.is_set():
+                    await self._throw(agen, asyncio.CancelledError())
+                    return
 
-            # Continue task production only after successful dispatch and handling.
-            if not await self._dispatch(agen, submission):
+                # Continue task production only after successful dispatch and handling.
+                if not await self._dispatch(agen, submission):
+                    return
+            except Exception as e:
+                # Record the fault before cleanup can be interrupted.
+                self._fail("program", e)
                 return
+            finally:
+                try:
+                    if agen is not None:
+                        await agen.aclose()
+                except Exception as error:
+                    logger.warning(
+                        f"Task factory cleanup failed for {self.controller.entity} ({error!r})"
+                    )
 
     async def _dispatch(
         self,

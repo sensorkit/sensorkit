@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for task calls and the executions they follow."""
+"""Tests for task calls, execution state streams, and task factory cleanup."""
 
 import asyncio
 import contextlib
+from datetime import datetime
 
 import pytest
 import pytest_asyncio
@@ -10,6 +11,7 @@ import uuid_utils.compat as uuid
 
 from sensorkit.backend.base import RemoteRequestError
 from sensorkit.backend.request import CallError, CallRejected, declare_request
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.controller import (
     ControllerClient,
     ControllerState,
@@ -21,8 +23,8 @@ from sensorkit.core.controller import (
     execute_task_request,
 )
 from sensorkit.core.entity import EventsNotSubscribed
-from sensorkit.core.executor import TaskCall, TaskFailed, TaskOutcomeUnknown
-from sensorkit.core.task import InitTask, TaskExecution
+from sensorkit.core.executor import TaskCall, TaskFailed, TaskingLoop, TaskOutcomeUnknown
+from sensorkit.core.task import CollectTask, InitTask, TaskExecution, TaskSubmission
 
 
 @pytest_asyncio.fixture
@@ -419,3 +421,105 @@ async def test_other_execution_fails_call(kit, controller_impl):
 
     assert not raised.value.aborted
     assert state.operating_state.current == InternalControllerState.OPERATE
+
+
+@contextlib.asynccontextmanager
+async def tasking_loop(kit, controller_impl, factory_func):
+    """Yield a tasking loop for the caller to start and finalize."""
+    await controller_impl.report_state(InternalControllerState.OPERATE, KeywordDict())
+    client = kit.controller(controller_impl.entity)
+
+    async with asyncio.TaskGroup() as group:
+        yield TaskingLoop(client, factory_func, {}, group)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exit_path", "injected", "fault"),
+    [
+        ("invalid", None, "program"),
+        ("stopped", asyncio.CancelledError, None),
+        ("rejected", CallRejected, "controller"),
+        ("interrupted", asyncio.CancelledError, None),
+    ],
+)
+async def test_factory_cleanup_precedes_dispatch_exit(
+    kit, controller_impl, exit_path, injected, fault
+):
+    """Factory cleanup finishes in the producer before tasking ends."""
+    errors: list[BaseException] = []
+    cleanups: list[asyncio.Task | None] = []
+
+    if exit_path == "interrupted":
+
+        @controller_impl.task_handler(CollectTask)
+        async def collect(task):
+            await asyncio.Event().wait()
+
+    async def factory():
+        # An expiry without a timezone fails dispatch before the task is sent.
+        expiry_time = datetime(2000, 1, 1) if exit_path == "invalid" else None
+
+        try:
+            if exit_path == "stopped":
+                loop.request_stop()
+
+            yield TaskSubmission(task=CollectTask(), expiry_time=expiry_time)
+
+            if exit_path == "interrupted":
+                loop.request_stop(abort=True)
+                await asyncio.Event().wait()
+        except (Exception, asyncio.CancelledError) as error:
+            errors.append(error)
+            yield None
+        finally:
+            cleanups.append(asyncio.current_task())
+
+    async with tasking_loop(kit, controller_impl, factory) as loop, asyncio.timeout(5.0):
+        producer = loop.start()
+        await loop.finalize()
+
+    # The producer must close the generator before automatic finalization can run.
+    assert cleanups == [producer]
+    assert [type(error) for error in errors] == ([injected] if injected else [])
+    assert loop.loop_state.fault == fault
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exit_path", "fault"),
+    [
+        ("invalid", ("program", "factory", "TypeError")),
+        ("rejected", ("controller", "dispatch", "CallRejected")),
+    ],
+)
+async def test_interrupted_factory_cleanup_keeps_dispatch_fault(
+    kit, controller_impl, exit_path, fault
+):
+    """Cancellation during factory cleanup preserves the original dispatch failure."""
+    interrupted = asyncio.Event()
+
+    async def factory():
+        expiry_time = datetime(2000, 1, 1) if exit_path == "invalid" else None
+
+        try:
+            yield TaskSubmission(task=CollectTask(), expiry_time=expiry_time)
+        except CallRejected:
+            yield None
+        finally:
+            loop.request_stop(abort=True)
+
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                interrupted.set()
+                raise
+
+    async with tasking_loop(kit, controller_impl, factory) as loop, asyncio.timeout(5.0):
+        loop.start()
+        await loop.finalize()
+
+    state = loop.loop_state
+
+    assert interrupted.is_set()
+    assert (state.fault, state.stage, state.error.split(":")[0]) == fault
