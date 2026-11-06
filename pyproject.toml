@@ -1,7 +1,8 @@
 [project]
 name = "sensorkit"
-dynamic = ["version", "readme"]
+dynamic = ["version"]
 description = "Autonomous observatory control for space domain awareness and time-domain astronomy: hardware drivers, satellite tracking, scheduling, and safety automation, distributed over NATS."
+readme = "README.md"
 license = "Apache-2.0"
 authors = [
     { name = "Erik Small", email = "erik.small@ensc.dev" },
@@ -311,8 +312,6 @@ layers = [
 
 [tool.hatch.metadata]
 allow-direct-references = true
-
-[tool.hatch.metadata.hooks.custom]
 
 [tool.hatch.version]
 source = "vcs"
