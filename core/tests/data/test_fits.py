@@ -1,12 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 import array
 import asyncio
+import contextlib
 import io
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
 
 import numpy as np
 import pytest
+import pytest_asyncio
 from astropy.io import fits
+from astropy.io.fits import file as fits_file
 from pydantic import BaseModel, ValidationError
 
 from sensorkit.common.keyword import declare_keyword
@@ -343,6 +349,280 @@ async def test_array_to_fits_non_string_scalar_literals():
         assert header["SHUTTER"] is True
         assert header["GAIN"] == 1.5  # numeric value inside the [value, comment] form
         assert "detector gain" in header.comments["GAIN"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dtype", ["uint16", "int32", "float32"])
+@pytest.mark.parametrize("order", ["C", "F"])
+async def test_array_to_fits_preserves_pixels(dtype, order):
+    image = np.arange(24, dtype=dtype).reshape((4, 6), order=order)
+    ctx = Context()
+    ctx.set(ArrayInfo.from_array(image))
+
+    _, buf = await _run_dataop(ArrayToFITS(), ctx, image.tobytes(order=order))
+
+    with fits.open(io.BytesIO(buf)) as hdul:
+        # FITS stores big-endian data, so compare the type without its byte order.
+        assert hdul[0].data.dtype.newbyteorder("=") == image.dtype
+        assert np.array_equal(hdul[0].data, image)
+
+
+class HeldExecutor(ThreadPoolExecutor):
+    """Thread pool that holds submitted jobs until `release` is set."""
+
+    def __init__(self):
+        super().__init__(max_workers=1)
+        self.submitted = asyncio.Event()
+        self.release = threading.Event()
+
+    def submit(self, fn, /, *args, **kwargs):
+        self.submitted.set()
+
+        def held():
+            self.release.wait()
+            return fn(*args, **kwargs)
+
+        return super().submit(held)
+
+
+@pytest_asyncio.fixture
+async def held_executor():
+    """Hold jobs submitted through the event loop's default executor."""
+    executor = HeldExecutor()
+    asyncio.get_running_loop().set_default_executor(executor)
+    yield executor
+    executor.release.set()
+    executor.shutdown()
+
+
+async def wait_for_event(event: asyncio.Event):
+    """Wait for an event with a five-second deadline."""
+    async with asyncio.timeout(5):
+        await event.wait()
+
+
+@contextlib.asynccontextmanager
+async def running_dataop(op, ctx: Context, buffer, release: threading.Event):
+    """Yield the data operation's task and the task receiving its output.
+
+    On exit, release the worker, then cancel and join both tasks.
+    """
+    incoming, outgoing = DataFlow(), DataFlow()
+    task = asyncio.create_task(op.process([incoming], [outgoing]))
+    received = asyncio.create_task(outgoing.receive("buffer"))
+
+    try:
+        await incoming.send(ctx, buffer)
+        yield task, received
+    finally:
+        release.set()
+        task.cancel()
+        received.cancel()
+        await asyncio.gather(task, received, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_array_to_fits_writes_header_copied_before_encoding(held_executor):
+    """Encoding uses the header captured before the worker starts."""
+    op = ArrayToFITS(header={"INSTRUME": "Test Camera"})
+    ctx = Context()
+    ctx.set(ArrayInfo(shape=(4, 4), dtype="uint16"))
+    ctx.set(FITSHeader(OBSERVER="Erik"))
+    data = np.arange(16, dtype=np.uint16)
+
+    async with running_dataop(op, ctx, data.tobytes(), held_executor.release) as (task, received):
+        await wait_for_event(held_executor.submitted)
+
+        header = ctx[FITSHeader]
+        header["OBSERVER"] = "Changed"
+        header["LATE"] = "added during encoding"
+        held_executor.release.set()
+
+        await task
+        out_ctx, buf = await received
+
+    with fits.open(io.BytesIO(buf)) as hdul:
+        written = hdul[0].header
+        assert written["OBSERVER"] == "Erik"
+        assert written["INSTRUME"] == "Test Camera"
+        assert "LATE" not in written
+        assert np.array_equal(hdul[0].data.flatten(), data)
+
+    # The context keeps its own header, including the cards added by this op.
+    assert out_ctx[FITSHeader] is header
+    assert header["INSTRUME"] == "Test Camera"
+
+
+class HeldArrayWrite:
+    """Pause Astropy's pixel writes from worker threads until `release` is set.
+
+    Astropy may have already swapped the input's byte order when this write begins.
+    Writes on the event loop thread proceed immediately to keep that loop responsive.
+    """
+
+    def __init__(self, write_array):
+        self.loop = asyncio.get_running_loop()
+        self.loop_thread = threading.get_ident()
+        self.write_array = write_array
+        self.started = asyncio.Event()
+        self.finished = asyncio.Event()
+        self.release = threading.Event()
+        self.threads = set()
+        self.error: Exception | None = None
+
+    def write(self, file, array):
+        thread = threading.get_ident()
+        self.threads.add(thread)
+        self.loop.call_soon_threadsafe(self.started.set)
+
+        if thread != self.loop_thread:
+            self.release.wait()
+
+        try:
+            if self.error is not None:
+                raise self.error
+
+            return self.write_array(file, array)
+        finally:
+            self.loop.call_soon_threadsafe(self.finished.set)
+
+
+@pytest_asyncio.fixture
+async def held_write():
+    held = HeldArrayWrite(fits_file._File.writearray)
+
+    # Keep the wrapper unbound so Astropy supplies the file instance.
+    def write_array(file, array):
+        return held.write(file, array)
+
+    try:
+        with mock.patch.object(fits_file._File, "writearray", new=write_array):
+            yield held
+    finally:
+        held.release.set()
+
+
+def record_thread(threads: set[int], function):
+    """Record the calling thread for each call to `function`."""
+
+    def recorded(*args, **kwargs):
+        threads.add(threading.get_ident())
+        return function(*args, **kwargs)
+
+    return recorded
+
+
+@pytest.mark.asyncio
+async def test_array_to_fits_encodes_off_the_event_loop(held_write):
+    """HDU construction, header writing, and serialization run in a worker thread."""
+    hdu_threads: set[int] = set()
+    header_threads: set[int] = set()
+    op = ArrayToFITS(header={"INSTRUME": "Test Camera", "RESOLVER": "=thread_id()"})
+    ctx = Context()
+    ctx.set(ArrayInfo(shape=(4, 4), dtype="int32"))
+    ctx.set_value("thread_id", threading.get_ident)
+    pixels = np.arange(16, dtype=np.int32).tobytes()
+
+    with (
+        mock.patch.object(
+            fits.PrimaryHDU, "__init__", new=record_thread(hdu_threads, fits.PrimaryHDU.__init__)
+        ),
+        mock.patch.object(
+            fits.Header, "__setitem__", new=record_thread(header_threads, fits.Header.__setitem__)
+        ),
+    ):
+        async with running_dataop(op, ctx, pixels, held_write.release) as (task, received):
+            await wait_for_event(held_write.started)
+
+            # Context updates finish before the worker reaches the held pixel write.
+            assert not task.done()
+            assert ctx.get(ImageInfo) is not None
+            assert ctx[FITSHeader]["INSTRUME"] == "Test Camera"
+
+            held_write.release.set()
+            await task
+            _, buf = await received
+
+    loop_thread = held_write.loop_thread
+    workers = hdu_threads | header_threads | held_write.threads
+    assert hdu_threads
+    assert header_threads
+    assert len(workers) == 1
+    assert loop_thread not in workers
+
+    # Card values resolve against the context on the loop thread.
+    with fits.open(io.BytesIO(buf)) as hdul:
+        assert hdul[0].header["RESOLVER"] == loop_thread
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dtype", ["int16", "int32", "float32", "float64"])
+@pytest.mark.parametrize("outcome", ["written", "write-error", "cancelled"])
+async def test_array_to_fits_leaves_shared_writable_input_unchanged(held_write, dtype, outcome):
+    """Shared input arrays remain writable and unchanged throughout serialization."""
+    image = np.arange(-8, 8, dtype=dtype).reshape((4, 4))
+    expected = image.copy()
+    ctx = Context()
+    ctx.set(ArrayInfo.from_array(image))
+
+    # Astropy handles OSError with a disk-space check, so inject RuntimeError here.
+    if outcome == "write-error":
+        held_write.error = RuntimeError("write failed")
+
+    async with running_dataop(ArrayToFITS(), ctx, image, held_write.release) as (task, received):
+        await wait_for_event(held_write.started)
+
+        # Inspect the original array while the worker is paused inside Astropy's data write.
+        assert np.array_equal(image, expected)
+        assert image.flags.writeable
+
+        if outcome == "cancelled":
+            task.cancel()
+
+        held_write.release.set()
+        await wait_for_event(held_write.finished)
+
+        match outcome:
+            case "written":
+                await task
+                _, buf = await received
+
+                with fits.open(io.BytesIO(buf)) as hdul:
+                    assert np.array_equal(hdul[0].data, expected)
+            case "write-error":
+                with pytest.raises(RuntimeError, match="write failed"):
+                    await task
+            case "cancelled":
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+    assert np.array_equal(image, expected)
+    assert image.flags.writeable
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("header", "pixel_count", "match"),
+    [
+        ({"OBSERVER": "non-ascii é"}, 16, "printable ASCII"),
+        ({}, 10, "does not match shape"),
+    ],
+    ids=["unwritable-card", "buffer-size-mismatch"],
+)
+async def test_array_to_fits_encoding_error_raises(header, pixel_count, match):
+    """Encoding errors propagate without sending a frame."""
+    op = ArrayToFITS(header=header)
+    incoming, outgoing = DataFlow(), DataFlow()
+    task = asyncio.create_task(op.process([incoming], [outgoing]))
+    ctx = Context()
+    ctx.set(ArrayInfo(shape=(4, 4), dtype="uint16"))
+
+    await incoming.send(ctx, np.zeros(pixel_count, dtype=np.uint16).tobytes())
+
+    with pytest.raises(ValueError, match=match):
+        await task
+
+    assert not outgoing.send_called
 
 
 @pytest.mark.asyncio

@@ -461,14 +461,8 @@ class ArrayToFITS(DataOp):
         # This op requires the ArrayInfo keyword to be present.
         array = context[ArrayInfo]
 
-        # Reshape the input buffer. This should always be zero-copy in cases where ReshapeArray
-        # preceded this op, because if memory reallocation was required, it will have already been
-        # done. Note in that case the buffer is actually already an ndarray, but we cannot assume
-        # that.
-        image_ndarray: np.ndarray = await asyncio.to_thread(array.ndarray_from_buffer, buffer)
-
         # Here we stipulate that this is a 2D image. FITS data cube support could be added here.
-        if image_ndarray.ndim != 2:
+        if len(array.shape) != 2:
             raise RuntimeError("array_to_fits only supports 2D arrays")
 
         # Set the ImageInfo context if it is not already present.
@@ -487,19 +481,32 @@ class ArrayToFITS(DataOp):
 
         context.set(fits_header)
 
+        # Snapshot the resolved header for the worker; other graph branches may change it.
+        # Card values are immutable, so a shallow copy is sufficient.
+        fits_bytes = await asyncio.to_thread(self._encode, array, buffer, FITSHeader(fits_header))
+        await outgoing[0].send(context, fits_bytes)
+
+    @staticmethod
+    def _encode(array: ArrayInfo, buffer: Buffer, header: FITSHeader) -> bytes:
+        """Serialize the image buffer and resolved header cards as a FITS file."""
+        # The new view has its own writeability flag, even if the input is already an ndarray.
+        image_ndarray = array.ndarray_from_buffer(buffer)
+
+        # Astropy may swap writable arrays' bytes in place. A read-only view keeps shared input
+        # pixels unchanged while the worker serializes the frame.
+        image_ndarray.flags.writeable = False
+
         # Build primary HDU. astropy populates SIMPLE, NAXIS, and NAXIS{n} from the
         # array shape (NAXIS1 = fastest-varying axis = number of columns).
         primary_hdu = fits.PrimaryHDU(image_ndarray)
 
-        # The accumulated FITSHeader is the source of truth for the written header.
-        fits_header.write_to(primary_hdu.header)
+        # Write the resolved FITSHeader cards into the primary HDU header.
+        header.write_to(primary_hdu.header)
 
-        # Build the output FITS bytes and send it along the graph.
-        hdul = fits.HDUList([primary_hdu])
         bio = io.BytesIO()
-        hdul.writeto(bio)
+        fits.HDUList([primary_hdu]).writeto(bio)
 
-        await outgoing[0].send(context, bio.getvalue())
+        return bio.getvalue()
 
 
 class CompressFITS(DataOp):
