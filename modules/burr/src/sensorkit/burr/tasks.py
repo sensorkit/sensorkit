@@ -22,7 +22,7 @@ from sensorkit.std import CameraParameterSet, FrameType, StandardCollectTask
 
 # Produces e.g. `20260424T031530_photometric_standards_110-364_f0.fits`.
 _FILE_NAME_TEMPLATE = (
-    'f"{datetime.now(UTC):%Y%m%dT%H%M%S}_{BurrContext.mode}_{BurrContext.targ}_f{frame_num}.fits"'
+    'f"{datetime.now(UTC):%Y%m%dT%H%M%S}_{BurrContext.mode}_{BurrContext.targ}_f{Collect.frame_number}.fits"'
 )
 
 _SOURCE_FRAME_TYPES = {"twilight_flats": FrameType.FLAT}
