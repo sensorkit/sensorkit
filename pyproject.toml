@@ -1,8 +1,7 @@
 [project]
 name = "sensorkit"
-dynamic = ["version"]
+dynamic = ["version", "readme"]
 description = "Autonomous observatory control for space domain awareness and time-domain astronomy: hardware drivers, satellite tracking, scheduling, and safety automation, distributed over NATS."
-readme = "README.md"
 license = "Apache-2.0"
 authors = [
     { name = "Erik Small", email = "erik.small@ensc.dev" },
@@ -311,6 +310,17 @@ layers = [
 [tool.hatch.metadata]
 allow-direct-references = true
 
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+# PyPI cannot resolve repository-relative links, so pin them to the release tag.
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://|#)([^)]+)\)'
+replacement = '](https://github.com/sensorkit/sensorkit/blob/v$HFPR_VERSION/\1)'
+
 [tool.hatch.version]
 source = "vcs"
 
@@ -366,5 +376,5 @@ modules = [
 subpackage-path = "modules/{module}/src/sensorkit/{module}"
 
 [build-system]
-requires = ["hatchling>=1.27", "hatch-vcs"]
+requires = ["hatchling>=1.27", "hatch-vcs", "hatch-fancy-pypi-readme"]
 build-backend = "hatchling.build"
