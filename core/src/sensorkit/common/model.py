@@ -225,7 +225,10 @@ _registry_var: ContextVar[ModelRegistryView | None] = ContextVar("model_registry
 
 
 class ModelRegistryView[T](ModelRegistryBase[T]):
-    """Immutable view of a ModelRegistry with effective keys resolved by namespace precedence."""
+    """A registry view resolving model tags by namespace precedence.
+
+    Call `update` to refresh the view after the registry changes.
+    """
 
     def __init__(self, registry: ModelRegistry, precedence: Iterable[str] = ()):
         self._registry = registry
@@ -376,19 +379,11 @@ class RegistryDiscriminator:
 
 
 class RegistryBaseModel(BaseModel, ABC):
-    """Base class for pydantic models that auto-register into a ModelRegistry upon subclassing.
+    """Base for models that register concrete subclasses by discriminator.
 
-    This abstract base class does automatic registration of model subclasses into a ModelRegistry
-    using the discriminator pattern. Each concrete subclass is registered when defined, with its
-    class name used as the discriminator value by default.
-
-    Subclasses must implement get_registry() to specify which ModelRegistry instance they should
-    register with. The registry's discriminator field is automatically populated on each subclass
-    with the appropriate discriminator value.
-
-    The registration happens in two hooks:
-    - __init_subclass__: Registers the class in the registry and sets up the discriminator field
-    - __pydantic_init_subclass__: Ensures discriminator values are available at class scope
+    A direct subclass implements `model_registry` to select its registry.
+    Concrete descendants register when defined. Their discriminator defaults to
+    the class name unless the model supplies a value.
 
     Example:
         >>> registry = ModelRegistry(discriminator="type")
@@ -396,15 +391,10 @@ class RegistryBaseModel(BaseModel, ABC):
         ...     type: str
         ...
         ...     @classmethod
-        ...     def get_registry(cls):
+        ...     def model_registry(cls):
         ...         return registry
-        >>>
         >>> class MyModel(MyBase):
-        ...     pass  # Automatically registered with discriminator value "MyModel"
-
-    Note:
-        The root RegistryBaseModel class and direct subclasses that define get_registry() are
-        not registered themselves - only their concrete descendant classes are registered.
+        ...     pass
     """
 
     @classmethod
@@ -469,7 +459,7 @@ class RegistryBaseModel(BaseModel, ABC):
 
     @classmethod
     def _find_registered_base(cls) -> type | None:
-        """Find the first class in the MRO that directly inherits from RegisteredBaseModel."""
+        """Find the first class in the MRO that directly inherits from RegistryBaseModel."""
         for klass in cls.__mro__:
             if RegistryBaseModel in klass.__bases__:
                 return klass

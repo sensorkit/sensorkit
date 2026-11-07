@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Bind reported capabilities to placements.
 
-Binding requires reports for every configured device and verifies authored
-trait assertions. Established traits come from reported commands and keywords;
+Binding requires capability details for every configured device and checks
+its declared traits. Established traits come from reported commands and keywords;
 assertions do not restrict which capabilities compilation may use.
 """
 
@@ -24,8 +24,8 @@ from sensorkit.sensor.topology import (
 class BoundSensor:
     """A topology with reported device details and established traits.
 
-    Selections, routing and lowering read these facts. `bind` validates
-    report coverage and trait assertions. Direct construction skips validation.
+    Selections, routing and graph compilation read these facts. `bind` validates
+    capability coverage and trait assertions. Direct construction skips validation.
 
     `device_keywords` supplies device keyword values for planning. `None`
     means no mapping was supplied. The values may describe capabilities or
@@ -52,15 +52,15 @@ class BoundSensor:
 
     @classmethod
     def bind(cls, topology: Topology, details: Mapping[str, DeviceDetails]) -> BoundSensor:
-        """Check device reports and trait assertions, then return a sensor.
+        """Check device capability details and trait assertions, then return a sensor.
 
         Trait matching uses the same capability predicates as device
         declarations. Unsupported workflow commands are found later, during
         compilation.
 
         Raises:
-            ValueError: A configured device has no report, or an authored trait
-                is unregistered or not satisfied by its device.
+            ValueError: Capability details are missing, or a declared trait is
+                unregistered or not satisfied by its device.
         """
         silent = tuple(p for p in topology.placements() if p.device not in details)
 

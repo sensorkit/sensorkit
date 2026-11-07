@@ -3,9 +3,8 @@ import sensorkit.api as sk
 from sensorkit.sdasim.camera import SdasimCameraConfig
 
 # Each entry in the `sdasim:` config section is a single camera, registered as
-# the service's delegate entity -- one camera == one service == one process.
-# sdasim rendering is CPU-bound, so one camera per process is intentional:
-# multiple cameras are run as separate service instances, not hosted together.
+# the service's entity. Run separate service processes to isolate CPU-bound
+# rendering; `sensorkit go` runs services in threads within one process.
 #
 #     sdasim:
 #       - id: sdasimCameraAlpaca

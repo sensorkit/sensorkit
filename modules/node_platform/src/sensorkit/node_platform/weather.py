@@ -120,7 +120,7 @@ class NodePlatformWeather(NodePlatformDevice):
 
             if basic_safety_kw is not None:
                 # Standard go/no-go signal — what the StandardSafety archetype
-                # asserts and what WeatherConstraint / SafetyConstraint consume.
+                # matches and what SafetyConstraint consumes.
                 await device.publish(basic_safety_kw)
 
             if safety_kw is not None:

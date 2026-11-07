@@ -7,7 +7,7 @@ rules. Validation checks the document without contacting devices; binding then
 checks reported capabilities and establishes each device's traits.
 
 The lifecycle and collect compilers produce planned steps with dependencies.
-Shared lowering resolves capability omissions, deadlines and operator rules,
+Shared graph compilation resolves capability omissions, deadlines and operator rules,
 then builds graphs for `sensorkit.common.dag` to schedule and execute.
 
 `Sensor` connects to devices and exposes planning and execution as

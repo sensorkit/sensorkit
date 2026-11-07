@@ -1,20 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""SENPAI streak analyzer.
+"""SENPAI image analysis integration.
 
-Importing `senpai` runs its `setup_logging()` as an import side effect: it logs
-the engine's start-up on the way past and attaches a console handler to the
-*root* logger. Every process listing `sensorkit.senpai.service` in
-`sensorkit.imports` pays for that, not just the one running the analyzer -- so
-an agent, a controller or the config loader each echo the engine's banner, and
-then every stdlib record in the process (httpx, matplotlib, astropy) onto a
-console that belongs to loguru.
-
-The banner is emitted *during* that import, so it cannot be removed afterwards
--- only pre-empted. Mute the engine's namespace here, before anything imports
-`senpai`: this is the package, so it runs before the submodules that pull the
-engine in. The root handler it bolts on is dropped after the fact instead, by
-`analyzer.quiet_engine_logging()`; the process that actually runs the analyzer
-re-enables the namespace into a file via `analyzer.redirect_engine_logging()`.
+Mute the engine's logging namespace before importing it, and save the current
+root handlers so the analyzer can restore them after engine initialization.
+The analyzer service redirects engine diagnostics to a separate log file.
 """
 import logging
 

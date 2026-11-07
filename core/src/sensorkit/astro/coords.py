@@ -17,12 +17,7 @@ if TYPE_CHECKING:
 
 @functools.lru_cache
 def astropy_unit(spec: str | Unit) -> Unit:
-    """Resolve a unit spec to an astropy Unit, memoizing the parse.
-
-    Passing an already-resolved Unit is a cheap identity check; string specs are
-    parsed once and cached, which matters for compound units like "m/s" whose
-    grammar parse is otherwise paid on every call.
-    """
+    """Resolve and cache an Astropy unit specification."""
     from astropy.units import Unit
 
     return Unit(spec)
@@ -33,7 +28,7 @@ type Coordinates = Horizontal | Equatorial | Geodetic | Cartesian
 
 @dataclass(frozen=True, slots=True)
 class Horizontal:
-    """Horizontal coordinates."""
+    """Azimuth and altitude, conventionally in degrees."""
     az: float
     alt: float
 
@@ -56,7 +51,7 @@ class Horizontal:
 
 @dataclass(frozen=True, slots=True)
 class Equatorial:
-    """Equatorial coordinates."""
+    """Right ascension and declination, conventionally in degrees."""
     ra: float
     dec: float
 
@@ -101,7 +96,7 @@ class Equatorial:
 
 @dataclass(frozen=True, slots=True)
 class Geodetic:
-    """Geodetic coordinates."""
+    """Longitude, latitude, and elevation, conventionally in degrees and meters."""
     lon: float
     lat: float
     elev: float
@@ -139,7 +134,7 @@ class Cartesian:
 
 @dataclass(frozen=True, slots=True)
 class StateVector:
-    """Representation of a state vector."""
+    """Position and velocity at a specified time."""
     t: datetime
     r: Cartesian
     v: Cartesian

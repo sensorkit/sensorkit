@@ -153,7 +153,7 @@ class TestCollectedResponseActualTimes:
     @pytest.mark.asyncio
     async def test_collected_response_uses_task_execution_times(self, program):
         """COLLECTED carries the TaskExecutionResult window (UDL-formatted, ...Z)."""
-        # task_id is a UUID on StandardCollectTask, so the request id must parse.
+        # Use a UUID request ID for the collect's correlation context.
         request_id = str(uuid.uuid4())
         await program.queue.push_task(tle_request(id=request_id))
 

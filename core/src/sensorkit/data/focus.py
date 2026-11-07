@@ -359,8 +359,7 @@ class AnalyzeFocusConvolution(DataOp):
             focus_metric = edge_magnitude.mean()
 
         elif self.method == "variance_laplacian":
-            # Variance of Laplacian - excellent for focus detection
-            # This is essentially the Tenengrad operator
+            # Variance of the Laplacian measures image sharpness.
             laplacian = ndimage.laplace(img_norm)
             focus_metric = laplacian.var()
 

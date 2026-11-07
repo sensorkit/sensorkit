@@ -498,43 +498,18 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
     @override
     def use_device(self, name: str, *, subscribe: list[type] | None = None) -> DeviceClient:
-        """Register a controlled device and return a client for it.
+        """Register a device dependency and return its client.
 
-        Registers a device that this controller interacts with. Optionally subscribes to
-        specific keyword types published by the device. Subscribed keywords are automatically
-        cached and made available in contexts via `update_context()`.
-
-        Note:
-            Subscriptions remain inactive until `start_device_subscriptions()` is called.
-            When using the declarative API, this occurs automatically after initialization.
+        Subscribed keywords are cached for task contexts. The declarative API starts
+        subscriptions after attach hooks and stops them before detach hooks.
 
         Args:
-            name: Entity identifier for the device (e.g., "mount", "camera").
-            subscribe: Optional list of keyword model types (e.g., Pydantic models) to
-                subscribe to. Each subscribed keyword will be monitored, and its latest
-                value cached for inclusion in contexts.
+            name: Entity ID of the device.
+            subscribe: Keyword model types to monitor.
 
         Returns:
-            A client instance for interacting with the registered device.
-                Access the subscription object via `get_device(name).subscription` to
-                retrieve cached values directly.
-
-        Raises:
-            KeyError: If attempting to access a device via `get_device(name)` that
-                hasn't been registered with `use_device()`.
-
-        Examples:
-            Basic device registration without subscriptions:
-
-            >>> camera = self.use_device("camera")
-
-            Register device and subscribe to specific keyword types:
-
-            >>> mount = self.use_device("mount", subscribe=[AltAzPointing, RADecPointing])
-
-            Access cached subscription values from the ControlledDevice instance:
-
-            >>> pointing = self.get_device("mount").get(AltAzPointing)
+            The device client. Cached values are available through
+            `get_device(name).subscription`.
         """
         device = self._devices.get_or_add(
             name,
@@ -557,21 +532,19 @@ class ControllerImpl(EntityImpl, ControllerInterface):
 
     @override
     async def start_device_subscriptions(self):
-        """Start all keyword subscriptions registered via `use_device`.
+        """Start keyword subscriptions registered through `use_device`.
 
-        This is called automatically by the declarative API after init
-        callbacks have run.  It may also be called manually if the
-        controller is not using the declarative API.
+        The declarative API calls this after attach hooks. Controllers registered
+        directly can call it explicitly.
         """
         for device in self._devices.values():
             await device.subscription.start()
 
     @override
     async def stop_device_subscriptions(self):
-        """Stop all keyword subscriptions registered via `use_device`.
+        """Stop keyword subscriptions registered through `use_device`.
 
-        Called automatically by the declarative API before deinit
-        callbacks run.
+        The declarative API calls this before detach hooks.
         """
         for device in self._devices.values():
             await device.subscription.stop()

@@ -42,7 +42,7 @@ class FrameInput:
 
 
 def _iso_z(dt: datetime) -> str:
-    """Format a UTC datetime as ISO-8601 with a trailing ``Z``."""
+    """Format a UTC datetime as ISO-8601 with a trailing `Z`."""
     return dt.isoformat().replace("+00:00", "Z")
 
 

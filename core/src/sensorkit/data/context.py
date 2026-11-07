@@ -113,8 +113,8 @@ class Context(KeywordDict):
                 self._expand(value, {id(value)})
 
     def _expand(self, obj: CompositeKeyword, visited: set[int]):
-        # DFS over composed keywords, storing each under its own key. `super()._set_keyword`
-        # keeps the walk explicit and avoids re-entering this class's expanding `_set_keyword`.
+        # Traverse composed keywords, storing each under its own key. Calling the base
+        # setter avoids repeating expansion through this class's `set_keyword`.
         for composed in obj.composed_keywords():
             if id(composed) in visited:
                 continue

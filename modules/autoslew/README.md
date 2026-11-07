@@ -45,6 +45,10 @@ Propagatable inputs (e.g. a state vector) are normalized to an ICRF
 
 ## Example Config
 
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
+
 `host` and `port` set on the endpoint propagate to every device; override them
 per-device when a device lives on a different Autoslew instance (Autoslew's Alpaca
 server is always on port `11111`). `status_frequency` and `timeout` are optional
@@ -61,8 +65,8 @@ value:
         Telescope:
           device_type: telescope
           min_altitude_degrees: 20.0   # floor for the satellite start altitude (sat:startalt)
-          status_frequency: 1.0        # status rate while idle (seconds)
-          status_frequency_fast: 0.1   # status rate while slewing or tracking
+          status_frequency: 1.0        # poll interval while idle (seconds)
+          status_frequency_fast: 0.1   # poll interval while slewing or tracking (seconds)
         Focuser:
           device_type: focuser
         Rotator:

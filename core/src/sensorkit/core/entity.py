@@ -103,14 +103,14 @@ class EntityBase:
         return self.backend.key_value(self.entity)
 
     async def kv_put_model(self, model: BaseModel):
-        """Serialise model to JSON and write it to the KV store under its class name."""
+        """Serialize model to JSON and write it to the KV store under its class name."""
         await self._kv.update(
             key=model.__class__.__name__,
             value=model.model_dump_json().encode(),
         )
 
     async def kv_get_model[M: BaseModel](self, model_type: type[M]) -> M:
-        """Fetch and deserialise a model from the KV store by its class name."""
+        """Fetch and deserialize a model from the KV store by its class name."""
         entry = await self._kv.get(model_type.__name__)
         return model_type.model_validate_json(entry.value)
 
@@ -435,12 +435,12 @@ class EntityInterface(ABC):
 
     @abstractmethod
     async def kv_put_model(self, model: BaseModel):
-        """Serialise model and write it to the KV store."""
+        """Serialize model and write it to the KV store."""
         ...
 
     @abstractmethod
     async def kv_get_model[M: BaseModel](self, model_type: type[M]) -> M:
-        """Fetch and deserialise a model from the KV store."""
+        """Fetch and deserialize a model from the KV store."""
         ...
 
     @abstractmethod

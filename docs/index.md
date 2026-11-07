@@ -3,17 +3,23 @@
   <img src="assets/sensorkit-stacked-dark.svg#only-dark" alt="SensorKit" width="300">
 </h1>
 
-**SensorKit is an open-source control system for autonomous observatories**, built for space domain awareness and time-domain astronomy. It connects your telescope hardware to an automation layer that decides — continuously and safely — when to open the dome, what to observe, and when to shut down, whether that's for a passing satellite, a transient follow-up, or an ordinary night of survey work.
+**SensorKit is an open-source control system for autonomous observatories**, built for space domain awareness and time-domain astronomy.
+It connects telescope hardware to an automation agent that decides when to open the dome, which program to run, and when to shut down.
+Observing programs select targets for satellite tracking, transient follow-up, or survey work.
 
-You describe your site in a single YAML file: which mount, camera, and dome you have, what weather limits you trust, and which observing programs are allowed to request time. SensorKit runs the night.
+Describe your devices, weather limits, and observing programs in a single YAML file.
+The following excerpt connects a sensor to its devices and adds a weather constraint and an observing program.
 
 ```yaml
 sensors:
   - id: MySensor
-    devices:
-      mount: MyMount
-      camera: MyCamera
-      dome: MyDome
+    model:
+      components:
+        - device: MyMount
+        - device: MyDome
+        - device: MyCamera
+          instrument: true
+    policies: {}
 
 automation:
   controllers:
@@ -42,14 +48,16 @@ automation:
 <img src="assets/sensorkit-architecture.svg" alt="SensorKit architecture">
 
 - **Devices** wrap hardware drivers and expose commands and telemetry on the bus.
-- The **sensor controller** coordinates a mount, camera, dome, and friends into one logical instrument, with configurable init/shutdown sequencing and pointing-safety policies.
+- The **sensor controller** coordinates devices and instruments, with configurable initialization, shutdown sequencing, and command timeouts.
 - **Programs** publish *offer windows* ("I have work between these times") and produce tasks on demand.
-- The **agent** merges modes, offers, and constraints into a schedule, and brings controllers up and down accordingly. Its decisions are persisted, so a restart resumes exactly where it left off.
+- The **agent** combines modes and program offers into a schedule, applies safety constraints, and brings controllers up and down accordingly.
+  After a restart, it restores control settings and checks controller state before resuming operation.
 
 A few design choices worth knowing about, because they shape day-to-day use:
 
 - **Devices are described by what they can do, not what they're called.** A structural *trait* system matches devices by the commands they implement, so a controller asks for "something that can slew and track" rather than a specific driver class.
-- **State is event-sourced.** Controller and device state is rebuilt from a persisted event stream after a crash or restart — no "please re-home everything" after a network blip.
+- **State is event-sourced.** Stored state is rebuilt from persisted events after a restart.
+  Controllers verify or reestablish their operating state before accepting observation tasks.
 - **Exclusive leases** prevent two copies of the same service from fighting over one piece of hardware.
 
 ## Status

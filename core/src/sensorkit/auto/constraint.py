@@ -138,14 +138,7 @@ class ConstraintEvaluator:
             self._update_state()
 
     def constrain(self, reason: str, *, details: ConstraintDetails | None = None):
-        """Set constraint active.
-
-        Returns:
-            bool: True if state changed (clear → active)
-
-        Raises:
-            QueueFull: if the status queue is full
-        """
+        """Mark the constraint active and refresh its data timeout."""
         self._timeout.reschedule(asyncio.get_event_loop().time() + self.constraint.ttl)
         self._cancel_hold()
         self.intended_state = ConstraintState(
@@ -157,11 +150,7 @@ class ConstraintEvaluator:
         self._update_state()
 
     def clear(self, reason: str = "", *, details: ConstraintDetails | None = None):
-        """Set constraint inactive. If hold > 0, defers the clear until the hold expires.
-
-        Raises:
-            QueueFull: if the status queue is full
-        """
+        """Refresh the data timeout and clear the constraint after any configured hold."""
         self._timeout.reschedule(asyncio.get_event_loop().time() + self.constraint.ttl)
 
         if self.constraint.hold > 0 and self.intended_state.state == "active":

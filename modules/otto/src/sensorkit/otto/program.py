@@ -24,14 +24,10 @@ from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 
 @sk.declare_keyword
 class OttoContext(BaseModel):
-    """Otto's per-visit correlation id, attached to every collect task Otto emits for one
-    target-visit.
+    """Correlation ID for one target visit.
 
-    All the filter/exposure/binning tasks of a single visit — and every frame fanned out
-    from them — share one `visit_id`, so downstream processing can regroup a whole visit
-    (e.g. combine multi-band frames into a colour). Distinct visits differ. Reachable from
-    FITS-header exprs and filename templates as `OttoContext.visit_id`. Namespaced so it
-    does not collide with the flat keys the std controller injects (target_id, track_mode, ...).
+    Every filter, exposure, and binning task in a visit shares the same `visit_id`.
+    FITS expressions and filename templates access it as `OttoContext.visit_id`.
     """
 
     visit_id: str
@@ -521,15 +517,7 @@ class OttoProgram:
         return [obj_id for obj_id, _ in candidates]
 
     async def generate_tasks(self):
-        """
-        Background task that automatically generates observation tasks.
-
-        Implement your automated task generation logic here:
-        - Reading from Spacebook
-        - Parsing TLE files
-        - Scheduling based on visibility windows
-        - etc.
-        """
+        """Queue observations for visible targets across the configured camera settings."""
 
         while True:
             try:

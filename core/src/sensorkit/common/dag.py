@@ -1,44 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Generic dependency-graph IR and executor, with no knowledge of what a node does.
+"""Dependency graphs and asynchronous execution.
 
-* `Node` is one unit of work. Its payload is opaque, and each frontend's dispatcher
-  interprets its own. `delay_s` delays dispatch once dependencies resolve.
-* `Graph` is nodes plus typed edges. A soft edge only orders, and the dependent
-  runs whatever the outcome. A hard edge propagates failure, so a node whose hard
-  dependency did not succeed is skipped, and skips cascade.
-* `GraphBuilder` accumulates nodes and edges, and checks for cycles when sealing.
-* `DagRunner` executes a graph against a dispatcher and never raises for node
-  failures. Outcomes are the `RunReport`, and raise policy is the frontend's.
+`Node` holds one unit of work with a payload interpreted by the caller's
+dispatcher. `GraphBuilder` adds nodes and dependencies, then checks for cycles.
+`DagRunner` executes the graph and returns node outcomes in a `RunReport`.
+The caller decides whether those outcomes should raise an exception.
 
-Three independent per-node settings make up the failure model.
+A soft edge requires completion. A hard edge requires success; an unsuccessful
+dependency skips its dependents unless that dependency uses `on_failure="continue"`.
+The dependency's failure policy controls propagation:
 
-`Node.on_failure` is how far a failure spreads.
+- `stop` stops further dispatch.
+- `skip` skips hard dependents and allows independent work to continue.
+- `continue` treats outgoing hard edges as completion dependencies.
 
-| value | meaning |
-|---|---|
-| `stop` | hard edges stay hard, and the failure stops dispatching |
-| `skip` | hard edges stay hard, so dependents skip and skips cascade |
-| `continue` | outgoing hard edges behave as soft |
+`Node.optional` excludes a failed node from required failures.
+`Node.override` records an outcome without dispatching. Its reason also follows
+any skips it causes; these are excluded from required failures.
+`RunReport.failures` contains required failed or skipped nodes, excluding
+canceled nodes and skips caused only by overrides.
 
-It is read off the dependency, so a node states its own blast radius. It applies
-to any resolution other than `ok`, so a skipped `continue` node still lets its
-dependents run.
-
-`Node.optional` is whether a failure fails the run, and nothing else.
-
-`Node.override` records an outcome without dispatching. `ok` satisfies hard edges
-as a success does, and `skipped` cascades as a skip does, carrying the reason and
-staying out of `RunReport.failures`.
-
-`RunReport.failures` holds non-optional nodes that failed or were skipped, since a
-required step that did not run means the run did not do what it said. Cancelled
-nodes are excluded, since the run reports its own cancellation.
-
-A cancelled run cancels its in-flight nodes and waits for them, so no node's work
-outlives its run. Each cancellation reaching the run, including one arriving
-while it drains, is offered to the caller's `Absorbed` predicate as it arrives.
-The run is reported as aborted only if the predicate claims all of them, and
-otherwise the first it declines propagates once the nodes drain.
+Cancellation cancels in-flight nodes and waits for them to finish. The caller's
+`Absorbed` predicate classifies each cancellation as a requested abort or a
+cancellation to propagate. A requested abort returns an aborted result. Any
+unrecognized cancellation propagates after in-flight work finishes.
 """
 
 from __future__ import annotations
@@ -52,14 +37,13 @@ from typing import Literal
 from loguru import logger
 
 type Absorbed = Callable[[BaseException], bool]
-"""Whether a cancellation reaching a run was the caller's own domain abort.
+"""Predicate recognizing cancellation as a caller-requested abort.
 
-Answered by whoever executes the run, since a domain abort and a shutdown both
-arrive as plain cancellation and only the caller knows which it issued. Asked
-as each cancellation arrives, so it answers from the caller's intent at that
-moment, and not again once one is declined. An answer is never revisited, so one
-it declines is never outweighed by one it claimed. A run given none propagates
-every cancellation."""
+The caller distinguishes an abort from service shutdown because both arrive as
+cancellation. Each cancellation is classified as it arrives. Once a cancellation
+is rejected by the predicate, it propagates after in-flight work finishes.
+Omitting the predicate propagates every cancellation.
+"""
 
 type OnFailure = Literal["stop", "skip", "continue"]
 """How far a node's failure spreads. A frontend's table-level setting is the
@@ -84,7 +68,7 @@ class Node:
     label: str                        # one-line human description
     group: str                        # display grouping: phase / step
     payload: object                   # frontend-defined; opaque here
-    on_failure: OnFailure = "stop"    # blast radius of my failure
+    on_failure: OnFailure = "stop"    # failure propagation policy
     optional: bool = False            # True: my failure degrades, not fails
     delay_s: float = 0.0              # timed start after deps resolve
     override: NodeOverride | None = None    # set: don't dispatch, record this
@@ -261,8 +245,7 @@ class NodeResult:
 
 @dataclass
 class RunReport:
-    """First-class outcome of a run, including degraded outcomes that raise
-    nothing."""
+    """Node outcomes for one graph run, including optional failures."""
 
     name: str
     graph: Graph
@@ -373,7 +356,7 @@ class RunState:
 
         Ordering edges are satisfied by any resolution, and so is a hard
         dependency that declared `on_failure="continue"`, since it states its own
-        blast radius.
+        failure propagation policy.
         """
         return [
             r
@@ -490,15 +473,14 @@ class RunState:
 
 def _claims(absorbed: Absorbed | None,
             cancellation: asyncio.CancelledError) -> bool:
-    """Whether the caller claims a cancellation as its own domain abort."""
+    """Whether the caller recognizes a cancellation as its own domain abort."""
     return absorbed is not None and absorbed(cancellation)
 
 
 class DagRunner:
-    """Generic DAG executor.
+    """Execute dependency graphs using a caller-supplied dispatcher.
 
-    The graph is the API's IR, so callers compile, inspect (`Graph.format`),
-    verify, then execute.
+    Callers can compile and inspect a graph before executing it.
     """
 
     def __init__(self, dispatch: Dispatch):
@@ -518,7 +500,7 @@ class DagRunner:
                 since no report is returned then.
 
         Returns:
-            What every node did, marked aborted where `absorbed` claimed every
+            What every node did, marked aborted where `absorbed` recognized every
             cancellation that reached the run.
 
         Raises:

@@ -48,7 +48,7 @@ docker compose up --build
 
 Open [http://localhost:6080](http://localhost:6080) to watch the simulated mount slew to targets.
 The [quick start guide](docs/quickstart.md) walks through the rest:
-exploring the system with the CLI, connecting SensorView, and reading the ~35-line observing program that drives it.
+exploring the system with the CLI, connecting SensorView, and reading the observing program that drives it.
 
 [//]: # (For a demo, watch [this]&#40;https://youtube.com/@SensorKit/live&#41; 24/7 YouTube stream of SensorKit orchestrating:)
 
@@ -68,7 +68,7 @@ exploring the system with the CLI, connecting SensorView, and reading the ~35-li
 pip install sensorkit
 ```
 
-Hardware and feature support ships as optional extras.
+Hardware and feature support ship as optional extras.
 Install only what your site uses:
 
 ```bash
@@ -136,7 +136,7 @@ SK_TEST_BACKEND=nats uv run pytest core/tests
 # Also run tests needing site-local hardware or services
 ENV=local uv run pytest core/tests
 
-# Lint and check import-layer contracts
+# Lint and check import layering
 uv run ruff check core modules
 uv run lint-imports
 ```

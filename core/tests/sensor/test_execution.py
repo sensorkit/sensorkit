@@ -5,8 +5,7 @@ The rig serves `BENCH`, so commands and Abort cross the same request and event
 machinery a real one does. The wheel has no Abort, so interrupting it is
 unsupported.
 
-Workflows are either collects, packed and compiled, or step lists lowered by
-hand where a case is about one execution rule and a collect would bury it.
+Workflows are either collects, packed and compiled, or step lists compiled directly where a case is about one execution rule and a collect would bury it.
 
 Synchronization is by events. Deadlines in the tens of milliseconds are the
 behavior under test where they appear.

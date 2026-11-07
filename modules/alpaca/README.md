@@ -38,6 +38,10 @@ Note: both `RateTarget` and `EphemerisTarget` cases will employ closed-loop trac
 
 ## Example Config
 
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
+
 `host`, `port`, and `protocol` set on the endpoint propagate to every device;
 override them per-device when a device lives on a different server. Each device
 is addressed by its `device_number` on that server. `status_frequency` and `timeout` are optional overrides for each device (except `telescope`).
@@ -70,8 +74,8 @@ value:
         telescope1:
           device_type: telescope
           device_number: 0
-          status_frequency: 1.0        # status rate while idle (seconds)
-          status_frequency_fast: 0.1   # status rate while slewing or tracking
+          status_frequency: 1.0        # poll interval while idle (seconds)
+          status_frequency_fast: 0.1   # poll interval while slewing or tracking (seconds)
         rotator1:
           device_type: rotator
           device_number: 0
@@ -89,8 +93,8 @@ value:
 
 ## Example: Weather Constraint
 
-A weather constraint pauses a controller (agent) when conditions exceed the
-configured thresholds. The constraint's `provider` is the entity name of any
+A weather constraint makes the agent demand shutdown for the controller while
+conditions exceed the configured thresholds. The constraint's `provider` is the entity name of any
 device that publishes the `BasicWeather` keyword — that can be this module's
 `observing_conditions` device.
 
@@ -106,7 +110,7 @@ value:
       protocol: http
       devices:
         AlpacaWeather:
-          device_type: weather
+          device_type: observing_conditions
           status_frequency: 5.0
           timeout: 60.0
 ```

@@ -1,12 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""ASA Autoslew enclosure shutter (StandardEnclosure) — backbone-only.
+"""ASA Autoslew enclosure shutter through Telescope extension actions.
 
-Autoslew exposes NO ASCOM Dome device; shutter control is the Telescope actions
-``dome:openshutter``/``dome:closeshutter`` plus the ``IsDomeInScopePosition``
-CommandBool. So this device has no alpyca device of its own — it connects the
-shared Telescope backbone and drives those verbs through it. Most deployments run
-the enclosure as its own module; this covers the "Autoslew drives its own shutter"
-case. There is no shutter-open readback, so open/closed is tracked in memory.
+Autoslew exposes shutter control through the shared telescope client rather
+than an ASCOM Dome device. Shutter position is tracked in memory because the
+interface provides no open/closed readback.
 """
 
 from __future__ import annotations

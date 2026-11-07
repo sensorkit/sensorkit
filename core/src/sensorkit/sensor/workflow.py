@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Shared workflow models and lowering for lifecycle and collect compilers.
+"""Shared workflow models and graph compilation for lifecycle and collect compilers.
 
 Compilers emit named `PlannedStep` records with dependencies. `lower` checks
 capabilities, resolves deadlines and operator rules, and builds graphs for
@@ -174,7 +174,7 @@ class Operation:
 
 @dataclass(frozen=True)
 class Omission:
-    """An unsupported step removed during lowering, with its origin and
+    """An unsupported step removed during graph compilation, with its origin and
     reason.
     """
 
@@ -197,7 +197,7 @@ class DeadlineRule(BaseModel, frozen=True, extra="forbid"):
     any target.
 
     Author targets as `device: cam-1`, `trait: MustConnect` or `any: true`.
-    More specific rules take precedence during lowering. A rule without a
+    More specific rules take precedence during graph compilation. A rule without a
     command is a default that yields to every rule naming the command.
     """
 
@@ -243,7 +243,7 @@ def resolve_deadline(
     precede universal rules.
 
     Return `None` if neither an explicit value nor a matching rule exists.
-    Lowering validates the result and stores it on the operation.
+    Graph compilation validates the result and stores it on the operation.
 
     Raises:
         ValueError: Multiple rules match at the winning specificity.
@@ -396,7 +396,7 @@ class Cleanup:
 class CleanupPlan:
     """Planned cleanup steps with outcome, timeout and arming conditions.
 
-    `armed_by` names main-workflow steps until lowering resolves operations.
+    `armed_by` names main-workflow steps until graph compilation resolves operations.
     `None` is always armed; an empty tuple is never armed. Omitted triggers do
     not arm cleanup, and omitting every trigger preserves the empty tuple. The
     whole-graph timeout must be finite and positive, even for an empty graph.
@@ -480,7 +480,7 @@ def _compile(
     deadlines: tuple[DeadlineRule, ...],
     rules: tuple[OperatorRule, ...],
 ) -> tuple[Graph, dict[str, Operation], tuple[Omission, ...]]:
-    """Lower one step list into a graph, operation index and omission
+    """Compile one step list into a graph, operation index and omission
     records.
     """
     by_name = _checked(steps)

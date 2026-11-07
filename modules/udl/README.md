@@ -52,6 +52,10 @@ on restart.
 
 ## Example Config
 
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
+
 ```yaml
 entity: udl
 key: UDLConfig
@@ -96,8 +100,8 @@ value:
     read_context:
       op: context_from_fits
       keyword_map:
-        task_id: UDLREQID         # the module writes this header automatically;
-                                  # this line maps it back out for correlation
+        task_id: UDLREQID         # camera graph writes the execution ID;
+                                  # this mapping restores it for correlation
         frame_num: FRAMENUM
         image_width: NAXIS1
         image_height: NAXIS2
@@ -110,18 +114,17 @@ value:
 ```
 
 Both blocks live on the same entity — the program reads its `DataGraph` from
-its own entity name, so keep them identical (here `udl` for example, matching the `-n udl`
+its own entity name, so keep them identical (here `udl` for example, matching the `udl`
 service name below).
 
 As with Otto, the DataGraph is the delivery pipeline (bytes ride it from
 `watch_directory` to the publishers) and the `keyword_map` feeds SkyImagery
 metadata; the right side must mirror whatever the camera graph's
-`array_to_fits` `header:` map wrote. The collect context provides `task_id`
-(and `frame_num`/`frame_count`) to that map during standard collects, so the
-camera graph writes them as ordinary header entries (`UDLREQID: "{task_id}"`
-here). Mapping `task_id` back out is what correlates a frame to its
-CollectRequest (required for publishing and the `COMPLETED` response);
-`frame_num` drives `sequenceId` and set-completion counting. Unlike Otto, most
+`array_to_fits` `header:` map wrote. For this example, configure `UDLREQID: =str(TaskInfo.task_id)` and
+`FRAMENUM: =Collect.frame_number` in the camera graph.
+The header carries the framework execution ID; the program maps that ID to its CollectRequest.
+Restoring it as `task_id` correlates the frame for publishing and the `COMPLETED` response.
+The restored `frame_num` drives `sequenceId` and set-completion counting. Unlike Otto, most
 SkyImagery metadata (`satNo`, `classificationMarking`, `dataMode`, `origin`,
 set length) comes from the polled CollectRequest itself rather than FITS
 headers.

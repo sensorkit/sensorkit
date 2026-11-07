@@ -42,6 +42,10 @@ installed and is not available in TheSky's bundled mount simulator.
 
 ## Example Config
 
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
+
 `host` and `port` set on the endpoint propagate to every device; override the `host`
 per-device when a device lives on a different TheSky instance. Devices talk to
 TheSky over its JavaScript-over-TCP interface (port 3040), serialized
@@ -63,8 +67,8 @@ value:
           device_type: ota
         mount1:
           device_type: telescope
-          status_frequency_slow: 1.0     # status rate while idle/tracking
-          status_frequency_fast: 0.1     # increased publishing rate during tracking
+          status_frequency_slow: 1.0     # poll interval while idle/tracking (seconds)
+          status_frequency_fast: 0.1     # poll interval during tracking (seconds)
         rotator1:
           device_type: rotator
         focuser1:
@@ -84,9 +88,8 @@ value:
 
 TheSky's `weather` device doesn't report numeric conditions — it publishes
 `BasicSafety`, a single go/no-go flag derived from TheSky's `WeatherUtil.goodToGo`.
-A `kind: safety` constraint pauses the controller (agent) whenever that flag
-reports unsafe — the cleanest way to gate on TheSky's verdict, since it needs no
-thresholds.
+A `kind: safety` constraint makes the agent demand shutdown while TheSky reports
+unsafe. It requires no numeric thresholds.
 
 First, expose the weather device as an entity (here named `TheSkyWeather`):
 
@@ -123,5 +126,5 @@ constraining while unsafe and clearing when safe.
 
 ## Usage
 ```sh
-sensorkit service run thesky sensorkit.thesky.service
+sensorkit service run thesky_service sensorkit.thesky.service
 ```

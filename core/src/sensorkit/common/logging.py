@@ -138,7 +138,7 @@ def limited_logger(subject: str | None = None, *, interval: float = DEFAULT_LIMI
     site is limited, every call made through the returned logger is discarded. The
     first call always emits and opens the next window.
 
-    The result *must* used immediately, as in `limited_logger().info(...)`.
+    The result must be used immediately, as in `limited_logger().info(...)`.
     Acquiring it is what consumes the window, so holding one in a variable and
     reusing it defeats the limit. For the same reason, wrapping this function in a
     helper keys every one of that helper's callers to the helper's own line.

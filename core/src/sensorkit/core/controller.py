@@ -306,14 +306,14 @@ class ControllerClient(EntityClient):
     """Object that exposes client-side functionality of a Controller."""
 
     async def enable(self):
-        """Request that the Program enable task sourcing for the target Controller."""
+        """Enable the controller's task handlers."""
         return await self.call(
             set_enable_state_request,
             ControllerEnableStateRequest(enable=True)
         )
 
     async def disable(self):
-        """Request that the Program disable task sourcing."""
+        """Disable the controller's task handlers."""
         return await self.call(
             set_enable_state_request,
             ControllerEnableStateRequest(enable=False)

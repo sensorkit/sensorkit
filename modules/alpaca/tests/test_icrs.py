@@ -105,8 +105,7 @@ async def test_telescope_follow_icrs(telescope):
     from sensorkit.astro.coords import Equatorial
     from sensorkit.astro.target import ICRSTarget
 
-    # The fake's SlewToCoordinatesAsync is a no-op, Slewing is already False,
-    # so the wait loop exits immediately.
+    # The fake reports slew onset on the next read, then a settled mount.
     await telescope.telescope_follow_target(
         FollowTarget(target=ICRSTarget(coords=Equatorial(ra=90.0, dec=20.0)))
     )

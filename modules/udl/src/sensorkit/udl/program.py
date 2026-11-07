@@ -423,7 +423,7 @@ class UDLProgram:
             """Remove dict members that carry no data.
 
             UDL-compliant endpoints have been observed attaching placeholder
-            sub-objects (e.g. ``"stateVector": {}``) whose required members
+            sub-objects (e.g. `"stateVector": {}`) whose required members
             would fail validation of an otherwise compliant request.
             """
             if isinstance(value, dict):

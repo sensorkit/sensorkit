@@ -274,7 +274,6 @@ class ControllerDriver:
         return changed
 
 
-# FIXME: This is an AI implementation of this class; should be reviewed.
 class ProgramStateManager:
     """Manages the desired enable state for programs and drives remote state."""
 

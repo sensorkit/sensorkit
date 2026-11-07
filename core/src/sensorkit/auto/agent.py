@@ -277,11 +277,8 @@ async def agent_service(service: sk.Service):
         await operator.start(client=service.client, task_group=service.context.task_group)
 
     # Handle configuration requests.
-    # FIXME: asyncio.Lock does not guarantee FIFO wakeup order, so this usage could result in
-    #        scrambled concurrent request calls. Also, the number of waiters is unbounded. The
-    #        request API should provide a "serialized" mode that internally utilizes a bounded
-    #        Queue to guarantee FIFO ordering and put an upper bound on the number of waiting
-    #        requests.
+    # TODO: Bound the number of pending configuration requests. The lock serializes
+    # handlers in waiter order but does not limit how many callers can wait.
     _configure_lock = asyncio.Lock()
 
     async def _agent_configure_request(request: AgentConfigureRequest):

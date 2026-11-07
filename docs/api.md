@@ -1,4 +1,4 @@
-# API reference — `sensorkit.api`
+# API reference - `sensorkit.api`
 
 Everything you need to write devices, controllers, and programs is exported from one module:
 
@@ -10,7 +10,8 @@ The API is small by design: you declare entities with decorators, attach handler
 
 !!! note "The API is still settling"
 
-    SensorKit is in beta: this surface is stable in shape but still evolving in detail. Expect incremental changes — renames, signature adjustments, new capabilities — rather than the wholesale rewrite planned for the [CLI](cli.md).
+    SensorKit is in beta.
+    Public names, signatures, and configuration formats may change.
 
 ---
 
@@ -144,7 +145,7 @@ class Task(RegistryBaseModel):
 `Task` defines the work to perform.
 Subclasses set a `task_type` literal and add domain-specific fields.
 They register automatically for dispatch and serialization.
-The controller mints a separate `TaskExecution` with identity, context, and expiry when a task is submitted.
+The controller creates a separate `TaskExecution` with identity, context, and expiry when a task is submitted.
 A declared handler annotated with `T` receives the task.
 A declared handler annotated with `TaskExecution[T]` receives the envelope and accesses its task through `.task`.
 
@@ -191,7 +192,11 @@ Devices implement whichever subset applies; traits and archetypes (below) descri
 
 ## Traits and archetypes
 
-Devices are matched **structurally**: a device satisfies a `Trait` if it implements all of the trait's required commands (and publishes its required keywords). This is what lets controllers and tooling work against capabilities rather than specific driver classes.
+Traits match advertised capabilities.
+A trait with required commands matches a device that implements all of those commands.
+For these traits, required keyword publications are trusted rather than checked.
+A trait with no required commands matches its required keyword publications.
+Controllers can therefore select devices by capability.
 
 ```python
 TRACKING = sk.declare_trait("tracking", required_commands=(FollowTarget, Stop))
@@ -248,6 +253,7 @@ Adds: `command(cmd) -> Call`, `enable()` / `disable()`, `get_details()`, and tra
 
 Adds:
 
+- `start_task(task, *, context=None, expiry_time=None, interrupt=False) -> TaskExecution` - Await task acceptance and return the execution envelope, which can be awaited for its final result.
 - `execute_task(task, *, context=None, expiry_time=None, interrupt=False) -> Call` — submit a task; the returned `Call` tracks acknowledgement and completion.
 - `abort_task(task_id=None)` — abort the current (or a specific) task.
 - `wait_for_task(task_id=None)` — wait until nothing (or the given task) is executing.
@@ -385,7 +391,8 @@ Base for state models that are rebuilt from an event stream — the mechanism be
 
 The low-level bus abstraction. Most service code never touches it, but it's public for advanced integrations and tests:
 
-- `Backend` / `BackendImpl` — `NATS` in production, `fake` (in-memory) for tests; the entire test suite runs against either.
+- `Backend` / `BackendImpl` - Backend interface and implementation; `nats` uses NATS, and `fake` provides in-memory messaging and storage for tests.
+  Backend tests exercise both implementations when a NATS server is available.
 - `Entity`, `Subject` — addressable names on the bus.
 - `KVEntry`, `KVError`, `RevisionError` — KV records and failures (`RevisionError` signals an optimistic-concurrency conflict).
 - `Event`, `UnknownEvent` — event stream base types.

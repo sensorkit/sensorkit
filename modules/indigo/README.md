@@ -7,6 +7,10 @@ The `indigo` module provides integration for INDIGO devices via the INDIGO WebSo
 
 ## Example Config
 
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
+
 `host`, `port`, and `client_name` set on the endpoint propagate to every device;
 override them per-device when a device lives on a different server. An INDIGO device is **push-based**: it opens a WebSocket
 to the server and republishes whenever a property changes, so there is no
@@ -34,8 +38,8 @@ value:
 
 ## Example: Weather Constraint
 
-A weather constraint pauses a controller (agent) when conditions go out of
-bounds. Stations like the AAG CloudWatcher report their assessment as
+A weather constraint makes the agent demand shutdown for the controller while
+conditions are unsafe. Stations like the AAG CloudWatcher report their assessment as
 *categorical* states rather than raw numbers, which the device republishes on
 the `WeatherConditions` keyword. Each field carries one of a fixed set of
 Title-cased states:

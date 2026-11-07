@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""What a compiler decides, and the graph `lower` builds from it.
+"""Validate planned steps and their compiled workflow graphs.
 
-Steps are hand built here rather than compiled, since neither compiler exists
-yet and `lower` is what both stand on. The sensor is `sensor.yaml`, so what a
-device supports is real and an omission is reachable.
-
-Node ids follow emission order, and the tests read them that way.
+Tests construct steps directly to isolate shared graph compilation from the
+lifecycle and collect compilers. The fixture supplies device capabilities,
+including unsupported commands that exercise omission handling.
+Node IDs follow emission order.
 """
 from __future__ import annotations
 

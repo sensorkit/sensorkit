@@ -183,7 +183,7 @@ def audit_workflow(workflow: ExecutableWorkflow) -> AuditReport:
     return AuditReport(findings=(), description="\n".join(lines))
 
 
-# TODO: Support concrete offline previews from saved device reports.
+# TODO: Support concrete offline previews from saved device capability details.
 
 
 def _structure_checked(structure: Structure, label: str) -> tuple[Topology | None, Finding]:

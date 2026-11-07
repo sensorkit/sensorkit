@@ -1,20 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-"""ASA extension surface layered onto ``sensorkit.alpaca``'s generic Alpaca device.
+"""ASA extensions to the Alpaca device interface.
 
-Autoslew's remote surface is plain ASCOM Alpaca. Every ASA-specific feature
-(satellite tracking, refraction, pointing model, dome/cover/nasmyth control) rides
-the standard ASCOM extension mechanisms — ``Action`` / ``CommandString`` /
-``CommandBool`` — on the single **Telescope** device. So the Telescope client is a
-shared *backbone* every Autoslew device leans on for its ASA verbs, in addition to
-its own typed Alpaca device (Focuser/Rotator/CoverCalibrator) where one exists.
+Autoslew exposes extension actions on its Telescope device. A shared telescope
+client, called the backbone here, carries these actions for the mount and
+other devices. Focusers, rotators, and covers also use their own typed Alpaca
+clients for standard commands.
 
-``AutoslewMixin`` supplies that backbone surface, plus the ASA connect/disconnect
-quirk shared by every Autoslew device: some (e.g. the CoverCalibrator) don't
-implement the Platform-7 ``Connect()``/``Disconnect()`` methods, falling back to
-the legacy ``Connected`` property instead. Concrete devices mix it in ahead of the
-corresponding `sensorkit.alpaca` device class, e.g.
-``AutoslewFocuser(AutoslewMixin, AlpacaFocuser)``, so its overrides take priority
-over `AlpacaDevice`'s in the MRO.
+`AutoslewMixin` tries the Platform 7 connection methods and falls back to the
+`Connected` property when they are unsupported.
 """
 
 from __future__ import annotations
@@ -36,7 +29,7 @@ def _num(s: Any) -> float:
 
 
 def _pick(d: dict, *keys: str, default: Any = None) -> Any:
-    """First present key (case-insensitive) from a dict — tolerates ICD misspellings."""
+    """Return the first present key, ignoring case and accepting spelling variants."""
     lower = {k.lower(): v for k, v in d.items()}
     for k in keys:
         if k.lower() in lower:
@@ -45,13 +38,9 @@ def _pick(d: dict, *keys: str, default: Any = None) -> Any:
 
 
 class AutoslewMixin:
-    """ASA extension behavior shared by every Autoslew device.
+    """Connection handling and telescope extension calls shared by Autoslew devices.
 
-    Mixed in ahead of `AlpacaDevice` (or a subclass of it): relies on
-    `self.telescope` (the ASA Telescope backbone — the mount's own primary device,
-    or an auxiliary client set up purely to carry Action/CommandString/CommandBool
-    for a non-Telescope device) and on `self.call`/`self.get`/`self.put` from
-    `AlpacaDevice`.
+    Concrete devices supply a telescope client and the Alpaca call helpers.
     """
 
     telescope: Any

@@ -388,7 +388,7 @@ class EOObservationPublisher:
         """Post EOObservations to the UDL for the configured sensor."""
         info = get_keyword_info(SenpaiResult)
         keyword_key = info.key if info else SenpaiResult.__name__
-        # Sanitise the program entity into a valid NATS durable consumer name.
+        # Sanitize the program entity into a valid NATS durable consumer name.
         durable_name = "udl-eo-" + re.sub(
             r"[^A-Za-z0-9_-]", "_", str(self._program.program.entity)
         )

@@ -43,12 +43,17 @@ pwi4:
 # The sensor controller: devices composed into one instrument
 sensors:
   - id: MySensor
-    controller_name: MySensor
-    devices:
-      mount: MyMount
-      camera: MyCamera
-      dome: MyDome
-    site_position:
+    model:
+      components:
+        - device: MyMount
+        - device: MyDome
+        - device: MyCamera
+          instrument: true
+    policies: {}
+
+config:
+  MySensor:
+    SitePosition:
       latitude_degrees: 34.05
       longitude_degrees: -118.25
       altitude_km: 0.3
@@ -97,12 +102,12 @@ Each top-level section is handled by the component that owns it — `sensors` by
 | Section      | Owner                                | Purpose                                                             |
 |--------------|--------------------------------------|---------------------------------------------------------------------|
 | `sensorkit`  | bootstrap                            | Global settings: `imports` (modules to load), `backend`             |
-| `sensors`    | [sensor controller](sensor.md)       | Device composition, site position, operating policies (pending)    |
+| `sensors`    | [sensor controller](sensor.md)       | Device topology, lifecycle sequencing, and command timeouts    |
 | `automation` | [agent](agent.md)                    | Modes, constraints, scheduling                                     |
 | `data_flow`  | data pipeline (below)                | Per-device data processing graphs                                  |
 | `webapi`     | web API service                      | HTTP API port and served data products                             |
 | `services`   | `sensorkit go` / `service run`       | Your own program/service definitions                               |
-| `config`     | —                                    | Free-form per-entity keyword values (escape hatch)                 |
+| `config`     | —                                    | Per-entity keyword values, including `SitePosition`                 |
 
 ### Module sections
 
@@ -136,7 +141,8 @@ sensorkit config load sensorkit.yaml -f     # write everything, even unchanged k
 
 !!! warning "Config changes need a service restart"
 
-    Presently, all services read their configuration **once at startup**. `config load` updates the store, not running services — after changing a value, load and then restart the affected service. (In a future release, some configuration will become hot-reloadable for some services.)
+    Services read their configuration at startup.
+    After changing configuration, load it and restart the affected services.
 
 `sensorkit go -l` performs the load automatically before starting services, which is the usual workflow during setup:
 
@@ -206,7 +212,7 @@ automation:
   contexts:
     standard_collect:
       FileNameTemplate:
-        template: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-f{frame_num}.fits"
+        template: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-f{Collect.frame_number}.fits"
 ```
 
 Analysis modules extend the same pipeline mechanism — e.g. focus estimation ops (`analyze_focus_stars`, `analyze_focus_fft`) or handing frames to astrometry/photometry services.
@@ -267,7 +273,8 @@ Clients present it as `Authorization: Bearer <token>`. Anonymous read does not e
 
 ### Browser access
 
-Cross-origin requests are refused unless the origin is listed. A dashboard served from somewhere other than the API's own origin needs:
+Browser clients need an allowed origin to read cross-origin responses.
+For a dashboard served from a different origin, configure CORS:
 
 ```yaml
 webapi:
@@ -280,9 +287,12 @@ webapi:
 
 `max_stream_clients` (default 32) caps concurrent event-stream subscribers, and `stream_queue_size` (default 4096) bounds each subscriber's backlog. `expose_docs: true` serves the browser documentation pages at `/docs` and `/redoc`, which are off by default. `/openapi.json` is always served to a caller the authentication settings admit.
 
-## Under the hood: the KV store
+## The key-value store
 
-Everything `config load` writes lands in the NATS key-value store, namespaced by entity. Each entity (a device, sensor, program, or the agent) has its own keyspace, and each key holds one typed record — `SensorConfig` for a sensor, `AgentConfig` for the agent, and so on. Runtime state (controller state, agent decisions, offers) lives in the same store, which is what makes the system inspectable:
+Everything `config load` writes lands in the NATS key-value store, namespaced by entity. Each entity (a device, sensor, program, or the agent) has its own keyspace, and each key holds one typed record — `SensorConfig` for a sensor, `AgentConfig` for the agent, and so on.
+Runtime state snapshots and program offers also live in the store.
+Persisted events allow event-sourced state to be rebuilt after a restart.
+Inspect stored configuration and state with the CLI:
 
 ```bash
 # Everything, or one entity's keys

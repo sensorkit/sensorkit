@@ -288,7 +288,7 @@ async def test_a_run_given_no_predicate_propagates_every_cancellation():
 # ---- cancellation arriving while the run drains -------------------------
 
 def domain(exc: BaseException) -> bool:
-    """Claims a cancellation the caller sent as an abort, and nothing else."""
+    """Recognizes a cancellation the caller sent as an abort, and nothing else."""
     return str(exc) == "abort"
 
 

@@ -100,8 +100,7 @@ class TheSkyFocuser(TheSkyDevice):
 
     @sk.command_handler
     async def focuser_change(self, cmd: ChangeFocusPosition):
-        # NOTE: the TheSky focuser simulator does not allow setting limits (for testing). As of this release, we respect
-        # limits set via config, but a future release ought to respect both config and TheSky limits.
+        # Enforce configured focus limits; the TheSky simulator cannot set its own.
         await self.require_connected()
         logger.debug(f"changing focuser position to {cmd.position}")
 

@@ -24,10 +24,8 @@ class TheSkyFilterWheel(TheSkyDevice):
     config: TheSkyFilterWheelConfig
     device_name = "Filter Wheel"
 
-    # NOTE: the TheSky API allows for querying the name of a filter slot based on its index, but: 1) if you provide an
-    # index beyond the actual available indices, it does not error, rather it appears to move to the first index; and
-    # 2) looping through indices to retrieve the names would take an unnecessarily long time. And so we enforce that
-    # the user define the names via config (e.g. {R: 0, G: 1, B: 2})
+    # Configure filter names explicitly. TheSky may select the first slot when
+    # queried with an invalid index, so probing cannot reliably discover slots.
 
     @sk.on_attach
     async def entity_init(self):
@@ -117,8 +115,7 @@ class TheSkyFilterWheel(TheSkyDevice):
 
     @sk.command_handler
     async def filter_wheel_set_filter(self, cmd: SetFilter):
-        # NOTE: TheSky does not actually change the filter until a call to TakeImage() is received, so we will have to
-        # account for that delay wherever it makes sense to do so.
+        # TheSky applies the selected filter when TakeImage starts.
         await self.require_connected()
         logger.debug(f"setting filter wheel position to {cmd.filter}")
 

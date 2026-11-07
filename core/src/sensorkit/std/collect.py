@@ -22,7 +22,7 @@ from sensorkit.std.instrument import FrameType
 
 
 class CameraParameterSet(BaseModel):
-    """Camera Parameter Set"""
+    """Camera settings and frame count for one capture sequence."""
 
     frame_type: FrameType = Field(default=FrameType.LIGHT)
     integration_time_seconds: float = Field(...)
@@ -36,21 +36,16 @@ class CameraParameterSet(BaseModel):
 
 @sk.declare_keyword
 class Collect(BaseModel):
-    """Collect context information snapshot.
+    """Requested target, camera settings, and frame number for a collect.
 
-    This keyword represents a snapshot of the complete collect state at a specific point
-    in time during collection—for example, before an individual frame is captured. It
-    carries the target being observed, camera parameters, and the current position in
-    the frame sequence. It is primarily used with the standard collect task and other
-    compatible observation tasks.
+    The sensor adds this keyword to each capture's context. Device telemetry in
+    that context records observed values separately from these requested settings.
 
     Attributes:
-        target: The astronomical target to observe (can be various target types like TLE,
-            catalog object, ephemeris, etc.)
-        target_id: Optional name or identifier of the object being observed.
-        params: Camera configuration parameters including integration time, frame count,
-            binning, gain, frame type, and filter
-        frame_number: Current frame number in the collection sequence (default: 0)
+        target: Target requested for this frame's tracking mode.
+        target_id: Optional target name or identifier.
+        params: Requested camera settings and frame count.
+        frame_number: Zero-based frame number on the assigned instrument.
     """
 
     target: Target
@@ -79,43 +74,25 @@ class Collect(BaseModel):
 
 
 class StandardCollectTask(sk.CollectTask):
-    """Task to collect one or more camera frames while tracking a target.
+    """Request camera frame sequences while following a target.
 
-    This task executes a standard observation by configuring a camera to capture a sequence
-    of frames while a mount tracks a specified target. It handles the complete observation
-    workflow including target tracking, camera configuration, auxiliary device sequencing,
-    and frame acquisition.
+    The sensor controller matches each parameter set to an instrument and plans
+    pointing, camera configuration, capture, and cleanup. Shared devices determine
+    which sequences can run concurrently. Incompatible settings are placed in
+    separate configuration epochs.
 
-    Implementations must build and propagate context data to any operations that require it.
-    The base context must be taken from the `TaskExecution`. (FIXME: do this internally)
-
-    Mandatory context keywords:
-      - Collect: Snapshot of the current collect state, prior to each operation
-      - AltAzPointing
-      - RADecPointing
-      - AxisRates
-      - SitePosition
-
-    Several exposures may be asked for at once, as a list. Whether they are taken
-    together or in turn is not the task's to say: each is matched to an instrument
-    that can take it, and a sensor with more than one takes them concurrently while
-    a sensor with one takes them in sequence.
+    Each capture receives the execution context, requested collect metadata, and
+    available telemetry from its instrument's device chain.
 
     Attributes:
-        task_type: Always "standard_collect" for this task type
-        target: The astronomical target to observe (e.g., TLE, catalog object, ephemeris,
-            ICRS coordinates, alt-az position, etc.)
-        camera_params: Camera configuration including integration time, frame count,
-            binning, gain, frame type, and filter selection. A list asks for one
-            exposure per element
-        end_time: *Advisory* deadline for task completion. Deprecated and slated for removal
-        sidereal_frames: Frame numbers that should use sidereal tracking mode, counted
-            within each exposure. Every instrument exposing at once switches together,
-            since the tracking mode is the mount's rather than a camera's. Defaults to
-            empty list
-        target_id: Optional name or identifier of the object being observed. If not supplied,
-            the handler may infer an identifier (e.g., NORAD ID for TLE targets, catalog name
-            for catalog targets) on a per-target basis
+        task_type: Discriminator for a standard collect task.
+        target: Target to follow.
+        camera_params: Settings for one sequence, or a list of sequences.
+        end_time: Legacy advisory end time. Use execution expiry to enforce a deadline.
+        sidereal_frames: Zero-based indices within each sequence that use sidereal
+            tracking. Instruments capturing concurrently switch together.
+        target_id: Optional target identifier. The sensor infers the NORAD ID for a
+            TLE target or the object name for a catalog target when omitted.
     """
 
     task_type: Literal["standard_collect"] = "standard_collect"
@@ -127,7 +104,7 @@ class StandardCollectTask(sk.CollectTask):
 
     @property
     def exposures(self) -> tuple[CameraParameterSet, ...]:
-        """Every exposure asked for, however the task wrote them."""
+        """Return the requested frame sequences as a tuple."""
         if isinstance(self.camera_params, CameraParameterSet):
             return (self.camera_params,)
 

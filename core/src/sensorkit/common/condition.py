@@ -52,17 +52,11 @@ class Condition(BaseModel, ABC):
         previous: object,
         was_active: bool,
     ) -> tuple[bool, bool]:
-        """Evaluate the condition.
+        """Evaluate notification and active state for one value update.
 
         Returns:
-            A `(should_notify, is_active)` tuple.
-
-            *should_notify* -- `True` if a notification should be sent this
-            tick.
-
-            *is_active* -- `True` if the condition is currently in an "active"
-            zone (used for deadband/hysteresis tracking).  For conditions
-            without deadband the two values are identical.
+            A pair of booleans. The first requests a notification for this update.
+            The second records active state for subsequent hysteresis or edge checks.
         """
         ...
 

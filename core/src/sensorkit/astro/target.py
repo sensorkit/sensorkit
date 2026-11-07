@@ -554,7 +554,7 @@ def make_altaz_frame(loc: EarthLocation, obstime: Time) -> AltAzFrame:
     return AltAzFrame(obstime=obstime, location=loc)
 
 def norm_az_deg(az_deg: float) -> float:
-    """Normalise an azimuth value to the [0, 360) degree range."""
+    """Normalize an azimuth value to the [0, 360) degree range."""
     return az_deg % 360.0
 
 

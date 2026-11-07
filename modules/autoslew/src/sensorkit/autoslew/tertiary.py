@@ -1,12 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""ASA Autoslew tertiary / Nasmyth selector — bespoke, backbone-only.
+"""ASA Autoslew tertiary mirror status through Telescope extension actions.
 
-ASA calls this the "Tertiary" (hence the file name; cf. node_platform's "M3").
-There is no ASCOM device for it and no SK archetype — control is the Telescope
-actions ``selectnasmythport`` / ``getcurrentnasmythport`` / ``tertiarystatus``, so
-this bare device rides the shared Telescope backbone and publishes the current
-port. A port-select command is deferred until SensorKit defines one (the
-node_platform M3 change command is commented out for the same reason).
+The device publishes the selected Nasmyth port. It does not currently register
+a command for changing that port.
 """
 
 from __future__ import annotations

@@ -18,8 +18,9 @@ hardware (see sdasim for details):
 
 ## How It Works
 
-1. Each configured camera runs as its own service process (rendering is
-   CPU-bound; run multiple cameras as separate services)
+1. Each camera is a separate service.
+   Run cameras in separate processes to isolate CPU-bound rendering;
+   `sensorkit go` runs services in threads within one process.
 2. The camera subscribes to the configured mount (and rotator) entities for
    live pointing and inertial (ICRF) axis rates;
    sdasim renders apparent motion as object rate minus mount rate, so
@@ -34,6 +35,10 @@ hardware (see sdasim for details):
 
 ## Example Config
 
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
+
 ```yaml
 entity: sdasimCamera
 key: SdasimCameraConfig
@@ -47,9 +52,13 @@ value:
 
 Satellite rendering, the star field, and the observer site live in the sdasim
 scene YAML (`sdasim_config`), not here (but see `TODO`). Wire the camera into a sensor like
-any other camera device (`devices: camera: sdasimCamera`) and give it the
+any other camera device by adding `device: sdasimCamera` with `instrument: true`
+to the sensor's `model.components` topology, and give it the
 standard camera producer DataGraph (`app_source → array_to_fits →
 write_file`); its `write_file` directory is where the synthetic FITS land.
+
+Light, dark, bias, and flat frames are supported.
+Flat frames require `sensor.flat_radiance` in the scene configuration.
 
 ## Usage
 
@@ -68,6 +77,4 @@ sensorkit service run sdasimCamera sensorkit.sdasim.service
   rotation is not yet applied to the render.
 - **Filters** — no filter wheel is simulated, and no filter context/header
   key is set on captured frames.
-- **Calibration frames** — every capture is a light frame; dark/bias frame
-  types are not simulated beyond the sensor noise model.
 - **Full-frame only** — no ROI support; binning is symmetric N×N.

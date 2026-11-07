@@ -3,7 +3,7 @@
 
 Tables contain phases of entries. Each entry selects placements and runs an
 ordered list of commands on each. Entries in one phase must select disjoint
-placements. Compilation emits planned steps for shared workflow lowering.
+placements. Compilation emits planned steps for shared workflow graph compilation.
 
 A phase normally follows the preceding phase with completion dependencies.
 Explicit `after` lists change that order. `require` clauses can refine a wait
@@ -301,7 +301,7 @@ def compile_lifecycle(
     Raises:
         ValueError: References or declaration order are invalid, entries
             overlap or select nothing, joins match no operations, a required
-            command is unsupported, or shared lowering rejects the workflow.
+            command is unsupported, or shared graph compilation rejects the workflow.
     """
     return TableCompiler(workflow, sensor, deadlines=deadlines, rules=rules).run()
 
@@ -311,7 +311,7 @@ class TableCompiler:
 
     Phases may reference earlier phases; entries may also reference peers in
     their own phase. Dependencies are accumulated separately, then attached to
-    frozen steps before shared lowering.
+    frozen steps before shared graph compilation.
     """
 
     def __init__(
@@ -336,7 +336,7 @@ class TableCompiler:
         self.emitted = 0
 
     def run(self) -> ExecutableWorkflow:
-        """Expand phases and cleanup specs, then lower their planned steps."""
+        """Expand phases and cleanup specs, then compile their planned steps."""
         previous: str | None = None
 
         for phase in self.table.phases:

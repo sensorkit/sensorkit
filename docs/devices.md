@@ -19,7 +19,7 @@ sensorkit service run <Id>       # the section's `id` is the service name
         - sensorkit.pwi4.service
     ```
 
-Device names (the keys under `devices:`) are the entity names you'll use everywhere else — in the sensor's `devices:` mapping, in constraints (`provider:`), and on the CLI (`-e MyMount`).
+Device names (the keys under `devices:`) are the entity names you'll use everywhere else — in the sensor's `model.components` topology, in constraints (`provider:`), and on the CLI (`-e MyMount`).
 
 ---
 
@@ -63,9 +63,7 @@ alpaca:
 
 | Field                      | Default | Description                    |
 |----------------------------|---------|--------------------------------|
-| `cooler_on`                | `true`  | Turn the cooler on at connect  |
-| `ccd_temperature_setpoint` | —       | Target CCD temperature (°C)    |
-| `readout_mode`             | —       | Readout mode index or name     |
+| `temperature`             | `-10.0` | Target sensor temperature in degrees C |
 
 ---
 
@@ -84,7 +82,7 @@ pwi4:
         devices:
           MyMount:
             device_type: mount
-            status_frequency: 1.0
+            status_frequency_slow: 1.0
           MyFocuser:
             device_type: focuser
           MyRotator:
@@ -140,11 +138,14 @@ node_platform:
         devices:
           MyMount:
             device_type: mount
-          MyCamera:
-            device_type: camera
+          MyEnclosure:
+            device_type: enclosure
           MyWeather:
             device_type: weather
 ```
+
+Node Platform does not provide a camera device through this module.
+Configure a camera through another device service.
 
 Other modules (INDIGO, NINA) follow the same pattern; their sections are named after the module. Module maturity varies — Alpaca and PWI4 are the most heavily exercised.
 
@@ -173,10 +174,12 @@ alpaca:
 Once connected, each device publishes:
 
 - **Details** — the commands it supports, from which SensorKit derives its *traits* (structural capabilities like "can slew", "can capture") and *archetype* (mount, camera, …). Controllers match devices by capability, not by driver.
-- **Keywords** — a stream of typed telemetry (pointing, temperatures, weather readings) polled at `status_frequency`.
-- **State** — connection and enablement, persisted so it survives restarts.
+- **Keywords** - Typed telemetry, such as pointing, temperature, and weather readings.
+  Polling intervals depend on the driver; INDIGO publishes property changes as they arrive.
+- **State** - Framework enablement and any driver-specific persisted state.
+  Connection status is established by the driver when it connects.
 
-You can poke any device directly from the CLI, bypassing the controller:
+You can command a device directly from the CLI:
 
 ```bash
 sensorkit device connect    -e MyMount

@@ -10,8 +10,8 @@ and publishes live sky-transmission telemetry (see allclear for details):
   can be used as an agent constraint, i.e. a binary "too cloudy" constraint (but
   see `TODO`).
 - **Telemetry and monitoring** — results are published as `SkyTransmission` /
-  `SkyTransmissionMap` keywords (the former is what automation weather
-  constraints consume, e.g. to hold tasking when `clear_fraction` drops), and
+  `SkyTransmissionMap` keywords. A conditional constraint can use
+  `SkyTransmission.clear_fraction` to stop operation under clouds, and
   an annotated live view is served as an MJPEG stream (consumed by
   SensorView's Streams tab).
 
@@ -33,6 +33,10 @@ and publishes live sky-transmission telemetry (see allclear for details):
    so only controllers are named in the config
 
 ## Example Config
+
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
 
 ```yaml
 entity: allsky

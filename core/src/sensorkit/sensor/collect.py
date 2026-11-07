@@ -4,7 +4,7 @@ workflows.
 
 `pack` chooses participants, routes settings and splits incompatible requests
 into child epochs. `compile_collect` derives dependencies and emits planned
-steps. Shared lowering builds the executable graphs. Each acquisition expands
+steps. Shared graph compilation builds the executable graphs. Each acquisition expands
 into a camera capture with planned keywords.
 
 Settings must describe absolute state. Each placement holds one setting per
@@ -873,7 +873,7 @@ def compile_collect(
 
     Raises:
         ValueError: Bound settings or participants conflict, commands are
-            unsupported, or shared lowering rejects the workflow.
+            unsupported, or shared graph compilation rejects the workflow.
     """
     return CollectCompiler(collect, sensor, deadlines=deadlines, rules=rules).run()
 
@@ -882,7 +882,7 @@ class CollectCompiler:
     """Single-use state for deriving collect dependencies and planned steps.
 
     Track governing settings by placement and command type, latest operations
-    per device, and latest acquisitions per instrument. Shared lowering handles
+    per device, and latest acquisitions per instrument. Shared graph compilation handles
     omissions, deadlines, operator rules and graph construction.
     """
 
@@ -908,7 +908,7 @@ class CollectCompiler:
         self.emitted = 0
 
     def run(self) -> ExecutableWorkflow:
-        """Emit preparation, epochs and cleanup, then lower their planned
+        """Emit preparation, epochs and cleanup, then compile their planned
         steps.
         """
         for position, routed in enumerate(self.collect.prepare):

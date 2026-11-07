@@ -36,6 +36,10 @@ SensorKit as telemetry (see SENPAI for details):
 
 ## Example Config
 
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
+
 ```yaml
 entity: senpai
 key: SenpaiConfig
@@ -66,21 +70,24 @@ value:
       keyword_map:                # required for sequence batching / correlation;
         task_id: TASKID           # the right side must mirror whatever the camera
         frame_num: FRAMENUM       # graph's array_to_fits `header:` map wrote
-        frame_count: NFRAMES      # (the collect context provides these keys to
-        exptime: EXPTIME          # that map); exptime sizes the stalled-
-      output:                     # sequence limit
+        frame_count: NFRAMES      # frame count from the camera header
+        exptime: EXPTIME          # exposure time sets the stalled-sequence limit
+      output:
         - sink
     sink:
       op: app_sink
 ```
 
 Both blocks live on the same entity — the analyzer shares the service name
-(`-n senpai` below). Point `watch_directory` at the camera graph's
+(`senpai` below). Point `watch_directory` at the camera graph's
 `write_file` directory; every FITS file that appears there is analyzed,
 regardless of which program collected it. The `keyword_map` is only needed for
 sequence batching and for downstream consumers that correlate results to
 tasking (e.g. EOObservations); without it, every frame processes individually
 and `SenpaiResult.task_id` stays null.
+For the example above, the camera's `array_to_fits.header` mapping can use
+`TASKID: =str(TaskInfo.task_id)`, `FRAMENUM: =Collect.frame_number`,
+`NFRAMES: =Collect.params.frame_count`, and `EXPTIME: =ExposureInfo.exposure_time`.
 
 ## Usage
 

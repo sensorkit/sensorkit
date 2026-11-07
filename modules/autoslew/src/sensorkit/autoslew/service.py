@@ -2,8 +2,8 @@
 """Config section + service entrypoint for the Autoslew module.
 
 One Autoslew Alpaca server (host:port) exposes several devices; each is configured
-under a ``devices`` mapping and shares the server's connection details, which are
-propagated down by the validator below (mirrors the ``alpaca`` module).
+under a `devices` mapping and shares the server's connection details, which are
+propagated down by the validator below (mirrors the `alpaca` module).
 """
 
 from typing import Annotated

@@ -107,7 +107,7 @@ class EventMultiplexer:
         """Wait until events are being received. A plain multiplexer has no source to wait for."""
 
     async def parse_event(self, json: bytes):
-        """Deserialise a JSON event payload and enqueue it to all matching subscriber queues."""
+        """Deserialize a JSON event payload and enqueue it to all matching subscriber queues."""
         # Parse the event and narrow its type.
         try:
             model = Event.model_validate_json(json)

@@ -63,20 +63,16 @@ class AllClearPipeline:
         output_dir: str | None = None,
         site_location: tuple[float, float] | None = None,
     ) -> FrameResult:
-        """Process a single image file through the allclear pipeline.
+        """Process an image and render telescope pointing overlays.
 
-        Parameters:
-            image_path : str
-                Path to a FITS/JPG/PNG/TIFF image.
-            pointings : dict of mount_name -> (az_deg, alt_deg), optional
-                Telescope pointings to overlay as crosshairs.
-            output_dir : str, optional
-                Directory to save annotated PNG. If None, no file is saved.
-            site_location : tuple of (lat_deg, lon_deg), optional
-                Fallback site coordinates from the SensorKit controller.
+        Args:
+            image_path: Path to a FITS, JPG, PNG, or TIFF image.
+            pointings: Mount names mapped to azimuth and altitude in degrees.
+            output_dir: Directory for the annotated PNG, or None to omit it.
+            site_location: Fallback latitude and longitude in degrees.
 
         Returns:
-            FrameResult
+            Analysis metrics and the annotated frame.
         """
         try:
             return self._do_process(image_path, pointings, output_dir, site_location)

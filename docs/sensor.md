@@ -1,6 +1,8 @@
 # Sensor controller
 
-The sensor controller turns a collection of devices into one logical instrument. It owns a mount and camera — plus, optionally, a dome, focuser, rotator, filter wheel, and mirror cover — and knows how to bring them up, point them, collect frames, and shut them down in the right order.
+The sensor controller coordinates a device topology containing one or more instruments.
+A typical sensor has a shared mount and dome, with a camera, focuser, and filter wheel on each instrument branch.
+Lifecycle workflows initialize and shut down the devices; collect workflows point the mount and capture frames.
 
 You rarely command devices individually during operations; you send *tasks* to the controller, and it sequences the hardware.
 
@@ -95,7 +97,7 @@ The controller responds to tasks — from the agent during autonomous operation,
 | Task         | What happens                                                                    |
 |--------------|----------------------------------------------------------------------------------|
 | **Init**     | Initialize the dome and mount, open the dome and mirror cover                  |
-| **Standby**  | Bring the sensor to a warm, ready-to-observe state                              |
+| **Standby**  | Run the same device sequence as Init and establish STANDBY                              |
 | **Collect**  | Slew/track a target, set filter and binning, capture frames, stop the mount     |
 | **Recover**  | Reconnect all devices and stop any in-progress motion after a fault             |
 | **Shutdown** | Close the mirror cover, deinitialize the mount, close the dome                  |
@@ -117,7 +119,7 @@ sensorkit controller init -e MySensor
 # Abort whatever is currently running
 sensorkit controller abort -e MySensor
 
-# Collect: 10 × 30 s on a fixed ICRS position
+# Capture 10 frames of 30 seconds each at a fixed ICRS position
 sensorkit controller collect -e MySensor \
     -t '{"target_type": "fixed", "frame": "icrf", "coords": {"ra": 83.82, "dec": -5.39}}' \
     -i 30.0 -c 10

@@ -34,6 +34,10 @@ Note: the Advanced API plugin is open-source on GitHub, and so adding support fo
 
 ## Example Config
 
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
+
 `host` and `port` set on the endpoint propagate to every device; override them
 per-device when a device lives on a different NINA instance. `status_frequency` and `timeout` are optional overrides for each device (except
 `mount`). Each device also reads optional Advanced API credentials from `env_file` (default `.env`), which may
@@ -58,8 +62,8 @@ value:
           device_type: dome
         mount1:
           device_type: mount
-          status_frequency_slow: 1.0   # status rate while idle/tracking
-          status_frequency_fast: 0.1   # status rate while slewing (seconds)
+          status_frequency_slow: 1.0   # poll interval while idle/tracking (seconds)
+          status_frequency_fast: 0.1   # poll interval while slewing (seconds)
         guider1:
           device_type: guider
         rotator1:
@@ -76,8 +80,8 @@ value:
 
 ## Example: Weather Constraint
 
-A weather constraint pauses a controller (agent) when conditions exceed the
-configured thresholds. The constraint's `provider` is the entity name of any
+A weather constraint makes the agent demand shutdown for the controller while
+conditions exceed the configured thresholds. The constraint's `provider` is the entity name of any
 device that publishes the `BasicWeather` keyword — that can be this module's
 `weather` device.
 

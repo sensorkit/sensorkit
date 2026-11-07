@@ -149,10 +149,8 @@ class EventSourcedState(BaseModel):
 
         yield original
 
-        # FIXME: For this to work properly, we need the backend to be enhanced to expose a method
-        #        of starting the stream at a given timestamp. NATS supports this so this is just a
-        #        much needed backend iteration. Below is a poor-man's substitute that kind of works
-        #        only because we currently always publish a state update subsequent to every event.
+        # TODO: Add backend support for resuming an event stream from a snapshot.
+        # Subscribe before reading the snapshot, then filter events already reflected in it.
         #
         # Skip any stream events already reflected in `original` (or that produced it), then yield
         # everything after. We order by the full uuid7 event_id rather than timestamp(): the latter

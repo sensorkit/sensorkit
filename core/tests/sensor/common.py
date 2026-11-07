@@ -179,7 +179,7 @@ def ran(outcome) -> list[str]:
 
 
 def abort_only(cancellation: BaseException) -> bool:
-    """Claims a cancellation the caller sent as an abort, and nothing else."""
+    """Recognizes a cancellation the caller sent as an abort, and nothing else."""
     return str(cancellation) == "abort"
 
 

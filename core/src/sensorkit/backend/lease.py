@@ -17,7 +17,7 @@ from sensorkit.common.aio import scoped_waiter
 
 
 class LeaseModel[M: BaseModel | None](BaseModel):
-    """Serialisable metadata stored in the KV entry for an active lease."""
+    """Serializable metadata stored in the KV entry for an active lease."""
 
     acquired_at: datetime
     refreshed_at: datetime
@@ -200,15 +200,11 @@ class LeaseGroup:
         return lease
 
     async def refresh_loop(self, record_callback: Callable[[Lease], None] | None = None):
-        """Yield Leases as their scheduled refresh time becomes current.
+        """Refresh leases as their scheduled renewal times arrive.
 
-        NOTE: This implementation requires that lease refreshes are performed serially. There are
-              potential performance pitfalls with this if using a high-latency backend (which, it
-              should be noted, is not a supported use case) or if servicing a large number of
-              entities such that a burst of coincident refreshes causes a delay beyond a lease TTL.
-              Lease refreshes are scheduled with a random element, which reduces the potential for
-              this happening, and TTLs can always be tuned longer. However, a callback-based
-              implementation where refreshes can be performed concurrently could be considered.
+        Refreshes run serially. A slow backend or many simultaneous renewals can
+        exceed a lease's TTL. Randomized refresh times reduce bursts; increase the
+        TTL when renewal latency approaches the expiry time.
         """
         try:
             while True:

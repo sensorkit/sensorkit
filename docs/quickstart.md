@@ -1,4 +1,4 @@
-# Quick start — a simulated observatory
+# Quick start - a simulated observatory
 
 The fastest way to understand SensorKit is to run one. The repository ships a complete simulated observatory in `deploy/simulated`: a PlaneWave PWI4 mount simulator (with a graphical interface you can watch), ASCOM Alpaca simulators for camera, dome, filter wheel, focuser, rotator, and weather, and the full SensorKit automation stack on top.
 
@@ -30,9 +30,7 @@ The first run builds the SensorKit image and pulls the simulators, which takes a
 | `otto`          | Otto, a satellite observation program (tasked with a real NORAD ID)                    |
 | `webapi`        | HTTP/JSON view into the running system                                                 |
 
-!!! note "`reload-config` is temporary"
-
-    The explicit `reload-config` container is a requirement that's going away: in an upcoming release, each service loads its own configuration at startup, so the stack won't need a separate seeding step.
+The `reload-config` container loads configuration before the SensorKit services start.
 
 ## 2. Watch it run
 
@@ -88,7 +86,7 @@ Point it at the simulated stack's web API at [http://localhost:8000](http://loca
 
 ## 5. Read the program
 
-The entire demo observing program is 35 lines — `deploy/simulated/program.py`:
+The following program is based on `deploy/simulated/program.py`:
 
 ```python
 import random
@@ -133,9 +131,7 @@ Two ideas carry all the weight here:
 
 Swap `AltAzTarget` for a `TLETarget` and you have a satellite tracker. That, plus scheduling and priorities, is covered in [Observing programs](programs.md).
 
-!!! note "Less boilerplate ahead"
-
-    The explicit `@sk.service_entrypoint` block at the bottom is another requirement on its way out: for single-entity services like this one, declaring the program will soon be enough on its own.
+The service entry point registers the program and runs it until shutdown.
 
 ## Where to next
 

@@ -44,7 +44,7 @@ _UNSET = object()
 
 
 def _safe_durable_name(prefix: str, rule_name: str) -> str:
-    """Sanitise a rule name into a valid NATS durable consumer name."""
+    """Sanitize a rule name into a valid NATS durable consumer name."""
     return prefix + re.sub(r"[^A-Za-z0-9_-]", "_", rule_name)
 
 

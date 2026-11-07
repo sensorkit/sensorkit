@@ -77,7 +77,7 @@ class Sensor:
         """Validate the definition, discover configured devices and bind
         their capabilities.
 
-        Validate the definition before reading device reports. The caller owns
+        Validate the definition before reading device capability details. The caller owns
         the supplied client and backend and remains responsible for closing
         them.
 
@@ -90,10 +90,10 @@ class Sensor:
             A session bound to the discovered device details.
 
         Raises:
-            ValueError: The definition is invalid, an entity is not a device, a
-                report is missing, or a declared trait is unregistered or
-                unsatisfied.
-            BackendError: A device report could not be read from the backend.
+            ValueError: The definition is invalid, capability details are missing,
+                an entity is not a device, or a declared trait is unregistered
+                or unsatisfied.
+            BackendError: Device capability details could not be read from the backend.
         """
         topology = definition.check()
         keys = tuple(p.device for p in topology.placements())
@@ -176,7 +176,7 @@ class Sensor:
             workflow: Workflow planned by this session.
             contexts: Current device contexts, sampled for each acquisition.
             base: Context shared by every acquisition in the run.
-            in_domain: Predicate claiming cancellations as domain aborts.
+            in_domain: Predicate recognizing cancellations as domain aborts.
             state: Fresh caller-owned state for inspection after hard
                 cancellation.
 

@@ -1,15 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""ASA Autoslew focuser (standard ASCOM Alpaca Focuser).
+"""ASA Autoslew focuser with Alpaca motion and Telescope extension actions.
 
-A standard-device wrapper (Autoslew's Focuser exposes no extension actions of its own
-— SupportedActions = 0). The ASA focuser extras (``focuser:homefind``, ``afc:*``) live
-on the Telescope device and are driven through the shared Telescope backbone.
-
-Inherits `entity_init`/`focuser_connect`/`focuser_disconnect`/`focuser_stop`/
-`focuser_change`/`status_publish` from `sensorkit.alpaca`'s `AlpacaFocuser`
-unchanged. The `state_model` classvar swaps in `AutoslewFocuserState` (its own
-`has_been_homed` field) at restore time; `_initialize` is overridden to add the
-backbone + home, and `entity_deinit` to also drop the backbone connection.
+Standard focus commands use the Alpaca focuser client. ASA homing and autofocus
+commands use the shared telescope client. Homing state is persisted separately
+from the generic Alpaca driver.
 """
 
 from __future__ import annotations

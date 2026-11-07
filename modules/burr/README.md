@@ -35,6 +35,10 @@ controller to execute. Some supported features (see Burr for details):
 
 ## Example Config
 
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
+
 ```yaml
 entity: burr
 key: BurrConfig
@@ -89,17 +93,12 @@ value:
       maximum_length_pixel: 100
 ```
 
-The module itself has no DataGraph: FITS files
-are written by the *camera* entity's DataGraph (`app_source →
-array_to_fits → write_file`), which Burr feeds only through the task
-context — `write_file` renders the module's filename template and
-`array_to_fits` merges the stamped `BURR*` cards automatically. Everything
-else downstream processing reads must come from the camera graph's
-`array_to_fits` `header:` map: most importantly `TRKMODE` (from
-`track_mode`; required by SENPAI), plus `DATE-OBS`, `EXPTIME`, `FILTER`, `RA` / `DEC` (degrees),
-`RA_RATE` / `DEC_RATE` (deg/s), and `FRAMENUM` / `FRAMECNT`. The camera
-graph's `write_file` `directory:` decides where the night's frames land —
-it is the `--data-dir` handed to SENPAI below.
+The camera entity's data graph writes FITS files through `app_source`, `array_to_fits`, and `write_file`.
+Burr supplies sequence identity in the task's `BurrContext` keyword.
+Configure the camera graph's `array_to_fits.header` mapping to write `BURRSEQ: =BurrContext.seq`.
+Other useful mappings include `TRKMODE: =Collect.track_mode`, `FRAMENUM: =Collect.frame_number`, and `FRAMECNT: =Collect.params.frame_count`.
+Include exposure timing, filter, pointing, and angular rates when required by downstream analysis.
+The `write_file.directory` value is the input directory passed to SENPAI's `--data-dir` option.
 
 ## Processing a Night (SENPAI)
 

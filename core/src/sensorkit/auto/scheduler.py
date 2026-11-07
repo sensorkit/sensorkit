@@ -62,7 +62,7 @@ class Scheduler:
         self._offer_history = IntervalTree()
 
     def get_schedule(self) -> Schedule:
-        """Returns a serializable copy of the current schedule."""
+        """Return a serializable copy of the current schedule."""
         return tuple(self.intervals)
 
     def get_intent(self, dt: datetime):

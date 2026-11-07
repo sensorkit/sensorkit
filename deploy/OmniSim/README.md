@@ -35,7 +35,7 @@ plate-solve/streak analyzer.
   - `docker-compose.yaml`
   - `sdasim_OmniSim.yaml`
   - `senpai_OmniSim.yaml`
-- Update the site coordinates in the OmniSimulator, in `omnisim.yaml` (`sensors[].site_position`, `config.OmniSim.SitePosition`), and in `sdasim_OmniSim.yaml`
+- Update the site coordinates in the OmniSimulator, in `omnisim.yaml` (`config.OmniSim.SitePosition`), and in `sdasim_OmniSim.yaml`
 - Update your Slack channel names in `omnisim.yaml` (or remove the references here and in `docker-compose.yaml` if not configured)
 
 - Toggle the Alpaca endpoint host at `omnisim.yaml` → `alpaca[].endpoints[].host`:
@@ -46,15 +46,16 @@ plate-solve/streak analyzer.
   - Bare-metal (`go`) → `astrometry-cli`
   - Docker → `null`
 
-**Editing config needs a reload** (Docker): `docker compose … up config`, or
-  restart the stack. Bare-metal `go` re-reads on launch.
+After editing configuration, load it and restart affected services.
+For Docker, run `docker compose up config` to load the values before restarting services.
+For native operation, restart `sensorkit go` with `-l` to load them.
 
 ## Run
 
 **Bare-metal** — needs a running NATS (`nats://localhost:4222`):
 
 ```bash
-sensorkit go -c /path/to/deploy/OmniSim/omnisim.yaml
+sensorkit go -c /path/to/deploy/OmniSim/omnisim.yaml -l
 ```
 
 **Docker**:

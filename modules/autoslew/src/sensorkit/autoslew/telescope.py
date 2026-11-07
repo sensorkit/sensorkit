@@ -1,26 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-"""ASA Autoslew mount (ASCOM Alpaca Telescope + ASA extensions).
+"""ASA Autoslew mount with Alpaca commands and ASA extensions.
 
-Subclasses `sensorkit.alpaca`'s `AlpacaTelescope`, inheriting connect/disconnect,
-home/park, and the slew-settle poll unchanged. The parts that differ are overridden
-wholesale (re-decorated so they hook back into SensorKit — see
-`sensorkit.api.declarative`):
+Initialization probes capabilities, clears stale motion, and enables the
+motors. Stopping also ends satellite tracking.
 
-  * **Init/stop/follow.** Autoslew needs its own capability probe (no RA/Dec-rate or
-    pulse-guide flags to cache), a motors-on + stale-track cleanup on init, and an
-    `AbortSlew` + ``sat:stop`` on stop.
-
-  * **Frames.** Autoslew's ASCOM interface is JNow / topocentric-of-date on *both*
-    read and command, regardless of its "Used Ascom Epoch" setting (verified live).
-    SensorKit standardizes on ICRS, so we convert at exactly two boundaries: JNow ->
-    ICRS on status out, ICRS -> JNow on goto in. The ``jnow_to_icrs`` / ``icrs_to_jnow``
-    helpers below are module-level (like pwi4's ``altaz_rates_to_radec_rates``).
-
-  * **Native TLE following.** Autoslew runs the satellite ephemeris on the controller,
-    so a ``TLETarget`` maps straight onto the ``sat:*`` action flow rather than the
-    slew+offset-rate dance the generic Alpaca path uses. Motors must be ON first
-    (``sat:start`` returns 0x40B "Motors are not on" otherwise), and ``motoron`` is
-    asynchronous — poll ``MotStat`` until it engages.
+The driver converts reported JNow coordinates to ICRS and outgoing ICRS slew
+coordinates to JNow. Native TLE following uses ASA satellite actions and waits
+for the motors before starting.
 """
 
 from __future__ import annotations

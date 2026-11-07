@@ -7,7 +7,7 @@ A program has exactly two responsibilities:
 1. **Advertise when it has work**, by publishing *offer windows* (time intervals).
 2. **Produce the next task** when the agent activates it, via a *task factory*.
 
-## A complete program
+## Example program
 
 ```python
 from datetime import UTC, datetime, timedelta
@@ -17,6 +17,7 @@ from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 
+# Replace the abbreviated element lines with a current, complete TLE.
 ISS = TLE(
     line0="ISS (ZARYA)",
     line1="1 25544U 98067A   ...",
@@ -127,7 +128,7 @@ StandardCollectTask(
 
 `sidereal_frames` is a small but practical SDA feature: within one rate-tracked satellite collect, chosen frame numbers switch the mount to sidereal tracking — giving you fixed-star frames for astrometric calibration in the same sequence.
 
-`camera_params` also takes a **list** of parameter sets, one per exposure:
+`camera_params` also takes a **list** of parameter sets, each describing a sequence of frames:
 
 ```python
 StandardCollectTask(
@@ -139,7 +140,13 @@ StandardCollectTask(
 )
 ```
 
-Whether those exposures happen at once is the sensor's answer rather than the task's. Each is matched to an instrument that can take it, so a sensor with one camera takes them in turn and a sensor with several takes that many concurrently, with the barriers between them derived from the optics, so a filter wheel two instruments share still serializes exactly the frames it would invalidate. Two exposures that cannot share one configuration epoch (one wheel, two filters) are refused rather than silently reordered, since which of them goes first is a science question. `sidereal_frames` counts within each exposure, so every instrument exposing at once switches together.
+The sensor matches each frame sequence to an instrument.
+One camera takes the sequences in turn; several cameras can run them concurrently when their shared devices allow it.
+Shared filter wheels and focusers add dependencies between captures and configuration changes.
+The planner splits incompatible requests into separate configuration epochs while preserving request order.
+Requests that cannot run even on their own are rejected.
+`sidereal_frames` counts from zero within each sequence.
+Instruments capturing concurrently switch tracking mode together.
 
 You can also define your own task types (subclass `sk.Task`) and handle them in a custom controller — the scheduling machinery is the same.
 
@@ -152,8 +159,8 @@ All target types live in `sensorkit.astro.target` and share a discriminated mode
 | `AltAzTarget`       | Fixed horizon position                           | `AltAzTarget(coords=Horizontal(az, alt))` |
 | `ICRSTarget`        | Fixed celestial position (sidereal track)        | `ICRSTarget(coords=Equatorial(ra, dec))` — degrees |
 | `TLETarget`         | Satellite from a Two-Line Element set            | `TLETarget(tle=TLE(line0, line1, line2))` |
-| `StateVectorTarget` | Satellite from a position/velocity state vector  | `StateVectorTarget(sv=StateVector(...))` — meters, m/s |
-| `EphemerisTarget`   | Precomputed time-tagged path                     | `EphemerisTarget(jds=..., points=...)` |
+| `StateVectorTarget` | Satellite from a position/velocity state vector  | `StateVectorTarget(frame=..., sv=StateVector(...))` — meters, m/s |
+| `EphemerisTarget`   | Precomputed time-tagged path                     | `EphemerisTarget(frame=..., jds=..., points=...)` |
 | `RateTarget`        | Fixed angular rates from an initial position     | `RateTarget(rates=..., initial_coords=..., ...)` |
 
 You hand the controller *what* the target is, not *how* to track it. At execution time the target is **adapted** to the mount's actual capabilities — propagated into an ephemeris or a rate stream (via `satkit`/`astropy`, with atmospheric refraction applied from live weather data when available) if the mount can't consume the native form directly. The same program works across mounts with different tracking interfaces.

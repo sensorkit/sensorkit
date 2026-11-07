@@ -123,8 +123,7 @@ udl = [
 ]
 
 [dependency-groups]
-# Read sources without importing them, so CI can run them against the source
-# tree alone.
+# Ruff reads source files without importing the package.
 lint = [
     "ruff~=0.9",
 ]
@@ -163,8 +162,7 @@ dev = [
     "ty>=0.0.80",
 ]
 
-# These groups allow the user to opt in to using the pytorch indexes, and,
-# crucially, allows selection of the CPU-only variant.
+# Select the CPU or CUDA PyTorch index through a dependency group.
 torch-cpu = [
     "torch>=2.6",
 ]

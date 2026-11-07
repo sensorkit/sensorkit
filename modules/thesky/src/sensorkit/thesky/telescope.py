@@ -76,28 +76,18 @@ def radec_rates_to_altaz_rates(
     location: EarthLocation,
     time: Time,
 ) -> tuple[float, float]:
-    """
-    Convert RA/Dec rates to Alt/Az rates.
+    """Convert equatorial angular rates to altitude and azimuth rates.
 
-    Parameters
-    ----------
-    ra_hr : float
-        Right ascension in hours.
-    dec_deg : float
-        Declination in degrees.
-    ra_rate_deg_per_sec : float
-        RA rate in degrees per second.
-    dec_rate_deg_per_sec : float
-        Dec rate in degrees per second.
-    location : EarthLocation
-        Observer location.
-    time : Time
-        Observation time.
+    Args:
+        ra_hr: Right ascension in hours.
+        dec_deg: Declination in degrees.
+        ra_rate_deg_per_sec: Right ascension rate in degrees per second.
+        dec_rate_deg_per_sec: Declination rate in degrees per second.
+        location: Observer location.
+        time: Observation time.
 
-    Returns
-    -------
-    tuple[float, float]
-        (alt_rate, az_rate) all in degrees per second.
+    Returns:
+        Altitude and azimuth rates, in degrees per second.
     """
     # Convert RA from hours to degrees
     ra_deg = ra_hr * 15.0

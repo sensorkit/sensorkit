@@ -3,7 +3,7 @@
 Otto is an autonomous observation program, meant for collecting large training
 data sets. Given NORAD IDs, orbit regimes, and/or JPL Horizons object names, it
 fetches the ephemeris data for each, tracks object visibility, and continuously
-generates `StandardCollectTask` offers over the configured camera parameter grid
+publishes offer windows and generates `StandardCollectTask` instances over the configured camera parameter grid
 (filters × exposures × binnings). Collected FITS imagery can optionally be
 published to Google Drive, Dropbox, and/or the UDL SkyImagery filedrop. Some
 supported features:
@@ -109,6 +109,10 @@ stars: ["Vega", "HR 7001", "HIP 32349", "alf Lyr", "M31"]
 
 ## Example Config
 
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
+
 ```yaml
 entity: otto
 key: OttoConfig
@@ -178,7 +182,7 @@ value:
 ```
 
 Both blocks live on the same entity — the program reads its `DataGraph` from its
-own entity name, so keep them identical (here `otto` for example, matching the `-n otto`
+own entity name, so keep them identical (here `otto` for example, matching the `otto`
 service name below).
 
 The `otto` DataGraph is structured to monitor the directory defined in the camera DataGraph

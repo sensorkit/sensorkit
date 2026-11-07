@@ -1,16 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""ASA Autoslew rotator (standard ASCOM Alpaca Rotator).
+"""ASA Autoslew rotator with Alpaca motion and Telescope extension actions.
 
-Standard-device wrapper. Autoslew's Rotator has one own action (``settarget``); the
-ASA rotator extras (``rotator:setslewoption``/``dontslewtozero``/``homefind``) live on
-the Telescope device, driven through the shared backbone.
-
-Inherits `entity_init`/`rotator_connect`/`rotator_disconnect`/`rotator_change`/
-`rotator_stop`/`status_publish` from `sensorkit.alpaca`'s `AlpacaRotator`
-unchanged. The `state_model` classvar swaps in `AutoslewRotatorState` (its own
-`has_been_homed` field) at restore time; `_initialize` is overridden to add the
-backbone, ASA settings, and one-time home, and `entity_deinit` to also drop the
-backbone connection.
+Standard rotator commands use the Alpaca rotator client. ASA homing and slew
+options use the shared telescope client. Homing state is persisted separately
+from the generic Alpaca driver.
 """
 
 from __future__ import annotations

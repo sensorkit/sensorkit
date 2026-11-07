@@ -51,7 +51,7 @@ def partition(
 class RoutedCommand:
     """A command with its target placement and optional explicit timeout.
 
-    Routing chooses the target; lowering resolves the timeout against deadline
+    Routing chooses the target; graph compilation resolves the timeout against deadline
     rules. The timeout is orchestration metadata, not part of the device
     command.
     """

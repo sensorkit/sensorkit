@@ -318,7 +318,7 @@ async def test_declared_device():
 
 @pytest.mark.asyncio
 async def test_device_declared_device_traits(service):
-    """Test that advisory trait mismatches produce a warning at publish time."""
+    """A device missing a declared trait's commands fails service startup."""
     missing_trait = declare_trait("missing_trait", required_commands=(DevCmd,))
 
     @declare_device(traits=[missing_trait])

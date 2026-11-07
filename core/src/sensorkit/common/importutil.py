@@ -28,13 +28,12 @@ def get_caller_module(*, depth: int):
 
 
 def module_from_file(path: pathlib.Path, name: str):
-    """Load and return a Python module from a filesystem path, handling relative imports within it."""
+    """Load a Python file with its directory temporarily on the import path."""
     # Dynamic load boilerplate.
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
 
-    # We must temporarily add the file's containing directory to the path for any relative imports
-    # it might contain to work properly.
+    # Temporarily allow imports of sibling modules from the file's directory.
     sys.path.append(str(path.parent))
 
     try:
@@ -51,7 +50,7 @@ def module_from_file(path: pathlib.Path, name: str):
 
 
 def import_module_or_file(name: str):
-    """Import a module by name or path, handling relative imports within it.
+    """Import a module by name or load a file with access to sibling modules.
 
     Importing the same path again returns the already loaded module.
     """

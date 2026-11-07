@@ -119,7 +119,7 @@ sensorkit controller collect  -e ENTITY -t TARGET_JSON [-i SECONDS] [-c COUNT] [
 
 ---
 
-## `device` — poke hardware directly
+## `device` - command devices directly
 
 ```bash
 sensorkit device connect    -e ENTITY

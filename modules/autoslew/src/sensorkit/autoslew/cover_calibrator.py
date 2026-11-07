@@ -1,16 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""ASA Autoslew mirror cover (standard ASCOM Alpaca CoverCalibrator).
+"""ASA Autoslew mirror cover through the Alpaca CoverCalibrator interface.
 
-Autoslew exposes a CoverCalibrator device but only the *cover* half is implemented
-(``Brightness``/``MaxBrightness`` return NotImplemented) — so this is effectively a
-mirror cover (``StandardMirrorCover``). ASA also exposes cover control via the
-Telescope actions ``telescope:opencover``/``closecover``; we prefer the real device.
-
-`sensorkit.alpaca`'s `AlpacaCoverCalibrator` already degrades gracefully when the
-calibrator half is unimplemented (`AlpacaCoverCalibratorStatus.calibrator_state`
-reads back "NotPresent", `brightness`/`max_brightness` read back `None`), so nothing
-here needs to override its behavior — this class exists purely to name the ASA
-device and mix in the ASA connect/disconnect quirk.
+The inherited Alpaca driver tolerates unsupported calibrator properties.
+This device adds Autoslew connection handling and a separate persisted state.
 """
 
 from __future__ import annotations

@@ -56,7 +56,7 @@ type WorkflowOutcome = Literal["completed", "aborted"]
 type AbortPredicate = Callable[[BaseException], bool]
 """Caller predicate distinguishing a domain abort from hard cancellation.
 
-True claims a cancellation as a domain abort; false or no predicate causes hard
+True recognizes a cancellation as a domain abort; false or no predicate causes hard
 cancellation. Classify each arrival separately until one is declined. The
 caller supplies intent because both arrive as `CancelledError`.
 """
@@ -135,7 +135,7 @@ class WorkflowReport:
     """Main-run results, cleanup results, attempts and interruption
     outcomes.
 
-    Cleanup reports retain execution order. `reason` records the first claimed
+    Cleanup reports retain execution order. `reason` records the first recognized
     cancellation for an aborted workflow, otherwise `None`.
     """
 
@@ -215,13 +215,13 @@ class WorkflowExecutor:
             workflow: Compiled main and cleanup graphs.
             contexts: Current device contexts, sampled for each acquisition.
             base: Context shared by every acquisition in this run.
-            in_domain: Predicate claiming cancellations as domain aborts. False
+            in_domain: Predicate recognizing cancellations as domain aborts. False
                 or no predicate means hard cancellation.
             state: Fresh caller-owned state for inspecting results after
                 cancellation.
 
         Returns:
-            An aggregate report, marked aborted for a claimed domain
+            An aggregate report, marked aborted for a recognized domain
             cancellation.
 
         Raises:

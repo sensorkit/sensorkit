@@ -29,6 +29,10 @@ Propagatable inputs (e.g. a state vector) are normalized to an ICRF
 
 ## Example Config
 
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
+
 `host` and `port` set on the endpoint propagate to every device; override them
 per-device when a device lives on a different PWI4 instance. The endpoint-level
 `request_timeout` is the HTTP request timeout for the shared PWI4 client
@@ -54,8 +58,8 @@ value:
           wrap_deadband_deg: 10.0      # only recenter when beyond this from center
           heaters: {}                  # {role: power_percent} for mirror/optics heaters
           fans: []                     # fan roles to turn on
-          status_frequency_slow: 1.0   # status rate while idle/tracking
-          status_frequency_fast: 0.1   # increased publishing rate during tracking
+          status_frequency_slow: 1.0   # poll interval while idle/tracking (seconds)
+          status_frequency_fast: 0.1   # poll interval during tracking (seconds)
         rotator1:
           device_type: rotator
         focuser1:

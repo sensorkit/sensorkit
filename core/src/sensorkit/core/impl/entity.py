@@ -175,7 +175,7 @@ class EntityImpl(EntityBase, EntityInterface):
 
         callback = request.create_handler(func, self._stream)
 
-        # Claim the name before yielding, so concurrent attach hooks cannot both get past the
+        # Reserve the name before yielding, so concurrent attach hooks cannot both get past the
         # check and race to bind the same subject.
         self._requests[request.name] = request
 
@@ -187,7 +187,7 @@ class EntityImpl(EntityBase, EntityInterface):
 
     @override
     async def data_graph(self):
-        """Return an AppSource if there is a DataGraph is associated with this entity."""
+        """Return this entity's configured data graph, creating it on first use."""
         if not self._data_graph:
             with contextlib.suppress(KVError):
                 dg = await self.kv_get_model(DataGraph)

@@ -150,9 +150,11 @@ class SkyTransmissionAnalyzer:
         stable_for: float = 1.0,
         timeout: float = 60.0,
     ) -> bool:
-        """Wait until *path* exists, is non-empty, and its size has been unchanged
-        for *stable_for* seconds (so the writer has flushed and closed). Returns
-        False if the file never stabilises within *timeout*."""
+        """Wait for a nonempty file whose size stays unchanged for `stable_for` seconds.
+
+        Stable size does not prove that the writer has closed the file.
+        Return False if the file does not stabilize before the timeout.
+        """
         deadline = time.monotonic() + timeout
         last_size = -1
         stable_since: float | None = None

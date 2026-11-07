@@ -706,7 +706,7 @@ class HuntsmanDome:
     async def _ensure_initialized(self):
         """Run Init on demand, once.
 
-        `SensorControl` sends Init ahead of OpenEnclosure, but the two run
+        The sensor controller sends Init ahead of OpenEnclosure, but the two run
         concurrently under the `concurrent_dome_init_open` policy, and an operator
         can open the dome directly. So a completed Init is treated as a
         precondition of opening rather than something the ordering guarantees.

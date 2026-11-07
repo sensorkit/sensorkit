@@ -130,18 +130,13 @@ class TheSkyDevice:
             return parse_thesky_response(response)
 
     async def poll(self, script: str, expected: str, delay: float = 0.1, interval: float = 1.0):
-        """Poll TheSky for script completion.
+        """Poll a script until it returns the expected value.
 
-        Parameters
-        ----------
-        script : str
-            The JavaScript to execute.
-        expected : str
-            The result upon completion.
-        delay : float
-            A fudge factor [sec] to avoid command in progress errors. May remove this after demonstrated stability.
-        interval : float
-            How often to poll [sec].
+        Args:
+            script: JavaScript to execute.
+            expected: Result indicating completion.
+            delay: Seconds to wait before the first poll to allow command startup.
+            interval: Seconds between polls.
         """
 
         await asyncio.sleep(delay)

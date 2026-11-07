@@ -30,30 +30,15 @@ _SOURCE_FRAME_TYPES = {"twilight_flats": FrameType.FLAT}
 
 @sk.declare_keyword
 class BurrContext(BaseModel):
-    """Burr's identity keyword, attached to every SK collect task burr emits.
+    """Burr sequence identity attached to collect execution context.
 
-    Rides in `StandardCollectTask.context` as a *declared* keyword (rather
-    than loose flat keys), so it round-trips on the wire as a typed object and
-    is reachable from sensorkit FITS-header exprs and filename templates via
-    `context.eval` as `BurrContext.<field>` (e.g. `BurrContext.seq`).
-    Being namespaced also stops these values from colliding with the generic
-    flat keys the std controller injects (`target_id`, `track_mode`, ...),
-    which otherwise override anything burr puts at the top level.
+    FITS expressions and filename templates access these values through
+    `BurrContext.<field>`.
 
-    Fields
-    ------
-    seq
-        Per-exposure collect id — a fresh value for each entry in the
-        request's `exposure_seconds`. Every SK task and every frame fanned
-        out from one exposure (e.g. the sidereal reference frame plus its rate
-        frames) shares one `seq`; distinct exposures differ. This is the unit
-        downstream fitting groups on ("I will fit this").
-    targ
-        Target name for this collect (filename-safe). The manager's best name
-        for the thing observed — star name, satellite name, coverage pixel, etc.
-    mode
-        The task source that produced the collect: `coverage`, `calsats`,
-        `twilight_flats`, `photometric_standards`, `lunar_background`.
+    Attributes:
+        seq: Identifier shared by tasks and frames from one requested exposure.
+        targ: Filename-safe target name.
+        mode: Task source, such as coverage, calsats, or twilight_flats.
     """
 
     seq: str
@@ -67,28 +52,15 @@ def build_sk_tasks(
     request: obs.ObservationRequest,
     collect: CollectConfig | None = None,
 ):
-    """Translate an ObservationRequest into one or more StandardCollectTask instances.
+    """Translate a Burr observation request into standard collect tasks.
 
-    Burr's nested frame model (`exposure_seconds` × `exposure_map`) maps
-    to one or more SK tasks per request:
+    Each exposure produces one task for uniform tracking or a rate-then-sidereal
+    sequence. A sidereal-then-rate sequence produces two tasks. Other interleavings
+    raise `ValueError`.
 
-    - **Uniform SIDEREAL**: one task per exposure, target=ICRSTarget,
-      frame_count=len(exposure_map).
-    - **Uniform RATE**: one task per exposure, target=RateTarget (concrete
-      rates resolved for that exposure duration), frame_count=len(exposure_map).
-    - **[RATE..., SIDEREAL...]** (rates first): one task per exposure,
-      target=RateTarget, `sidereal_track_from_frame` set to the first
-      sidereal frame index. Generic controller switches to ICRF at that frame.
-    - **[SIDEREAL..., RATE...]** (sidereal first): two tasks per exposure —
-      N sidereal frames at ICRSTarget, then M rate frames at RateTarget.
-      The generic controller's `sidereal_track_from_frame` only switches
-      TO sidereal, so we can't express this with one task.
-    - Any other interleaving raises `ValueError`.
-
-    Targets feeding SIDEREAL frames are resolved through
-    `to_sk_sidereal_target`, which freezes an AltAz/Lunar pointing to ICRS at
-    emit time (sensorkit tracks AltAzTarget as fixed). OFF-only requests (flats)
-    keep their AltAz target.
+    Rate-then-sidereal tasks list their sidereal frame indices in `sidereal_frames`.
+    Sidereal AltAz and lunar pointings are converted to ICRS at task creation.
+    Frames with tracking off retain a fixed AltAz target.
     """
     end_time = run.lighting_schedule.schedule_end_utc
     modes = [spec.tracking_mode for spec in request.exposure_map]
@@ -274,13 +246,7 @@ def _to_sk_target(burr_target: obs.Target) -> Target:
                 )
             )
         case obs.TLETarget():
-            # Synthesize a line0 ("name line") from the NORAD catalog number
-            # in line1[2:7]. SK's newer std controller (device-module-refactors
-            # branch) reads target_id via `line0.split()[1]`, which crashes
-            # with AttributeError on line0=None. The old controller read
-            # NORAD directly from line1[2:7], which would be more robust —
-            # flagged upstream. For now, giving line0 a two-token string
-            # (`NORAD <id>`) makes split()[1] yield the NORAD number.
+            # Supply a display name from the NORAD catalog number when line0 is absent.
             norad_id = (
                 burr_target.tle_line1[2:7].strip()
                 if burr_target.tle_line1 and len(burr_target.tle_line1) >= 7
@@ -345,34 +311,21 @@ def _to_sk_ratetarget(
     site: SiteMetadata | None = None,
     frame: ReferenceFrame = ReferenceFrame.ICRF,
 ) -> RateTarget:
-    """Build a sensorkit `RateTarget` from a burr target + concrete rates.
+    """Build a rate target from a Burr position and angular rates.
 
-    Initial position comes from `burr_target`; rates are converted from
-    arcsec/s (burr's unit, stored in `Rates`) to deg/s (sensorkit's
-    `Coordinates` unit convention). The frame label on the returned
-    `RateTarget` is set by `frame`: ICRF is what pwi4 accepts, CIRF
-    is what node_platform accepts. Picking the wrong one leaves the
-    mount with no accepted form of the target, since a RateTarget
-    cannot be propagated, and BaseTarget.adapt() rejects it. AltAz/Lunar
-    inputs are converted using the provided `site` and `initial_time`.
+    Args:
+        burr_target: Initial position. AltAz and lunar targets require a site
+            and are converted to equatorial coordinates.
+        rates: Right ascension and declination rates in arcseconds per second.
+        initial_time: UTC epoch of the initial coordinates; defaults to now.
+        site: Observer location for AltAz and lunar targets.
+        frame: Rate reference frame accepted by the destination mount.
 
-    Parameters
-    ----------
-    burr_target : TargetUnion
-        The burr target whose *position* to use as the rate-follow
-        origin. RADec is passed through directly; AltAz/Lunar are
-        converted to ICRS using `site` + `initial_time`.
-    rates : Rates
-        RA/Dec rate vector in arcsec/s.
-    initial_time : datetime, optional
-        UTC time at which `initial_coords` is valid. Defaults to
-        `datetime.now(UTC)`.
-    site : SiteMetadata, optional
-        Observer location. Required for AltAz/Lunar conversion; ignored
-        for RADec inputs. When omitted for AltAz, raises ValueError.
+    Returns:
+        A rate target with angular values in degrees and degrees per second.
 
-    TLE targets raise: their motion is intrinsic to the orbit and
-    should not be combined with custom rates.
+    Raises:
+        ValueError: The input is a TLE target or requires a missing site.
     """
     if initial_time is None:
         initial_time = datetime.now(UTC)

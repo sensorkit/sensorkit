@@ -49,10 +49,7 @@ class TheSkyDome(TheSkyDevice):
     config: TheSkyDomeConfig
     device_name = "Dome"
 
-    # NOTE: the current implementation assumes that the dome is slaved to the mount (or that a clamshell style dome is
-    # being used). A future version will support a dome that can rotate independently of the mount, but such
-    # functionality would also be required at the core SensorKit level. Additional note: the dome must be unparked
-    # before a GotoAzEl command but not before a FindHome command.
+    # GotoAzEl requires an unparked dome; FindHome does not.
 
     @sk.on_attach
     async def entity_init(self):

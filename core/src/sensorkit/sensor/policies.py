@@ -121,7 +121,7 @@ class SensorPolicies(BaseModel, frozen=True, extra="forbid"):
         """Generate `init`, `standby`, `shutdown` and `recover` tables.
 
         `standby` uses the same sequence as `init`.
-        Unsupported commands are omitted during lowering. `compose_tables`
+        Unsupported commands are omitted during graph compilation. `compose_tables`
         removes generated entries that select no equipment and applies authored
         table replacements.
         """

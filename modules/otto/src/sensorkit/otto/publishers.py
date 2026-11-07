@@ -153,9 +153,9 @@ class UDLPublisher(Publisher):
     """Uploads FITS frames to the UDL SkyImagery filedrop.
 
     Each frame is zipped together with a SkyImagery metadata JSON and POSTed as
-    raw ``application/zip`` through the udl-sdk client's HTTP transport — the
+    raw `application/zip` through the udl-sdk client's HTTP transport — the
     payload proven against the live UDL filedrop. The SDK's own
-    ``sky_imagery.upload_zip()`` is avoided: it sends multipart/form-data and
+    `sky_imagery.upload_zip()` is avoided: it sends multipart/form-data and
     mis-targets the imagery filedrop host for non-default base URLs.
     """
 

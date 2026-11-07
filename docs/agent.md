@@ -10,9 +10,11 @@ On every evaluation cycle, per controller, the agent:
 2. Intersects those windows with the **offer windows** published by observing programs, applying per-program **priorities**, to build a schedule.
 3. Runs **constraints** (weather, safety monitors, arbitrary telemetry conditions) as continuous background monitors. An active constraint vetoes operation.
 4. Applies any manual **overrides** you've set from the CLI.
-5. Holds an *election* over all of these votes and drives the controller toward the winner — sending Init, Standby, or Shutdown tasks and starting or stopping program tasking as needed.
+5. Evaluates an *election* over all of these votes and drives the controller toward the winner — sending Init, Standby, or Shutdown tasks and starting or stopping program tasking as needed.
 
-The agent's decisions and your control settings are persisted (in the KV store) and its state is event-sourced, so an agent restart resumes with the same overrides, exclusions, and control settings — no surprises after a power cycle.
+Agent state is event-sourced, and overrides, program exclusions, and control settings persist across restarts.
+After a restart, the agent checks controller state before resuming operation.
+Failure counters and retry timing start fresh.
 
 The current election, per-source votes, and the schedule are all observable:
 
@@ -165,7 +167,7 @@ A general-purpose constraint over **any telemetry keyword from any entity** — 
 
 ```yaml
 - kind: conditional
-  entity: MyMount
+  entity: MyWeather
   keyword: BasicWeather        # any published keyword model
   field: humidity              # dot-path into the model (optional)
   condition:

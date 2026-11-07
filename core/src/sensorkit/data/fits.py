@@ -359,7 +359,7 @@ class BuildFITSHeader(DataOp):
         include: Set of keyword keys, or `"all"`. Keywords that implement the `FITSCardProvider`
             protocol are queried for FITS cards, and they are included in the header. Invalid
             keywords or keywords that do not implement the protocol result in warnings. If "all"
-            is specified, the inclusion order is defined by the configured import order.
+            is specified, providers are visited in context order.
         rename: Dictionary mapping old FITS keyword names to new names.
         remove: Set of FITS keyword names to remove from the header.
         define: Dictionary mapping FITS keyword names to card values resolved against the

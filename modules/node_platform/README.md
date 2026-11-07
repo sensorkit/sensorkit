@@ -37,6 +37,10 @@ Propagatable inputs (e.g. a state vector) are normalized to an ICRF
 
 ## Example Config
 
+The YAML below uses low-level `entity`/`key`/`value` records.
+Save all documents in a file and load them with `sensorkit kv load FILE` before starting the service.
+For deployment-wide configuration, see the [unified configuration guide](../../docs/configuration.md).
+
 Connection settings live on the endpoint and apply to every device on it:
 `host`, `port`, `request_timeout`, and `env_file` are propagated to each device,
 so setting them per-device has no effect. Credentials live only in `env_file`
@@ -70,8 +74,8 @@ value:
             M1: 1.0                    # percent
             M2: 1.0
             M3: 0.0
-          status_frequency_slow: 1.0   # status rate while idle/tracking
-          status_frequency_fast: 0.1   # increased publishing rate during tracking
+          status_frequency_slow: 1.0   # poll interval while idle/tracking (seconds)
+          status_frequency_fast: 0.1   # poll interval during tracking (seconds)
         m3_1:
           device_type: m3
         rotator1:
@@ -83,8 +87,8 @@ value:
 
 ## Example: Weather Constraint
 
-A weather constraint pauses a controller (agent) when conditions exceed the
-configured thresholds. The constraint's `provider` is the entity name of any
+A weather constraint makes the agent demand shutdown for the controller while
+conditions exceed the configured thresholds. The constraint's `provider` is the entity name of any
 device that publishes the `BasicWeather` keyword — that can be this module's
 `weather` device.
 
@@ -132,8 +136,8 @@ constraint doesn't chatter around the limit.
 
 The same `weather` device also publishes `BasicSafety`, a simple go/no-go flag
 reflecting the Node Platform's own safety assessment. A `kind: safety`
-constraint pauses the controller whenever that flag reports unsafe — the
-cleanest way to gate on the platform's verdict, since it needs no thresholds:
+constraint makes the agent demand shutdown while the platform reports unsafe.
+It requires no numeric thresholds.
 
 ```yaml
 automation:
@@ -152,5 +156,5 @@ the provider's `is_safe` flag, constraining while unsafe and clearing when safe.
 
 ## Usage
 ```sh
-sensorkit service run node_platform_service sensorkit.node_platform.service
+sensorkit service run node_platform sensorkit.node_platform.service
 ```
