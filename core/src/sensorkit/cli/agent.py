@@ -209,7 +209,7 @@ def _print_runtime_state(runtime: ControllerRuntimeState | None, sampled: dateti
 
     lifecycle = runtime.lifecycle
     failures = lifecycle.failure_state
-    recovery = f"{failures.attempts} of {failures.recovery_attempts} failed attempts"
+    recovery = f"{failures.attempts} of {failures.recovery_attempts} recovery attempts used"
 
     if failures.emergency_due:
         recovery += ", emergency shutdown due"
@@ -226,9 +226,14 @@ def _print_runtime_state(runtime: ControllerRuntimeState | None, sampled: dateti
     if failures.retry_at is not None:
         click.echo(f"  Retry at:        {failures.retry_at.isoformat()}")
 
-    if failures.settled_at is not None:
-        settled = max(0.0, (sampled - failures.settled_at).total_seconds())
-        click.echo(f"  Settled for:     {settled:.0f} of {failures.stable_period:.0f} s")
+    match failures.failures, failures.attempts, failures.stable_at:
+        case 0, 0, _:
+            click.echo("  Stable:          yes")
+        case _, _, None:
+            click.echo("  Stable:          unknown")
+        case _, _, stable_at:
+            remaining = max(0.0, (stable_at - sampled).total_seconds())
+            click.echo(f"  Stable:          in {remaining:.0f} s")
 
     if failures.failure is not None:
         click.echo(f"  Procedure failure:  {failures.failure}")

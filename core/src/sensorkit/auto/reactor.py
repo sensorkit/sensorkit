@@ -75,7 +75,7 @@ class ControllerReactor:
             ControllerUnrecoverable: If an emergency shutdown succeeded.
         """
         if self.supervisor.state.current == InternalControllerState.ERROR:
-            self.failure_state.record_initial_error()
+            self.failure_state.record_initial_error(asyncio.get_running_loop().time())
 
         try:
             with self.supervisor.state_changes() as changes:
@@ -208,6 +208,7 @@ class ControllerReactor:
         """Start recovery or the demanded procedure, or return the deadline delaying it."""
         now = asyncio.get_running_loop().time()
         failure_state = self.failure_state
+        failure_state.expire(now)
 
         # Recovery handles running tasks in its procedure.
         if failure_state.recovery_due:

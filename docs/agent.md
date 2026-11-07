@@ -240,13 +240,14 @@ The next successful lifecycle task establishes a settled expectation.
 Shutdown bypasses the retry delay after a failure.
 
 Two failures trigger recovery even if a lifecycle task succeeded between them.
-The failure count starts over once a confirmed state has held for 15 minutes.
+A successful recovery counts toward the recovery attempt limit, so a fault that keeps returning after recovery ends in emergency shutdown.
+Failure and recovery counts start over after 15 minutes without a failure or recovery attempt, regardless of state changes.
 
 ### Runtime status
 
 The agent publishes each controller's lifecycle step, failure counts, and constraint states about once a second.
 `sensorkit agent status` shows them with the sample time, and `GET /agent/state` returns them in `runtime_state`.
-The status includes recovery progress, the pending retry time, and how long the controller has stayed settled.
+The status includes recovery progress, the pending retry time, and how long until the failure counts reset.
 It shows the current procedure's failure separately from the last lifecycle restart error.
 Constraints appear in config order with their reason and details.
 

@@ -271,7 +271,6 @@ class ControllerStateSupervisor:
         self._expected = state
         self._deadline = None
         self._expected_changed.set()
-        self._update_settled(asyncio.get_running_loop().time())
 
         if not self._ended():
             self.failed.clear()
@@ -298,18 +297,6 @@ class ControllerStateSupervisor:
         self._observer.close()
         self.failed.set()
         self._ready.set()
-        self._update_settled(asyncio.get_running_loop().time())
-
-    def _update_settled(self, now: float):
-        """Update settled time from controller state, expectation, and monitor health."""
-        actual = self._observed_state
-        self.failure_state.set_settled(
-            self.healthy()
-            and self._expected in SETTLED_STATES
-            and actual.current == self._expected
-            and actual.target is None,
-            now,
-        )
 
     def _process_state(self, state: ControllerOperatingState | None):
         """Accept newer state updates and compare the processed state with the expectation."""
@@ -322,9 +309,7 @@ class ControllerStateSupervisor:
             self._observed_state = state.model_copy(deep=True)
 
         if self._observed_state is not None:
-            now = asyncio.get_running_loop().time()
-            self._evaluate(now)
-            self._update_settled(now)
+            self._evaluate(asyncio.get_running_loop().time())
             self._ready.set()
 
             if newer:

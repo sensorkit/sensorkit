@@ -12,9 +12,10 @@ from pydantic import BaseModel, PrivateAttr, computed_field
 class FailureState(BaseModel):
     """Track controller failures and schedule retries, recovery, and emergency shutdown.
 
-    Repeated failures trigger recovery unless the controller stayed settled for the stable
-    period between them. Exhausting recovery attempts triggers an emergency shutdown. Each
-    procedure counts at most one failure, so one incident seen by several observers counts once.
+    Repeated failures trigger recovery unless the stable period passed without a failure or
+    recovery attempt between them. Exhausting recovery attempts, successful or failed, triggers an
+    emergency shutdown. Each procedure counts at most one failure, so one incident seen by several
+    observers counts once.
 
     Lifecycle bookkeeping uses monotonic timestamps and exception objects. Published snapshots
     use UTC datetimes and exception text.
@@ -31,16 +32,16 @@ class FailureState(BaseModel):
     cycle_delay: float = 120.0
     """Seconds after a failed emergency shutdown before recovery resumes."""
     stable_period: float = 900.0
-    """Seconds a confirmed state must hold before a new failure starts a fresh count."""
+    """Seconds without a failure or recovery attempt before failure and recovery counts reset."""
     failures: int = 0
     """Failures counted toward recovery. Successful recovery resets this to one."""
     attempts: int = 0
-    """Failed recovery attempts in the current recovery cycle."""
+    """Completed recovery attempts since the counts last reset or an emergency shutdown failed."""
 
     # Event loop times and the live exception stay out of serialized state.
     _retry_at: float | None = PrivateAttr(default=None)
     _error: BaseException | None = PrivateAttr(default=None)
-    _settled_at: float | None = PrivateAttr(default=None)
+    _stable_since: float | None = PrivateAttr(default=None)
 
     @property
     def error(self) -> BaseException | None:
@@ -56,8 +57,8 @@ class FailureState(BaseModel):
     @computed_field
     @property
     def emergency_due(self) -> bool:
-        """Whether the next recovery attempt is an emergency shutdown."""
-        return self.attempts >= self.recovery_attempts
+        """Whether the next command is an emergency shutdown."""
+        return self.recovery_due and self.attempts >= self.recovery_attempts
 
     def waiting(self, now: float) -> float | None:
         """Return the pending retry deadline in event loop time, or None if no delay remains."""
@@ -67,7 +68,7 @@ class FailureState(BaseModel):
         return None
 
     def snapshot(self, monotonic: float) -> FailureStateSnapshot:
-        """Return a detached copy with UTC datetimes and exception text.
+        """Return a detached copy with UTC datetimes, exception text, and expired counts reset.
 
         Args:
             monotonic: The shared monotonic reference for evaluating retry deadlines.
@@ -77,13 +78,16 @@ class FailureState(BaseModel):
         def project(time: float | None):
             return None if time is None else utc_now + timedelta(seconds=time - monotonic)
 
-        error = self._error
+        state = self.model_copy()
+        state.expire(monotonic)
+        error = state._error
+        stable_since = state._stable_since
 
         return FailureStateSnapshot(
-            **self.model_dump(include=set(FailureState.model_fields)),
+            **state.model_dump(include=set(FailureState.model_fields)),
             failure=None if error is None else f"{type(error).__name__}: {error}",
-            retry_at=project(self.waiting(monotonic)),
-            settled_at=project(self._settled_at),
+            retry_at=project(state.waiting(monotonic)),
+            stable_at=project(None if stable_since is None else stable_since + self.stable_period),
         )
 
     def begin_procedure(self):
@@ -91,36 +95,33 @@ class FailureState(BaseModel):
         self._error = None
         self._retry_at = None
 
-    def record_initial_error(self):
+    def expire(self, now: float):
+        """Reset failure and recovery counts once the stable period passes without either."""
+        if self._stable_since is not None and now - self._stable_since >= self.stable_period:
+            self.failures = 0
+            self.attempts = 0
+
+    def record_initial_error(self, now: float):
         """Count a controller error found at startup once, without delaying the first command."""
+        self.expire(now)
+        self._stable_since = now
+
         if self.failures == 0:
             self.failures = 1
-            self._settled_at = None
 
     def record_failure(self, now: float, error: BaseException):
         """Record and count the first controller failure for the current procedure."""
         if self._error is not None:
             return
 
+        self.expire(now)
         self._error = error
-        self.set_settled(False, now)
+        self._stable_since = now
         self.failures += 1
 
         # Only the first failure schedules a retry delay.
         if not self.recovery_due:
             self._retry_at = now + self.retry_delay
-
-    def set_settled(self, settled: bool, now: float):
-        """Track continuous settled time and reset failure counts when earned."""
-        if settled:
-            if self._settled_at is None:
-                self._settled_at = now
-            return
-
-        if self._settled_at is not None:
-            if now - self._settled_at >= self.stable_period:
-                self.failures = 0
-            self._settled_at = None
 
     def delay_retry(self, now: float):
         """Delay the next command without counting a controller failure."""
@@ -129,15 +130,18 @@ class FailureState(BaseModel):
     def record_recovery(self, now: float):
         """Record a successful recovery.
 
-        Another failure before the stable period ends triggers recovery again.
+        Another failure before the stable period ends triggers recovery again and counts toward
+        `recovery_attempts`.
         """
         self.failures = 1
-        self.attempts = 0
+        self.attempts += 1
+        self._stable_since = now
         self._retry_at = now + self.retry_delay
 
     def record_failed_attempt(self, now: float):
         """Count a failed recovery attempt."""
         self.attempts += 1
+        self._stable_since = now
 
         # Exhausted attempts fall back to emergency shutdown without waiting.
         if not self.emergency_due:
@@ -146,6 +150,7 @@ class FailureState(BaseModel):
     def record_failed_emergency(self, now: float):
         """Resume recovery attempts after a delay."""
         self.attempts = 0
+        self._stable_since = now
         self._retry_at = now + self.cycle_delay
 
     def clear(self):
@@ -153,7 +158,7 @@ class FailureState(BaseModel):
         self.failures = 0
         self.attempts = 0
         self._retry_at = None
-        self._settled_at = None
+        self._stable_since = None
 
 
 class FailureStateSnapshot(FailureState):
@@ -163,5 +168,5 @@ class FailureStateSnapshot(FailureState):
     """First controller failure counted for the current procedure, if any."""
     retry_at: datetime | None = None
     """Earliest retry or recovery time, or None if no delay remains."""
-    settled_at: datetime | None = None
-    """Time when the current settled interval began."""
+    stable_at: datetime | None = None
+    """When counts reset or will reset without another failure, or None if none were counted."""

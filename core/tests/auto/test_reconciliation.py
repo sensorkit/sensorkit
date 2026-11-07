@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import time
-from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -195,70 +193,87 @@ def test_procedure_counts_one_failure():
     assert failure_state.failures == 1
 
 
-@pytest.mark.parametrize("settled_for", [10.0, 900.0])
-def test_stable_period_restarts_failure_count(settled_for):
-    """A confirmed state held for the stable period starts a fresh failure count."""
+def recovery_due_at(now: float, **kwargs) -> FailureState:
+    """Return failure state with two failures counted by `now`."""
+    failure_state = FailureState(**kwargs)
+    failure_state.record_failure(now - 1.0, ControllerFailure("first"))
+    failure_state.begin_procedure()
+    failure_state.record_failure(now, ControllerFailure("second"))
+    failure_state.begin_procedure()
+    return failure_state
+
+
+@pytest.mark.parametrize("stable_for", [899.0, 900.0])
+def test_stable_period_restarts_failure_count(stable_for):
+    """A stable period without failures starts a fresh failure count."""
     failure_state = FailureState(stable_period=900.0)
     failure_state.record_failure(0.0, ControllerFailure("first"))
     failure_state.begin_procedure()
+    failure_state.record_failure(stable_for, ControllerFailure("second"))
 
-    # Confirming the state again does not forget the failure.
-    failure_state.set_settled(True, 10.0)
-    failure_state.set_settled(True, 20.0)
-
-    assert failure_state.failures == 1
-
-    failure_state.record_failure(10.0 + settled_for, ControllerFailure("second"))
-
-    assert failure_state.recovery_due is (settled_for < 900.0)
+    assert failure_state.recovery_due is (stable_for < 900.0)
 
 
-def test_unsettled_time_does_not_reset_failure_count():
-    """Time outside a settled interval cannot erase an earlier failure."""
-    failure_state = FailureState(stable_period=900.0)
-    failure_state.record_failure(0.0, ControllerFailure("first"))
-    failure_state.begin_procedure()
-    failure_state.set_settled(True, 10.0)
-    failure_state.set_settled(False, 20.0)
-    failure_state.record_failure(1000.0, ControllerFailure("second"))
+@pytest.mark.parametrize("stable_for", [899.0, 900.0])
+def test_stable_period_resets_recovery_attempts(stable_for):
+    """Successful and failed recovery attempts count until a stable period passes."""
+    failure_state = recovery_due_at(0.0, stable_period=900.0, recovery_attempts=3)
+    failure_state.record_failed_attempt(1.0)
+    failure_state.record_recovery(2.0)
+
+    assert failure_state.attempts == 2
+    assert failure_state.snapshot(3.0).attempts == 2
+
+    failure_state.record_failure(2.0 + stable_for, ControllerFailure("fault returned"))
+
+    if stable_for < 900.0:
+        assert failure_state.attempts == 2
+        assert failure_state.recovery_due
+        assert not failure_state.emergency_due
+
+        # The last allowed recovery leaves emergency shutdown for the next failure.
+        failure_state.begin_procedure()
+        failure_state.record_recovery(3.0 + stable_for)
+
+        assert not failure_state.emergency_due
+
+        failure_state.record_failure(4.0 + stable_for, ControllerFailure("fault returned"))
+
+        assert failure_state.recovery_due and failure_state.emergency_due
+    else:
+        assert failure_state.attempts == 0
+        assert failure_state.failures == 1
+        assert not failure_state.recovery_due
+
+
+def test_recovery_attempts_restart_stable_period():
+    """Recovery attempts spanning the stable period keep the failure history."""
+    failure_state = recovery_due_at(0.0, stable_period=900.0)
+    failure_state.record_failed_attempt(500.0)
+    failure_state.record_recovery(1000.0)
+    failure_state.record_failure(1100.0, ControllerFailure("fault returned"))
+
+    assert failure_state.recovery_due
+    assert failure_state.attempts == 2
+
+
+def test_expire_resets_counts_without_a_failure():
+    """Counts reset once the stable period passes, even if no new failure is recorded."""
+    failure_state = recovery_due_at(1.0, stable_period=900.0)
+    failure_state.expire(900.0)
 
     assert failure_state.recovery_due
 
-
-def test_completed_stable_period_is_credited_when_leaving():
-    """Leaving a settled state preserves an earned reset and credits it only once."""
-    failure_state = FailureState(stable_period=900.0)
-    failure_state.record_failure(0.0, ControllerFailure("first"))
-    failure_state.begin_procedure()
-    failure_state.set_settled(True, 10.0)
-    failure_state.set_settled(False, 910.0)
+    failure_state.expire(901.0)
 
     assert failure_state.failures == 0
-    assert failure_state.snapshot(910.0).settled_at is None
-
-    failure_state.record_failure(1000.0, ControllerFailure("second"))
-    failure_state.set_settled(False, 2000.0)
-
-    assert failure_state.failures == 1
-
-
-def test_procedure_boundary_preserves_settled_interval():
-    """Replacing a procedure without a state change preserves continuous settled time."""
-    failure_state = FailureState()
-    utc_start = datetime.now(UTC)
-    monotonic_start = time.monotonic()
-    failure_state.set_settled(True, monotonic_start)
-    failure_state.begin_procedure()
-    failure_state.set_settled(True, monotonic_start + 10.0)
-
-    snapshot = failure_state.snapshot(monotonic_start + 10.0)
-
-    assert abs(snapshot.settled_at - utc_start) < timedelta(milliseconds=100)
 
 
 def test_exhausted_attempts_call_for_emergency_shutdown():
     """Failed recovery attempts delay retries until the limit triggers emergency shutdown."""
-    failure_state = FailureState(recovery_attempts=2, attempt_delay=20.0, cycle_delay=120.0)
+    failure_state = recovery_due_at(
+        0.0, recovery_attempts=2, attempt_delay=20.0, cycle_delay=120.0
+    )
     failure_state.record_failed_attempt(0.0)
 
     assert failure_state.waiting(1.0) == 20.0
@@ -278,8 +293,8 @@ def test_exhausted_attempts_call_for_emergency_shutdown():
 def test_initial_error_counts_only_without_prior_failures():
     """An error found at startup adds no failure to one already counted."""
     failure_state = FailureState()
-    failure_state.record_initial_error()
-    failure_state.record_initial_error()
+    failure_state.record_initial_error(0.0)
+    failure_state.record_initial_error(0.0)
 
     assert failure_state.failures == 1
     assert failure_state.waiting(0.0) is None
@@ -1032,6 +1047,50 @@ async def test_recovery_succeeds_after_failed_attempt(kit, controller, until):
 
     assert attempts == 2
     assert inits == 3
+
+
+@pytest.mark.asyncio
+async def test_brief_recoveries_exhaust_recovery_attempts(kit, controller, until):
+    """A controller that repeatedly leaves OPERATE shuts down after brief recoveries."""
+    inits = 0
+    recoveries = 0
+    shutdowns = 0
+
+    @controller.task_handler(InitTask)
+    async def init(task):
+        nonlocal inits
+        inits += 1
+
+    @controller.task_handler(RecoverTask)
+    async def recover(task):
+        nonlocal recoveries
+        recoveries += 1
+
+    @controller.task_handler(ShutdownTask)
+    async def shutdown(task):
+        nonlocal shutdowns
+        shutdowns += 1
+
+    lifecycle = quick_lifecycle()
+    lifecycle.failure_state.recovery_attempts = 2
+
+    async with started(lifecycle, kit):
+        lifecycle.enable()
+        lifecycle.set_demand_state(OPERATE, program=None)
+
+        # One retry precedes the two successful recoveries.
+        for expected_inits in range(1, 5):
+            await until(lambda expected=expected_inits: inits == expected)
+            await until(lambda: reports(kit, OPERATE))
+            assert lifecycle.enabled
+            assert shutdowns == 0
+            await controller.report_state(ERROR)
+
+        await until(lambda: not lifecycle.enabled, timeout=3.0)
+        assert await reports(kit, SHUTDOWN)
+
+    assert recoveries == 2
+    assert shutdowns == 1
 
 
 @pytest.mark.asyncio

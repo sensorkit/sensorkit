@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import datetime
 
 import pytest
 import pytest_asyncio
@@ -29,11 +28,6 @@ UNKNOWN = InternalControllerState.UNKNOWN
 TRANSITION = InternalControllerState.TRANSITION
 
 GRACE = 1.0
-
-
-def settled_since(failure_state: FailureState) -> datetime | None:
-    """Return the settled interval's start in UTC."""
-    return failure_state.snapshot(asyncio.get_running_loop().time()).settled_at
 
 
 class PausedSupervisor(ControllerStateSupervisor):
@@ -85,16 +79,12 @@ async def gated_init(controller):
 
 
 @contextlib.asynccontextmanager
-async def supervising(
-    kit, *, transition_grace: float = GRACE, failure_state: FailureState | None = None
-):
+async def supervising(kit, *, transition_grace: float = GRACE):
     """Start a monitor and supervisor for ctrl1, stopping both on exit."""
     monitor = ControllerMonitor(kit.controller("ctrl1"))
     await monitor.start()
     supervisor = ControllerStateSupervisor(
-        monitor,
-        FailureState() if failure_state is None else failure_state,
-        transition_grace=transition_grace,
+        monitor, FailureState(), transition_grace=transition_grace
     )
     await supervisor.start()
 
@@ -423,82 +413,6 @@ async def test_skipped_transition_confirmed_in_time(kit, controller, until):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["transition", "unknown", "stop", "monitor_failure"])
-async def test_leaving_settled_conditions_ends_interval(kit, controller, change):
-    """Expected-state changes and unhealthy monitoring end settled time immediately."""
-    await controller.report_state(OPERATE, KeywordDict())
-
-    async with supervising(kit) as supervisor:
-        assert settled_since(supervisor.failure_state) is not None
-
-        match change:
-            case "transition":
-                supervisor.expect_transition()
-            case "unknown":
-                supervisor.invalidate()
-            case "stop":
-                await supervisor.stop()
-            case "monitor_failure":
-                await kit.backend.key_value(controller.entity).update("ControllerState", b"{}")
-
-                async with asyncio.timeout(5.0):
-                    await supervisor.failed.wait()
-
-        assert settled_since(supervisor.failure_state) is None
-
-
-@pytest.mark.asyncio
-async def test_reconfirmation_preserves_settled_interval(kit, controller):
-    """Starting another procedure and confirming the same state preserves settled time."""
-    await controller.report_state(OPERATE, KeywordDict())
-
-    async with supervising(kit) as supervisor:
-        before = supervisor.failure_state.model_copy()
-        assert settled_since(supervisor.failure_state) is not None
-        supervisor.failure_state.begin_procedure()
-        await supervisor.confirm(OPERATE)
-
-        assert supervisor.failure_state == before
-
-
-@pytest.mark.asyncio
-async def test_long_transition_preserves_failure_history(kit, controller):
-    """A failed transition lasting longer than the stable period still triggers recovery."""
-    entered = asyncio.Event()
-    release = asyncio.Event()
-
-    @controller.task_handler(InitTask)
-    async def init(task):
-        entered.set()
-        await release.wait()
-        raise RuntimeError("Initialization failed")
-
-    await controller.report_state(OPERATE, KeywordDict())
-    failure_state = FailureState(stable_period=0.05)
-
-    async with supervising(kit, transition_grace=0.05, failure_state=failure_state) as supervisor:
-        failure_state.record_failure(asyncio.get_running_loop().time(), ControllerFailure("first"))
-        failure_state.begin_procedure()
-        await supervisor.confirm(OPERATE)
-        supervisor.expect_transition()
-        call = asyncio.ensure_future(kit.controller("ctrl1").execute_task(InitTask()))
-
-        try:
-            async with asyncio.timeout(5.0):
-                await entered.wait()
-                await asyncio.sleep(2 * failure_state.stable_period)
-                release.set()
-                await asyncio.gather(call, return_exceptions=True)
-                await supervisor.failed.wait()
-
-            assert failure_state.failures == 2
-            assert failure_state.recovery_due
-        finally:
-            release.set()
-            await asyncio.gather(call, return_exceptions=True)
-
-
-@pytest.mark.asyncio
 async def test_departure_counts_one_failure(kit, controller, until):
     """Leaving a settled expected state counts once, regardless of later state updates."""
     async with settled_at(kit, controller, OPERATE, until) as supervisor:
@@ -549,7 +463,6 @@ async def test_context_change_is_not_a_failure(kit, controller, until):
 
     async with settled_at(kit, controller, OPERATE, until) as supervisor:
         before = supervisor.failure_state.model_copy()
-        assert settled_since(supervisor.failure_state) is not None
 
         with supervisor.state_changes() as changes:
             await controller.report_state(OPERATE, other)

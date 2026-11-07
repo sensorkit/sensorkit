@@ -140,7 +140,6 @@ def test_snapshot_projects_timing_without_changing_bookkeeping():
     utc_before = datetime.now(UTC)
     monotonic = time.monotonic()
     state.record_failure(monotonic - 3.0, error)
-    state.set_settled(True, monotonic - 2.0)
     before = state.model_copy()
 
     snapshot = state.snapshot(monotonic)
@@ -154,7 +153,7 @@ def test_snapshot_projects_timing_without_changing_bookkeeping():
     assert not snapshot.emergency_due
     assert utc_before + timedelta(seconds=1.9) <= snapshot.retry_at
     assert snapshot.retry_at <= utc_after + timedelta(seconds=2)
-    assert snapshot.retry_at - snapshot.settled_at == timedelta(seconds=4)
+    assert snapshot.stable_at - snapshot.retry_at == timedelta(seconds=895)
     assert snapshot.stable_period == 900.0
     assert snapshot.failure == "ControllerFailure: lost"
     assert snapshot.error is None
@@ -178,31 +177,29 @@ def test_snapshot_reference_does_not_move_bookkeeping():
     state = FailureState()
     monotonic = time.monotonic()
     state.record_failure(monotonic, ControllerFailure("lost"))
-    state.set_settled(True, monotonic + 1.0)
     before = state.model_copy()
 
     first = state.snapshot(monotonic)
     earlier = state.snapshot(monotonic - 3600.0)
 
     assert abs(earlier.retry_at - first.retry_at) < timedelta(milliseconds=100)
-    assert abs(earlier.settled_at - first.settled_at) < timedelta(milliseconds=100)
+    assert abs(earlier.stable_at - first.stable_at) < timedelta(milliseconds=100)
     assert state.waiting(monotonic) == monotonic + 5.0
     assert state == before
 
 
-def test_snapshot_does_not_apply_an_earned_reset():
+def test_snapshot_applies_an_earned_reset_without_changing_bookkeeping():
     state = FailureState()
     state.record_failure(0.0, ControllerFailure("lost"))
-    state.set_settled(True, 10.0)
 
     snapshot = state.snapshot(2000.0)
 
-    assert snapshot.failures == 1
-    assert snapshot.settled_at is not None
+    assert snapshot.failures == 0
+    assert snapshot.stable_at is not None
     assert state.failures == 1
 
-    # The reset remains available to the next unsettled observation.
-    state.set_settled(False, 2000.0)
+    # The reset remains available to the next expiry check.
+    state.expire(2000.0)
     assert state.failures == 0
 
 
@@ -222,10 +219,20 @@ def test_snapshot_reports_escalation_flags():
     assert snapshot.attempts == 6
 
 
+@pytest.mark.parametrize(("failures", "attempts"), [(1, 0), (0, 1), (2, 4)])
+def test_snapshot_preserves_counts_when_reset_time_is_unknown(failures, attempts):
+    state = FailureState(failures=failures, attempts=attempts)
+
+    snapshot = state.snapshot(time.monotonic())
+
+    assert snapshot.failures == failures
+    assert snapshot.attempts == attempts
+    assert snapshot.stable_at is None
+
+
 def test_snapshot_round_trips_through_json():
     state = FailureState()
     state.record_failure(0.0, ControllerFailure("lost"))
-    state.set_settled(True, 1.0)
     snapshot = state.snapshot(2.0)
 
     restored = FailureStateSnapshot.model_validate_json(snapshot.model_dump_json())
