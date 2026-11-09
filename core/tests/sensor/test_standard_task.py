@@ -21,7 +21,7 @@ from sensorkit.sensor.collect import (
 )
 from sensorkit.sensor.standard_task import SIDEREAL, translate
 from sensorkit.std.collect import CameraParameterSet, Collect, StandardCollectTask
-from sensorkit.std.instrument import Binning, ConfigureCameraSensor
+from sensorkit.std.instrument import Binning, ConfigureCameraSensor, FrameType
 from sensorkit.std.mount import FollowTarget
 from sensorkit.std.optics import SetFilter
 from sensorkit.std.traits import Stop
@@ -237,6 +237,13 @@ def test_each_frame_publishes_its_own_frame_number(bench):
         cards = dict(unit.acquisition.keywords[Collect].get_fits_cards())
 
         assert cards["FRAMENUM"][0] == unit.acquisition.frame_number
+
+
+@pytest.mark.parametrize("frame_type", list(FrameType))
+def test_every_capture_takes_the_requested_frame_type(bench, frame_type):
+    collect = pack(translate(task(params(2, frame_type=frame_type))), bench)
+
+    assert {unit.command.frame_type for unit in units_of(collect)} == {frame_type}
 
 
 def test_numbering_leaves_the_translated_metadata_untouched(bench):

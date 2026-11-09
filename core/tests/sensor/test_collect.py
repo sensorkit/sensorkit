@@ -34,7 +34,7 @@ from sensorkit.sensor.selection import (
 )
 from sensorkit.std.collect import CameraParameterSet
 from sensorkit.std.collect import Collect as CollectMetadata
-from sensorkit.std.instrument import Binning, ConfigureCameraSensor
+from sensorkit.std.instrument import Binning, ConfigureCameraSensor, FrameType
 from sensorkit.std.optics import SetFilter
 from sensorkit.std.traits import Home
 
@@ -139,6 +139,13 @@ def test_a_unit_command_is_whole_but_for_the_header(at):
 
     assert unit.command.integration_time == 4.0
     assert unit.command.context is None
+
+
+def test_a_unit_captures_the_requested_frame_type(at):
+    acquisition = AcquisitionRequest(integration_time_s=1.0, frame_type=FrameType.FLAT)
+    unit = InstrumentRequest(id="a", acquisition=acquisition).expand(at("cam-sci"), 0, 0)[0]
+
+    assert unit.command.frame_type == FrameType.FLAT
 
 
 def test_a_unit_carries_the_authored_deadline(at):

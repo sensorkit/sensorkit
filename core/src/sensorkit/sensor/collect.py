@@ -56,7 +56,7 @@ from sensorkit.sensor.workflow import (
     lower,
 )
 from sensorkit.std.collect import Collect as CollectKeyword
-from sensorkit.std.instrument import CameraCapture
+from sensorkit.std.instrument import CameraCapture, FrameType
 from sensorkit.std.optics import SelectPort
 
 
@@ -78,13 +78,15 @@ class SettingUnsatisfiable(ValueError):
 
 @dataclass(frozen=True)
 class AcquisitionRequest:
-    """Integration time and optional command timeout for one capture.
+    """Integration time, frame type, and optional command timeout for one
+    capture.
 
     Zero integration is allowed for bias frames. `timeout_s` limits each
     capture. `None` inherits configured deadline rules.
     """
 
     integration_time_s: float
+    frame_type: FrameType = FrameType.LIGHT
     timeout_s: float | None = None
 
 
@@ -274,7 +276,11 @@ class InstrumentRequest:
                     ),
                 ),
                 target=target,
-                command=CameraCapture(integration_time=asked.integration_time_s, context=None),
+                command=CameraCapture(
+                    integration_time=asked.integration_time_s,
+                    frame_type=asked.frame_type,
+                    context=None,
+                ),
                 estimated_duration_s=asked.integration_time_s,
                 timeout_s=asked.timeout_s,
             )

@@ -129,6 +129,7 @@ def _segment(
         assignment=name,
         acquisition=AcquisitionRequest(
             integration_time_s=params.integration_time_seconds,
+            frame_type=params.frame_type,
             timeout_s=params.integration_time_seconds + margin_s,
         ),
         count=count,
