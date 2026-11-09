@@ -404,6 +404,9 @@ class TheSkyTelescope(TheSkyDevice):
             observer=self._geodetic,
         )
 
+        if self.config.require_coupled_dome:
+            await self._require_dome_coupling()
+
         match target:
             case ICRSTarget():
                 logger.debug("executing RADec follow")
@@ -609,10 +612,54 @@ class TheSkyTelescope(TheSkyDevice):
                 track_type = type(target).__name__
                 raise NotImplementedError(f"{track_type} tracking via TheSky is not supported")
 
+        async with asyncio.timeout(self.config.timeout):
+            await self._wait_for_coupled_dome()
+
         try:
             await self._publish_telescope_status()
         except Exception as e:
             logger.warning(f"Immediate telescope status publish failed: {e}")
+
+    async def _dome_follow_status(self, *, check_motion: bool = True) -> str:
+        script = """
+            var Out;
+            if (sky6Dome.IsConnected == 0) {
+                Out = "disconnected";
+            } else if (sky6Dome.IsCoupled == 0) {
+                Out = "uncoupled";
+            } else {
+                Out = "coupled";
+            }
+        """
+        if check_motion:
+            script += """
+                if (Out == "coupled") {
+                    Out = sky6Dome.IsGotoComplete == 0 ? "moving" : "complete";
+                }
+            """
+        return (await self.execute(script)).strip()
+
+    async def _require_dome_coupling(self):
+        status = await self._dome_follow_status(check_motion=False)
+        if status != "coupled":
+            raise RuntimeError(f"Required slew-coupled dome is {status}")
+
+    async def _wait_for_coupled_dome(self):
+        """Wait until the slew-coupled dome finishes its current goto."""
+        while True:
+            status = await self._dome_follow_status()
+
+            match status:
+                case "disconnected" | "uncoupled":
+                    if self.config.require_coupled_dome:
+                        raise RuntimeError(f"Required slew-coupled dome is {status}")
+                    return
+                case "complete":
+                    return
+                case "moving":
+                    await asyncio.sleep(0.1)
+                case _:
+                    raise RuntimeError(f"Unexpected dome status {status!r}")
 
     def write_tle(self, target: TLE) -> str:
         """Write TLE to a temp file and return the path for TheSky use."""
@@ -877,6 +924,7 @@ class TheSkyTelescopeConfig(TheSkyDeviceConfig[TheSkyTelescope]):
     status_frequency_slow: float = 1.0
     status_frequency_fast: float = 0.1
     timeout: float = 300.0
+    require_coupled_dome: bool = False
 
     @override
     def create_device(self):

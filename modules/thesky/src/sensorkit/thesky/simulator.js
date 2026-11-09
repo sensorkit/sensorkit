@@ -276,6 +276,8 @@ var _sky6Dome = {
 };
 var _sky6DomeDefaults = {
     IsConnected: 0,
+    IsCoupled: 0,
+    IsGotoComplete: 1,
     IsParkComplete: 0,
     IsUnparkComplete: 0,
     IsFindHomeComplete: 0,

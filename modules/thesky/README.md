@@ -40,6 +40,17 @@ Propagatable inputs (e.g. a state vector) are normalized to an ICRF
 Note: TLE following drives TheSky's Raven3 plugin — it requires the *TheSky Satellites* module to be
 installed and is not available in TheSky's bundled mount simulator.
 
+## Coupled Dome Acquisition
+
+After the mount reaches a target, acquisition waits for a connected, slew-coupled dome to finish its current goto.
+It returns on the first complete status without a settling delay.
+The dome wait has its own deadline of `timeout` seconds.
+Query errors and timeouts fail acquisition.
+
+Set `require_coupled_dome: true` on the telescope to require a connected dome with slew coupling enabled.
+The driver checks this requirement before issuing target motion and during the dome wait.
+With the default `false`, a disconnected or uncoupled dome allows acquisition to complete, including when either condition occurs during polling.
+
 ## Example Config
 
 The YAML below uses low-level `entity`/`key`/`value` records.
