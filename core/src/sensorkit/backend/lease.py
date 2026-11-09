@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import heapq
+import itertools
 import os
 import random
 from datetime import datetime, timedelta
@@ -177,7 +178,8 @@ class LeaseGroup:
 
     def __init__(self):
         self._lease_waiters: dict[Lease, asyncio.Task] = {}
-        self._refresh_queue: list[tuple[float, Lease]] = []
+        self._refresh_queue: list[tuple[float, int, Lease]] = []
+        self._refresh_sequence = itertools.count()
         self._lease_added = asyncio.Event()
 
     async def acquire[M: BaseModel | None](
@@ -276,7 +278,7 @@ class LeaseGroup:
 
     def _schedule_pop(self):
         if self._refresh_queue and self._refresh_queue[0][0] <= datetime.now().timestamp():
-            _, lease = heapq.heappop(self._refresh_queue)
+            _, _, lease = heapq.heappop(self._refresh_queue)
             return lease
 
         return None
@@ -291,4 +293,4 @@ class LeaseGroup:
     def _schedule_add(self, lease: Lease):
         delay = lease.ttl * 0.3 + random.random() * lease.ttl * 0.25
         dt = lease.model.refreshed_at + timedelta(seconds=delay)
-        heapq.heappush(self._refresh_queue, (dt.timestamp(), lease))
+        heapq.heappush(self._refresh_queue, (dt.timestamp(), next(self._refresh_sequence), lease))

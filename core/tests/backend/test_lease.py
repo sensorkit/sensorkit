@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from datetime import datetime, timedelta
 
 import pytest
 from pydantic import BaseModel
 
-from sensorkit.backend.base import Entity
+from sensorkit.backend.base import Entity, KeyNotFound
 from sensorkit.backend.lease import (
     Lease,
     LeaseAbandonedError,
@@ -110,3 +112,63 @@ async def test_lease_group_no_raise_on_explicit_expire(_backend):
         await group.expire()
 
         await loop_task  # must complete without raising
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deadline_offsets", [(0, 0, 0, 0), (0, 1, 1)], ids=["push", "pop"])
+async def test_lease_group_equal_refresh_deadlines(_backend, deadline_offsets):
+    kv = _backend.key_value(Entity.at("test_equal_refresh_deadlines"))
+    group = LeaseGroup()
+    leases = {}
+
+    try:
+        for index in range(len(deadline_offsets)):
+            key = f"lease{index}"
+            leases[key] = await group.acquire(kv, key, ttl=4.0, record=None)
+
+        group._refresh_queue.clear()
+        deadline = datetime.now() - timedelta(seconds=2)
+
+        for lease, offset in zip(leases.values(), deadline_offsets, strict=True):
+            lease.model.refreshed_at = deadline + timedelta(seconds=offset)
+            ttl = lease.ttl
+            # A zero scheduling TTL removes jitter without changing the backend TTL.
+            lease.ttl = 0.0
+            try:
+                group._schedule_add(lease)
+            finally:
+                lease.ttl = ttl
+
+        async def wait_for_renewals(key):
+            updates = await kv.monitor(key)
+            async with contextlib.aclosing(updates):
+                renewals = 0
+                async for entry in updates:
+                    if entry.deleted():
+                        continue
+
+                    model = LeaseModel.model_validate_json(entry.value)
+                    if model.refreshed_at > model.acquired_at:
+                        renewals += 1
+                        if renewals == 2:
+                            return
+
+        async with asyncio.timeout(10.0):
+            async with asyncio.TaskGroup() as tasks:
+                renewal_tasks = [tasks.create_task(wait_for_renewals(key)) for key in leases]
+                loop_task = tasks.create_task(group.refresh_loop())
+                await asyncio.gather(*renewal_tasks)
+
+                assert not loop_task.done()
+                assert all(not lease.expired for lease in leases.values())
+
+                await group.expire()
+                await loop_task
+
+        for key, lease in leases.items():
+            assert lease.expired
+            assert lease.expire_called
+            with pytest.raises(KeyNotFound):
+                await kv.get(key)
+    finally:
+        await group.expire()
