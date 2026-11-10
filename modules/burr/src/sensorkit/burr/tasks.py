@@ -91,6 +91,7 @@ def build_sk_tasks(
 
     collect = collect or CollectConfig()
     cam_extra = dict(
+        instrument=collect.instrument,
         frame_type=_SOURCE_FRAME_TYPES.get(request.source_name, FrameType.LIGHT),
         filter_name=collect.filter_name,
         readout_mode=collect.readout_mode,

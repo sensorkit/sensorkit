@@ -268,7 +268,7 @@ wheels = [
 
 [[package]]
 name = "astro-burr"
-version = "0.3.3"
+version = "0.3.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "alpyca" },
@@ -288,9 +288,9 @@ dependencies = [
     { name = "tzdata" },
     { name = "watchdog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a0/51/be57155dbe82f6ff149f1a013e47ead4c09ca21693465857da2f0e9bdac8/astro_burr-0.3.3.tar.gz", hash = "sha256:f156f7d8e9e2a5ff79a378597736ab9e171f279ce88d9acfad13c8094d7e4dd1", size = 176637, upload-time = "2026-08-12T22:10:07.771Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/e4/1f7a9df2e6d3ff453227ed4d681f59fe0a6c90d15f4341f21deed95d6ee2/astro_burr-0.3.4.tar.gz", hash = "sha256:854e43e65196e37723baf407fc84c521f8264e89e86b582e414fb4d52cfa0b8e", size = 178938, upload-time = "2026-11-05T03:11:24.915Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7f/da/25e25e3e206a08d3360d991b21974ba31bd4f23110ed2f8698383c15b391/astro_burr-0.3.3-py3-none-any.whl", hash = "sha256:1a8f6137867e5793674683d6efdfd11e6a4864a3900effc20ff369676d07eb2f", size = 206242, upload-time = "2026-08-12T22:10:12.576Z" },
+    { url = "https://files.pythonhosted.org/packages/35/c8/73a5af9530a1cda5961330a8f73acd4bc4742dd4b61e217b3cdd8107e24a/astro_burr-0.3.4-py3-none-any.whl", hash = "sha256:33ad99ffb6c6ab22d37e4eaf839b21cc46e2f95d062eca5989e6fc40d345bb56", size = 208462, upload-time = "2026-11-05T03:11:23.047Z" },
 ]
 
 [[package]]
@@ -3501,7 +3501,7 @@ requires-dist = [
     { name = "alpyca", marker = "extra == 'alpaca'", specifier = ">=3.1.1" },
     { name = "alpyca", marker = "extra == 'autoslew'", specifier = ">=3.1.1" },
     { name = "alpyca", marker = "extra == 'sky-transmission'", specifier = ">=3.1.0" },
-    { name = "astro-burr", marker = "extra == 'burr'" },
+    { name = "astro-burr", marker = "extra == 'burr'", specifier = ">=0.3.4" },
     { name = "astro-senpai", marker = "extra == 'senpai'", specifier = ">=2.3.1" },
     { name = "astropy", specifier = ">=7.1.0" },
     { name = "asyncclick", specifier = "==8.1.8" },

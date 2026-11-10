@@ -70,7 +70,7 @@ autoslew = [
     "sensorkit[alpaca]",
 ]
 burr = [
-    "astro-burr",
+    "astro-burr>=0.3.4",
 ]
 indigo = [
     "websockets>=14.0",

@@ -142,6 +142,8 @@ class BurrProgram:
 
     @sk.task_factory
     async def next_task(self):
+        await self.validate_instrument_selection()
+
         if not self._queue:
             await asyncio.to_thread(self._enqueue_next_request)
 
@@ -182,6 +184,32 @@ class BurrProgram:
                     pending.slot.source.on_request_completed(pending.request, duration)
 
             await asyncio.to_thread(finalize)
+
+    async def validate_instrument_selection(self) -> None:
+        """Require the named instrument on the configured and assigned controller."""
+        instrument = self.config.collect.instrument
+
+        if instrument is None:
+            return
+
+        program = sk.program()
+        # FIXME: Expose the assigned controller through the local public API.
+        assigned = program._state.enable_state.controller
+        configured = self.config.controller.name
+
+        if assigned is None or assigned != configured:
+            raise ValueError(
+                f"Instrument selection requires controller '{configured}', "
+                f"but this program is assigned to '{assigned}'"
+            )
+
+        info = await self.config.controller.require().kv_get_model(sk.EntityInfo)
+
+        if not isinstance(info.details, sk.ControllerDetails):
+            raise ValueError(f"Entity '{assigned}' has no controller details")
+
+        if not any(item.name == instrument for item in info.details.instruments):
+            raise ValueError(f"Controller '{assigned}' has no instrument '{instrument}'")
 
     def _build_task_sources(self):
         config = self.config.schedule

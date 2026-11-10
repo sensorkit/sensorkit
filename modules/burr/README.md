@@ -45,9 +45,14 @@ key: BurrConfig
 value:
   controller: controller1              # named controller for the agent to task
   minimum_altitude_degrees: 20         # site-wide altitude floor
+  raw_data_root: /path/to/data/raw/burr   # flat FITS directory for exposure adjustment
+  collect:
+    instrument: cam-east               # omit to let the controller select an instrument
+    filter_name: r
   runtime:
     output_dir: /path/to/data/processed/burr   # burr run dirs (run_state.json, plots) — not the FITS dir
   plotting:
+    debug: false
     review: true                       # write review plots into the run dir
   schedule:                            # `windows` values: day | civil_twilight |
     twilight_flats:                    #   nautical_twilight | astronomical_twilight | night
@@ -93,12 +98,27 @@ value:
       maximum_length_pixel: 100
 ```
 
+Use `collect` to set camera parameters for all tasks from this program.
+Set `collect.instrument` to an instrument name advertised by `controller`.
+Instrument names are case-sensitive, and whitespace is preserved.
+Leave the field unset for automatic selection by the controller.
+A named selection requires the program's assigned controller to match `controller`.
+Before each task, the program checks the assignment and instrument metadata.
+An invalid selection ends tasking with a program fault before another task is dispatched.
+
 The camera entity's data graph writes FITS files through `app_source`, `array_to_fits`, and `write_file`.
 Burr supplies sequence identity in the task's `BurrContext` keyword.
 Configure the camera graph's `array_to_fits.header` mapping to write `BURRSEQ: =BurrContext.seq`.
 Other useful mappings include `TRKMODE: =Collect.track_mode`, `FRAMENUM: =Collect.frame_number`, and `FRAMECNT: =Collect.params.frame_count`.
 Include exposure timing, filter, pointing, and angular rates when required by downstream analysis.
 The `write_file.directory` value is the input directory passed to SENPAI's `--data-dir` option.
+
+Set `raw_data_root` to the FITS directory to enable flat exposure adjustment from measured counts.
+Burr 0.3.4 requires `IMAGETYP=FLAT` and nonempty `UNITID` and `FILTER` values in each flat's image header.
+Give each camera a stable, distinct `UNITID`, such as `UNITID: cam-east`.
+Burr tracks exposure adjustment by that value.
+For a configured filter, `FILTER: =Collect.params.filter_name` writes the commanded name.
+Use device telemetry instead if the header needs the measured filter position.
 
 ## Processing a Night (SENPAI)
 
@@ -136,10 +156,6 @@ sensorkit service run burr sensorkit.burr.program
 
 ## TODO
 
-- **Flat-field exposure feedback** — burr's flats manager can read back the
-  latest flat from the FITS directory to close its exposure-adjustment loop,
-  but the module does not currently wire the data directory through
-  (`sk_data_root`), so flats step through the night blind.
 - **Rate target frame** — `RateTarget`s are emitted in ICRF (what PWI4-backed
   controllers accept); the `cirf` alternative (node_platform-backed
   controllers) exists in burr's config but is not yet exposed through
