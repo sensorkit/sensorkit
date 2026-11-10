@@ -9,6 +9,10 @@ import pytest
 from sensorkit.astro.common import RADecPointing, SitePosition
 from sensorkit.backend.request import CallError
 from sensorkit.common.keyword import KeywordDict
+from sensorkit.core.client import SensorKit
+from sensorkit.core.controller import ControllerState
+from sensorkit.core.entity import EntityInfo
+from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.task import TaskInfo
 from sensorkit.sensor.client import Sensor
 from sensorkit.sensor.execution import WorkflowError
@@ -17,7 +21,7 @@ from sensorkit.sensor.policies import SensorPolicies
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 from sensorkit.std.optics import Filter, Filters, SetFilter
 
-from .common import BENCH, TARGET, authored
+from .common import BENCH, TARGET, Rig, authored
 
 
 @pytest.fixture
@@ -277,3 +281,168 @@ async def test_a_refused_filter_on_an_unknown_wheel_blocks_the_capture(
 
     assert wheel.sent("SetFilter") == [SetFilter(filter="g")]
     assert rig["cam"].sent("CameraCapture") == []
+
+
+# Instrument metadata and selection
+
+
+REORDERED = """
+    sensor:
+      components:
+        - unit: west
+          components:
+            - device: cam-w
+              instrument: true
+            - device: wheel-w
+        - device: mount
+        - unit: east
+          components:
+            - device: cam-e
+              instrument: true
+            - device: foc-e
+    """
+"""Equivalent BENCH layout with reordered components."""
+
+
+async def registered(kit, service, document: str) -> None:
+    """Register the sensor controller with the supplied device layout."""
+    client = kit.controller("sensor")
+    await client.kv_put_model(
+        SensorConfig(model=authored(document).sensor, policies=SensorPolicies())
+    )
+    await client.kv_put_model(
+        SitePosition(latitude_degrees=20.0, longitude_degrees=-100.0, altitude_km=1.0)
+    )
+    impl = ControllerImpl.for_service_context(service, "sensor")
+    controller = SensorController()
+    impl.on_attach(controller.on_attach)
+    impl.add_task_handler(StandardCollectTask, execution_callback=controller.collect_task)
+    await service.register_impl(impl)
+
+
+def published(info: EntityInfo) -> dict[str, set[str]]:
+    """Return instrument names mapped to their associated device IDs."""
+    return {instrument.name: set(instrument.devices) for instrument in info.details.instruments}
+
+
+def naming(instrument: str, **kw) -> StandardCollectTask:
+    return StandardCollectTask(
+        target=TARGET,
+        camera_params=CameraParameterSet(
+            instrument=instrument, integration_time_seconds=0.1, frame_count=1, **kw
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_each_instrument_placement_is_published_under_its_device_key(
+    kit, rig, service_context
+):
+    keys = [f"cam-{number}" for number in range(10)]
+
+    for key in ("wheel", *keys):
+        await rig.serve(service_context, key, ("Connect",))
+
+    await registered(
+        kit,
+        service_context,
+        """
+        sensor:
+          components:
+            - device: mount
+            - unit: array
+              components:
+                - device: wheel
+        """
+        + "".join(
+            f"""
+                - device: {key}
+                  instrument: true
+        """
+            for key in keys
+        ),
+    )
+    info = await kit.controller("sensor").kv_get_model(EntityInfo)
+
+    assert published(info) == {key: {"mount", "wheel", key} for key in keys}
+    assert set(info.details.controlled_devices) == {"mount", "wheel", *keys}
+
+
+@pytest.mark.asyncio
+async def test_instrument_names_survive_restart_and_reordering(backend):
+    seen = []
+    captured = []
+
+    # Each iteration starts a fresh service against the same persisted data.
+    for document in (BENCH, REORDERED):
+        kit = SensorKit(backend)
+        service = await kit.register_service("sensor-service", "0.1.0")
+        rig = Rig()
+
+        try:
+            await rig.serve(service, "mount", ("FollowTarget", "Stop", "Abort"))
+
+            for key in ("foc-e", "wheel-w"):
+                await rig.serve(service, key, ("Connect",))
+
+            for key in ("cam-e", "cam-w"):
+                await rig.serve(service, key, ("CameraCapture", "Abort"))
+
+            await registered(kit, service, document)
+            client = kit.controller("sensor")
+            seen.append(published(await client.kv_get_model(EntityInfo)))
+            await client.enable()
+            await client.execute_task(naming("cam-w"))
+            captured.append(
+                {key: len(rig[key].sent("CameraCapture")) for key in ("cam-e", "cam-w")}
+            )
+        finally:
+            await rig.release()
+            await service.shutdown()
+
+    assert (
+        seen
+        == [{"cam-e": {"mount", "foc-e", "cam-e"}, "cam-w": {"mount", "wheel-w", "cam-w"}}] * 2
+    )
+    assert captured == [{"cam-e": 0, "cam-w": 1}] * 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name", ["cam-n", "mount", "cam-e"], ids=["unknown", "not-an-instrument", "lacks-the-filter"]
+)
+async def test_a_named_target_the_sensor_cannot_honor_sends_nothing(
+    kit, rig, service_context, controller_impl, name
+):
+    for branch, held in (("e", "r"), ("w", "g")):
+        await rig.serve(
+            service_context,
+            f"wheel-{branch}",
+            ("SetFilter",),
+            keywords=[Filters(filters=[Filter(name=held)])],
+        )
+        await rig.serve(service_context, f"cam-{branch}", ("CameraCapture", "Abort"))
+
+    controller = await attached(controller_impl, BENCH.replace("foc-e", "wheel-e"))
+    await controller_impl.start_device_subscriptions()
+
+    try:
+        async with asyncio.timeout(2.0):
+            while any(
+                controller.device_contexts()[wheel].get(Filters) is None
+                for wheel in ("wheel-e", "wheel-w")
+            ):
+                await asyncio.sleep(0)
+
+        client = kit.controller(str(controller_impl.entity))
+        await client.enable()
+
+        with pytest.raises(CallError):
+            await client.execute_task(naming(name, filter_name="g"))
+
+        state = await client.kv_get_model(ControllerState)
+    finally:
+        await controller_impl.stop_device_subscriptions()
+
+    assert name in state.execution_state.finished.error
+    assert all(device.received == [] for device in rig.devices.values())

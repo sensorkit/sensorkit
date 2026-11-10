@@ -322,6 +322,7 @@ Adds command-handler registration and enable/disable state (normally driven for 
 ### `ControllerImpl`
 
 - `use_device(name, *, subscribe=[...])` — declare a device dependency, optionally subscribing to keyword types; returns a handle for sending commands and reading cached state.
+- `register_instrument(name, *, devices=())` - add a name and optional device associations to controller metadata. See [Instruments](#instruments).
 - `get_device(name)` / `all_devices()` — access attached devices.
 - `update_context(...)` — build a `Context` snapshot from live device keyword state (feeds FITS headers and pipeline expressions).
 - `report_state(state, context)` — report the observed operating state and its lifecycle input.
@@ -365,6 +366,39 @@ A controller that cannot reconstruct its input should do one of the following.
 - Report no known states.
 - Report UNKNOWN at startup.
 - Report a known state only if the controller has no input options for that state.
+
+#### Instruments
+
+Controllers publish instrument names and device associations in `EntityInfo.details.instruments`.
+Names are case-sensitive and unique within a controller.
+Register instruments in an attach hook to include them in the initial publication.
+Later registrations require a call to `publish_entity_info()`.
+
+```python
+@sk.on_attach
+def register_instruments(self):
+    sk.controller().register_instrument("imager")
+```
+
+Supply device IDs or device clients through `devices`.
+The published description contains opaque IDs whose order has no meaning.
+Instruments can share device associations or have none.
+Call `use_device()` separately for device dependencies.
+A TCS integration can expose instruments without SensorKit devices.
+
+Read the controller's `EntityInfo` to discover its instruments.
+
+```python
+info = await kit.controller("MySensor").kv_get_model(sk.EntityInfo)
+
+if isinstance(info.details, sk.ControllerDetails):
+    for instrument in info.details.instruments:
+        print(instrument.name, instrument.devices)
+```
+
+Set `CameraParameterSet.instrument` to select an instrument for the entire sequence.
+Collect handlers must honor the selection or reject the task.
+The controller chooses an instrument when the field is omitted.
 
 ### `ProgramImpl`
 

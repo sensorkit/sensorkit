@@ -148,6 +148,34 @@ Requests that cannot run even on their own are rejected.
 `sidereal_frames` counts from zero within each sequence.
 Instruments capturing concurrently switch tracking mode together.
 
+Choose an instrument for each sequence with `CameraParameterSet.instrument`.
+
+```python
+StandardCollectTask(
+    target=...,
+    camera_params=[
+        CameraParameterSet(
+            instrument="cam-east",
+            integration_time_seconds=5.0,
+            frame_count=3,
+            filter_name="r",
+        ),
+        CameraParameterSet(
+            instrument="cam-west",
+            integration_time_seconds=30.0,
+            frame_count=1,
+            filter_name="r",
+        ),
+        CameraParameterSet(integration_time_seconds=10.0, frame_count=2),
+    ],
+)
+```
+
+The selection applies to every frame, including frames that use sidereal tracking.
+Omitting `instrument` lets the controller choose.
+The controller rejects unknown names and instruments that cannot satisfy the requested settings.
+Read `EntityInfo.details.instruments` for the available names (see [Instruments](api.md#instruments)).
+
 You can also define your own task types (subclass `sk.Task`) and handle them in a custom controller — the scheduling machinery is the same.
 
 ## Targets

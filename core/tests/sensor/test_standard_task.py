@@ -19,7 +19,9 @@ from sensorkit.sensor.collect import (
     SettingUnsatisfiable,
     pack,
 )
+from sensorkit.sensor.selection import IsRef
 from sensorkit.sensor.standard_task import SIDEREAL, translate
+from sensorkit.sensor.topology import Placement
 from sensorkit.std.collect import CameraParameterSet, Collect, StandardCollectTask
 from sensorkit.std.instrument import Binning, ConfigureCameraSensor, FrameType
 from sensorkit.std.mount import FollowTarget
@@ -340,3 +342,116 @@ def test_a_filter_no_chain_can_change_rejects_the_collect():
 
     with pytest.raises(SettingUnsatisfiable):
         pack(translate(task(params(filter_name="r"))), sensor_of(BENCH, fixed))
+
+
+# Instrument selection
+
+
+def named(sensor: BoundSensor) -> dict[str, Placement]:
+    return {p.device: p for p in sensor.topology.instruments()}
+
+
+def cameras(collect: BoundCollect) -> dict[str, set[str]]:
+    """Return the camera IDs assigned to each acquisition request."""
+    placed: dict[str, set[str]] = {}
+
+    for unit in units_of(collect):
+        placed.setdefault(unit.acquisition.request, set()).add(unit.target.device)
+
+    return placed
+
+
+def test_an_untargeted_exposure_selects_no_instrument():
+    requests = [r for epoch in translate(SEVERAL).epochs for r in epoch.units]
+
+    assert {r.select for r in requests} == {None}
+
+
+def test_every_segment_of_a_named_exposure_keeps_its_instrument(bench):
+    collect = task(params(3, instrument="cam-w"), params(2), sidereal_frames=(1,))
+    intent = translate(collect, instruments=named(bench))
+    selected = {(r.id, r.select) for epoch in intent.epochs for r in epoch.units}
+
+    assert selected == {("exposure-0", IsRef(device="cam-w")), ("exposure-1", None)}
+    assert len(intent.epochs) == 3
+    assert cameras(pack(intent, bench))["exposure-0"] == {"cam-w"}
+
+
+@pytest.mark.parametrize("instruments", [{}, None], ids=["mapping", "standalone"])
+def test_an_unknown_instrument_is_rejected_by_name(instruments):
+    with pytest.raises(ValueError, match="Unknown instrument 'cam-n'"):
+        translate(task(params(instrument="cam-n")), instruments=instruments)
+
+
+def test_a_device_that_is_not_an_instrument_cannot_be_named(bench):
+    with pytest.raises(ValueError, match="'wheel-e'. This sensor exposes 'cam-e', 'cam-w'"):
+        translate(task(params(instrument="wheel-e")), instruments=named(bench))
+
+
+def test_same_filter_instruments_take_the_exposures_named_for_them(wheels):
+    held = {"wheel-a": filters("r"), "wheel-b": filters("r")}
+    longer = CameraParameterSet(
+        instrument="cam-a", filter_name="r", integration_time_seconds=5.0, frame_count=1
+    )
+    collect = task(params(instrument="cam-b", filter_name="r"), longer)
+    packed = pack(translate(collect, instruments=named(wheels)), wheels, device_keywords=held)
+    integrations = {(u.target.device, u.command.integration_time) for u in units_of(packed)}
+
+    assert integrations == {("cam-b", 1.0), ("cam-a", 5.0)}
+
+
+def test_automatic_exposures_rank_around_named_ones(wheels):
+    collect = task(params(4, instrument="cam-b"), params(), params())
+    packed = pack(translate(collect, instruments=named(wheels)), wheels)
+
+    # Automatic sequences choose cam-a while its assigned exposure time is lower.
+    assert cameras(packed) == {
+        "exposure-0": {"cam-b"},
+        "exposure-1": {"cam-a"},
+        "exposure-2": {"cam-a"},
+    }
+
+
+def test_a_named_instrument_that_cannot_take_the_filter_is_not_replaced(wheels):
+    held = {"wheel-a": filters("g"), "wheel-b": filters("r")}
+    intent = translate(
+        task(params(instrument="cam-a", filter_name="r")), instruments=named(wheels)
+    )
+
+    with pytest.raises(SettingUnsatisfiable, match="first/cam-a"):
+        pack(intent, wheels, device_keywords=held)
+
+
+def test_named_instruments_on_a_shared_wheel_take_turns():
+    shared = sensor_of(
+        """
+        components:
+          - device: mount
+          - unit: ota
+            components:
+              - device: wheel
+              - device: cam-a
+                instrument: true
+              - device: cam-b
+                instrument: true
+        """,
+        {
+            "mount": (("Connect", "FollowTarget", "Stop"), ()),
+            "wheel": (("SetFilter",), ()),
+            "cam-a": (("Connect",), ()),
+            "cam-b": (("Connect",), ()),
+        },
+    )
+    collect = task(
+        params(instrument="cam-b", filter_name="r"), params(instrument="cam-a", filter_name="g")
+    )
+    packed = pack(translate(collect, instruments=named(shared)), shared)
+
+    assert [
+        [(s.target.device, s.command) for s in epoch.settings if isinstance(s.command, SetFilter)]
+        for epoch in packed.epochs
+    ] == [[("wheel", SetFilter(filter="r"))], [("wheel", SetFilter(filter="g"))]]
+    assert [{u.target.device for u in epoch.units} for epoch in packed.epochs] == [
+        {"cam-b"},
+        {"cam-a"},
+    ]

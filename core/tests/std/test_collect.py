@@ -2,7 +2,11 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sensorkit.astro.target import TLE, TLETarget
+import pytest
+from pydantic import ValidationError
+
+from sensorkit.astro.coords import Horizontal
+from sensorkit.astro.target import TLE, AltAzTarget, TLETarget
 from sensorkit.std.collect import CameraParameterSet, FrameType, StandardCollectTask
 
 
@@ -27,3 +31,33 @@ def test_collect_task():
         ),
         end_time=datetime.now(timezone.utc) + timedelta(hours=1),
     )
+
+
+def test_parameter_sets_keep_their_instrument_names_on_the_wire():
+    task = StandardCollectTask(
+        target=AltAzTarget(coords=Horizontal(az=90.0, alt=30.0)),
+        camera_params=[
+            CameraParameterSet(instrument="cam-a", integration_time_seconds=1, frame_count=1),
+            CameraParameterSet(integration_time_seconds=1, frame_count=1),
+        ],
+    )
+    restored = StandardCollectTask.model_validate_json(task.model_dump_json())
+
+    assert [p.instrument for p in restored.exposures] == ["cam-a", None]
+
+
+def test_parameter_sets_without_an_instrument_leave_it_unset():
+    params = CameraParameterSet.model_validate_json(
+        '{"integration_time_seconds": 1.0, "frame_count": 1}'
+    )
+
+    assert params.instrument is None
+
+
+def test_only_an_empty_instrument_name_is_rejected():
+    with pytest.raises(ValidationError, match="at least 1 character"):
+        CameraParameterSet(instrument="", integration_time_seconds=1, frame_count=1)
+
+    params = CameraParameterSet(instrument=" ", integration_time_seconds=1, frame_count=1)
+
+    assert params.instrument == " "

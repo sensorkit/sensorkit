@@ -22,8 +22,15 @@ from sensorkit.std.instrument import FrameType
 
 
 class CameraParameterSet(BaseModel):
-    """Camera settings and frame count for one capture sequence."""
+    """Exposure settings and frame count for a camera sequence.
 
+    Attributes:
+        instrument: Controller instrument name, or None for automatic selection.
+            The controller must use a named instrument for the whole sequence
+            or reject the task.
+    """
+
+    instrument: Optional[str] = Field(default=None, min_length=1)
     frame_type: FrameType = Field(default=FrameType.LIGHT)
     integration_time_seconds: float = Field(...)
     frame_count: int = Field(...)

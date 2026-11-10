@@ -2,9 +2,10 @@
 """Translate standard collect tasks into hardware-independent collect
 intents.
 
-The target becomes sensor-subject preparation and epoch settings. Stop becomes
-cleanup. Camera parameters become per-request instrument settings. Packing
-chooses devices and checks command support and setting requirements.
+Target commands establish pointing before acquisition and stop it during cleanup.
+Each camera parameter set supplies an acquisition request and its settings.
+A parameter set naming an instrument selects only that instrument. Packing
+resolves command targets and checks the requested settings.
 
 When planning keywords are supplied, packing prefers instruments whose routed
 wheel reports the requested filter. A nonempty list that lacks the name makes
@@ -24,6 +25,7 @@ sampled at dispatch.
 from __future__ import annotations
 
 import itertools
+from collections.abc import Mapping
 
 from sensorkit.astro.common import ReferenceFrame
 from sensorkit.astro.target import (
@@ -41,7 +43,8 @@ from sensorkit.sensor.collect import (
     InstrumentRequest,
     RequestEpoch,
 )
-from sensorkit.sensor.selection import AnyOf, KeywordMatch, Supports
+from sensorkit.sensor.selection import AnyOf, IsRef, KeywordMatch, Supports
+from sensorkit.sensor.topology import Placement
 from sensorkit.std.collect import (
     CameraParameterSet,
     Collect,
@@ -56,19 +59,28 @@ SIDEREAL = FrameTarget(frame=ReferenceFrame.ICRF)
 """Target value that holds the current pointing under sidereal tracking."""
 
 
-def translate(task: StandardCollectTask, *, readout_margin_s: float = 60.0) -> CollectIntent:
-    """Build collect requests and target-based epochs from a standard task.
+def translate(
+    task: StandardCollectTask,
+    *,
+    instruments: Mapping[str, Placement] | None = None,
+    readout_margin_s: float = 60.0,
+) -> CollectIntent:
+    """Translate a standard collect into acquisition requests and settings.
 
-    Exposure segments retain their ids and assignments across epochs.
-    Preparation reaches the original target even if the first frame uses
-    sidereal tracking. Each capture's deadline is its integration time plus
-    `readout_margin_s`.
+    Each exposure keeps its request ID and instrument assignment across tracking
+    segments. `instruments` resolves published names to collection targets.
+    Untargeted exposures are assigned during packing.
+
+    Preparation points at the task's target, including when frame zero uses
+    sidereal tracking. Capture timeouts include `readout_margin_s`.
 
     Raises:
-        ValueError: A sidereal frame index is out of range or only one binning
-            axis is supplied.
+        ValueError: An instrument name is unknown, a sidereal frame index is
+            invalid, or only one binning axis is set.
     """
     exposures = task.exposures
+    known = {} if instruments is None else instruments
+    selections = tuple(instrument_selection(params.instrument, known) for params in exposures)
     settings = tuple(camera_settings(params) for params in exposures)
     longest = max(params.frame_count for params in exposures)
     _check_sidereal(task, longest)
@@ -86,6 +98,7 @@ def translate(task: StandardCollectTask, *, readout_margin_s: float = 60.0) -> C
                 target,
                 min(first + count, params.frame_count) - first,
                 settings[number],
+                selections[number],
                 readout_margin_s,
             )
             for number, params in enumerate(exposures)
@@ -116,6 +129,7 @@ def _segment(
     target: Target,
     count: int,
     settings: tuple[CommandRequest, ...],
+    selection: IsRef | None,
     margin_s: float,
 ) -> InstrumentRequest:
     """Build one exposure segment with a stable request id and assignment
@@ -134,8 +148,25 @@ def _segment(
         ),
         count=count,
         collect=Collect(target=target, target_id=target_id(task), params=params),
+        select=selection,
         settings=settings,
     )
+
+
+def instrument_selection(name: str | None, instruments: Mapping[str, Placement]) -> IsRef | None:
+    """Resolve an instrument name, preserving automatic selection for `None`.
+
+    Raises:
+        ValueError: The instrument name is not registered.
+    """
+    if name is None:
+        return None
+
+    if name not in instruments:
+        known = ", ".join(f"'{key}'" for key in instruments) or "none"
+        raise ValueError(f"Unknown instrument '{name}'. This sensor exposes {known}.")
+
+    return IsRef(device=instruments[name].device)
 
 
 def _pointing(target: Target) -> CommandRequest:

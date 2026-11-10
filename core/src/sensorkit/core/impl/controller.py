@@ -52,7 +52,7 @@ from sensorkit.core.controller import (
     set_enable_state_request,
 )
 from sensorkit.core.device import DeviceClient
-from sensorkit.core.entity import ControllerDetails, EntityInfo
+from sensorkit.core.entity import ControllerDetails, EntityInfo, InstrumentInfo
 from sensorkit.core.impl.entity import EntityImpl
 from sensorkit.core.state import StateUpdate
 from sensorkit.core.task import RecoverTask, Task, TaskExecution, TaskInfo
@@ -396,6 +396,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         self._execution: TaskRun | None = None
         self._states = ControllerStateResolver()
         self._devices = ControllerDeviceMap()
+        self._instruments: dict[str, InstrumentInfo] = {}
 
     @override
     def task_running(self):
@@ -495,6 +496,29 @@ class ControllerImpl(EntityImpl, ControllerInterface):
     @override
     async def detach_impl(self):
         await self.stop_device_subscriptions()
+
+    @override
+    def register_instrument(
+        self,
+        name: str,
+        *,
+        devices: Collection[str | DeviceClient] = (),
+    ) -> None:
+        if isinstance(devices, str):
+            raise TypeError(
+                f"Pass devices for instrument '{name}' as a collection of IDs or clients"
+            )
+
+        keys = tuple(
+            str(device.entity) if isinstance(device, DeviceClient) else device
+            for device in devices
+        )
+        instrument = InstrumentInfo(name=name, devices=keys)
+
+        if name in self._instruments:
+            raise ValueError(f"Cannot register instrument '{name}' twice")
+
+        self._instruments[name] = instrument
 
     @override
     def use_device(self, name: str, *, subscribe: list[type] | None = None) -> DeviceClient:
@@ -1002,6 +1026,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
                 published_keywords=frozenset(self._published_keywords),
                 supported_tasks=[t.__name__ for t in self._task_handlers.keys()],
                 controlled_devices=list(self._devices.keys()),
+                instruments=tuple(self._instruments.values()),
             ),
         )
 

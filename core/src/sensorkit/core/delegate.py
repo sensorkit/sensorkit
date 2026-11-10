@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from sensorkit.backend.request import RequestBase, RequestHandlerFunc
     from sensorkit.common.keyword import Keyword, KeywordDict
     from sensorkit.core.client import SensorKit
+    from sensorkit.core.device import DeviceClient
     from sensorkit.data.context import Context
     from sensorkit.data.graph import DataGraph
 
@@ -104,6 +105,15 @@ class ControllerDelegate(EntityDelegate, ControllerInterface):
     @override
     def on_disable(self, func: Callable[[], None]):
         return self.delegate_target.on_disable(func)
+
+    @override
+    def register_instrument(
+        self,
+        name: str,
+        *,
+        devices: Collection[str | DeviceClient] = (),
+    ) -> None:
+        return self.delegate_target.register_instrument(name, devices=devices)
 
     @override
     def use_device(self, name: str, *, subscribe: list[type] | None = None):

@@ -50,6 +50,8 @@ class SensorController:
     """A controller running lifecycle and collect tasks as sensor workflows."""
 
     stopping: bool = False
+    instruments: Mapping[str, Placement] = {}
+    """Collection targets by instrument name."""
 
     @sk.on_attach
     async def on_attach(self):
@@ -80,6 +82,12 @@ class SensorController:
             controller.get_device(placement.device).subscription.add_trait_keywords(
                 bound.details[placement.device]
             )
+
+        self.instruments = {target.device: target for target in bound.topology.instruments()}
+
+        for name, target in self.instruments.items():
+            chain = bound.topology.chain(target)
+            controller.register_instrument(name, devices=[p.device for p in chain])
 
         # Publish device roles for consumers of the legacy capability model.
         await controller.kv_put_model(
@@ -171,11 +179,13 @@ class SensorController:
     async def collect_task(self, execution: sk.TaskExecution[StandardCollectTask]):
         """Point at the task's target and capture its exposures.
 
+        Named parameter sets keep their instrument throughout the collect.
         Planning uses one snapshot of subscribed device keywords. Frame headers
         sample them again when each capture is dispatched.
         """
         workflow = self.sensor.plan_collect(
-            translate(execution.task), device_keywords=self.device_contexts()
+            translate(execution.task, instruments=self.instruments),
+            device_keywords=self.device_contexts(),
         )
         base = sk.Context(execution.context, self.site)
 

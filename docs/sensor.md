@@ -46,6 +46,12 @@ Units group devices belonging to a branch; mark each collection target with
 For several cameras, declare separate units with their cameras and any local
 filter wheels or focusers.
 
+The device key of each collection target is its instrument name.
+The controller publishes each name and its chain's device IDs in `EntityInfo.details.instruments`
+(see [Instruments](api.md#instruments)).
+Names stay the same across restarts and layout changes that preserve device keys.
+Changing a target's device key changes its instrument name.
+
 Configure policy overrides within the sensor's `policies` block:
 
 ```yaml
@@ -103,6 +109,8 @@ The controller responds to tasks — from the agent during autonomous operation,
 | **Shutdown** | Close the mirror cover, deinitialize the mount, close the dome                  |
 
 During a collect, the controller commands the target and camera settings.
+Set a sequence's `instrument` field to select a collection target.
+Planning rejects unknown names, ordinary device IDs, and targets incompatible with the requested settings before sending commands.
 Before each frame, it samples subscribed device keywords from that instrument's
 chain into a fresh context, together with task context, site position and numbered
 `Collect` metadata.

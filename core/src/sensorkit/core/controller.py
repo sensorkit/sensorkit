@@ -727,6 +727,30 @@ class ControllerInterface(EntityInterface):
         ...
 
     @abstractmethod
+    def register_instrument(
+        self,
+        name: str,
+        *,
+        devices: Collection[str | DeviceClient] = (),
+    ) -> None:
+        """Add an instrument to the controller's `EntityInfo`.
+
+        Register during attachment for automatic publication. Later additions
+        require `publish_entity_info()`. Call `use_device()` separately for
+        device dependencies.
+
+        Args:
+            name: Case-sensitive instrument name, unique within this controller.
+            devices: Associated device IDs or clients. Clients are stored by
+                entity ID. Empty and shared associations are allowed.
+
+        Raises:
+            ValueError: The name is empty or duplicates a registered name.
+            TypeError: A string was supplied instead of a collection of devices.
+        """
+        ...
+
+    @abstractmethod
     def use_device(self, name: str, *, subscribe: list[type] | None = None):
         """Declare a device dependency, optionally subscribing to the listed keyword types."""
         ...

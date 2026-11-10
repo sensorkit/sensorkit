@@ -18,6 +18,7 @@ from sensorkit.core.entity import (
     EntityInfo,
     EntityRef,
     EventsNotSubscribed,
+    InstrumentInfo,
 )
 from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.impl.device import DeviceImpl
@@ -463,6 +464,18 @@ async def test_late_keyword_declaration_needs_republish(service_context, kit):
             entity_type="controller",
             details=ControllerDetails(supported_tasks=[], controlled_devices=[]),
         ),
+        EntityInfo(
+            entity_type="controller",
+            details=ControllerDetails(
+                supported_tasks=["StandardCollectTask"],
+                controlled_devices=["mount"],
+                instruments=(
+                    InstrumentInfo(name="wide", devices=("wheel", "cam-a")),
+                    InstrumentInfo(name="narrow", devices=("wheel", "not-a-device")),
+                    InstrumentInfo(name="tcs-imager"),
+                ),
+            ),
+        ),
     ],
 )
 def test_entity_info_round_trip_preserves_details_type(info):
@@ -488,6 +501,28 @@ def test_entity_info_reads_historical_records(data, details):
 
     assert type(info.details) is type(details)
     assert info.details == details
+
+
+def test_controller_details_without_instruments_list_none():
+    data = '{"supported_tasks": ["Observe"], "controlled_devices": ["camera"]}'
+
+    assert ControllerDetails.model_validate_json(data).instruments == ()
+
+
+@pytest.mark.parametrize(
+    "instruments, match",
+    [
+        ([{"name": ""}], "at least 1 character"),
+        (
+            [{"name": "imager"}, {"name": "guider"}, {"name": "imager"}],
+            "Instrument names must be unique",
+        ),
+    ],
+    ids=["empty", "repeated"],
+)
+def test_controller_details_reject_invalid_instrument_names(instruments, match):
+    with pytest.raises(ValidationError, match=match):
+        ControllerDetails(supported_tasks=[], controlled_devices=[], instruments=instruments)
 
 
 class Gauge(BaseModel):

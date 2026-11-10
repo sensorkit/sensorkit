@@ -5,15 +5,17 @@ import asyncio
 import contextlib
 import functools
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Annotated, Literal, overload
+from typing import TYPE_CHECKING, Annotated, Literal, Self, overload
 
 from loguru import logger
 from pydantic import (
     BaseModel,
+    Field,
     PlainSerializer,
     PlainValidator,
     StringConstraints,
     ValidationError,
+    model_validator,
 )
 
 from sensorkit.backend.base import Entity, KeyNotFound
@@ -61,6 +63,15 @@ class DeviceDetails(EntityDetails):
         return match_traits(self, exclude_archetypes=True)
 
 
+class InstrumentInfo(BaseModel):
+    """Instrument metadata published by a controller."""
+
+    name: str = Field(min_length=1)
+    """Case-sensitive name used to select this instrument in controller tasks."""
+    devices: tuple[str, ...] = ()
+    """Optional opaque device IDs. Their order has no meaning."""
+
+
 class ControllerDetails(EntityDetails):
     """Controller info."""
 
@@ -68,6 +79,17 @@ class ControllerDetails(EntityDetails):
     """Identifiers of each task supported by this controller."""
     controlled_devices: list[str]
     """Names of each device commanded by this controller."""
+    instruments: tuple[InstrumentInfo, ...] = ()
+    """Instruments available for task selection."""
+
+    @model_validator(mode="after")
+    def _check_instruments(self) -> Self:
+        names = {instrument.name for instrument in self.instruments}
+
+        if len(names) != len(self.instruments):
+            raise ValueError("Instrument names must be unique")
+
+        return self
 
 
 @declare_keyword
