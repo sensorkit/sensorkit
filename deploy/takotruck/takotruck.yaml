@@ -101,7 +101,7 @@ automation:
       controller_name: TakoTruck
     standard_collect:
       FileNameTemplate:
-        template: f"{TaskInfo.task_id}_{Collect.frame_number}.fits"
+        template: f"{Task.task_id}_{Collect.frame_number}.fits"
 
 data_flow:
   - entity: QHY600

@@ -9,7 +9,8 @@ import uuid_utils.compat as uuid
 from pydantic import BaseModel
 
 from sensorkit.common.keyword import KeywordDict, declare_keyword
-from sensorkit.core.task import CollectTask, TaskContextOverlay, TaskExecution
+from sensorkit.core.task import CollectTask, TaskContextOverlay, TaskExecution, TaskInfo
+from sensorkit.data.context import Context
 
 
 @declare_keyword
@@ -121,6 +122,36 @@ def test_build_merges_keyword_payloads_field_wise():
 class ProbeCollectTask(CollectTask):
     task_type: Literal["probe_collect"] = "probe_collect"
     exposures: int
+
+
+def test_task_info_context_round_trip():
+    info = TaskInfo(task=CollectTask(), task_id=uuid.uuid7(), controller_id="mycontroller")
+    execution = TaskExecution(
+        task=info.task,
+        task_id=info.task_id,
+        controller_id=info.controller_id,
+        context=KeywordDict(info),
+    )
+
+    assert set(execution.context) == {"Task"}
+    assert execution.context["Task"] is info
+    assert execution.context[TaskInfo] is info
+
+    wire = execution.model_dump_json()
+    assert json.loads(wire)["context"] == {"Task": info.model_dump(mode="json")}
+
+    restored = TaskExecution.model_validate_json(wire)
+    assert restored.context[TaskInfo] == info
+    assert restored.context["Task"] == info
+
+
+def test_task_info_context_expressions():
+    info = TaskInfo(task=CollectTask(), task_id=uuid.uuid7(), controller_id="mycontroller")
+    context = Context(info)
+
+    assert context.eval("Task.task_id") == info.task_id
+    assert context.resolve("=Task.task_id") == info.task_id
+    assert context.resolve("{Task.task_id}.fits") == f"{info.task_id}.fits"
 
 
 @pytest.mark.parametrize(

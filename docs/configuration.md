@@ -179,7 +179,7 @@ data_flow:
         - op: app_source              # frames enter from the camera driver
         - op: fits_header             # add/override FITS header cards
           define:
-            TASKID:   =str(TaskInfo.task_id)
+            TASKID:   =str(Task.task_id)
             FRAMENUM: =Collect.frame_number
             CENTAZ:   =AltAzPointing.azimuth_degrees
             CENTALT:  =AltAzPointing.altitude_degrees
@@ -216,6 +216,19 @@ automation:
 ```
 
 Analysis modules extend the same pipeline mechanism — e.g. focus estimation ops (`analyze_focus_stars`, `analyze_focus_fft`) or handing frames to astrometry/photometry services.
+
+### Task context keyword migration
+
+The task identity keyword is named `Task` in configuration and serialized contexts.
+The Python class remains `TaskInfo`.
+
+Update existing configuration references from `TaskInfo` to `Task` in context keys, expressions, filename templates, and explicit `fits_header.include` lists.
+For example, `=str(TaskInfo.task_id)` becomes `=str(Task.task_id)`.
+Python imports and type-based access such as `context[TaskInfo]` are unchanged.
+
+Persisted contexts keyed by `TaskInfo` deserialize that entry as `UnknownKeyword` and do not provide typed `TaskInfo` access.
+Those stored context keys must be migrated to `Task` to restore typed access.
+No automatic migration is provided.
 
 ## Web API
 

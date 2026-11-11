@@ -120,7 +120,7 @@ service name below).
 As with Otto, the DataGraph is the delivery pipeline (bytes ride it from
 `watch_directory` to the publishers) and the `keyword_map` feeds SkyImagery
 metadata; the right side must mirror whatever the camera graph's
-`array_to_fits` `header:` map wrote. For this example, configure `UDLREQID: =str(TaskInfo.task_id)` and
+`array_to_fits` `header:` map wrote. For this example, configure `UDLREQID: =str(Task.task_id)` and
 `FRAMENUM: =Collect.frame_number` in the camera graph.
 The header carries the framework execution ID; the program maps that ID to its CollectRequest.
 Restoring it as `task_id` correlates the frame for publishing and the `COMPLETED` response.

@@ -131,7 +131,7 @@ Include exposure timing, filter, pointing, and angular rates when required by do
 The `write_file.directory` value is the input directory passed to SENPAI's `--data-dir` option.
 Every filename includes the SensorKit task ID, the assigned instrument name encoded as hexadecimal, and the frame number.
 The encoding distinguishes names that differ only by case and prevents path separators from creating subdirectories.
-Capture context must include `TaskInfo`, `Instrument`, and `Collect` to resolve these filenames.
+Capture context must include `Task`, `Instrument`, and `Collect` to resolve these filenames.
 `SensorController` supplies the assigned instrument's context automatically.
 Custom controllers merge `controller.instrument_context(name)` into each capture's context after selecting an instrument.
 

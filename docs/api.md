@@ -167,7 +167,8 @@ Controller-created executions capture submitted context before adding task ident
 When reading an envelope without a snapshot, the fallback captures its stored working context.
 The working `context` includes task identity and can change during execution.
 Executions returned by `ControllerClient.start_task` can be awaited for the final result.
-`TaskInfo` records task identity in data-pipeline context.
+`TaskInfo` records task identity in data-pipeline context under the keyword key `Task`.
+Configuration expressions use `Task.task_id`; Python code can access the keyword through `context[TaskInfo]`.
 
 ---
 

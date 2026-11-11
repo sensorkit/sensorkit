@@ -132,7 +132,7 @@ class CollectTask(Task):
     task_type: Literal["collect"] = "collect"
 
 
-@declare_keyword
+@declare_keyword(key="Task")
 class TaskInfo(BaseModel):
     """Keyword describing a task that has been executed on a controller."""
     task: Task
