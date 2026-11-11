@@ -294,32 +294,62 @@ REPORTED_CONTEXTS = {
 guide camera is on another chain."""
 
 
-def test_a_header_layers_base_then_chain_then_planned(facts, at):
-    base = named(site="base", observer="base")
-    planned = named(frame="planned")
+def test_a_header_layers_task_then_instrument_then_chain(facts, at):
+    base = named(site="base", observer="base", program="base", unit="base")
+    planned = named(observer="planned", unit="planned", frame="planned")
+    instrument = named(unit="instrument", optics="instrument")
+    targets = []
+
+    def instrument_context(target):
+        targets.append(target)
+        return instrument
+
     header = Dispatcher(facts, {}, contexts=lambda: REPORTED_CONTEXTS,
+                        instrument_contexts=instrument_context,
                         base=base).header(acquiring(at, planned))
 
-    # Root first, so the deepest publisher wins, and nothing reported displaces
-    # what was planned. The guide camera is off the chain.
-    assert dict(header) == {"site": "mount", "observer": "base",
-                            "pointing": "mount", "optics": "wheel",
-                            "sensor": "cam-sci", "frame": "planned"}
+    # Instrument values override the task layer, followed by device telemetry.
+    # Only the science camera's chain contributes device values.
+    assert dict(header) == {
+        "site": "mount",
+        "observer": "planned",
+        "program": "base",
+        "unit": "instrument",
+        "frame": "cam-sci",
+        "optics": "wheel",
+        "pointing": "mount",
+        "sensor": "cam-sci",
+    }
+    assert targets == [at("cam-sci")]
 
 
 def test_every_header_is_new_and_leaves_its_sources_alone(facts, at):
     base = named(observer="base")
-    planned = named(frame="planned")
+    planned = named(plan="planned")
+    instrument = named(unit="instrument")
     operation = acquiring(at, planned)
     dispatcher = Dispatcher(facts, {}, contexts=lambda: REPORTED_CONTEXTS,
+                            instrument_contexts=lambda _: instrument,
                             base=base)
     first, second = dispatcher.header(operation), dispatcher.header(operation)
-    first.set_value("frame", "changed by a handler")
+
+    for key in ("observer", "plan", "unit", "frame"):
+        first.set_value(key, "changed by a handler")
 
     assert isinstance(first, Context)
     assert first is not second
-    assert second["frame"] == "planned"
-    assert dict(planned) == {"frame": "planned"}
+    assert dict(second) == {
+        "observer": "base",
+        "plan": "planned",
+        "unit": "instrument",
+        "site": "mount",
+        "pointing": "mount",
+        "optics": "wheel",
+        "sensor": "cam-sci",
+        "frame": "cam-sci",
+    }
+    assert dict(planned) == {"plan": "planned"}
+    assert dict(instrument) == {"unit": "instrument"}
     assert dict(base) == {"observer": "base"}
     assert dict(REPORTED_CONTEXTS["cam-sci"]) == {"sensor": "cam-sci",
                                                   "frame": "cam-sci"}

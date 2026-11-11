@@ -50,6 +50,7 @@ from sensorkit.sensor.dispatch import (
     AttemptRecorder,
     DeviceContexts,
     Dispatcher,
+    InstrumentContexts,
     Interruption,
     InterruptionOutcome,
     InterruptionRecorder,

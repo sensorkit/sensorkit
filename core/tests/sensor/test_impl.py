@@ -11,14 +11,14 @@ from sensorkit.backend.request import CallError
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.client import SensorKit
 from sensorkit.core.controller import ControllerState
-from sensorkit.core.entity import EntityInfo
+from sensorkit.core.entity import EntityInfo, InstrumentInfo
 from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.task import TaskInfo
 from sensorkit.sensor.client import Sensor
 from sensorkit.sensor.execution import WorkflowError
 from sensorkit.sensor.impl import SensorConfig, SensorController
 from sensorkit.sensor.policies import SensorPolicies
-from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
+from sensorkit.std.collect import CameraParameterSet, Collect, StandardCollectTask
 from sensorkit.std.optics import Filter, Filters, SetFilter
 
 from .common import BENCH, TARGET, Rig, authored
@@ -179,6 +179,7 @@ async def test_collect_headers_keep_task_context_without_keywords_from_other_cha
     for key in controller.devices:
         controller_impl.use_device(key, subscribe=[Filter] if key == "off-chain" else [])
 
+    controller_impl.register_instrument("cam", devices=("mount", "cam"))
     controller_impl.add_task_handler(
         StandardCollectTask, execution_callback=controller.collect_task
     )
@@ -446,3 +447,138 @@ async def test_a_named_target_the_sensor_cannot_honor_sends_nothing(
 
     assert name in state.execution_state.finished.error
     assert all(device.received == [] for device in rig.devices.values())
+
+
+async def served_wheels(rig, service_context, controller_impl) -> SensorController:
+    """Attach camera chains with r filters on the east and g filters on the west."""
+    for branch, held in (("e", "r"), ("w", "g")):
+        await rig.serve(
+            service_context,
+            f"wheel-{branch}",
+            ("SetFilter",),
+            keywords=[Filters(filters=[Filter(name=held)])],
+        )
+        await rig.serve(service_context, f"cam-{branch}", ("CameraCapture", "Abort"))
+
+    controller = await attached(controller_impl, BENCH.replace("foc-e", "wheel-e"))
+    await controller_impl.start_device_subscriptions()
+
+    # Wait for subscriptions to receive both filter lists.
+    async with asyncio.timeout(2.0):
+        while any(
+            controller.device_contexts()[wheel].get(Filters) is None
+            for wheel in ("wheel-e", "wheel-w")
+        ):
+            await asyncio.sleep(0)
+
+    return controller
+
+
+def chain_of(instrument: str) -> set[str]:
+    """Return the devices on a bench camera's instrument chain."""
+    return {"mount", instrument.replace("cam", "wheel"), instrument}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("task", "expected"),
+    [(collecting("g"), "cam-w"), (naming("cam-e"), "cam-e")],
+    ids=["automatic", "named"],
+)
+async def test_a_capture_carries_its_assigned_instrument(
+    kit, rig, service_context, controller_impl, task, expected
+):
+    await served_wheels(rig, service_context, controller_impl)
+
+    try:
+        client = kit.controller(str(controller_impl.entity))
+        await client.enable()
+        await client.execute_task(task)
+    finally:
+        await controller_impl.stop_device_subscriptions()
+
+    (capture,) = rig[expected].sent("CameraCapture")
+    instrument = capture.context[InstrumentInfo]
+
+    assert capture.context[Collect].params.instrument == task.camera_params.instrument
+    assert instrument.name == expected
+    assert set(instrument.devices) == chain_of(expected)
+    assert capture.context.resolve("{Instrument.name}") == expected
+    assert capture.context.get(Filters) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_capture_takes_its_instrument_from_the_controller_not_its_devices(
+    kit, rig, service_context, controller_impl
+):
+    controller = await served_wheels(rig, service_context, controller_impl)
+    controller_impl.register_instrument("guider")
+    task = StandardCollectTask(
+        target=TARGET,
+        camera_params=[
+            CameraParameterSet(instrument=key, integration_time_seconds=0.1, frame_count=1)
+            for key in ("cam-e", "cam-w")
+        ],
+    )
+
+    try:
+        contexts = controller.device_contexts()
+        client = kit.controller(str(controller_impl.entity))
+        await client.enable()
+        await client.execute_task(task)
+    finally:
+        await controller_impl.stop_device_subscriptions()
+
+    assert InstrumentInfo(name="guider") in controller_impl.entity_info().details.instruments
+    assert all(context.get(InstrumentInfo) is None for context in contexts.values())
+
+    for key in ("cam-e", "cam-w"):
+        (capture,) = rig[key].sent("CameraCapture")
+
+        assert (
+            capture.context[InstrumentInfo]
+            == controller_impl.instrument_context(key)[InstrumentInfo]
+        )
+
+
+@pytest.mark.asyncio
+async def test_captures_keep_their_own_instrument_alongside_task_context(
+    kit, rig, service_context, controller_impl
+):
+    await served_wheels(rig, service_context, controller_impl)
+    task = StandardCollectTask(
+        target=TARGET,
+        camera_params=[
+            CameraParameterSet(integration_time_seconds=0.1, frame_count=2, filter_name="r"),
+            CameraParameterSet(instrument="cam-w", integration_time_seconds=0.1, frame_count=1),
+        ],
+    )
+    submitted = KeywordDict({"probe": "task context"}, InstrumentInfo(name="submitted"))
+
+    try:
+        client = kit.controller(str(controller_impl.entity))
+        await client.enable()
+        await client.execute_task(task, context=submitted)
+    finally:
+        await controller_impl.stop_device_subscriptions()
+
+    captures = {key: rig[key].sent("CameraCapture") for key in ("cam-e", "cam-w")}
+
+    for key, sent in captures.items():
+        for capture in sent:
+            assert capture.context[InstrumentInfo].name == key
+            assert set(capture.context[InstrumentInfo].devices) == chain_of(key)
+            assert capture.context["probe"] == "task context"
+            assert capture.context[TaskInfo].task == task
+            assert capture.context[Filters].filters[0].name == {"cam-e": "r", "cam-w": "g"}[key]
+
+    assert {
+        key: [c.context[Collect].frame_number for c in sent] for key, sent in captures.items()
+    } == {"cam-e": [0, 1], "cam-w": [0]}
+    assert all(
+        "Instrument" not in controller_impl.get_device(key).subscription.cache
+        for key in ("mount", "wheel-e", "wheel-w", "cam-e", "cam-w")
+    )
+    assert published(controller_impl.entity_info()) == {
+        key: chain_of(key) for key in ("cam-e", "cam-w")
+    }

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -10,7 +11,14 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 import sensorkit.api as sk
 from sensorkit.backend.event import Event
 from sensorkit.backend.request import HandlerError, declare_request
-from sensorkit.common.keyword import UnknownKeyword, declare_keyword
+from sensorkit.common.keyword import (
+    UnknownKeyword,
+    declare_keyword,
+    dump_keyword_json,
+    get_keyword_info,
+    get_keyword_type,
+    validate_keyword_json,
+)
 from sensorkit.core.entity import (
     ControllerDetails,
     DeviceDetails,
@@ -24,6 +32,8 @@ from sensorkit.core.impl.controller import ControllerImpl
 from sensorkit.core.impl.device import DeviceImpl
 from sensorkit.core.impl.entity import EntityImpl
 from sensorkit.core.impl.program import ProgramImpl
+from sensorkit.data.fits import BuildFITSHeader, FITSHeader
+from sensorkit.data.graph import DataFlow
 
 
 def test_entity_ref_unset_and_unresolved_behavior():
@@ -523,6 +533,68 @@ def test_controller_details_without_instruments_list_none():
 def test_controller_details_reject_invalid_instrument_names(instruments, match):
     with pytest.raises(ValidationError, match=match):
         ControllerDetails(supported_tasks=[], controlled_devices=[], instruments=instruments)
+
+
+INSTRUMENTS = [
+    InstrumentInfo(name="wide", devices=("mount", "wheel", "cam-a")),
+    InstrumentInfo(name="tcs-imager"),
+]
+
+
+@pytest.mark.parametrize("info", INSTRUMENTS, ids=["devices", "no-devices"])
+def test_instrument_info_is_the_instrument_keyword(info):
+    context = sk.Context(info)
+
+    assert get_keyword_info(InstrumentInfo).key == "Instrument"
+    assert get_keyword_type("Instrument") is InstrumentInfo
+    assert context["Instrument"] is info
+    assert context[InstrumentInfo] is info
+    assert context.eval("Instrument.name") == info.name
+    assert context.eval("Instrument.devices") == info.devices
+
+
+@pytest.mark.parametrize("info", INSTRUMENTS, ids=["devices", "no-devices"])
+def test_instrument_keyword_round_trips_without_changing_its_fields(info):
+    adapter = TypeAdapter(sk.Context)
+    restored = adapter.validate_json(adapter.dump_json(sk.Context(info)))
+
+    assert json.loads(dump_keyword_json(info)) == {
+        "name": info.name,
+        "devices": list(info.devices),
+    }
+    assert validate_keyword_json("Instrument", dump_keyword_json(info)) == info
+    assert list(restored) == ["Instrument"]
+    assert restored[InstrumentInfo] == info
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("info", "listed"),
+    [(INSTRUMENTS[0], "mount,wheel,cam-a"), (INSTRUMENTS[1], "")],
+    ids=["devices", "no-devices"],
+)
+async def test_instrument_keyword_resolves_in_fits_header_cards(info, listed):
+    op = BuildFITSHeader(
+        define={
+            "UNITID": "=Instrument.name",
+            "INSTDEVS": "{','.join(Instrument.devices)}",
+            "NINSTDEV": "=len(Instrument.devices)",
+        }
+    )
+    incoming, outgoing = DataFlow(), DataFlow()
+    processing = asyncio.create_task(op.process([incoming], [outgoing]))
+    receiving = asyncio.create_task(outgoing.receive("buffer"))
+
+    async with asyncio.timeout(1.0):
+        await incoming.send(sk.Context(info), b"")
+        context, _ = await receiving
+        await processing
+
+    assert context[FITSHeader] == {
+        "UNITID": info.name,
+        "INSTDEVS": listed,
+        "NINSTDEV": len(info.devices),
+    }
 
 
 class Gauge(BaseModel):

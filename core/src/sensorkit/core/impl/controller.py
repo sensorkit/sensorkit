@@ -521,6 +521,15 @@ class ControllerImpl(EntityImpl, ControllerInterface):
         self._instruments[name] = instrument
 
     @override
+    def instrument_context(self, name: str) -> Context:
+        try:
+            instrument = self._instruments[name]
+        except KeyError:
+            raise KeyError(f"No instrument '{name}' is registered") from None
+
+        return Context(instrument.model_copy())
+
+    @override
     def use_device(self, name: str, *, subscribe: list[type] | None = None) -> DeviceClient:
         """Register a device dependency and return its client.
 
@@ -1026,7 +1035,7 @@ class ControllerImpl(EntityImpl, ControllerInterface):
                 published_keywords=frozenset(self._published_keywords),
                 supported_tasks=[t.__name__ for t in self._task_handlers.keys()],
                 controlled_devices=list(self._devices.keys()),
-                instruments=tuple(self._instruments.values()),
+                instruments=tuple(info.model_copy() for info in self._instruments.values()),
             ),
         )
 

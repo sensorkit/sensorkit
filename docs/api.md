@@ -323,6 +323,7 @@ Adds command-handler registration and enable/disable state (normally driven for 
 
 - `use_device(name, *, subscribe=[...])` — declare a device dependency, optionally subscribing to keyword types; returns a handle for sending commands and reading cached state.
 - `register_instrument(name, *, devices=())` - add a name and optional device associations to controller metadata. See [Instruments](#instruments).
+- `instrument_context(name)` - return a new `Context` holding a registered instrument's metadata. See [Instruments](#instruments).
 - `get_device(name)` / `all_devices()` — access attached devices.
 - `update_context(...)` — build a `Context` snapshot from live device keyword state (feeds FITS headers and pipeline expressions).
 - `report_state(state, context)` — report the observed operating state and its lifecycle input.
@@ -399,6 +400,19 @@ if isinstance(info.details, sk.ControllerDetails):
 Set `CameraParameterSet.instrument` to select an instrument for the entire sequence.
 Collect handlers must honor the selection or reject the task.
 The controller chooses an instrument when the field is omitted.
+
+Use `instrument_context(name)` inside a controller to read its local registration without a backend request.
+It returns a fresh `Context` containing the registered `InstrumentInfo` under the key `Instrument`.
+Changing the context or its metadata leaves the registration unchanged.
+Unknown names raise `KeyError`.
+Custom controllers can use the accessor for instruments with no device associations.
+
+The sensor controller resolves instrument context for each capture, including automatic selections.
+Capture context merges task values, instrument values, then device snapshots from root to camera.
+Planned per-frame `Collect` metadata belongs to the task values.
+Later values replace earlier values.
+DataGraph expressions can read `Instrument.name` and `Instrument.devices`.
+For example, `=Instrument.name` can supply the FITS `UNITID` value.
 
 ### `ProgramImpl`
 

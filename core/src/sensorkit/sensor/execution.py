@@ -40,6 +40,7 @@ from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.dispatch import (
     DeviceContexts,
     Dispatcher,
+    InstrumentContexts,
     Interruption,
     InterruptionRecorder,
     OperationEvent,
@@ -204,6 +205,7 @@ class WorkflowExecutor:
         workflow: ExecutableWorkflow,
         *,
         contexts: DeviceContexts | None = None,
+        instrument_contexts: InstrumentContexts | None = None,
         base: sk.Context | None = None,
         in_domain: AbortPredicate | None = None,
         state: ExecutionState | None = None,
@@ -214,6 +216,7 @@ class WorkflowExecutor:
         Args:
             workflow: Compiled main and cleanup graphs.
             contexts: Current device contexts, sampled for each acquisition.
+            instrument_contexts: Resolve controller keywords for each capture target.
             base: Context shared by every acquisition in this run.
             in_domain: Predicate recognizing cancellations as domain aborts. False
                 or no predicate means hard cancellation.
@@ -237,7 +240,12 @@ class WorkflowExecutor:
         # Reserve state before yielding so concurrent reuse cannot pass.
         results = state.begin(workflow)
         dispatcher = Dispatcher(
-            self.sensor, self.clients, contexts=contexts, base=base, events=self.events
+            self.sensor,
+            self.clients,
+            contexts=contexts,
+            instrument_contexts=instrument_contexts,
+            base=base,
+            events=self.events,
         )
         runner = DagRunner(_dispatching(dispatcher, state))
         reasons: list[str] = []

@@ -3,9 +3,9 @@
 calls.
 
 Operations already contain resolved timeouts and command parameters. For an
-acquisition, dispatch samples a fresh header from base context, device contexts
-along the chain, then planned keywords. It adds the header to a copy of the
-acquisition command.
+acquisition, dispatch merges task and planned frame keywords, instrument
+context, then device snapshots along the chain. It adds this context to a copy
+of the acquisition command.
 
 Record attempts immediately before sending; failures before this point do not
 arm cleanup. A cancelled or timed-out call triggers one built-in Abort attempt
@@ -33,10 +33,14 @@ from sensorkit.common.dag import Node
 from sensorkit.core.device import Abort, DeviceClient, DeviceCommand
 from sensorkit.data.context import merge_contexts
 from sensorkit.sensor.binding import BoundSensor
+from sensorkit.sensor.topology import Placement
 from sensorkit.sensor.workflow import Operation
 
 type DeviceContexts = Callable[[], Mapping[str, sk.Context]]
 """Callable supplying current device contexts, sampled for each acquisition."""
+
+type InstrumentContexts = Callable[[Placement], sk.Context]
+"""Resolve a capture target to its instrument context."""
 
 type OperationOutcome = Literal["begin", "ok", "failed", "cancelled"]
 
@@ -100,12 +104,14 @@ class Dispatcher:
         clients: Mapping[str, DeviceClient],
         *,
         contexts: DeviceContexts | None = None,
+        instrument_contexts: InstrumentContexts | None = None,
         base: sk.Context | None = None,
         events: AsyncObserver[OperationEvent] | None = None,
     ):
         self.sensor = sensor
         self.clients = clients
         self.contexts = contexts
+        self.instrument_contexts = instrument_contexts
         self.base = base
         self.events = events
 
@@ -181,22 +187,28 @@ class Dispatcher:
         return operation.command.model_copy(deep=True, update={"context": self.header(operation)})
 
     def header(self, operation: Operation) -> sk.Context:
-        """Build a fresh acquisition context with sources in precedence
-        order.
+        """Merge task, instrument, and device context for a capture.
 
-        Merge base context, device contexts from root to instrument, then
-        planned acquisition keywords. Deeper publishers override earlier ones;
-        planned keywords take final precedence.
+        Base context and planned frame keywords form the task context.
+        Device snapshots merge from root to capture target. Later values
+        replace earlier values.
 
         Raises:
-            KeyError: The target is not an instrument in this topology.
+            KeyError: The target is not an instrument or has no registered context.
         """
         # Frame numbering is already included in planned acquisition keywords.
+        planned = operation.acquisition.keywords if operation.acquisition is not None else None
+        instrument = (
+            self.instrument_contexts(operation.target)
+            if self.instrument_contexts is not None
+            else None
+        )
         reported = self.contexts() if self.contexts is not None else {}
         chain = self.sensor.topology.chain(operation.target)
-        planned = operation.acquisition.keywords if operation.acquisition is not None else None
 
-        return merge_contexts(self.base, *(reported.get(p.device) for p in chain), planned)
+        return merge_contexts(
+            self.base, planned, instrument, *(reported.get(p.device) for p in chain)
+        )
 
     async def abort(self, device: str, record: InterruptionRecorder) -> Interruption:
         """Attempt built-in Abort once, recording the outcome before

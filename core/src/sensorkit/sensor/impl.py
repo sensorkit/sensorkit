@@ -110,6 +110,11 @@ class SensorController:
 
         return {key: controller.get_device(key).subscription.snapshot() for key in self.devices}
 
+    def instrument_context(self, target: Placement) -> sk.Context:
+        """Read registered context for the assigned capture target."""
+        # Sensor instrument names are camera device IDs.
+        return sk.controller().instrument_context(target.device)
+
     async def execute(
         self,
         workflow: ExecutableWorkflow,
@@ -126,7 +131,11 @@ class SensorController:
                 ends, or the service is stopping.
         """
         report = await self.sensor.execute(
-            workflow, contexts=contexts, base=base, in_domain=lambda _: not self.stopping
+            workflow,
+            contexts=contexts,
+            instrument_contexts=self.instrument_context,
+            base=base,
+            in_domain=lambda _: not self.stopping,
         )
 
         # Core records a task as aborted only if the handler is cancelled.
@@ -181,7 +190,8 @@ class SensorController:
 
         Named parameter sets keep their instrument throughout the collect.
         Planning uses one snapshot of subscribed device keywords. Frame headers
-        sample them again when each capture is dispatched.
+        sample them again at dispatch, along with the assigned instrument's
+        registered context.
         """
         workflow = self.sensor.plan_collect(
             translate(execution.task, instruments=self.instruments),

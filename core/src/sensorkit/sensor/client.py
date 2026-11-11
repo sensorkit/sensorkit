@@ -23,7 +23,7 @@ from sensorkit.core.entity import DeviceDetails, EntityInfo
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.collect import CollectIntent, compile_collect, pack
 from sensorkit.sensor.definition import SensorDefinition
-from sensorkit.sensor.dispatch import DeviceContexts, OperationEvent
+from sensorkit.sensor.dispatch import DeviceContexts, InstrumentContexts, OperationEvent
 from sensorkit.sensor.execution import (
     AbortPredicate,
     ExecutionState,
@@ -163,6 +163,7 @@ class Sensor:
         workflow: ExecutableWorkflow,
         *,
         contexts: DeviceContexts | None = None,
+        instrument_contexts: InstrumentContexts | None = None,
         base: sk.Context | None = None,
         in_domain: AbortPredicate | None = None,
         state: ExecutionState | None = None,
@@ -175,6 +176,7 @@ class Sensor:
         Args:
             workflow: Workflow planned by this session.
             contexts: Current device contexts, sampled for each acquisition.
+            instrument_contexts: Resolve controller keywords for each capture target.
             base: Context shared by every acquisition in the run.
             in_domain: Predicate recognizing cancellations as domain aborts.
             state: Fresh caller-owned state for inspection after hard
@@ -206,7 +208,12 @@ class Sensor:
 
         try:
             return await self._executor.execute(
-                workflow, contexts=contexts, base=base, in_domain=in_domain, state=state
+                workflow,
+                contexts=contexts,
+                instrument_contexts=instrument_contexts,
+                base=base,
+                in_domain=in_domain,
+                state=state,
             )
         finally:
             self._running = False

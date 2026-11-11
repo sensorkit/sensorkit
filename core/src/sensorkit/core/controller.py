@@ -733,7 +733,7 @@ class ControllerInterface(EntityInterface):
         *,
         devices: Collection[str | DeviceClient] = (),
     ) -> None:
-        """Add an instrument to the controller's `EntityInfo`.
+        """Register instrument metadata for discovery and capture context.
 
         Register during attachment for automatic publication. Later additions
         require `publish_entity_info()`. Call `use_device()` separately for
@@ -747,6 +747,18 @@ class ControllerInterface(EntityInterface):
         Raises:
             ValueError: The name is empty or duplicates a registered name.
             TypeError: A string was supplied instead of a collection of devices.
+        """
+        ...
+
+    @abstractmethod
+    def instrument_context(self, name: str) -> Context:
+        """Return a fresh context for a registered instrument.
+
+        The `Instrument` keyword contains its registered `InstrumentInfo`.
+        Changing the returned context or metadata leaves the registration unchanged.
+
+        Raises:
+            KeyError: No instrument with this name is registered.
         """
         ...
 

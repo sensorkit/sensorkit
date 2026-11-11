@@ -63,8 +63,9 @@ class DeviceDetails(EntityDetails):
         return match_traits(self, exclude_archetypes=True)
 
 
+@declare_keyword(key="Instrument")
 class InstrumentInfo(BaseModel):
-    """Instrument metadata published by a controller."""
+    """Controller instrument metadata, available in capture context as `Instrument`."""
 
     name: str = Field(min_length=1)
     """Case-sensitive name used to select this instrument in controller tasks."""

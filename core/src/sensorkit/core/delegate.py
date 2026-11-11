@@ -116,6 +116,10 @@ class ControllerDelegate(EntityDelegate, ControllerInterface):
         return self.delegate_target.register_instrument(name, devices=devices)
 
     @override
+    def instrument_context(self, name: str) -> Context:
+        return self.delegate_target.instrument_context(name)
+
+    @override
     def use_device(self, name: str, *, subscribe: list[type] | None = None):
         return self.delegate_target.use_device(name, subscribe=subscribe)
 
