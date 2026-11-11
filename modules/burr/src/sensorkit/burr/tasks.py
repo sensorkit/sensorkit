@@ -20,9 +20,10 @@ from sensorkit.burr.models import CollectConfig
 from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.std import CameraParameterSet, FrameType, StandardCollectTask
 
-# Produces e.g. `20260424T031530_photometric_standards_110-364_f0.fits`.
+# Hex preserves case-sensitive instrument names and excludes path separators.
 _FILE_NAME_TEMPLATE = (
-    'f"{datetime.now(UTC):%Y%m%dT%H%M%S}_{BurrContext.mode}_{BurrContext.targ}_f{Collect.frame_number}.fits"'
+    'f"{datetime.now(UTC):%Y%m%dT%H%M%S}_{BurrContext.mode}_{BurrContext.targ}'
+    '_{TaskInfo.task_id}_{Instrument.name.encode().hex()}_f{Collect.frame_number}.fits"'
 )
 
 _SOURCE_FRAME_TYPES = {"twilight_flats": FrameType.FLAT}
@@ -58,6 +59,9 @@ def build_sk_tasks(
     sequence. A sidereal-then-rate sequence produces two tasks. Other interleavings
     raise `ValueError`.
 
+    Each selected instrument receives its configured camera settings.
+    Exposure duration, frame count, and tracking pattern are shared.
+
     Rate-then-sidereal tasks list their sidereal frame indices in `sidereal_frames`.
     Sidereal AltAz and lunar pointings are converted to ICRS at task creation.
     Frames with tracking off retain a fixed AltAz target.
@@ -90,15 +94,7 @@ def build_sk_tasks(
         )
 
     collect = collect or CollectConfig()
-    cam_extra = dict(
-        instrument=collect.instrument,
-        frame_type=_SOURCE_FRAME_TYPES.get(request.source_name, FrameType.LIGHT),
-        filter_name=collect.filter_name,
-        readout_mode=collect.readout_mode,
-        gain=collect.gain,
-        binning_x=collect.binning,
-        binning_y=collect.binning,
-    )
+    frame_type = _SOURCE_FRAME_TYPES.get(request.source_name, FrameType.LIGHT)
 
     for exp_seconds in request.exposure_seconds:
         # A fresh BurrContext.seq per exposure: every SK task, and thus every
@@ -123,11 +119,7 @@ def build_sk_tasks(
             else:
                 concrete_rates = request.rates.to_concrete_rates(exp_seconds)
 
-        cam = CameraParameterSet(
-            integration_time_seconds=exp_seconds,
-            frame_count=frame_count,
-            **cam_extra,
-        )
+        cam = _camera_params(collect, frame_type, exp_seconds, frame_count)
         tasks: list[StandardCollectTask] = []
 
         # SIDEREAL and OFF both route through the non-rate target path:
@@ -169,11 +161,7 @@ def build_sk_tasks(
             tasks.append(
                 StandardCollectTask(
                     target=sidereal_target,
-                    camera_params=CameraParameterSet(
-                        integration_time_seconds=exp_seconds,
-                        frame_count=first_rate,
-                        **cam_extra,
-                    ),
+                    camera_params=_camera_params(collect, frame_type, exp_seconds, first_rate),
                     end_time=end_time,
                 )
             )
@@ -182,10 +170,8 @@ def build_sk_tasks(
                     target=_resolve_rate_target(
                         is_tle_target, sidereal_target, request.target, concrete_rates, config
                     ),
-                    camera_params=CameraParameterSet(
-                        integration_time_seconds=exp_seconds,
-                        frame_count=frame_count - first_rate,
-                        **cam_extra,
+                    camera_params=_camera_params(
+                        collect, frame_type, exp_seconds, frame_count - first_rate
                     ),
                     end_time=end_time,
                 )
@@ -199,6 +185,28 @@ def build_sk_tasks(
 
         for task in tasks:
             yield task.submit(context=exposure_context, expiry_time=end_time)
+
+
+def _camera_params(
+    collect: CollectConfig, frame_type: FrameType, exp_seconds: float, frame_count: int
+) -> CameraParameterSet | list[CameraParameterSet]:
+    """Build capture parameters for each selected instrument."""
+    params = [
+        CameraParameterSet(
+            instrument=instrument,
+            frame_type=frame_type,
+            integration_time_seconds=exp_seconds,
+            frame_count=frame_count,
+            filter_name=settings.filter_name,
+            readout_mode=settings.readout_mode,
+            gain=settings.gain,
+            binning_x=settings.binning,
+            binning_y=settings.binning,
+        )
+        for instrument, settings in collect.instrument_settings()
+    ]
+
+    return params if collect.instruments is not None else params[0]
 
 
 def _resolve_rate_target(

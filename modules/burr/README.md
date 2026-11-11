@@ -47,8 +47,14 @@ value:
   minimum_altitude_degrees: 20         # site-wide altitude floor
   raw_data_root: /path/to/data/raw/burr   # flat FITS directory for exposure adjustment
   collect:
-    instrument: cam-east               # omit to let the controller select an instrument
+    gain: 100
+    binning: 1
     filter_name: r
+    instruments:
+      cam-east: {}
+      cam-west:
+        filter_name: g
+        gain: 200
   runtime:
     output_dir: /path/to/data/processed/burr   # burr run dirs (run_state.json, plots) — not the FITS dir
   plotting:
@@ -98,10 +104,21 @@ value:
       maximum_length_pixel: 100
 ```
 
-Use `collect` to set camera parameters for all tasks from this program.
-Set `collect.instrument` to an instrument name advertised by `controller`.
+Set shared `filter_name`, `readout_mode`, `gain`, and `binning` values under `collect`.
+Use `collect.instruments` to select instruments and override their camera settings.
+Each entry inherits omitted settings from `collect`.
+An explicit null clears an inherited value and leaves that setting unspecified.
+In the example, cam-east uses filter r and gain 100, while cam-west uses filter g and gain 200.
+
+Every enabled Burr source uses these instrument selections.
+Each task includes one sequence per configured instrument.
+Burr's exposure duration, target, tracking pattern, and frame count apply to all instruments.
+
+For one instrument, the `collect.instrument` shorthand uses the shared settings directly.
+Omit both selectors for automatic instrument selection.
+The selectors cannot be combined, and `collect.instruments` must contain at least one entry.
+
 Instrument names are case-sensitive, and whitespace is preserved.
-Leave the field unset for automatic selection by the controller.
 A named selection requires the program's assigned controller to match `controller`.
 Before each task, the program checks the assignment and instrument metadata.
 An invalid selection ends tasking with a program fault before another task is dispatched.
@@ -112,10 +129,15 @@ Configure the camera graph's `array_to_fits.header` mapping to write `BURRSEQ: =
 Other useful mappings include `TRKMODE: =Collect.track_mode`, `FRAMENUM: =Collect.frame_number`, and `FRAMECNT: =Collect.params.frame_count`.
 Include exposure timing, filter, pointing, and angular rates when required by downstream analysis.
 The `write_file.directory` value is the input directory passed to SENPAI's `--data-dir` option.
+Every filename includes the SensorKit task ID, the assigned instrument name encoded as hexadecimal, and the frame number.
+The encoding distinguishes names that differ only by case and prevents path separators from creating subdirectories.
+Capture context must include `TaskInfo`, `Instrument`, and `Collect` to resolve these filenames.
+`SensorController` supplies the assigned instrument's context automatically.
+Custom controllers merge `controller.instrument_context(name)` into each capture's context after selecting an instrument.
 
 Set `raw_data_root` to the FITS directory to enable flat exposure adjustment from measured counts.
 Burr 0.3.4 requires `IMAGETYP=FLAT` and nonempty `UNITID` and `FILTER` values in each flat's image header.
-Give each camera a stable, distinct `UNITID`, such as `UNITID: cam-east`.
+Use `UNITID: =Instrument.name` to identify the selected instrument.
 Burr tracks exposure adjustment by that value.
 For a configured filter, `FILTER: =Collect.params.filter_name` writes the commanded name.
 Use device telemetry instead if the header needs the measured filter position.
@@ -131,6 +153,10 @@ python -m senpai.cli.burr night /data/processed/burr/<Site>_<YYYYMMDD> \
     --data-dir /data/raw/burr/<controller> --seq-key BURRSEQ -o processed/
 python -m senpai.cli.burr calibrate processed/<Site>_<YYYYMMDD>
 ```
+
+Use `--seq-key BURRSEQ` to group frames from the same requested exposure.
+SENPAI's filename parser includes the task and instrument suffixes in its target label.
+Without sequence headers, those suffixes also affect its fallback grouping.
 
 `night` groups the night's frames into per-collect batches — `--seq-key
 BURRSEQ` batches on the stamped sequence id; without it attribution falls back

@@ -186,10 +186,10 @@ class BurrProgram:
             await asyncio.to_thread(finalize)
 
     async def validate_instrument_selection(self) -> None:
-        """Require the named instrument on the configured and assigned controller."""
-        instrument = self.config.collect.instrument
+        """Require named instruments on the configured and assigned controller."""
+        names = [name for name, _ in self.config.collect.instrument_settings() if name is not None]
 
-        if instrument is None:
+        if not names:
             return
 
         program = sk.program()
@@ -208,8 +208,11 @@ class BurrProgram:
         if not isinstance(info.details, sk.ControllerDetails):
             raise ValueError(f"Entity '{assigned}' has no controller details")
 
-        if not any(item.name == instrument for item in info.details.instruments):
-            raise ValueError(f"Controller '{assigned}' has no instrument '{instrument}'")
+        available = {item.name for item in info.details.instruments}
+
+        if missing := [name for name in names if name not in available]:
+            listed = ", ".join(f"'{name}'" for name in missing)
+            raise ValueError(f"Controller '{assigned}' has no instrument {listed}")
 
     def _build_task_sources(self):
         config = self.config.schedule
