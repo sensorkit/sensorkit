@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Focuser control and focus analysis contracts."""
+"""Focuser commands and focus analysis schemas."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ class AutoFocus(sk.Task):
     The task schema is beta.
 
     Attributes:
-        instrument: Entity name of the camera that takes the sweep.
+        instrument: Name of the controller instrument that takes the sweep.
         positions: Focuser positions to visit, one exposure per entry.
         integration_time_seconds: Exposure time of each frame.
         binning: Camera binning, or None to keep the current setting.
@@ -63,7 +63,7 @@ class AutoFocus(sk.Task):
 
 @sk.declare_keyword(kind="config")
 class FocusAnalysisSource(BaseModel):
-    """Analysis provider selected by a controller.
+    """Focus analysis provider selected by a controller.
 
     Attributes:
         entity: The entity that publishes focus analysis results.
@@ -74,17 +74,15 @@ class FocusAnalysisSource(BaseModel):
 
 @sk.declare_keyword
 class FocusSweepContext(BaseModel):
-    """Membership and commanded position for one sweep sample.
+    """Sweep identity and commanded position for one sample.
 
     Attributes:
-        instrument: Camera entity name, written as FOCINST.
-        sweep_id: Sweep identity, written as FOCSWEEP.
+        sweep_id: Unique sweep identifier, written as FOCSWEEP.
         sample_index: Zero-based sample index, written as FOCSAMP.
         sample_count: Requested sample count, written as FOCCOUNT.
         commanded_position: Requested focuser position, written as FOCCMD.
     """
 
-    instrument: str = Field(min_length=1)
     sweep_id: UUID
     sample_index: int = Field(ge=0)
     sample_count: int = Field(gt=0)
@@ -99,7 +97,6 @@ class FocusSweepContext(BaseModel):
 
     def get_fits_cards(self):
         """Yield FITS cards identifying this sweep sample."""
-        yield "FOCINST", (self.instrument, "Focus instrument")
         yield "FOCSWEEP", (str(self.sweep_id), "Focus sweep ID")
         yield "FOCSAMP", (self.sample_index, "Zero-based focus sample index")
         yield "FOCCOUNT", (self.sample_count, "Requested focus sample count")
@@ -124,7 +121,6 @@ class FocusSweepContext(BaseModel):
 
         return cls.model_validate(
             {
-                "instrument": header["FOCINST"],
                 "sweep_id": header["FOCSWEEP"],
                 "sample_index": header["FOCSAMP"],
                 "sample_count": header["FOCCOUNT"],
@@ -141,10 +137,10 @@ class FocusAnalysis(BaseModel):
 
     Attributes:
         controller_id: The controller that owns the instrument.
-        instrument: Camera entity name, independent of the camera-reported
-            `exposure.instrument` label.
+        instrument: Controller instrument name, independent of the
+            camera-reported `exposure.instrument` label.
         image_id: Provider identifier of the analyzed image.
-        exposure: Observed acquisition metadata of the image.
+        exposure: Exposure metadata recorded at capture.
         reported_position: Focuser position reported at capture, if known.
         sweep: Sweep membership, or None for an image outside a sweep.
         median_fwhm_pixels: Median point-source FWHM in image pixels.
@@ -178,37 +174,34 @@ class FocusAnalysis(BaseModel):
 
         return self
 
-    @model_validator(mode="after")
-    def _check_sweep(self) -> Self:
-        if self.sweep is not None and self.sweep.instrument != self.instrument:
-            raise ValueError("sweep: instrument must match the analysis instrument")
-
-        return self
-
 
 @sk.declare_keyword
 class FocusSweepAnalysis(BaseModel):
-    """Terminal fit outcome and image evidence for one sweep.
+    """Focus fit outcome and sample measurements for one sweep.
 
-    Success proposes a focus position for the controller to apply.
-    Failure includes a reason and may retain partial evidence and a rejected fit residual.
+    A successful fit estimates best focus or its direction beyond the sampled range.
+    A failed fit includes a reason and may retain sample measurements and a fit residual.
 
     Attributes:
         controller_id: The controller that owns the instrument.
-        instrument: Entity name of the camera that took the sweep.
-        sweep_id: Identity of the sweep.
-        outcome: Whether the fit produced a proposed position.
-        best_position: Proposed focuser position.
+        instrument: Name of the controller instrument that took the sweep.
+        sweep_id: Unique sweep identifier.
+        outcome: Whether the fit estimated a focus position or direction.
+        position: Estimated focus position or sampled boundary, depending on disposition.
+        disposition: Relationship of best focus to position. `equals` gives an
+            estimated minimum. `greater_than` and `less_than` indicate best focus
+            beyond the corresponding boundary of the sampled range.
         rms_residual_pixels: Root mean square residual of the fitted FWHM values, in pixels.
         reason: Why the fit failed.
-        samples: Per-image evidence available to the fit.
+        samples: Per-image measurements used to assess the sweep.
     """
 
     controller_id: sk.ControllerRef
     instrument: str = Field(min_length=1)
     sweep_id: UUID
     outcome: Literal["success", "failure"]
-    best_position: FiniteFloat | None = None
+    position: FiniteFloat | None = None
+    disposition: Literal["equals", "greater_than", "less_than"] | None = None
     rms_residual_pixels: FiniteFloat | None = Field(default=None, ge=0)
     reason: str | None = Field(default=None, min_length=1)
     samples: list[FocusAnalysis] = Field(default_factory=list)
@@ -218,16 +211,20 @@ class FocusSweepAnalysis(BaseModel):
         match self:
             case FocusSweepAnalysis(outcome="success", reason=str()):
                 raise ValueError("reason: a successful sweep has no failure reason")
-            case FocusSweepAnalysis(outcome="success", best_position=None):
-                raise ValueError("best_position: a successful sweep requires a position")
+            case FocusSweepAnalysis(outcome="success", position=None):
+                raise ValueError("position: a successful sweep requires a position")
+            case FocusSweepAnalysis(outcome="success", disposition=None):
+                raise ValueError("disposition: a successful sweep requires a disposition")
             case FocusSweepAnalysis(outcome="success", rms_residual_pixels=None):
                 raise ValueError("rms_residual_pixels: a successful sweep requires a residual")
             case FocusSweepAnalysis(outcome="success") if not any(s.valid for s in self.samples):
                 raise ValueError("samples: a successful sweep requires a valid sample")
             case FocusSweepAnalysis(outcome="failure", reason=None):
                 raise ValueError("reason: a failed sweep requires a reason")
-            case FocusSweepAnalysis(outcome="failure") if self.best_position is not None:
-                raise ValueError("best_position: a failed sweep has no position")
+            case FocusSweepAnalysis(outcome="failure", position=float()):
+                raise ValueError("position: a failed sweep has no position")
+            case FocusSweepAnalysis(outcome="failure", disposition=str()):
+                raise ValueError("disposition: a failed sweep has no disposition")
 
         return self
 

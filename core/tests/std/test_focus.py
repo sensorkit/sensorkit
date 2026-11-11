@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for the focuser and focus analysis contracts."""
+"""Tests for focuser commands and focus analysis schemas."""
 
 import json
 import math
@@ -52,7 +52,6 @@ def exposure(**overrides) -> ExposureInfo:
 
 def sweep_context(index: int = 0, **overrides) -> FocusSweepContext:
     fields = {
-        "instrument": "camera",
         "sweep_id": SWEEP_ID,
         "sample_index": index,
         "sample_count": 3,
@@ -87,7 +86,8 @@ def sweep_analysis(**overrides) -> FocusSweepAnalysis:
         "instrument": "camera",
         "sweep_id": SWEEP_ID,
         "outcome": "success",
-        "best_position": 1040.0,
+        "position": 1040.0,
+        "disposition": "equals",
         "rms_residual_pixels": 0.12,
         "samples": [analysis(sweep=sweep_context(i)) for i in range(3)],
     }
@@ -97,7 +97,8 @@ def sweep_analysis(**overrides) -> FocusSweepAnalysis:
 def failed_sweep_analysis(**overrides) -> FocusSweepAnalysis:
     fields = {
         "outcome": "failure",
-        "best_position": None,
+        "position": None,
+        "disposition": None,
         "rms_residual_pixels": None,
         "reason": "fit did not converge",
     }
@@ -202,7 +203,6 @@ class TestFocusSweepContext:
             {"sample_index": -1},
             {"sample_count": 0},
             {"commanded_position": math.nan},
-            {"instrument": ""},
         ],
     )
     def test_rejects_invalid_membership(self, overrides):
@@ -214,10 +214,10 @@ class TestFocusSweepContext:
 
         assert FocusSweepContext.from_fits_header(header_from(context)) == context
 
-    def test_fits_cards_exclude_controller(self):
+    def test_fits_cards_exclude_controller_and_instrument(self):
         cards = dict(sweep_context().get_fits_cards())
 
-        assert set(cards) == {"FOCINST", "FOCSWEEP", "FOCSAMP", "FOCCOUNT", "FOCCMD"}
+        assert set(cards) == {"FOCSWEEP", "FOCSAMP", "FOCCOUNT", "FOCCMD"}
 
     def test_ordinary_header_has_no_context(self):
         header = fits.Header({"INSTRUME": "QHY600M", "SKCTRL": "controller"})
@@ -237,7 +237,7 @@ class TestFocusSweepContext:
             ("FOCSWEEP", "not-a-uuid"),
             ("FOCSAMP", "first"),
             ("FOCSAMP", 3),
-            ("FOCINST", ""),
+            ("FOCCMD", "far"),
         ],
     )
     def test_invalid_header_value_raises_validation_error(self, keyword, value):
@@ -317,7 +317,6 @@ class TestFocusAnalysis:
             ({"median_fwhm_pixels": math.inf}, "finite"),
             ({"source_count": -1}, "greater than or equal to 0"),
             ({"reason": ""}, "at least 1 character"),
-            ({"sweep": sweep_context(instrument="other")}, "must match the analysis instrument"),
         ],
     )
     def test_rejects_inconsistent_measurement(self, overrides, match):
@@ -335,6 +334,13 @@ class TestFocusSweepAnalysis:
         assert [type(sample) for sample in restored.samples] == [FocusAnalysis] * 3
         assert [sample.sweep.sample_index for sample in restored.samples] == [0, 1, 2]
         assert type(restored.controller_id) is sk.ControllerRef
+
+    @pytest.mark.parametrize("disposition", ["greater_than", "less_than"])
+    def test_directional_success_round_trips(self, disposition):
+        result = sweep_analysis(position=1100.0, disposition=disposition)
+        restored = validate_keyword_json("FocusSweepAnalysis", dump_keyword_json(result))
+
+        assert (restored.position, restored.disposition) == (1100.0, disposition)
 
     def test_success_needs_only_one_valid_sample(self):
         samples = [analysis(sweep=sweep_context(0)), invalid_analysis(sweep=sweep_context(1))]
@@ -359,12 +365,14 @@ class TestFocusSweepAnalysis:
         "overrides, match",
         [
             ({"reason": "noisy"}, "no failure reason"),
-            ({"best_position": None}, "requires a position"),
+            ({"position": None}, "requires a position"),
+            ({"disposition": None}, "requires a disposition"),
+            ({"disposition": "near"}, "Input should be"),
             ({"rms_residual_pixels": None}, "requires a residual"),
             ({"rms_residual_pixels": -0.1}, "greater than or equal to 0"),
             ({"samples": []}, "requires a valid sample"),
             ({"samples": [invalid_analysis()]}, "requires a valid sample"),
-            ({"best_position": math.nan}, "finite"),
+            ({"position": math.nan}, "finite"),
         ],
     )
     def test_rejects_inconsistent_success(self, overrides, match):
@@ -375,7 +383,8 @@ class TestFocusSweepAnalysis:
         "overrides, match",
         [
             ({"reason": None}, "requires a reason"),
-            ({"best_position": 1040.0}, "has no position"),
+            ({"position": 1040.0}, "has no position"),
+            ({"disposition": "less_than"}, "has no disposition"),
         ],
     )
     def test_rejects_inconsistent_failure(self, overrides, match):
@@ -388,10 +397,7 @@ class TestFocusSweepAnalysis:
             (analysis(sweep=None), "context from this sweep"),
             (analysis(sweep=sweep_context(sweep_id=OTHER_SWEEP_ID)), "context from this sweep"),
             (analysis(controller_id="other"), "controller must match"),
-            (
-                analysis(instrument="other", sweep=sweep_context(instrument="other")),
-                "instrument must match",
-            ),
+            (analysis(instrument="other"), "instrument must match"),
         ],
     )
     def test_rejects_unrelated_evidence(self, sample, match):
