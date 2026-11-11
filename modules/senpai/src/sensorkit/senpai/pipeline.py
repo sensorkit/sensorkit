@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import io
 import logging
 import math
 import time
 import warnings
+from collections.abc import Buffer, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +29,8 @@ try:
     from senpai.core.config import initialize_config
     from senpai.engine.models.images import ProcessedFitsImage
     from senpai.engine.processing.collect import final_plots, process_senpai_collect
+    from senpai.engine.processing.sidereal import process_astrometry_fits_sidereal
+    from senpai.engine.utils.preprocessing import preprocess_image
 finally:
     logging.disable(logging.NOTSET)
 
@@ -39,6 +45,33 @@ class FrameInput:
     frame_num: int | None = None
     frame_count: int | None = None
     controller_name: str | None = None
+
+
+@dataclass
+class FocusMeasurement:
+    """Point-source width measured in one image.
+
+    Attributes:
+        median_fwhm_pixels: Median point-source FWHM in image pixels, if measured.
+        source_count: Source count supplied by the engine.
+        reason: Why the measurement is unusable, or None if it is usable.
+    """
+
+    median_fwhm_pixels: float | None
+    source_count: int
+    reason: str | None
+
+
+async def run_engine[R](call: Callable[..., R], *args) -> R:
+    """Run an engine call in a worker thread and return its result."""
+
+    # The engine prints to stdout, bypassing the logging that is redirected to its log file.
+    # SensorKit's console is on stderr, so it is unaffected.
+    def quiet() -> R:
+        with contextlib.redirect_stdout(io.StringIO()):
+            return call(*args)
+
+    return await asyncio.to_thread(quiet)
 
 
 def _iso_z(dt: datetime) -> str:
@@ -89,8 +122,7 @@ class SenpaiPipeline:
         the batch).
         """
         images = [
-            ProcessedFitsImage.from_file_bytes(inp.data, file_path=inp.file_path)
-            for inp in inputs
+            ProcessedFitsImage.from_file_bytes(inp.data, file_path=inp.file_path) for inp in inputs
         ]
 
         # Announce the collect: frame count, the task id when the frames carry one,
@@ -155,15 +187,50 @@ class SenpaiPipeline:
         results: list[SenpaiResult] = []
         for inp, image in zip(inputs, images, strict=True):
             try:
-                results.append(
-                    self._extract(inp, image, frames_by_path, from_sequence)
-                )
+                results.append(self._extract(inp, image, frames_by_path, from_sequence))
             except Exception:
                 # A bad frame (e.g. a corrupt header) must not discard the
                 # rest of the batch's results.
                 logger.exception(f"Failed to extract results for {inp.file_path}")
 
         return results
+
+    def measure_focus(self, data: Buffer, file_path: str) -> FocusMeasurement:
+        """Measure the point-source width of one FITS image.
+
+        Detects sources without plate solving.
+        A failed or unusable measurement carries a reason.
+
+        Args:
+            data: The FITS image.
+            file_path: Path of the image file, or an empty string if unknown.
+        """
+        median = None
+        count = 0
+        reason = "engine reported no usable width"
+
+        try:
+            image = ProcessedFitsImage.from_file_bytes(data, file_path=file_path)
+            image = preprocess_image(image, self.config, store_intermediates=False)
+            stats = process_astrometry_fits_sidereal(image, pipeline_mode="detect").fwhm_stats
+        except Exception as exc:
+            logger.exception(f"Focus measurement failed for {file_path}")
+            reason = f"measurement failed: {exc}" if str(exc) else "measurement failed"
+        else:
+            # Reject the engine's default width summary.
+            if stats is not None and (stats.median_fwhm, stats.n_measurements) != (4.0, 1):
+                count = max(int(stats.n_measurements), 0)
+
+                if math.isfinite(stats.median_fwhm) and stats.median_fwhm > 0:
+                    median = float(stats.median_fwhm)
+
+        usable = median is not None and count > 0
+
+        return FocusMeasurement(
+            median_fwhm_pixels=median,
+            source_count=count,
+            reason=None if usable else reason,
+        )
 
     def _extract(
         self,
@@ -326,9 +393,7 @@ class SenpaiPipeline:
         if pixel_scale_arcsec is not None and std_fwhm_pixels is not None:
             std_fwhm_arcsec = std_fwhm_pixels * pixel_scale_arcsec
 
-        exposure = (
-            frame.frame_metadata.exposure_time_seconds if frame.frame_metadata else None
-        )
+        exposure = frame.frame_metadata.exposure_time_seconds if frame.frame_metadata else None
         if exposure is None:
             exposure = image.header.get("EXPTIME")
 

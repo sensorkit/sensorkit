@@ -9,6 +9,7 @@ import pytest
 from astropy.io import fits
 
 import sensorkit.senpai.analyzer as analyzer_mod
+import sensorkit.senpai.processors as processors_mod
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileInfo
 from sensorkit.senpai.models import SenpaiConfig, SenpaiResult
@@ -142,7 +143,7 @@ class TestBatching:
         inputs, from_sequence = pipeline.runs[0]
         assert inputs[0].task_id is None
         assert from_sequence is False
-        assert not analyzer._batches
+        assert not analyzer._standard.batches
 
     @pytest.mark.asyncio
     async def test_batch_closes_on_frame_count(self, analyzer, pipeline, data_graph, recorder):
@@ -162,7 +163,7 @@ class TestBatching:
         inputs, from_sequence = pipeline.runs[0]
         assert [inp.frame_num for inp in inputs] == [0, 1, 2]
         assert from_sequence is True
-        assert not analyzer._batches
+        assert not analyzer._standard.batches
 
     @pytest.mark.asyncio
     async def test_single_frame_collect_is_sequence_derived(self, analyzer, pipeline, data_graph):
@@ -197,7 +198,7 @@ class TestBatching:
     ):
         # exptime (0.01 s) + margin sets the stall limit; nothing follows the frame, so the
         # batch goes quiet for much longer than that.
-        monkeypatch.setattr(analyzer_mod, "_STALL_MARGIN_S", 0.05)
+        monkeypatch.setattr(processors_mod, "STALL_MARGIN_S", 0.05)
 
         async with consuming(analyzer):
             feed(data_graph, frame(task_id="task-a", frame_num=0, frame_count=3, exptime=0.01))
@@ -206,7 +207,7 @@ class TestBatching:
         inputs, from_sequence = pipeline.runs[0]
         assert len(inputs) == 1
         assert from_sequence is True
-        assert not analyzer._batches
+        assert not analyzer._standard.batches
 
     @pytest.mark.asyncio
     async def test_healthy_batch_not_flushed_early(
@@ -214,14 +215,14 @@ class TestBatching:
     ):
         # Stall limit is comfortably longer than the quiet spell that follows: the incomplete
         # batch must still be open (not processed) when we look.
-        monkeypatch.setattr(analyzer_mod, "_STALL_DEFAULT_S", 30.0)
+        monkeypatch.setattr(processors_mod, "STALL_DEFAULT_S", 30.0)
 
         async with consuming(analyzer):
             feed(data_graph, frame(task_id="task-a", frame_num=0, frame_count=3))
             await asyncio.sleep(0.2)
 
             assert pipeline.runs == []
-            assert "task-a" in analyzer._batches
+            assert analyzer._standard.batches.get("task-a") is not None
 
     @pytest.mark.asyncio
     async def test_slow_processing_does_not_fragment_other_batches(
@@ -233,7 +234,7 @@ class TestBatching:
         lands (and queues) during that run. The sweep must not flush A partially — it gets its
         queued frame first and closes normally.
         """
-        monkeypatch.setattr(analyzer_mod, "_STALL_MARGIN_S", 0.05)
+        monkeypatch.setattr(processors_mod, "STALL_MARGIN_S", 0.05)
         pipeline.delay = 0.3
 
         def seq_frame(name, task, num):
@@ -246,7 +247,7 @@ class TestBatching:
                 seq_frame("b0.fits", "task-b", 0),
                 seq_frame("b1.fits", "task-b", 1),
             )
-            # Lands while _process(task-b) is still running, well past task-a's ~0.06 s limit.
+            # Lands while task-b is still being processed, well past task-a's ~0.06 s limit.
             await asyncio.sleep(0.1)
             feed(data_graph, seq_frame("a1.fits", "task-a", 1))
             await until_runs(pipeline, 2)
@@ -305,16 +306,18 @@ class TestBatching:
             await asyncio.sleep(0.05)
 
             assert len(pipeline.runs) == 1
-            assert not analyzer._batches
+            assert not analyzer._standard.batches
 
-    @pytest.mark.asyncio
-    async def test_done_memory_stays_bounded(self, analyzer):
-        for n in range(analyzer_mod._DONE_MEMORY + 10):
-            analyzer._mark_done(f"task-{n}")
+    def test_done_memory_stays_bounded(self):
+        groups = processors_mod.FrameGroups()
 
-        assert len(analyzer._done) == analyzer_mod._DONE_MEMORY
-        assert "task-0" not in analyzer._done  # oldest evicted
-        assert f"task-{analyzer_mod._DONE_MEMORY + 9}" in analyzer._done
+        for n in range(processors_mod.DONE_MEMORY + 10):
+            groups.open(f"task-{n}", [], stall_after_s=1.0)
+            groups.close(f"task-{n}")
+
+        assert not groups.is_done("task-9")  # oldest evicted
+        assert groups.is_done("task-10")
+        assert groups.is_done(f"task-{processors_mod.DONE_MEMORY + 9}")
 
     @pytest.mark.asyncio
     async def test_publish_failure_does_not_drop_remaining_results(

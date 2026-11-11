@@ -89,6 +89,58 @@ For the example above, the camera's `array_to_fits.header` mapping can use
 `TASKID: =str(Task.task_id)`, `FRAMENUM: =Collect.frame_number`,
 `NFRAMES: =Collect.params.frame_count`, and `EXPTIME: =Exposure.exposure_time`.
 
+## Focus Sweeps
+
+The analyzer satisfies the standard `focus_provider` trait.
+It publishes `FocusAnalysis` for each sweep frame and `FocusSweepAnalysis` for each completed or failed sweep.
+A successful fit estimates best focus or its direction beyond the sampled range.
+The controller handles focuser positioning.
+
+A frame is a focus sweep frame when its DataGraph context contains a typed `FocusSweepContext`.
+The analyzer does not read sweep identity from FITS cards.
+The DataGraph must supply the following capture metadata with each FITS image.
+
+| Context | Required | Use |
+| --- | --- | --- |
+| `FocusSweepContext` | yes | Sweep identity, sample index and count, commanded position |
+| `Instrument` | yes | Controller instrument name |
+| `TaskInfo` or `controller_name` | yes | Controller identity |
+| `ExposureInfo` | yes | Observed exposure metadata and the stall limit |
+| `FocusPosition` | no | Reported focuser position |
+
+Sweep frames skip calibration filtering and sequence batching.
+Each frame is measured alone with source detection only, without a plate solution.
+The measurement is the engine's median point-source FWHM in image pixels.
+In detection-only mode, the engine supplies an aggregate count of one for each width summary.
+A `FocusAnalysis` is published for each frame, including frames with no usable measurement.
+
+A sweep is identified by controller, instrument, and sweep ID.
+It closes when every sample index has been measured, in any arrival order.
+A repeated delivery of a measured sample is ignored unless its sample count or commanded position conflicts.
+One `FocusSweepAnalysis` is then published with the samples ordered by index.
+Later frames of a closed sweep are ignored.
+
+A quadratic is fitted to the median FWHM at each commanded position.
+The fit requires five distinct positions with usable measurements.
+
+| Fit | Result |
+| --- | --- |
+| Minimum inside the sampled positions | `disposition: equals` at the estimated best focus |
+| Widths only fall or only rise across the sweep | `greater_than` the highest position or `less_than` the lowest |
+| Fitted width change no greater than twice the RMS residual | Failure |
+| Fitted width change within numerical rounding tolerance | Failure |
+| Width peak inside the sampled positions | Failure |
+| Nonpositive fitted minimum inside the sampled positions | Failure |
+| Fewer than five usable positions | Failure |
+
+A sweep also fails when a sample contradicts the sample count or an earlier commanded position,
+when a frame lacks exposure metadata,
+or when no new sample arrives for the exposure time plus 60 seconds.
+A failure retains the measurements received so far.
+
+The analyzer rejects the engine's default summary of exactly 4 pixels with a count of one.
+This also discards any genuine measurement with that exact pair.
+
 ## Usage
 
 The SENPAI application (`astro-senpai`) is an optional dependency — install the `senpai`
