@@ -200,7 +200,6 @@ Built-in operations include:
 | `fits_header`       | Define or override FITS header cards, with `=` context expressions |
 | `array_to_fits`     | Encode a raw image array as a FITS file                        |
 | `compress_fits`     | FITS tile compression                                          |
-| `apply_dark`        | Subtract a dark frame                                          |
 | `context_from_fits` | Populate context from an existing FITS header                  |
 | `write_file` / `read_file` | Write to / read from disk                               |
 | `watch_directory`   | Source files appearing in a directory                          |
@@ -218,7 +217,7 @@ automation:
 Pipeline ops describe frames and files with the `Image`, `Array`, and `File` keywords.
 Expressions such as `=Image.width` and `=File.path.name` read them.
 
-Analysis modules extend the same pipeline mechanism — e.g. focus estimation ops (`analyze_focus_stars`, `analyze_focus_fft`) or handing frames to astrometry/photometry services.
+Analysis modules extend the same pipeline mechanism, for example by handing frames to astrometry or photometry services.
 
 ### Task context keyword migration
 

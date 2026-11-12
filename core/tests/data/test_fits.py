@@ -17,13 +17,11 @@ from pydantic import BaseModel, ValidationError
 
 from sensorkit.common.keyword import declare_keyword
 from sensorkit.data.fits import (
-    ApplyDark,
     ArrayInfo,
     ArrayToFITS,
     BuildFITSHeader,
     CompressFITS,
     ContextFromFITS,
-    DarkInfo,
     FITSHeader,
     ImageInfo,
     ReshapeArray,
@@ -648,119 +646,6 @@ async def test_context_from_fits():
 
     recv = asyncio.create_task(receiver())
     await incoming.send(Context(), buf)
-    await recv
-    await task
-
-
-@pytest.mark.asyncio
-async def test_apply_dark_happy_path(tmp_path):
-    """Dark subtraction applied when exposures match."""
-    dark_data = np.full((4, 4), 10.0, dtype=np.float64)
-    dark_buf = _make_fits_buffer(dark_data, {"EXPTIME": 5.0})
-    (tmp_path / "dark_5s.fits").write_bytes(dark_buf)
-
-    image_data = np.full((4, 4), 100.0, dtype=np.float64)
-    image_buf = _make_fits_buffer(image_data, {"EXPTIME": 5.0})
-
-    op = ApplyDark(dark_directory=str(tmp_path))
-    incoming = DataFlow()
-    outgoing = DataFlow()
-    task = asyncio.create_task(op.process([incoming], [outgoing]))
-
-    async def receiver():
-        ctx, out_buf = await outgoing.receive("buffer")
-        info = ctx.get(DarkInfo)
-        assert info is not None
-        assert info.applied is True
-        assert info.image_exposure == 5.0
-
-        with fits.open(io.BytesIO(out_buf)) as hdul:
-            result = hdul[0].data.astype(np.float64)
-            np.testing.assert_allclose(result, 90.0)
-            assert "DARKFILE" in hdul[0].header
-
-    recv = asyncio.create_task(receiver())
-    await incoming.send(Context(), image_buf)
-    await recv
-    await task
-
-
-@pytest.mark.asyncio
-async def test_apply_dark_no_exposure(tmp_path):
-    """Image without EXPTIME passes through unchanged."""
-    image_data = np.full((4, 4), 100.0, dtype=np.float64)
-    image_buf = _make_fits_buffer(image_data)
-
-    op = ApplyDark(dark_directory=str(tmp_path))
-    incoming = DataFlow()
-    outgoing = DataFlow()
-    task = asyncio.create_task(op.process([incoming], [outgoing]))
-
-    async def receiver():
-        ctx, out_buf = await outgoing.receive("buffer")
-        info = ctx.get(DarkInfo)
-        assert info is not None
-        assert info.applied is False
-        assert out_buf == image_buf
-
-    recv = asyncio.create_task(receiver())
-    await incoming.send(Context(), image_buf)
-    await recv
-    await task
-
-
-@pytest.mark.asyncio
-async def test_apply_dark_no_darks(tmp_path):
-    """Empty dark directory passes through unchanged."""
-    image_data = np.full((4, 4), 100.0, dtype=np.float64)
-    image_buf = _make_fits_buffer(image_data, {"EXPTIME": 5.0})
-
-    op = ApplyDark(dark_directory=str(tmp_path))
-    incoming = DataFlow()
-    outgoing = DataFlow()
-    task = asyncio.create_task(op.process([incoming], [outgoing]))
-
-    async def receiver():
-        ctx, out_buf = await outgoing.receive("buffer")
-        info = ctx.get(DarkInfo)
-        assert info is not None
-        assert info.applied is False
-
-    recv = asyncio.create_task(receiver())
-    await incoming.send(Context(), image_buf)
-    await recv
-    await task
-
-
-@pytest.mark.asyncio
-async def test_apply_dark_closest_exposure(tmp_path):
-    """Multiple darks: closest exposure time is selected."""
-    for exp in (1.0, 5.0, 10.0):
-        dark = np.full((4, 4), exp, dtype=np.float64)
-        buf = _make_fits_buffer(dark, {"EXPTIME": exp})
-        (tmp_path / f"dark_{exp}s.fits").write_bytes(buf)
-
-    # Image with EXPTIME=6.0 — closest dark is 5.0s.
-    image_data = np.full((4, 4), 100.0, dtype=np.float64)
-    image_buf = _make_fits_buffer(image_data, {"EXPTIME": 6.0})
-
-    op = ApplyDark(dark_directory=str(tmp_path))
-    incoming = DataFlow()
-    outgoing = DataFlow()
-    task = asyncio.create_task(op.process([incoming], [outgoing]))
-
-    async def receiver():
-        ctx, out_buf = await outgoing.receive("buffer")
-        info = ctx.get(DarkInfo)
-        assert info.applied is True
-        assert info.dark_exposure == 5.0
-
-        with fits.open(io.BytesIO(out_buf)) as hdul:
-            # 100 - 5.0 (dark data value for 5s exposure) = 95
-            np.testing.assert_allclose(hdul[0].data.astype(np.float64), 95.0)
-
-    recv = asyncio.create_task(receiver())
-    await incoming.send(Context(), image_buf)
     await recv
     await task
 
