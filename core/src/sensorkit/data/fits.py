@@ -32,7 +32,7 @@ _ARRAY_TYPECODE_TO_DTYPE = {
 }
 
 
-@declare_keyword
+@declare_keyword(key="Array")
 class ArrayInfo(BaseModel):
     """Metadata describing the shape, dtype, and memory order of a raw array buffer."""
     shape: tuple[int, ...]
@@ -231,7 +231,7 @@ class FITSCardProvider(Protocol):
 type BayerPattern = Literal["RGGB", "BGGR", "GRBG", "GBRG"]
 
 
-@declare_keyword
+@declare_keyword(key="Image")
 class ImageInfo(BaseModel):
     """Structure and pixel encoding of a captured image.
 

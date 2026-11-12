@@ -215,6 +215,9 @@ automation:
         template: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-f{Collect.frame_number}.fits"
 ```
 
+Pipeline ops describe frames and files with the `Image`, `Array`, and `File` keywords.
+Expressions such as `=Image.width` and `=File.path.name` read them.
+
 Analysis modules extend the same pipeline mechanism — e.g. focus estimation ops (`analyze_focus_stars`, `analyze_focus_fft`) or handing frames to astrometry/photometry services.
 
 ### Task context keyword migration

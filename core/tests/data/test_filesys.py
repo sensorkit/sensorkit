@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
+import json
 import pathlib
 import tempfile
 
 import aiofile
 import pytest
 from loguru import logger
+from pydantic import TypeAdapter
 
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import (
     FileAsyncWriter,
@@ -19,6 +22,18 @@ from sensorkit.data.filesys import (
 )
 from sensorkit.data.graph import DataFlow, DataGraph
 from sensorkit.data.local import AppSink
+
+
+def test_file_info_uses_the_file_context_key():
+    info = FileInfo(path=pathlib.Path("frames/frame_1.fits"), size=2880)
+    adapter = TypeAdapter(KeywordDict)
+    wire = adapter.dump_json(KeywordDict(info))
+
+    assert json.loads(wire) == {"File": info.model_dump(mode="json")}
+
+    restored = adapter.validate_json(wire)
+    assert restored[FileInfo] == info
+    assert Context(restored).resolve("=File.path.stem") == "frame_1"
 
 
 @pytest.mark.asyncio

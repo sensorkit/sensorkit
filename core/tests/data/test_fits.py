@@ -90,7 +90,7 @@ async def test_array_to_fits():
     array_to_fits = ArrayToFITS(
         header={
             "MYHDR": 'f"{mycontextval}"',
-            "BYTEORD": 'f"{ArrayInfo.order}"',
+            "BYTEORD": 'f"{Array.order}"',
             "INSTRUME": "Test Camera",
         },
     )
@@ -109,8 +109,8 @@ async def test_array_to_fits():
 
     async def receiver():
         out_context, fits_buffer = await outgoing_edge.receive("buffer")
-        assert out_context["ImageInfo"].width == width
-        assert out_context["ImageInfo"].height == height
+        assert out_context["Image"].width == width
+        assert out_context["Image"].height == height
 
         bio = io.BytesIO(fits_buffer)
 

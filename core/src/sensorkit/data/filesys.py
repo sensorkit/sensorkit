@@ -24,7 +24,7 @@ class FileNameTemplate(BaseModel):
     template: str
 
 
-@declare_keyword
+@declare_keyword(key="File")
 class FileInfo(BaseModel):
     """Information about a file on disk."""
     path: pathlib.Path
