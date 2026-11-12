@@ -158,11 +158,11 @@ data_flow:
         - op: app_source
         - op: fits_header
           option:
-            TASKID: =BurrContext.seq
+            TASKID: =Burr.seq
         - op: fits_header
           include: all
           option:
-            TASKID: =OttoContext.visit_id
+            TASKID: =Otto.visit_id
           define:
             SITELAT:
               value: =SitePosition.latitude_degrees

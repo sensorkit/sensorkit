@@ -22,19 +22,19 @@ from sensorkit.std import CameraParameterSet, FrameType, StandardCollectTask
 
 # Hex preserves case-sensitive instrument names and excludes path separators.
 _FILE_NAME_TEMPLATE = (
-    'f"{datetime.now(UTC):%Y%m%dT%H%M%S}_{BurrContext.mode}_{BurrContext.targ}'
+    'f"{datetime.now(UTC):%Y%m%dT%H%M%S}_{Burr.mode}_{Burr.targ}'
     '_{Task.task_id}_{Instrument.name.encode().hex()}_f{Collect.frame_number}.fits"'
 )
 
 _SOURCE_FRAME_TYPES = {"twilight_flats": FrameType.FLAT}
 
 
-@sk.declare_keyword
+@sk.declare_keyword(key="Burr")
 class BurrContext(BaseModel):
     """Burr sequence identity attached to collect execution context.
 
     FITS expressions and filename templates access these values through
-    `BurrContext.<field>`.
+    `Burr.<field>`.
 
     Attributes:
         seq: Identifier shared by tasks and frames from one requested exposure.
@@ -102,7 +102,7 @@ def build_sk_tasks(
         # sidereal frame and the RateTarget rate frames of one sidereal-then-
         # rate collect carry the same seq — so downstream fitting regroups the
         # frames of one collect. Distinct exposure_seconds entries differ.
-        # The FileNameTemplate resolves the identity via `BurrContext.<field>`
+        # The FileNameTemplate resolves the identity via `Burr.<field>`
         # when sensorkit's filesys.WriteFile renders it.
         exposure_context = sk.KeywordDict(
             BurrContext(seq=str(uuid.uuid4()), targ=targ, mode=mode),

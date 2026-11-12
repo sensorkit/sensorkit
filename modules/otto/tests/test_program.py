@@ -9,12 +9,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import sensorkit.api as sk
 from sensorkit.astro.common import ReferenceFrame, SitePosition
 from sensorkit.astro.coords import Equatorial
 from sensorkit.astro.target import ICRSTarget
+from sensorkit.data.context import Context
 from sensorkit.otto.horizons import HorizonsCache, HorizonsObject, HorizonsSample
 from sensorkit.otto.models import TaskConfig
-from sensorkit.otto.program import OttoProgram, OttoState
+from sensorkit.otto.program import OttoContext, OttoProgram, OttoState
 from sensorkit.otto.stars import StarCache
 from sensorkit.otto.task_queue import TaskQueue
 from sensorkit.otto.utils import ObjectListManager, to_jd
@@ -31,6 +33,13 @@ def _resolved_execution():
     fut = asyncio.get_running_loop().create_future()
     fut.set_result(None)
     return fut
+
+
+def test_otto_context_uses_the_otto_context_key():
+    context = Context(sk.KeywordDict(OttoContext(visit_id="visit-1")))
+
+    assert set(context) == {"Otto"}
+    assert context.resolve("{Otto.visit_id}.fits") == "visit-1.fits"
 
 
 def set_state(program, **lists):

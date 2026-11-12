@@ -124,8 +124,8 @@ Before each task, the program checks the assignment and instrument metadata.
 An invalid selection ends tasking with a program fault before another task is dispatched.
 
 The camera entity's data graph writes FITS files through `app_source`, `array_to_fits`, and `write_file`.
-Burr supplies sequence identity in the task's `BurrContext` keyword.
-Configure the camera graph's `array_to_fits.header` mapping to write `BURRSEQ: =BurrContext.seq`.
+Burr supplies sequence identity in the task's `BurrContext` keyword under the key `Burr`.
+Configure the camera graph's `array_to_fits.header` mapping to write `BURRSEQ: =Burr.seq`.
 Other useful mappings include `TRKMODE: =Collect.track_mode`, `FRAMENUM: =Collect.frame_number`, and `FRAMECNT: =Collect.params.frame_count`.
 Include exposure timing, filter, pointing, and angular rates when required by downstream analysis.
 The `write_file.directory` value is the input directory passed to SENPAI's `--data-dir` option.

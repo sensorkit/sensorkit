@@ -22,12 +22,12 @@ from sensorkit.otto.utils import ListType, ObjectListManager, sidereal_frames
 from sensorkit.std.collect import CameraParameterSet, StandardCollectTask
 
 
-@sk.declare_keyword
+@sk.declare_keyword(key="Otto")
 class OttoContext(BaseModel):
     """Correlation ID for one target visit.
 
     Every filter, exposure, and binning task in a visit shares the same `visit_id`.
-    FITS expressions and filename templates access it as `OttoContext.visit_id`.
+    FITS expressions and filename templates access it as `Otto.visit_id`.
     """
 
     visit_id: str

@@ -215,7 +215,7 @@ async def test_instruments_receive_each_collect_and_label_its_files(
 
     assert (type(sidereal.task.target), type(streak.task.target)) == (ICRSTarget, RateTarget)
     assert requested(sidereal) == requested(streak) == expected
-    assert sidereal.context["BurrContext"] == streak.context["BurrContext"]
+    assert sidereal.context["Burr"] == streak.context["Burr"]
     assert sidereal.context[TaskInfo].task_id != streak.context[TaskInfo].task_id
     assert len({name.casefold() for name in names}) == len(names)
     assert not any("/" in name for name in names)
@@ -238,11 +238,11 @@ async def test_failed_collect_fails_the_request_for_every_instrument(kit, contex
         await client.stop_tasking()
 
     first = received[0]
-    sequence = first.context["BurrContext"]
+    sequence = first.context["Burr"]
 
     # Failure removes the queued streak task from the same request.
     assert [p.instrument for p in first.task.exposures] == [INSTRUMENT, WEST]
-    assert [e for e in received if e.context["BurrContext"] == sequence] == [first]
+    assert [e for e in received if e.context["Burr"] == sequence] == [first]
     assert slot.success_count == 0
 
 
