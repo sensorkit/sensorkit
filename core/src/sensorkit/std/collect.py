@@ -41,8 +41,8 @@ class CameraParameterSet(BaseModel):
     binning_y: Optional[int] = Field(default=None)
 
 
-@sk.declare_keyword
-class Collect(BaseModel):
+@sk.declare_keyword(key="Collect")
+class CollectInfo(BaseModel):
     """Requested target, camera settings, and frame number for a collect.
 
     The sensor adds this keyword to each capture's context. Device telemetry in

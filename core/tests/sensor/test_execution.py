@@ -44,7 +44,7 @@ from sensorkit.sensor.workflow import (
     PlannedStep,
     lower,
 )
-from sensorkit.std.collect import CameraParameterSet, Collect, StandardCollectTask
+from sensorkit.std.collect import CameraParameterSet, CollectInfo, StandardCollectTask
 from sensorkit.std.instrument import CameraCapture
 from sensorkit.std.mount import FollowTarget
 from sensorkit.std.optics import SetFilter
@@ -957,7 +957,7 @@ async def test_a_dispatched_standard_frame_writes_its_frame_number(
     workflow = compile_collect(pack(translate(task), sensor), sensor)
     frames = [op for op in report_order(workflow) if op.acquisition is not None]
     planned = [(op.command.model_copy(deep=True),
-                op.acquisition.keywords[Collect].model_copy())
+                op.acquisition.keywords[CollectInfo].model_copy())
                for op in frames]
     report = await executor.execute(workflow)
     captured = [c for c in rig[frames[0].target.device].received
@@ -968,7 +968,7 @@ async def test_a_dispatched_standard_frame_writes_its_frame_number(
 
     for sent, op, (command, keyword) in zip(captured, frames, planned,
                                             strict=True):
-        written = sent.context[Collect]
+        written = sent.context[CollectInfo]
 
         assert written.frame_number == op.acquisition.frame_number
         assert dict(written.get_fits_cards())["FRAMENUM"][0] == (
@@ -976,7 +976,7 @@ async def test_a_dispatched_standard_frame_writes_its_frame_number(
         # Dispatch copied the command, and left what was planned alone.
         assert op.command == command
         assert op.command.context is None
-        assert op.acquisition.keywords[Collect] == keyword
+        assert op.acquisition.keywords[CollectInfo] == keyword
 
 
 def report_order(workflow: ExecutableWorkflow) -> list[Operation]:

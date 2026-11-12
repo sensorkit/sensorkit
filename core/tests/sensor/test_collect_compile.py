@@ -41,7 +41,7 @@ from sensorkit.sensor.workflow import (
     ExecutableWorkflow,
     Operation,
 )
-from sensorkit.std.collect import CameraParameterSet, Collect, StandardCollectTask
+from sensorkit.std.collect import CameraParameterSet, CollectInfo, StandardCollectTask
 from sensorkit.std.instrument import (
     Binning,
     CameraSensorTemperature,
@@ -783,7 +783,7 @@ async def test_a_standard_task_translates_packs_and_compiles(bench):
 
     for node in captured:
         acquisition = node.payload.acquisition
-        cards = dict(acquisition.keywords[Collect].get_fits_cards())
+        cards = dict(acquisition.keywords[CollectInfo].get_fits_cards())
 
         assert cards["FRAMENUM"][0] == acquisition.frame_number
 

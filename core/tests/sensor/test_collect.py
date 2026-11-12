@@ -32,8 +32,7 @@ from sensorkit.sensor.selection import (
     IsRef,
     Supports,
 )
-from sensorkit.std.collect import CameraParameterSet
-from sensorkit.std.collect import Collect as CollectMetadata
+from sensorkit.std.collect import CameraParameterSet, CollectInfo
 from sensorkit.std.instrument import Binning, ConfigureCameraSensor, FrameType
 from sensorkit.std.optics import SetFilter
 from sensorkit.std.traits import Home
@@ -122,15 +121,15 @@ def test_requests_without_collect_metadata_add_no_keywords(at):
 
 
 def test_each_frame_copies_and_numbers_its_collect_metadata(at):
-    metadata = CollectMetadata(target=TARGET,
+    metadata = CollectInfo(target=TARGET,
                                params=CameraParameterSet(integration_time_seconds=1.0,
                                                          frame_count=2))
     units = asking("a", count=2, collect=metadata).expand(at("cam-sci"), 5, 0)
 
-    assert [u.acquisition.keywords[CollectMetadata].frame_number for u in units] == [5, 6]
+    assert [u.acquisition.keywords[CollectInfo].frame_number for u in units] == [5, 6]
     assert metadata.frame_number == 0
-    units[0].acquisition.keywords[CollectMetadata].params.gain = 5.0
-    assert units[1].acquisition.keywords[CollectMetadata].params.gain is None
+    units[0].acquisition.keywords[CollectInfo].params.gain = 5.0
+    assert units[1].acquisition.keywords[CollectInfo].params.gain is None
     assert metadata.params.gain is None
 
 

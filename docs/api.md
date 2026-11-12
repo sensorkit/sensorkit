@@ -410,7 +410,9 @@ Custom controllers can use the accessor for instruments with no device associati
 
 The sensor controller resolves instrument context for each capture, including automatic selections.
 Capture context merges task values, instrument values, then device snapshots from root to camera.
-Planned per-frame `Collect` metadata belongs to the task values.
+Planned per-frame `CollectInfo` metadata belongs to the task values under the keyword key `Collect`.
+Python code imports `CollectInfo` from `sensorkit.std.collect` and accesses it through `context[CollectInfo]`.
+Configuration expressions use `Collect.frame_number`.
 Later values replace earlier values.
 DataGraph expressions can read `Instrument.name` and `Instrument.devices`.
 For example, `=Instrument.name` can supply the FITS `UNITID` value.

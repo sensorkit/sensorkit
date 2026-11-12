@@ -22,7 +22,7 @@ from sensorkit.sensor.collect import (
 from sensorkit.sensor.selection import IsRef
 from sensorkit.sensor.standard_task import SIDEREAL, translate
 from sensorkit.sensor.topology import Placement
-from sensorkit.std.collect import CameraParameterSet, Collect, StandardCollectTask
+from sensorkit.std.collect import CameraParameterSet, CollectInfo, StandardCollectTask
 from sensorkit.std.instrument import Binning, ConfigureCameraSensor, FrameType
 from sensorkit.std.mount import FollowTarget
 from sensorkit.std.optics import SetFilter
@@ -172,7 +172,7 @@ def test_collect_metadata_holds_the_requested_target_and_parameters():
     request = translate(task(exposure, target_id="probe")).epochs[0].units[0]
     planned = request.collect
 
-    assert isinstance(planned, Collect)
+    assert isinstance(planned, CollectInfo)
     assert (planned.target, planned.target_id, planned.params) == (
         TARGET, "probe", exposure)
 
@@ -236,7 +236,7 @@ def test_ordinals_continue_and_frame_numbers_are_per_instrument(bench):
 
 def test_each_frame_publishes_its_own_frame_number(bench):
     for unit in units_of(pack(translate(SEVERAL), bench)):
-        cards = dict(unit.acquisition.keywords[Collect].get_fits_cards())
+        cards = dict(unit.acquisition.keywords[CollectInfo].get_fits_cards())
 
         assert cards["FRAMENUM"][0] == unit.acquisition.frame_number
 
@@ -258,7 +258,7 @@ def test_numbering_leaves_the_translated_metadata_untouched(bench):
 
 
 def test_a_frame_records_the_target_its_segment_followed(bench):
-    targets = [u.acquisition.keywords[Collect].target
+    targets = [u.acquisition.keywords[CollectInfo].target
                for u in units_of(pack(translate(SEVERAL), bench))
                if u.acquisition.request == "exposure-0"]
 

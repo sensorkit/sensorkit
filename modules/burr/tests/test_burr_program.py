@@ -22,7 +22,7 @@ from sensorkit.core.program import ProgramTaskingMonitor
 from sensorkit.core.task import TaskExecution, TaskInfo
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileNameTemplate
-from sensorkit.std.collect import Collect, StandardCollectTask
+from sensorkit.std.collect import CollectInfo, StandardCollectTask
 from sensorkit.std.instrument import FrameType
 
 INSTRUMENT = " cam east "
@@ -157,7 +157,7 @@ def capture_file_names(
         instrument = controller.instrument_context(params.instrument or automatic_instrument)
 
         for frame in range(params.frame_count):
-            collect = Collect(target=execution.task.target, params=params, frame_number=frame)
+            collect = CollectInfo(target=execution.task.target, params=params, frame_number=frame)
             context = Context(execution.context, collect)
             context.update(instrument)
             names.append(context.resolve(context[FileNameTemplate].template, as_type=str))

@@ -25,7 +25,7 @@ from sensorkit.core.task import TaskInfo
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileNameTemplate
 from sensorkit.std import FrameType
-from sensorkit.std.collect import Collect
+from sensorkit.std.collect import CollectInfo
 
 OFF = TrackingMode.OFF
 RATE = TrackingMode.RATE
@@ -128,7 +128,7 @@ def file_names(submissions) -> list[str]:
             instrument = InstrumentInfo(name=params.instrument or AUTOMATIC_INSTRUMENT)
 
             for frame in range(params.frame_count):
-                collect = Collect(target=submission.task.target, params=params, frame_number=frame)
+                collect = CollectInfo(target=submission.task.target, params=params, frame_number=frame)
                 context = Context(submission.context, info, collect, instrument)
                 names.append(context.resolve(context[FileNameTemplate].template, as_type=str))
 

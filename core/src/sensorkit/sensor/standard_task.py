@@ -47,7 +47,7 @@ from sensorkit.sensor.selection import AnyOf, IsRef, KeywordMatch, Supports
 from sensorkit.sensor.topology import Placement
 from sensorkit.std.collect import (
     CameraParameterSet,
-    Collect,
+    CollectInfo,
     StandardCollectTask,
 )
 from sensorkit.std.instrument import Binning, ConfigureCameraSensor
@@ -147,7 +147,7 @@ def _segment(
             timeout_s=params.integration_time_seconds + margin_s,
         ),
         count=count,
-        collect=Collect(target=target, target_id=target_id(task), params=params),
+        collect=CollectInfo(target=target, target_id=target_id(task), params=params),
         select=selection,
         settings=settings,
     )

@@ -113,7 +113,7 @@ Set a sequence's `instrument` field to select a collection target.
 Planning rejects unknown names, ordinary device IDs, and targets incompatible with the requested settings before sending commands.
 Before each frame, it samples subscribed device keywords from that instrument's
 chain into a fresh context, together with task context, site position and numbered
-`Collect` metadata.
+`CollectInfo` metadata under the `Collect` key.
 Requested parameters remain separate from reported device values.
 Downstream FITS files use this context for per-frame metadata
 (see [Configuration → Data flow](configuration.md#data-flow)).

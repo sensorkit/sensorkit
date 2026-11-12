@@ -55,7 +55,7 @@ from sensorkit.sensor.workflow import (
     format_command,
     lower,
 )
-from sensorkit.std.collect import Collect as CollectKeyword
+from sensorkit.std.collect import CollectInfo
 from sensorkit.std.instrument import CameraCapture, FrameType
 from sensorkit.std.optics import SelectPort
 
@@ -240,7 +240,7 @@ class InstrumentRequest:
     acquisition: AcquisitionRequest
     count: int = 1
     distribute: Literal["one", "each"] = "one"
-    collect: CollectKeyword | None = None
+    collect: CollectInfo | None = None
     select: Selection | None = None
     settings: tuple[CommandRequest, ...] = ()
     requires: tuple[Selection, ...] = ()

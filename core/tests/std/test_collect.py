@@ -1,13 +1,34 @@
 # SPDX-License-Identifier: Apache-2.0
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from sensorkit.astro.coords import Horizontal
 from sensorkit.astro.target import TLE, AltAzTarget, TLETarget
-from sensorkit.std.collect import CameraParameterSet, FrameType, StandardCollectTask
+from sensorkit.common.keyword import KeywordDict
+from sensorkit.data.context import Context
+from sensorkit.std.collect import CameraParameterSet, CollectInfo, FrameType, StandardCollectTask
+
+
+def test_collect_info_keeps_the_collect_context_key():
+    info = CollectInfo(
+        target=AltAzTarget(coords=Horizontal(az=90.0, alt=30.0)),
+        params=CameraParameterSet(integration_time_seconds=1, frame_count=2),
+        frame_number=1,
+    )
+    adapter = TypeAdapter(KeywordDict)
+    wire = adapter.dump_json(KeywordDict(info))
+
+    assert json.loads(wire) == {"Collect": info.model_dump(mode="json")}
+
+    restored = adapter.validate_json(wire)
+    assert set(restored) == {"Collect"}
+    assert isinstance(restored["Collect"], CollectInfo)
+    assert restored[CollectInfo] == info
+    assert Context(restored).resolve("{Collect.frame_number}.fits") == "1.fits"
 
 
 def test_collect_task():

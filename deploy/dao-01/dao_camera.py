@@ -89,7 +89,7 @@ from sensorkit.std import (
     Stop,
     TemperatureUnit,
 )
-from sensorkit.std.collect import Collect
+from sensorkit.std.collect import CollectInfo
 from sensorkit.std.instrument import StandardCamera
 
 # ── PICam FFI ────────────────────────────────────────────────────────
@@ -651,7 +651,7 @@ class DaoCamera:
         context = cmd.context if cmd.context is not None else sk.Context()
         # Frame type rides in on the Collect keyword (flats, darks, ...);
         # LIGHT when absent.
-        collect = context.get(Collect)
+        collect = context.get(CollectInfo)
         frame_type = (collect.params.frame_type if collect else None) or FrameType.LIGHT
         context.set(
             ImageInfo(

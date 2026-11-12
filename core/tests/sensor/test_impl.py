@@ -18,7 +18,7 @@ from sensorkit.sensor.client import Sensor
 from sensorkit.sensor.execution import WorkflowError
 from sensorkit.sensor.impl import SensorConfig, SensorController
 from sensorkit.sensor.policies import SensorPolicies
-from sensorkit.std.collect import CameraParameterSet, Collect, StandardCollectTask
+from sensorkit.std.collect import CameraParameterSet, CollectInfo, StandardCollectTask
 from sensorkit.std.optics import Filter, Filters, SetFilter
 
 from .common import BENCH, TARGET, Rig, authored
@@ -500,7 +500,7 @@ async def test_a_capture_carries_its_assigned_instrument(
     (capture,) = rig[expected].sent("CameraCapture")
     instrument = capture.context[InstrumentInfo]
 
-    assert capture.context[Collect].params.instrument == task.camera_params.instrument
+    assert capture.context[CollectInfo].params.instrument == task.camera_params.instrument
     assert instrument.name == expected
     assert set(instrument.devices) == chain_of(expected)
     assert capture.context.resolve("{Instrument.name}") == expected
@@ -573,7 +573,7 @@ async def test_captures_keep_their_own_instrument_alongside_task_context(
             assert capture.context[Filters].filters[0].name == {"cam-e": "r", "cam-w": "g"}[key]
 
     assert {
-        key: [c.context[Collect].frame_number for c in sent] for key, sent in captures.items()
+        key: [c.context[CollectInfo].frame_number for c in sent] for key, sent in captures.items()
     } == {"cam-e": [0, 1], "cam-w": [0]}
     assert all(
         "Instrument" not in controller_impl.get_device(key).subscription.cache

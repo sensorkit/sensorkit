@@ -42,7 +42,7 @@ from sensorkit.sensor.policies import (
 from sensorkit.sensor.selection import IsRef
 from sensorkit.sensor.standard_task import SIDEREAL, translate
 from sensorkit.sensor.workflow import ExecutableWorkflow, Operation
-from sensorkit.std.collect import CameraParameterSet, Collect, StandardCollectTask
+from sensorkit.std.collect import CameraParameterSet, CollectInfo, StandardCollectTask
 from sensorkit.std.instrument import ConfigureCameraSensor
 from sensorkit.std.mount import FollowTarget
 from sensorkit.std.optics import ChangeFocusPosition, Filter, FocusPosition
@@ -359,7 +359,7 @@ async def test_a_standard_collect_sends_what_it_planned(session, rig):
     # Each frame was taken for its own exposure and under its own number.
     for camera, ops in by_camera.items():
         assert sorted(
-            (c.context[Collect].frame_number, c.integration_time)
+            (c.context[CollectInfo].frame_number, c.integration_time)
             for c in rig[camera].sent("CameraCapture")) == sorted(
             (op.acquisition.frame_number, INTEGRATION[op.acquisition.request])
             for op in ops)
@@ -471,17 +471,17 @@ async def test_each_header_is_sampled_when_its_frame_is_sent(session, rig):
     for header in east_headers:
         assert header[FocusPosition] == FocusPosition(position=1200.0)
         assert header.get(Filter) is None
-        assert header[Collect].params.gain == 1.5
+        assert header[CollectInfo].params.gain == 1.5
 
     # The filter asked for stays apart from the filter the wheel reports.
     for header in west_headers:
         assert header.get(FocusPosition) is None
         assert header[Filter] == Filter(name="clear")
-        assert header[Collect].params.filter_name in ("r", "b")
+        assert header[CollectInfo].params.filter_name in ("r", "b")
 
     # Each header carries its own frame's planned keywords.
     for camera, headers in (("cam-e", east_headers), ("cam-w", west_headers)):
-        assert sorted(h[Collect].frame_number for h in headers) == sorted(
+        assert sorted(h[CollectInfo].frame_number for h in headers) == sorted(
             op.acquisition.frame_number for op, _, _ in plan
             if op.target.device == camera)
 

@@ -37,7 +37,7 @@ from sensorkit.sensor.workflow import (
     Operation,
     OperatorRule,
 )
-from sensorkit.std.collect import CameraParameterSet, Collect
+from sensorkit.std.collect import CameraParameterSet, CollectInfo
 from sensorkit.std.traits import Stop
 
 from .common import REPORTED, TARGET, details_of, operation, pointing
@@ -369,7 +369,7 @@ def darks(collecting) -> ExecutableWorkflow:
                     id="darks", select=IsRef(device="cam-guide"),
                     acquisition=AcquisitionRequest(integration_time_s=4.0),
                     count=2,
-                    collect=Collect(target=TARGET, target_id="dark",
+                    collect=CollectInfo(target=TARGET, target_id="dark",
                                     params=CameraParameterSet(integration_time_seconds=4.0,
                                                               frame_count=2))),
                 InstrumentRequest(
