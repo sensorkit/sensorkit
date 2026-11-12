@@ -87,7 +87,7 @@ tasking (e.g. EOObservations); without it, every frame processes individually
 and `SenpaiResult.task_id` stays null.
 For the example above, the camera's `array_to_fits.header` mapping can use
 `TASKID: =str(Task.task_id)`, `FRAMENUM: =Collect.frame_number`,
-`NFRAMES: =Collect.params.frame_count`, and `EXPTIME: =ExposureInfo.exposure_time`.
+`NFRAMES: =Collect.params.frame_count`, and `EXPTIME: =Exposure.exposure_time`.
 
 ## Usage
 

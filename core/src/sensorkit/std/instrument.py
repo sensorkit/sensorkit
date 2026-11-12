@@ -145,7 +145,7 @@ class CameraCapture(AcquireData):
     frame_type: FrameType = FrameType.LIGHT
 
 
-@sk.declare_keyword
+@sk.declare_keyword(key="Exposure")
 class ExposureInfo(BaseModel):
     """Parameters of the exposure that produced an image.
 

@@ -416,6 +416,7 @@ Configuration expressions use `Collect.frame_number`.
 Later values replace earlier values.
 DataGraph expressions can read `Instrument.name` and `Instrument.devices`.
 For example, `=Instrument.name` can supply the FITS `UNITID` value.
+Cameras report `ExposureInfo` under the keyword key `Exposure`, so expressions such as `=Exposure.date_obs` read the exposure start.
 
 ### `ProgramImpl`
 
