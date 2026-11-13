@@ -22,6 +22,9 @@ sensor:
   a2d_bias: 500.0
   a2d_dtype: uint16
 
+optics:
+  enabled: true
+
 stars:
    mode: sstrc7
    catalog_path: /path/to/catalogs/sstrc7

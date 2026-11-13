@@ -237,6 +237,10 @@ sdasim:
     sdasim_config: /path/to/sensorkit/deploy/OmniSim/sdasim_OmniSim.yaml
     mount_entity: OmniSimTelescope
     rotator_entity: OmniSimRotator
+    focuser_entity: OmniSimFocuser
+    # Simulated best focus; sweeps must bracket it to fit.
+    best_focus_position: 25000
+    microns_per_step: 1.0
     device: cpu
     temperature: -10.0
     status_frequency: 1.0
@@ -287,6 +291,8 @@ senpai:
 
 config:
   OmniSim:
+    FocusAnalysisSource:
+      entity: SENPAI
     SitePosition:
       latitude_degrees: 20.82028
       longitude_degrees: -156.27944
