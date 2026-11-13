@@ -8,7 +8,9 @@ supply the lifecycle tables and deadline rules.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+import contextlib
+from collections.abc import AsyncIterator, Mapping
+from datetime import UTC, datetime
 from typing import Literal
 
 from loguru import logger
@@ -16,6 +18,13 @@ from pydantic import BaseModel, Field
 
 import sensorkit.api as sk
 from sensorkit.astro.common import SitePosition
+from sensorkit.sensor.autofocus import (
+    Focuser,
+    final_focus_position,
+    first_sweep_analysis,
+    focus_source,
+    translate_autofocus,
+)
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.client import Sensor
 from sensorkit.sensor.definition import SensorDefinition
@@ -33,7 +42,7 @@ from sensorkit.sensor.topology import Placement, Structure
 from sensorkit.sensor.workflow import ExecutableWorkflow
 from sensorkit.std.collect import StandardCollectTask
 from sensorkit.std.enclosure import CloseEnclosure
-from sensorkit.std.focus import ChangeFocusPosition
+from sensorkit.std.focus import AutoFocus, ChangeFocusPosition, FocusSweepAnalysis
 from sensorkit.std.instrument import ChangeRotatorPosition
 from sensorkit.std.mount import FollowTarget
 from sensorkit.std.optics import CloseMirrorCover, SetFilter
@@ -48,17 +57,21 @@ class SensorConfig(BaseModel):
 
 @sk.declare_controller
 class SensorController:
-    """A controller running lifecycle and collect tasks as sensor workflows."""
+    """Run lifecycle, collect, and autofocus tasks as sensor workflows."""
 
     stopping: bool = False
     instruments: Mapping[str, Placement] = {}
     """Collection targets by instrument name."""
+    running_autofocus: asyncio.Task | None = None
+    """Running autofocus task canceled by controller disable."""
 
     @sk.on_attach
     async def on_attach(self):
         controller = sk.controller()
         config = await controller.kv_get_model(SensorConfig)
         self.site = await controller.kv_get_model(SitePosition)
+        self.policies = config.policies
+        controller.on_disable(self.on_disable)
 
         definition = compose_deadlines(
             SensorDefinition(sensor=config.model), config.policies.deadlines()
@@ -101,6 +114,10 @@ class SensorController:
     @sk.on_detach
     async def on_detach(self):
         self.stopping = True
+
+    async def on_disable(self):
+        if self.running_autofocus is not None:
+            self.running_autofocus.cancel("Controller disabled")
 
     def device_contexts(self) -> Mapping[str, sk.Context]:
         """Return each device's latest subscribed keywords, unmerged.
@@ -201,6 +218,134 @@ class SensorController:
         base = sk.Context(execution.context, self.site)
 
         await self.execute(workflow, contexts=self.device_contexts, base=base)
+
+    @sk.task_handler
+    async def autofocus_task(self, execution: sk.TaskExecution[AutoFocus]):
+        """Execute one fixed sweep and apply a best-focus estimate.
+
+        The task ID identifies the sweep. Analysis comes from the configured
+        `FocusAnalysisSource` and is retained in the task's working context.
+        Pointing and tracking are preserved. Requested camera and filter
+        settings remain applied.
+
+        If best focus lies beyond the sweep, leave the focuser at the nearer
+        sampled boundary and fail the task. A later sweep can start there.
+        Capture, analysis, and final-move failures attempt to restore the starting
+        focus position. Cancellation, expiry, controller disable, and service
+        shutdown cancel active work without a return move.
+        """
+        task = execution.task
+
+        async with self._autofocus_lifetime(execution):
+            focuser = Focuser.on(
+                self.sensor.sensor, task.instrument, self.instruments, self.device_contexts()
+            )
+            positions = task.positions(focuser.start)
+            workflow = self.sensor.plan_collect(
+                translate_autofocus(
+                    task,
+                    positions,
+                    sweep_id=execution.task_id,
+                    focuser=focuser.device,
+                    instruments=self.instruments,
+                ),
+                device_keywords=self.device_contexts(),
+            )
+            source = await focus_source(sk.controller())
+
+            try:
+                analysis = await self._run_focus_sweep(execution, workflow, source)
+                execution.context.set(analysis)
+                await self._move_focus(focuser.move(final_focus_position(analysis, positions)))
+            except Exception as failure:
+                await self._restore_focus(focuser, failure)
+                raise
+
+            if analysis.disposition != "equals":
+                raise RuntimeError(
+                    f"Best focus is {analysis.disposition.replace('_', ' ')} "
+                    f"{analysis.position}, beyond the swept range; the focuser is left there"
+                )
+
+    @contextlib.asynccontextmanager
+    async def _autofocus_lifetime(self, execution: sk.TaskExecution) -> AsyncIterator[None]:
+        """Bound autofocus by execution expiry and controller disable."""
+        expiry = execution.expiry_time
+        seconds = None if expiry is None else (expiry - datetime.now(UTC)).total_seconds()
+        self.running_autofocus = asyncio.current_task()
+
+        try:
+            async with asyncio.timeout(seconds) as lifetime:
+                yield
+        except TimeoutError:
+            if lifetime.expired():
+                raise TimeoutError(f"The task expired at {expiry}") from None
+
+            raise
+        finally:
+            self.running_autofocus = None
+
+    async def _run_focus_sweep(
+        self,
+        execution: sk.TaskExecution[AutoFocus],
+        workflow: ExecutableWorkflow,
+        source: sk.EntityClient,
+    ) -> FocusSweepAnalysis:
+        """Capture the sweep and wait for matching analysis.
+
+        Subscribe before capturing the first frame. After the last capture,
+        allow the default command timeout for matching analysis.
+        Task expiry can shorten this wait.
+
+        Raises:
+            WorkflowError: Required work failed.
+            TimeoutError: No matching analysis arrived in time.
+        """
+        async with first_sweep_analysis(
+            source,
+            controller=execution.controller_id,
+            instrument=execution.task.instrument,
+            sweep_id=execution.task_id,
+        ) as analysis:
+            base = sk.Context(execution.context, self.site)
+            await self.execute(workflow, contexts=self.device_contexts, base=base)
+            seconds = self.policies.default_timeout
+
+            try:
+                async with asyncio.timeout(seconds):
+                    return await analysis
+            except TimeoutError:
+                raise TimeoutError(
+                    f"'{source.entity}' published no analysis of sweep {execution.task_id} "
+                    f"within {seconds} s"
+                ) from None
+
+    async def _move_focus(self, move: LifecycleWorkflow) -> None:
+        """Move the focuser under its command deadline.
+
+        Raises:
+            WorkflowError: The move failed.
+        """
+        await self.execute(self.sensor.plan_lifecycle(move))
+
+    async def _restore_focus(self, focuser: Focuser, failure: Exception) -> None:
+        """Attempt to restore starting focus after a capture, analysis, or move failure.
+
+        Raises:
+            RuntimeError: Restoration failed. The message includes both failures,
+                with the original failure retained as the cause.
+        """
+        # Expiry and absorbed aborts also leave the task cancelling.
+        if asyncio.current_task().cancelling():
+            return
+
+        try:
+            await self._move_focus(focuser.move(focuser.start))
+        except Exception as error:
+            raise RuntimeError(
+                f"{failure}; returning focuser '{focuser.device}' to {focuser.start} "
+                f"also failed: {error}"
+            ) from failure
 
 
 class SensorDevices(BaseModel):

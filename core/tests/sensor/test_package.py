@@ -7,7 +7,7 @@ import importlib
 import pytest
 
 MODULES = (
-    "audit", "binding", "client", "collect", "definition", "dispatch",
+    "audit", "autofocus", "binding", "client", "collect", "definition", "dispatch",
     "execution", "impl", "lifecycle", "policies", "routing", "selection",
     "standard_task", "topology", "workflow",
 )

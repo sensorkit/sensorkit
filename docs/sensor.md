@@ -105,6 +105,7 @@ The controller responds to tasks — from the agent during autonomous operation,
 | **Init**     | Initialize the dome and mount, open the dome and mirror cover                  |
 | **Standby**  | Run the same device sequence as Init and establish STANDBY                              |
 | **Collect**  | Slew/track a target, set filter and binning, capture frames, stop the mount     |
+| **AutoFocus** | Sweep an instrument's focuser, then move it to the analyzed best focus (beta) |
 | **Recover**  | Reconnect all devices and stop any in-progress motion after a fault             |
 | **Shutdown** | Close the mirror cover, deinitialize the mount, close the dome                  |
 
@@ -117,6 +118,24 @@ chain into a fresh context, together with task context, site position and number
 Requested parameters remain separate from reported device values.
 Downstream FITS files use this context for per-frame metadata
 (see [Configuration → Data flow](configuration.md#data-flow)).
+
+An autofocus sweep takes one light frame at each of `count` positions on the named instrument.
+Positions are spaced `step` apart and visited from lowest to highest.
+The sweep is centered on the focuser's reported starting position unless the task gives a `center`.
+The instrument's chain must contain exactly one focuser with a reported starting position.
+Pointing and tracking are preserved, and requested camera and filter settings remain applied.
+Each frame carries `FocusSweep` context with the task ID as its sweep ID.
+The controller's `FocusAnalysisSource` configuration names an online entity advertising the `focus_provider` trait.
+After the last frame, the controller waits up to `default_timeout` for matching `FocusSweepAnalysis`, bounded by task expiry.
+
+The task succeeds after moving to an estimated best focus within the sampled range.
+If best focus lies beyond the sampled range, the controller moves to the nearer sampled boundary and fails the task.
+A later sweep can start from that position.
+A failed analysis, analysis timeout, or failed move triggers an attempt to restore starting focus and fails the task.
+Any received analysis is retained in the task context.
+A failed restoration is included in the task's failure message.
+Cancellation, expiry, controller disable, and service shutdown cancel active work without a return move.
+For file output, configure a `FileNameTemplate` for the `autofocus` task type and make `Collect`-dependent header cards optional.
 
 ## Manual operation
 

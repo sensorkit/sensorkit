@@ -16,7 +16,8 @@ separate calls. `audit` explains definitions and compiled workflows. The optiona
 intents for the same compilers.
 
 `SensorController` serves a structure and policies from the `sensors`
-configuration section as a controller.
+configuration section as a controller. `autofocus` plans its focus sweeps
+and reads back their analysis.
 """
 
 from sensorkit.sensor.audit import (

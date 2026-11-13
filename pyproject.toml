@@ -294,7 +294,7 @@ type = "layers"
 containers = ["sensorkit.sensor"]
 layers = [
     "impl",
-    "client",
+    "client | autofocus",
     "audit | policies | standard_task",
     "definition | execution",
     "collect | dispatch | lifecycle",
