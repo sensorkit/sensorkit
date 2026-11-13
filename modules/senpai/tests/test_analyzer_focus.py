@@ -83,7 +83,9 @@ def focus_frame(
 
 def fits_focus_frame(index: int, position: float = 1000.0, *, count: int = len(POSITIONS)):
     """A sweep frame whose capture metadata travels only as FITS cards, as read from a file."""
-    task = AutoFocus(instrument="cam-east", positions=POSITIONS, integration_time_seconds=0.01)
+    task = AutoFocus(
+        instrument="cam-east", step=50.0, count=len(POSITIONS), integration_time_seconds=0.01
+    )
     written = (
         FocusSweepContext(
             sweep_id=SWEEP_ID, sample_index=index, sample_count=count, commanded_position=position
@@ -227,7 +229,7 @@ async def test_malformed_fits_sweep_frame_skips_science_analysis(senpai):
 @pytest.mark.asyncio
 async def test_sweep_frames_bypass_science_batching(senpai):
     context, data = focus_frame(0, count=1)
-    task = AutoFocus(instrument="cam-east", positions=[1000.0], integration_time_seconds=0.01)
+    task = AutoFocus(instrument="cam-east", step=50.0, count=3, integration_time_seconds=0.01)
     context.set(sk.TaskInfo(task=task, task_id=TASK_ID, controller_id="ctrl-task"))
     context.set_value("task_id", str(TASK_ID))
     context.set_value("frame_count", 3)

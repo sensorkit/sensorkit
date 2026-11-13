@@ -65,13 +65,16 @@ StandardFocuser = sk.declare_archetype(
 class AutoFocus(sk.Task):
     """Run a fixed focus sweep for one instrument.
 
-    The sweep visits each position in the given order and takes one light frame at each.
-    Positions may repeat. Current pointing and tracking are preserved.
+    The sweep takes one light frame at each of `count` positions spaced `step` apart,
+    lowest first, centered on `center` or else on the focuser's position at the start
+    of the task. Current pointing and tracking are preserved.
     The task schema is beta.
 
     Attributes:
         instrument: Name of the controller instrument that takes the sweep.
-        positions: Focuser positions to visit, one exposure per entry.
+        step: Focuser travel between adjacent positions.
+        count: Number of positions, with one exposure at each. Defaults to seven.
+        center: Sweep center, or None for the focuser's starting position.
         integration_time_seconds: Exposure time of each frame.
         binning: Camera binning, or None to keep the current setting.
         gain: Camera gain, or None to keep the current setting.
@@ -81,12 +84,21 @@ class AutoFocus(sk.Task):
 
     task_type: Literal["autofocus"] = "autofocus"
     instrument: str = Field(min_length=1)
-    positions: list[FiniteFloat] = Field(min_length=1)
+    step: FiniteFloat = Field(gt=0)
+    count: int = Field(default=7, ge=3)
+    center: FiniteFloat | None = None
     integration_time_seconds: FiniteFloat = Field(gt=0)
     binning: Binning | None = None
     gain: FiniteFloat | None = None
     readout_mode: int | None = None
     filter_name: str | None = None
+
+    def positions(self, start: float) -> list[float]:
+        """Return the sweep's positions, lowest first, around `center` or else `start`."""
+        middle = start if self.center is None else self.center
+        offset = (self.count - 1) / 2
+
+        return [middle + (index - offset) * self.step for index in range(self.count)]
 
 
 @sk.declare_keyword(kind="config")

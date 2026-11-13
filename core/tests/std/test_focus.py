@@ -122,10 +122,25 @@ def header_from(*providers) -> fits.Header:
 
 
 class TestAutoFocus:
-    def test_round_trip_keeps_order_and_settings(self):
+    def test_omitted_count_sweeps_seven_positions(self):
+        task = sk.Task.model_validate(
+            {
+                "task_type": "autofocus",
+                "instrument": "camera",
+                "step": 50.0,
+                "integration_time_seconds": 1.0,
+            }
+        )
+
+        assert isinstance(task, AutoFocus)
+        assert task.positions(1000.0) == [850.0, 900.0, 950.0, 1000.0, 1050.0, 1100.0, 1150.0]
+
+    def test_round_trip_keeps_shape_and_settings(self):
         task = AutoFocus(
             instrument="camera",
-            positions=[1000.0, 1050.0, 1050.0, 975.0],
+            step=50.0,
+            count=5,
+            center=1200.0,
             integration_time_seconds=2.0,
             binning=Binning(x=2, y=2),
             gain=26.0,
@@ -138,19 +153,37 @@ class TestAutoFocus:
         assert AutoFocus.model_tag() == "autofocus"
         assert type(restored) is AutoFocus
         assert restored == task
-        assert restored.positions == [1000.0, 1050.0, 1050.0, 975.0]
 
-    def test_acquisition_settings_are_optional(self):
-        task = AutoFocus(instrument="camera", positions=[1000.0], integration_time_seconds=1.0)
+    def test_acquisition_settings_and_center_are_optional(self):
+        task = AutoFocus(instrument="camera", step=50.0, count=3, integration_time_seconds=1.0)
 
         assert (task.binning, task.gain, task.readout_mode, task.filter_name) == (None,) * 4
+        assert task.center is None
+
+    @pytest.mark.parametrize(
+        ("count", "center", "positions"),
+        [
+            (5, None, [900.0, 950.0, 1000.0, 1050.0, 1100.0]),
+            (4, None, [925.0, 975.0, 1025.0, 1075.0]),
+            (3, 2000.0, [1950.0, 2000.0, 2050.0]),
+        ],
+        ids=["around-start", "even-count", "around-center"],
+    )
+    def test_positions_are_spaced_by_step_lowest_first(self, count, center, positions):
+        task = AutoFocus(
+            instrument="camera", step=50.0, count=count, center=center, integration_time_seconds=1.0
+        )
+
+        assert task.positions(1000.0) == positions
 
     @pytest.mark.parametrize(
         "overrides",
         [
-            {"positions": []},
-            {"positions": [1000.0, math.nan]},
-            {"positions": [math.inf]},
+            {"step": 0},
+            {"step": -50.0},
+            {"step": math.nan},
+            {"count": 2},
+            {"center": math.inf},
             {"integration_time_seconds": 0},
             {"integration_time_seconds": -1.0},
             {"integration_time_seconds": math.nan},
@@ -159,7 +192,12 @@ class TestAutoFocus:
         ],
     )
     def test_rejects_invalid_sweep(self, overrides):
-        fields = {"instrument": "camera", "positions": [1000.0], "integration_time_seconds": 1.0}
+        fields = {
+            "instrument": "camera",
+            "step": 50.0,
+            "count": 3,
+            "integration_time_seconds": 1.0,
+        }
 
         with pytest.raises(ValidationError):
             AutoFocus(**(fields | overrides))
