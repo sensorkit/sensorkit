@@ -276,7 +276,10 @@ class EntityClient(EntityBase):
         return self._monitor_receive(queue, context)
 
     async def monitor[M: Keyword | BaseModel](self, model_type: type[M]):
-        """Return an async generator yielding (subject, model) tuples for the given keyword or model type."""
+        """Return an async generator yielding (subject, model) tuples for the given keyword or model type.
+
+        The subscription is live when this returns. Closing a started generator releases it.
+        """
         key = info.key if (info := get_keyword_info(model_type)) else None
 
         if key is not None:
@@ -287,14 +290,15 @@ class EntityClient(EntityBase):
         consumer = await self._stream.consume(key, include_latest=True)
 
         async def receive_data():
-            async for msg in consumer:
-                try:
-                    model: M = validate_func(msg.data)
-                    yield msg.subject, model
-                except ValidationError:
-                    logger.exception("Data validation failed")
-                except Exception:
-                    logger.exception("Error while monitoring")
+            async with contextlib.aclosing(consumer):
+                async for msg in consumer:
+                    try:
+                        model: M = validate_func(msg.data)
+                        yield msg.subject, model
+                    except ValidationError:
+                        logger.exception("Data validation failed")
+                    except Exception:
+                        logger.exception("Error while monitoring")
 
         return receive_data()
 
