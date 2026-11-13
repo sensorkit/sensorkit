@@ -867,6 +867,10 @@ class ControllerImpl(EntityImpl, ControllerInterface):
                     logger.debug(f"execution begun {execution=}")
 
                     await self._publish_start(running)
+
+                    if not self._state.enable_state.enabled:
+                        raise RuntimeError("Controller is disabled")
+
                     await running.handler(execution)
                     running.handler_latched_state = self._states.latch
                     await self._confirm_observed_state(running)

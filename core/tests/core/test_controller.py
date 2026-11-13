@@ -1447,6 +1447,49 @@ async def test_predecessor_failure_skips_successor(kit, controller_impl):
 
 
 @pytest.mark.asyncio
+async def test_disable_during_cleanup_skips_successor_handler(kit, controller_impl):
+    held = HeldCleanup()
+    successor_ran = asyncio.Event()
+
+    @controller_impl.task_handler(CollectTask)
+    async def run_collect(_: CollectTask):
+        if held.started.is_set():
+            successor_ran.set()
+        else:
+            await held.handle(None)
+
+    cli = kit.controller(controller_impl.entity)
+
+    try:
+        async with asyncio.timeout(2.0):
+            first = cli.execute_task(CollectTask())
+            await first.invoke()
+            await held.started.wait()
+
+            second = cli.execute_task(CollectTask(), interrupt=True)
+            second_id = (await second.invoke()).execution.task_id
+            await held.cleaning.wait()
+            await cli.disable()
+            held.release.set()
+
+            with pytest.raises(CallError):
+                await first.wait()
+
+            with pytest.raises(CallError):
+                await second.wait()
+
+            state = await cli.kv_get_model(ControllerState)
+    finally:
+        held.release.set()
+
+    assert not successor_ran.is_set()
+    assert not state.enable_state.enabled
+    assert is_finished(state, second_id)
+    assert state.execution_state.finished.error == "Controller is disabled"
+    assert not state.execution_state.finished.aborted
+
+
+@pytest.mark.asyncio
 async def test_abort_pending_execution_joins_predecessor(kit, controller_impl):
     held = HeldCleanup()
     shutdown_ran = asyncio.Event()
