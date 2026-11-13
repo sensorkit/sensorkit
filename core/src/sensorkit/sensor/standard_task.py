@@ -199,11 +199,6 @@ def camera_settings(params: CameraParameterSet) -> tuple[CommandRequest, ...]:
     Raises:
         ValueError: Only one binning axis is supplied.
     """
-    settings: list[CommandRequest] = []
-
-    if params.filter_name is not None:
-        settings.append(_filter(params.filter_name))
-
     match params.binning_x, params.binning_y:
         case None, None:
             binning = None
@@ -212,9 +207,29 @@ def camera_settings(params: CameraParameterSet) -> tuple[CommandRequest, ...]:
         case x, y:
             raise ValueError(f"binning is {x} by {y}; give both axes or neither")
 
-    if binning is not None or params.gain is not None:
+    return capture_settings(params.filter_name, binning=binning, gain=params.gain)
+
+
+def capture_settings(
+    filter_name: str | None,
+    *,
+    binning: Binning | None,
+    gain: float | None,
+    readout_mode: int | None = None,
+) -> tuple[CommandRequest, ...]:
+    """Request filter and camera settings, retaining unspecified values."""
+    settings: list[CommandRequest] = []
+
+    if filter_name is not None:
+        settings.append(_filter(filter_name))
+
+    if (binning, gain, readout_mode) != (None, None, None):
         settings.append(
-            CommandRequest(command=ConfigureCameraSensor(binning=binning, gain=params.gain))
+            CommandRequest(
+                command=ConfigureCameraSensor(
+                    binning=binning, gain=gain, readout_mode=readout_mode
+                )
+            )
         )
 
     return tuple(settings)

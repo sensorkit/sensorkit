@@ -34,7 +34,7 @@ from sensorkit.sensor.selection import (
 )
 from sensorkit.std.collect import CameraParameterSet, CollectInfo
 from sensorkit.std.instrument import Binning, ConfigureCameraSensor, FrameType
-from sensorkit.std.optics import SetFilter
+from sensorkit.std.optics import Filter, Filters, SetFilter
 from sensorkit.std.traits import Home
 
 from .common import (
@@ -131,6 +131,19 @@ def test_each_frame_copies_and_numbers_its_collect_metadata(at):
     units[0].acquisition.keywords[CollectInfo].params.gain = 5.0
     assert units[1].acquisition.keywords[CollectInfo].params.gain is None
     assert metadata.params.gain is None
+
+
+def test_each_frame_copies_typed_keywords_beside_collect_metadata(at):
+    metadata = CollectInfo(
+        target=TARGET, params=CameraParameterSet(integration_time_seconds=1.0, frame_count=2)
+    )
+    held = Filters(filters=[Filter(name="r")])
+    units = asking("a", count=2, collect=metadata, keywords=(held,)).expand(at("cam-sci"), 3, 0)
+
+    assert [u.acquisition.keywords[Filters] for u in units] == [held, held]
+    assert [u.acquisition.keywords[CollectInfo].frame_number for u in units] == [3, 4]
+    units[0].acquisition.keywords[Filters].filters.clear()
+    assert units[1].acquisition.keywords[Filters] == held
 
 
 def test_a_unit_command_is_whole_but_for_the_header(at):

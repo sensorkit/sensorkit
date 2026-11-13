@@ -31,6 +31,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Literal
 
+from pydantic import BaseModel
+
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceCommand
 from sensorkit.sensor.binding import BoundSensor
@@ -226,8 +228,9 @@ class InstrumentRequest:
     preferences contribute to the same ranking.
 
     `collect` carries the requested target and camera parameters. Expansion
-    fills its per-instrument frame number. Dispatch samples device keywords
-    for each capture's header.
+    fills its per-instrument frame number. `keywords` adds typed keywords to
+    every capture of the request. Dispatch samples device keywords for each
+    capture's header.
 
     Requests with the same `assignment` form a group across the collect.
     The chosen instruments must be eligible for every segment. Segments must
@@ -241,6 +244,7 @@ class InstrumentRequest:
     count: int = 1
     distribute: Literal["one", "each"] = "one"
     collect: CollectInfo | None = None
+    keywords: tuple[BaseModel, ...] = ()
     select: Selection | None = None
     settings: tuple[CommandRequest, ...] = ()
     requires: tuple[Selection, ...] = ()
@@ -267,13 +271,7 @@ class InstrumentRequest:
                     request=self.id,
                     index=first_index + offset,
                     frame_number=frame,
-                    keywords=(
-                        KeywordDict(
-                            self.collect.model_copy(deep=True, update={"frame_number": frame})
-                        )
-                        if self.collect is not None
-                        else KeywordDict()
-                    ),
+                    keywords=self._capture_keywords(frame),
                 ),
                 target=target,
                 command=CameraCapture(
@@ -286,6 +284,15 @@ class InstrumentRequest:
             )
             for offset, frame in enumerate(frames)
         )
+
+    def _capture_keywords(self, frame: int) -> KeywordDict:
+        """Copy per-capture keywords and assign the collect frame number."""
+        planned = KeywordDict(None, *(keyword.model_copy(deep=True) for keyword in self.keywords))
+
+        if self.collect is not None:
+            planned.set(self.collect.model_copy(deep=True, update={"frame_number": frame}))
+
+        return planned
 
     def assignment_key(self, epoch: int, position: int) -> tuple[bool, str]:
         """Return the named assignment group or a unique key for an unnamed
