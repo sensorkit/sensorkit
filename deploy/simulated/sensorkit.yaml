@@ -56,6 +56,9 @@ automation:
     standard_collect:
       FileNameTemplate:
         template: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-f{Collect.frame_number}.fits"
+    autofocus:
+      FileNameTemplate:
+        template: f"{datetime.now(UTC):%Y%m%dT%H%M%S}-focus{FocusSweep.sample_index}.fits"
 
 data_flow:
   - entity: SimulatedCamera

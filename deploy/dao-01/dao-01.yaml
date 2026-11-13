@@ -87,6 +87,9 @@ automation:
     standard_collect:
       FileNameTemplate:
         template: f"{Task.task_id}_{Collect.frame_number}.fits"
+    autofocus:
+      FileNameTemplate:
+        template: f"{Task.task_id}_focus{FocusSweep.sample_index}.fits"
     
 
 data_flow:
@@ -101,6 +104,12 @@ data_flow:
           include: all
           option:
             TASKID: =Otto.visit_id
+            FILTER:
+              value: =Collect.params.filter_name
+              comment: name of filter used during the observation
+            FRAMECNT:
+              value: =Collect.params.frame_count
+              comment: total requested frame count
           define:
             SITELAT:
               value: =SitePosition.latitude_degrees
@@ -135,12 +144,6 @@ data_flow:
             DEC_RATE:
               value: =AxisRates.declination.velocity
               comment: measured declination rate [deg/s]
-            FILTER:
-              value: =Collect.params.filter_name
-              comment: name of filter used during the observation
-            FRAMECNT:
-              value: =Collect.params.frame_count
-              comment: total requested frame count
         - op: array_to_fits
         - op: write_file
           directory: f"C:/sk/data/raw/{Program.program_id}/{controller_name}"
