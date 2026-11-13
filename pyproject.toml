@@ -256,11 +256,9 @@ ignore_imports = [
     "sensorkit.udl.publishers -> sensorkit.senpai.models",
     # Autoslew devices are specialized Alpaca devices
     "sensorkit.autoslew.** -> sensorkit.alpaca.**",
-    # Sensor translation layer uses standards
-    "sensorkit.sensor.policies -> sensorkit.std.**",
-    "sensorkit.sensor.standard_task -> sensorkit.std.**",
-    "sensorkit.sensor.collect -> sensorkit.std.**",
-    "sensorkit.sensor.impl -> sensorkit.std.**",
+    # Standard constraints subclass the auto constraint base
+    "sensorkit.std.safety -> sensorkit.auto.constraint",
+    "sensorkit.std.weather -> sensorkit.auto.constraint",
 ]
 layers = [
     """
@@ -281,9 +279,8 @@ layers = [
     """,
     "sensorkit.cli",
     "sensorkit.webapi",
+    "sensorkit.auto | sensorkit.sensor",
     "sensorkit.std",
-    "sensorkit.auto",
-    "sensorkit.sensor",
     "sensorkit.astro",
     "sensorkit.api",
     "sensorkit.core : sensorkit.data",
@@ -296,6 +293,7 @@ name = "sensorkit.sensor module layering"
 type = "layers"
 containers = ["sensorkit.sensor"]
 layers = [
+    "impl",
     "client",
     "audit | policies | standard_task",
     "definition | execution",
