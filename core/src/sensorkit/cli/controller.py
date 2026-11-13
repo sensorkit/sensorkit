@@ -83,3 +83,48 @@ async def collect(
         collect_task,
         expiry_time=dt.datetime.now(dt.UTC) + dt.timedelta(minutes=10),
     )
+
+
+@controller_group.command("autofocus")
+@entity_option(required=True)
+@click.option("-n", "--instrument", required=True, help="Controller instrument name.")
+@click.option("-s", "--step", type=float, required=True, help="Focuser travel between positions.")
+@click.option("-c", "--count", type=int, default=7, show_default=True, help="Number of positions.")
+@click.option("--center", type=float, default=None, help="Sweep center. Default: current position.")
+@click.option("-i", "--integration-time-seconds", type=float, default=1.0)
+@click.option("-b", "--binning", type=int, default=None)
+@click.option("--filter", "filter_name", default=None)
+@click.option("-x", "--context", default=None, help="JSON object of task context keywords.")
+@with_kit
+async def autofocus(
+    kit,
+    entity: str,
+    instrument: str,
+    step: float,
+    count: int,
+    center: float | None,
+    integration_time_seconds: float,
+    binning: int | None,
+    filter_name: str | None,
+    context: str | None,
+):
+    """Execute an AutoFocus sweep on a controller instrument."""
+    from sensorkit.common.keyword import KeywordDict, validated_items
+    from sensorkit.std.focus import AutoFocus
+    from sensorkit.std.instrument import Binning
+
+    task = AutoFocus(
+        instrument=instrument,
+        step=step,
+        count=count,
+        center=center,
+        integration_time_seconds=integration_time_seconds,
+        binning=None if binning is None else Binning(x=binning, y=binning),
+        filter_name=filter_name,
+    )
+
+    await kit.controller(entity).execute_task(
+        task,
+        context=KeywordDict(validated_items(json.loads(context))) if context else None,
+        expiry_time=dt.datetime.now(dt.UTC) + dt.timedelta(minutes=10),
+    )

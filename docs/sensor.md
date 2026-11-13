@@ -151,11 +151,16 @@ sensorkit controller collect -e MySensor \
     -t '{"target_type": "fixed", "frame": "icrf", "coords": {"ra": 83.82, "dec": -5.39}}' \
     -i 30.0 -c 10
 
+# Sweep a focuser through seven positions 200 steps apart around its current position,
+# one 2-second frame at each
+sensorkit controller autofocus -e MySensor -n MyCamera -s 200 -c 7 -i 2.0
+
 # Shut down
 sensorkit controller shutdown -e MySensor
 ```
 
 `-f` on `init`/`shutdown` interrupts a running task first.
+`-x` on `autofocus` adds task context as a JSON object, for values the agent would otherwise supply, such as those a file output path needs.
 
 !!! warning "Stand the agent down first"
 
