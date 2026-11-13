@@ -77,6 +77,7 @@ from sensorkit.core.impl.program import ProgramImpl, ProgramOffers
 from sensorkit.core.program import (
     OfferInterval,
     ProgramClient,
+    ProgramInfo,
     ProgramOffering,
     ProgramRef,
     ProgramState,

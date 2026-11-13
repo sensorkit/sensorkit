@@ -50,6 +50,16 @@ class ProgramOffering(BaseModel):
     offer_windows: list[OfferInterval]
 
 
+@declare_keyword(key="Program")
+class ProgramInfo(BaseModel):
+    """Keyword identifying the program that submitted a task."""
+
+    program_id: str
+
+    def get_fits_cards(self):
+        yield "SKPROG", (self.program_id, "SensorKit program name")
+
+
 class ProgramEnableState(Event):
     """Event indicating the Program enable state has changed."""
     enabled: bool = False

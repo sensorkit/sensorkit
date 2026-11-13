@@ -37,6 +37,7 @@ from sensorkit.core.program import (
     ProgramActiveStateRequest,
     ProgramActiveStateResponse,
     ProgramEnableState,
+    ProgramInfo,
     ProgramOffering,
     ProgramState,
     ProgramTaskingMonitor,
@@ -46,7 +47,8 @@ from sensorkit.core.program import (
     TaskingStartupFailed,
     set_active_state_request,
 )
-from sensorkit.core.task import CollectTask, TaskExecution
+from sensorkit.core.task import CollectTask, TaskContextMap, TaskExecution, TaskSubmission
+from sensorkit.data.context import Context
 
 OPERATE = InternalControllerState.OPERATE
 
@@ -620,6 +622,56 @@ async def test_program_reuses_task_instance(kit, service_context):
         await program_client.stop_tasking()
 
     assert len(set(executed)) == 2
+
+
+def test_program_info_keyword():
+    info = ProgramInfo(program_id="myprogram")
+    context = Context(info)
+
+    assert set(KeywordDict(info)) == {"Program"}
+    assert context.resolve("=Program.program_id") == "myprogram"
+    assert dict(info.get_fits_cards()) == {"SKPROG": ("myprogram", "SensorKit program name")}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["none", "factory", "config"])
+async def test_program_identity_in_task_context(kit, service_context, source):
+    """Program identity reaches the controller and replaces factory and config values."""
+    controller = await service_context.register_controller("mycontroller")
+    program = await service_context.register_program("myprogram")
+    await controller.report_state(OPERATE, KeywordDict())
+
+    spoofed = KeywordDict(ProgramInfo(program_id="spoofed"))
+    factory_context = spoofed if source == "factory" else None
+    contexts = TaskContextMap(defaults=spoofed) if source == "config" else None
+    received: list[TaskExecution] = []
+    done = asyncio.Event()
+
+    @program.task_factory
+    async def program_tasker():
+        if not done.is_set():
+            await (yield TaskSubmission(task=CollectTask(), context=factory_context))
+            done.set()
+
+    async def run_task(execution: TaskExecution[CollectTask]):
+        received.append(execution)
+
+    controller.add_task_handler(CollectTask, execution_callback=run_task)
+
+    program_client = kit.program("myprogram")
+
+    async with asyncio.timeout(2.0):
+        await kit.controller("mycontroller").enable()
+        await program_client.enable("mycontroller")
+        (await program_client.start_tasking(contexts)).close()
+        await done.wait()
+        await program_client.stop_tasking()
+
+    [execution] = received
+    expected = ProgramInfo(program_id="myprogram")
+
+    assert execution.context[ProgramInfo] == expected
+    assert execution.submitted_context[ProgramInfo] == expected
 
 
 @pytest.mark.asyncio

@@ -423,6 +423,10 @@ Cameras report `ExposureInfo` under the keyword key `Exposure`, so expressions s
 - `add_offer(start, end)` / `remove_offer(start, end)` / `clear_offers()` — manage the offer set.
 - `publish_offers()` — publish it (as the `ProgramOffering` keyword, a list of `OfferInterval`s).
 
+Each task a program submits carries `ProgramInfo` under the keyword key `Program`.
+It replaces any `Program` value from the task factory or configured task contexts.
+Configuration expressions use `Program.program_id`; Python code can access the keyword through `context[ProgramInfo]`.
+
 ---
 
 ## State

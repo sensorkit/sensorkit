@@ -370,10 +370,13 @@ class TaskingLoop:
         task_group: asyncio.TaskGroup,
         *,
         on_tasking_change: TaskingChangeCallback | None = None,
+        overrides: KeywordDict | None = None,
     ):
         self.controller = controller
         self.task_factory: TaskFactoryFunc = factory_func
         self.contexts = contexts
+        self.overrides = KeywordDict(overrides)
+        """Keywords added to every submitted task, replacing factory and config values."""
         self._task_group = task_group
         self._on_tasking_change = on_tasking_change
         self.loop_state = TaskingLoopState(session_id=uuid.uuid7(), stage="factory")
@@ -519,11 +522,13 @@ class TaskingLoop:
                 self._published = snapshot
 
     def _resolve_context(self, submission: TaskSubmission) -> KeywordDict | None:
-        """Merge the factory-supplied context with the per-task-type context bundle."""
+        """Merge the factory context, the per-task-type context bundle, and the overrides."""
         context = KeywordDict(submission.context or {})
 
         if type_context := self.contexts.get(submission.task.task_type):
             context.update(type_context)
+
+        context.update(self.overrides)
 
         return context or None
 

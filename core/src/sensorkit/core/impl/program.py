@@ -15,6 +15,7 @@ from sensorkit.backend.base import Entity, KVError
 from sensorkit.backend.event import Event
 from sensorkit.backend.request import CallContext
 from sensorkit.common.aio import scoped_waiter
+from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.controller import TaskExecutionState
 from sensorkit.core.entity import EntityDetails, EntityInfo
 from sensorkit.core.executor import TaskFactoryFunc, TaskingLoop, TaskOutcomeUnknown
@@ -26,6 +27,7 @@ from sensorkit.core.program import (
     ProgramActiveStateResponse,
     ProgramEnableState,
     ProgramEnableStateRequest,
+    ProgramInfo,
     ProgramInterface,
     ProgramOffering,
     ProgramState,
@@ -194,6 +196,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             contexts=contexts,
             task_group=self.task_group,
             on_tasking_change=_on_tasking_change,
+            overrides=KeywordDict(ProgramInfo(program_id=str(self.entity))),
         )
         loop = self._task_loop
 
