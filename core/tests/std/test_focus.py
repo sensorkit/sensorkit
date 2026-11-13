@@ -196,7 +196,7 @@ class TestFocusAnalysisSource:
 class TestFocusSweepContext:
     def test_keyword_round_trip_keeps_sweep_id(self):
         context = sweep_context(2)
-        restored = validate_keyword_json("FocusSweepContext", dump_keyword_json(context))
+        restored = validate_keyword_json("FocusSweep", dump_keyword_json(context))
 
         assert restored == context
         assert restored.sweep_id == SWEEP_ID

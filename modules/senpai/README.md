@@ -96,17 +96,21 @@ It publishes `FocusAnalysis` for each sweep frame and `FocusSweepAnalysis` for e
 A successful fit estimates best focus or its direction beyond the sampled range.
 The controller handles focuser positioning.
 
-A frame is a focus sweep frame when its DataGraph context contains a typed `FocusSweepContext`.
-The analyzer does not read sweep identity from FITS cards.
-The DataGraph must supply the following capture metadata with each FITS image.
+A typed `FocusSweepContext` or a `FOCSWEEP` FITS card identifies a focus sweep frame.
+Typed sweep context takes precedence over FITS metadata.
+Frames marked by `FOCSWEEP` with missing or invalid metadata are rejected before science analysis.
+Each sweep frame needs the following capture metadata.
 
-| Context | Required | Use |
-| --- | --- | --- |
-| `FocusSweepContext` | yes | Sweep identity, sample index and count, commanded position |
-| `Instrument` | yes | Controller instrument name |
-| `TaskInfo` or `controller_name` | yes | Controller identity |
-| `ExposureInfo` | yes | Observed exposure metadata and the stall limit |
-| `FocusPosition` | no | Reported focuser position |
+| Context keyword | FITS cards | Required | Use |
+| --- | --- | --- | --- |
+| `FocusSweep` | `FOCSWEEP`, `FOCSAMP`, `FOCCOUNT`, `FOCCMD` | yes | Sweep identity, sample index and count, commanded position |
+| `Instrument` | `INSTRUME` | yes | Controller instrument name |
+| `Task` or `controller_name` | `SKCTRL` | yes | Controller identity |
+| `Exposure` | `DATE-OBS`, `EXPTIME`, and optional exposure cards | yes | Observed exposure metadata and the stall limit |
+| `FocusPosition` | `FOCPOS` | no | Reported focuser position |
+
+A camera graph writes these cards with a `fits_header` operation configured with `include: all`.
+The analyzer reads them from the first header carrying `FOCSWEEP`, so tile-compressed files also work.
 
 Sweep frames skip calibration filtering and sequence batching.
 Each frame is measured alone with source detection only, without a plate solution.

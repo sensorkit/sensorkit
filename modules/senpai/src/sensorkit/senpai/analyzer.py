@@ -18,8 +18,8 @@ from sensorkit.data.context import Context
 from sensorkit.senpai import PRE_IMPORT_ROOT_HANDLERS
 from sensorkit.senpai.models import SenpaiConfig, SenpaiResult
 from sensorkit.senpai.pipeline import SenpaiPipeline
-from sensorkit.senpai.processors import FocusSweepProcessor, StandardProcessor
-from sensorkit.std.focus import FocusAnalysis, FocusSweepAnalysis, FocusSweepContext
+from sensorkit.senpai.processors import FocusSweepProcessor, StandardProcessor, sweep_context
+from sensorkit.std.focus import FocusAnalysis, FocusSweepAnalysis
 
 # Libraries that bolt their *own* stderr handler on import (so they bypass the
 # root logger). We import them eagerly to strip those handlers.
@@ -193,11 +193,14 @@ class SenpaiAnalyzer:
         """Analyze one DataGraph frame and publish its measurements."""
         context, data = item
 
-        # Sweep membership takes precedence over frame type and collect metadata.
-        is_sweep = context.get(FocusSweepContext) is not None
-        processor = self._sweeps if is_sweep else self._standard
+        # Sweep membership takes precedence over frame type and collect metadata. A malformed
+        # sweep frame raises here rather than reaching science analysis.
+        sweep = sweep_context(context, data)
 
-        await self._publish_all(processor.handle(context, data))
+        if sweep is not None:
+            await self._publish_all(self._sweeps.handle(sweep, data))
+        else:
+            await self._publish_all(self._standard.handle(context, data))
 
     async def _flush_stalled(self) -> None:
         """Analyze partial collects and publish failures for stalled sweeps."""

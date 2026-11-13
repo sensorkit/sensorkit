@@ -110,6 +110,49 @@ class FrameGroups[K, G]:
             yield key, self.close(key)
 
 
+def sweep_context(context: Context, data: Buffer) -> Context | None:
+    """Restore focus capture metadata, or return None for a frame outside a sweep.
+
+    A typed `FocusSweepContext` is authoritative. Otherwise a FOCSWEEP card marks a sweep
+    frame, and its capture metadata is read from the cards of that FITS header.
+
+    Raises:
+        KeyError: If a marked header lacks a required card.
+        ValueError: If a marked header has an invalid card value.
+    """
+    if context.get(FocusSweepContext) is not None:
+        return context
+
+    header = _sweep_header(data)
+
+    if header is None:
+        return None
+
+    restored = Context(context)
+    restored.set(
+        FocusSweepContext.from_fits_header(header),
+        sk.InstrumentInfo(name=header["INSTRUME"]),
+    )
+
+    if "SKCTRL" in header:
+        restored.set_value("controller_name", header["SKCTRL"])
+
+    for keyword in (ExposureInfo.from_fits_header(header), FocusPosition.from_fits_header(header)):
+        if keyword is not None:
+            restored.set(keyword)
+
+    return restored
+
+
+def _sweep_header(data: Buffer) -> fits.Header | None:
+    """Find the first FITS header containing FOCSWEEP across all HDUs."""
+    try:
+        with fits.open(io.BytesIO(data)) as frames:
+            return next((hdu.header.copy() for hdu in frames if "FOCSWEEP" in hdu.header), None)
+    except Exception:
+        return None
+
+
 def _frame_type(data: Buffer) -> str | None:
     """IMAGETYP of a FITS payload, lowercased; None when absent or unreadable."""
     try:

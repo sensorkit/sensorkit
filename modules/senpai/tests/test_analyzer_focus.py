@@ -2,11 +2,13 @@
 """Focus sweep analysis by a running SenpaiAnalyzer, using the real engine."""
 
 import importlib.resources
+import io
 from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
 import pytest_asyncio
+from astropy.io import fits
 
 import sensorkit.api as sk
 import sensorkit.senpai.analyzer as analyzer_mod
@@ -79,6 +81,30 @@ def focus_frame(
     return context, star_field_fits(star_width(position)) if data is None else data
 
 
+def fits_focus_frame(index: int, position: float = 1000.0, *, count: int = len(POSITIONS)):
+    """A sweep frame whose capture metadata travels only as FITS cards, as read from a file."""
+    task = AutoFocus(instrument="cam-east", positions=POSITIONS, integration_time_seconds=0.01)
+    written = (
+        FocusSweepContext(
+            sweep_id=SWEEP_ID, sample_index=index, sample_count=count, commanded_position=position
+        ),
+        sk.TaskInfo(task=task, task_id=SWEEP_ID, controller_id="ctrl-a"),
+        sk.InstrumentInfo(name="cam-east", devices=("foc", "cam")),
+        ExposureInfo(
+            date_obs=datetime(2026, 11, 10, 8, 30, tzinfo=UTC),
+            exposure_time=0.01,
+            detector="QHY600M",
+        ),
+        FocusPosition(position=position + 0.5),
+    )
+    cards = [card for keyword in written for card in keyword.get_fits_cards()]
+
+    return (
+        Context(FileInfo(path=f"fits-focus-{index}.fits")),
+        star_field_fits(star_width(position), cards=cards),
+    )
+
+
 @pytest_asyncio.fixture
 async def senpai(kit, service, tmp_path, recorder):
     """Run the analyzer as a service entity and return a feeder for its DataGraph."""
@@ -132,6 +158,70 @@ async def test_sweep_locates_best_focus(senpai):
     assert result.samples[3].median_fwhm_pixels < result.samples[0].median_fwhm_pixels
     assert len(published.of(FocusAnalysis)) == 7
     assert published.of(FocusAnalysis)[0].sweep.sample_index == 3
+
+
+@pytest.mark.asyncio
+async def test_sweep_metadata_is_restored_from_fits_cards(senpai):
+    published = senpai(*(fits_focus_frame(index, POSITIONS[index]) for index in range(7)))
+
+    result = await published.wait_for(FocusSweepAnalysis, timeout=30.0)
+
+    assert (result.outcome, result.disposition) == ("success", "equals")
+    assert result.position == pytest.approx(BEST, abs=15.0)
+    assert (result.controller_id, result.instrument) == (sk.ControllerRef("ctrl-a"), "cam-east")
+    assert [sample.reported_position for sample in result.samples] == [p + 0.5 for p in POSITIONS]
+    assert {sample.exposure.detector for sample in result.samples} == {"QHY600M"}
+    assert published.of(SenpaiResult) == []
+
+
+def test_sweep_cards_are_read_from_a_compressed_image():
+    context, data = fits_focus_frame(2, POSITIONS[2])
+    buffer = io.BytesIO()
+
+    with fits.open(io.BytesIO(data)) as frames:
+        header = frames[0].header.copy()
+        header.strip()
+        fits.HDUList(
+            [fits.PrimaryHDU(), fits.CompImageHDU(data=frames[0].data, header=header)]
+        ).writeto(buffer)
+
+    restored = processors_mod.sweep_context(context, buffer.getvalue())
+
+    assert restored[FocusSweepContext].sample_index == 2
+    assert restored[sk.InstrumentInfo].name == "cam-east"
+    assert restored["controller_name"] == "ctrl-a"
+    assert restored[FocusPosition].position == POSITIONS[2] + 0.5
+    assert restored[ExposureInfo].exposure_time == 0.01
+
+
+def test_frame_without_sweep_cards_is_not_a_sweep_frame():
+    context = Context(FileInfo(path="science.fits"))
+
+    assert processors_mod.sweep_context(context, star_field_fits(4.0)) is None
+
+
+@pytest.mark.asyncio
+async def test_typed_sweep_context_outranks_fits_cards(senpai):
+    context, data = fits_focus_frame(0, count=1)
+    typed, _ = focus_frame(0, count=1, controller="ctrl-typed")
+    context.update(typed)
+
+    published = senpai((context, data))
+    result = await published.wait_for(FocusSweepAnalysis, timeout=30.0)
+
+    assert result.controller_id == sk.ControllerRef("ctrl-typed")
+
+
+@pytest.mark.asyncio
+async def test_malformed_fits_sweep_frame_skips_science_analysis(senpai):
+    context, _ = fits_focus_frame(0, count=1)
+    malformed = star_field_fits(4.0, cards=[("FOCSWEEP", "not-a-uuid")])
+
+    published = senpai((context, malformed), focus_frame(0, count=1))
+    await published.wait_for(FocusSweepAnalysis, timeout=30.0)
+
+    assert published.of(SenpaiResult) == []
+    assert len(published.of(FocusAnalysis)) == 1
 
 
 @pytest.mark.asyncio

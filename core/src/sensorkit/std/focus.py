@@ -100,9 +100,9 @@ class FocusAnalysisSource(BaseModel):
     entity: sk.EntityRef
 
 
-@sk.declare_keyword
+@sk.declare_keyword(key="FocusSweep")
 class FocusSweepContext(BaseModel):
-    """Sweep identity and commanded position for one sample.
+    """Sweep identity and commanded position for one sample, available in context as `FocusSweep`.
 
     Attributes:
         sweep_id: Unique sweep identifier, written as FOCSWEEP.
