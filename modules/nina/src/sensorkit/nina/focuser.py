@@ -87,17 +87,39 @@ class NinaFocuser(NinaDevice):
     @sk.command_handler
     async def focuser_change(self, cmd: ChangeFocusPosition):
         await self.require_connected()
-        position = int(cmd.position)
-        logger.debug(f"changing focuser to {position}")
+        info = await self.info("focuser")
+        maximum = info.get("MaxStep")
 
-        await self.client.get("/equipment/focuser/move", position=position)
+        if cmd.position < 0 or (maximum is not None and cmd.position > maximum):
+            raise ValueError(f"Focuser position {cmd.position} lies outside travel limits")
 
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                info = await self.info("focuser")
-                if not info.get("IsMoving", True):
-                    break
-                await asyncio.sleep(0.5)
+        target = int(cmd.position)
+        logger.debug(f"changing focuser to {target}")
+
+        await self.client.get("/equipment/focuser/move", position=target)
+        position = None
+
+        try:
+            async with asyncio.timeout(self.config.timeout):
+                while True:
+                    info = await self.info("focuser")
+                    position = info.get("Position")
+
+                    if position is None:
+                        raise RuntimeError("Focuser returned no position after the move")
+
+                    self.focuser_position = float(position)
+
+                    if info.get("IsMoving") is False and self.focuser_position == target:
+                        break
+
+                    await asyncio.sleep(self.config.status_frequency)
+        except TimeoutError:
+            raise TimeoutError(
+                f"Focuser did not stop at {target}; last position {position}"
+            ) from None
+
+        await sk.device().publish(FocusPosition(position=self.focuser_position))
 
         logger.debug(f"changed focuser to {self.focuser_position}")
 

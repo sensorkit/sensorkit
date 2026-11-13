@@ -107,26 +107,52 @@ class AlpacaFocuser(AlpacaDevice):
         await self.require_connected()
         logger.debug(f"changing focus to position {cmd.position}")
 
+        if not 0 <= cmd.position <= self._max_step:
+            raise ValueError(f"Focuser position {cmd.position} lies outside 0 to {self._max_step}")
+
         target = int(cmd.position)
-        target = max(0, min(target, self._max_step))
 
-        if self._absolute:
-            await self.call(self.focuser, "Move", target)
-        else:
-            if self.focuser_position is not None:
-                delta = target - int(self.focuser_position)
-                delta = max(-self._max_increment, min(delta, self._max_increment))
-                await self.call(self.focuser, "Move", delta)
-            else:
-                logger.warning("Cannot change focuser; current position unknown")
-                return
+        match self._absolute:
+            case True:
+                steps = target
+            case False:
+                current = await self.get(self.focuser, "Position", None)
 
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                is_moving = await self.get(self.focuser, "IsMoving", False)
-                if not is_moving:
-                    break
-                await asyncio.sleep(self.config.status_frequency)
+                if current is None:
+                    raise RuntimeError("Cannot move focuser without its current position")
+
+                steps = target - int(current)
+
+                if abs(steps) > self._max_increment:
+                    raise ValueError(
+                        f"Focuser travel {steps} exceeds the maximum increment "
+                        f"{self._max_increment}"
+                    )
+
+        await self.call(self.focuser, "Move", steps)
+        position = None
+
+        try:
+            async with asyncio.timeout(self.config.timeout):
+                while True:
+                    is_moving = await self.get(self.focuser, "IsMoving", None)
+                    position = await self.get(self.focuser, "Position", None)
+
+                    if position is None:
+                        raise RuntimeError("Focuser returned no position after the move")
+
+                    self.focuser_position = float(position)
+
+                    if is_moving is False and self.focuser_position == target:
+                        break
+
+                    await asyncio.sleep(self.config.status_frequency)
+        except TimeoutError:
+            raise TimeoutError(
+                f"Focuser did not stop at {target}; last position {position}"
+            ) from None
+
+        await sk.device().publish(FocusPosition(position=self.focuser_position))
 
         logger.debug(f"changed focus to position {self.focuser_position}")
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from typing import Literal, override
 
 from loguru import logger
@@ -11,6 +12,10 @@ from sensorkit.common.aio import AsyncLoop
 from sensorkit.pwi4.device import PWI4Client, PWI4Device, PWI4DeviceConfig, PWI4DeviceState
 from sensorkit.std import Connect, Connected, Disable, Disconnect, Enable, Enabled, Stop
 from sensorkit.std.focus import ChangeFocusPosition, FocusPosition, StandardFocuser
+
+FOCUS_POSITION_TOLERANCE = 1.0
+"""Absolute position tolerance in PWI4 focuser position units."""
+# FIXME: Verify this tolerance against the focuser's supported position resolution.
 
 
 @sk.declare_device(type=StandardFocuser)
@@ -119,9 +124,41 @@ class PWI4Focuser(PWI4Device):
         logger.debug(f"changing focuser to position {cmd.position}")
 
         await self.client.request("/focuser/goto", params={"target": cmd.position})
-        await self.client.poll(
-            lambda s: not self.client.get_bool(s, "focuser.is_moving"),
-        )
+        position = None
+
+        try:
+            async with asyncio.timeout(self.config.timeout):
+                while True:
+                    status = await self.client.status()
+
+                    try:
+                        position = float(status["focuser.position"])
+                    except (KeyError, TypeError, ValueError) as error:
+                        raise RuntimeError("Focuser returned no valid position") from error
+
+                    if not math.isfinite(position):
+                        raise RuntimeError("Focuser returned no finite position")
+
+                    moving = status.get("focuser.is_moving")
+
+                    if moving not in ("true", "false"):
+                        raise RuntimeError("Focuser returned no valid motion state")
+
+                    self.focuser_position = position
+
+                    if moving == "false" and math.isclose(
+                        position, cmd.position, rel_tol=0, abs_tol=FOCUS_POSITION_TOLERANCE
+                    ):
+                        break
+
+                    await asyncio.sleep(self.config.status_frequency)
+        except TimeoutError:
+            raise TimeoutError(
+                f"Focuser did not stop within {FOCUS_POSITION_TOLERANCE} of "
+                f"{cmd.position}; last position {position}"
+            ) from None
+
+        await sk.device().publish(FocusPosition(position=position))
 
         logger.debug(f"changed focuser to position {cmd.position}")
 

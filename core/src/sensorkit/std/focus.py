@@ -21,7 +21,19 @@ class FocusPosition(BaseModel):
 
 
 class ChangeFocusPosition(sk.DeviceCommand):
-    """Move the focuser to an absolute position."""
+    """Move the focuser to an absolute position.
+
+    Drivers may quantize the requested position to their supported resolution.
+    Positions outside the device's travel limits fail.
+
+    A successful response confirms that motion has ended and the final
+    position matches the target within the device's supported resolution.
+    Publish that position as
+    `FocusPosition` before responding successfully.
+
+    The command fails if the final position cannot be verified or differs
+    from the target.
+    """
 
     position: float
 

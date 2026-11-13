@@ -108,27 +108,32 @@ class TheSkyFocuser(TheSkyDevice):
             logger.error(f"Moving focus position ({cmd.position}) abandoned due to limits")
             raise RuntimeError(f"Focuser position ({cmd.position}) outside limits")
 
-        relative_position = cmd.position - self.focuser_position
+        target = int(cmd.position)
+        position = await self.execute(
+            f"""
+            var previous = ccdsoftCamera.Asynchronous;
+            try {{
+                ccdsoftCamera.Asynchronous = 0;
+                var distance = {target} - ccdsoftCamera.focPosition;
+                if (distance < 0) {{
+                    ccdsoftCamera.focMoveIn(distance);
+                }} else if (distance > 0) {{
+                    ccdsoftCamera.focMoveOut(distance);
+                }}
+                Out = ccdsoftCamera.focPosition;
+            }} finally {{
+                ccdsoftCamera.Asynchronous = previous;
+            }}
+            """
+        )
 
-        if relative_position < 0:
-            await self.execute(
-                f"""
-                ccdsoftCamera.focMoveIn({relative_position});
-                """
-            )
-        elif relative_position > 0:
-            await self.execute(
-                f"""
-                ccdsoftCamera.focMoveOut({relative_position});
-                """
-            )
-        else:
-            return
+        self.focuser_position = float(position)
 
-        async with asyncio.timeout(self.config.timeout):
-            await self.poll("""ccdsoftCamera.focPosition;""", f"{cmd.position}")
+        if self.focuser_position != target:
+            raise RuntimeError(f"Focuser stopped at {self.focuser_position}, expected {target}")
 
-        logger.debug(f"changed focuser position to {cmd.position}")
+        await sk.device().publish(FocusPosition(position=self.focuser_position))
+        logger.debug(f"changed focuser position to {target}")
 
     async def status_publish(self):
         resp = await self.execute(

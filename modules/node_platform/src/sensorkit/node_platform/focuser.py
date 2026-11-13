@@ -66,23 +66,40 @@ class NodePlatformFocuser(NodePlatformDevice):
     @sk.command_handler
     async def focuser_change(self, cmd: ChangeFocusPosition):
         await self.require_connected()
-        logger.debug(f"changed focuser position to {cmd.position}")
+        target = int(cmd.position)
+        logger.debug(f"changing focuser position to {target}")
 
         req = osapi.V1GoToFocuserPositionRequest(
-            position=cmd.position,
+            position=target,
             operation=osapi.FocusOperation.GOTO,
         )
         await self.api.call("v1_go_to_focuser_position", req)
         await asyncio.sleep(0.1)
 
-        async with asyncio.timeout(self.config.timeout):
-            while True:
-                status: osapi.V1FocuserStatus = await self.api.call("v1_get_focuser_status")
-                if not status.moving:
-                    break
-                await asyncio.sleep(0.5)
+        position = None
 
-        logger.debug(f"changed focuser position to {cmd.position}")
+        try:
+            async with asyncio.timeout(self.config.timeout):
+                while True:
+                    status: osapi.V1FocuserStatus = await self.api.call("v1_get_focuser_status")
+                    position = None if status.position is None else status.position.zaxis_microns
+
+                    if position is None:
+                        raise RuntimeError("Focuser returned no position after the move")
+
+                    self.focuser_position = float(position)
+
+                    if status.moving is False and self.focuser_position == target:
+                        break
+
+                    await asyncio.sleep(self.config.status_frequency)
+        except TimeoutError:
+            raise TimeoutError(
+                f"Focuser did not stop at {target}; last position {position}"
+            ) from None
+
+        await sk.device().publish(FocusPosition(position=self.focuser_position))
+        logger.debug(f"changed focuser position to {target}")
 
     async def status_publish(self):
         status: osapi.V1FocuserStatus = await self.api.call("v1_get_focuser_status")
