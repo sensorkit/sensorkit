@@ -19,6 +19,22 @@ class FocusPosition(BaseModel):
 
     position: float
 
+    def get_fits_cards(self):
+        """Yield the reported focuser position as FOCPOS."""
+        yield "FOCPOS", (self.position, "Reported focus position")
+
+    @classmethod
+    def from_fits_header(cls, header: Mapping[str, object]) -> Self | None:
+        """Read the reported focuser position, or None if the header has no FOCPOS card.
+
+        Raises:
+            ValidationError: If the card value is invalid.
+        """
+        if "FOCPOS" not in header:
+            return None
+
+        return cls.model_validate({"position": header["FOCPOS"]})
+
 
 class ChangeFocusPosition(sk.DeviceCommand):
     """Move the focuser to an absolute position.
@@ -149,8 +165,7 @@ class FocusAnalysis(BaseModel):
 
     Attributes:
         controller_id: The controller that owns the instrument.
-        instrument: Controller instrument name, independent of the
-            camera-reported `exposure.instrument` label.
+        instrument: Name of the controller instrument that took the image.
         image_id: Provider identifier of the analyzed image.
         exposure: Exposure metadata recorded at capture.
         reported_position: Focuser position reported at capture, if known.

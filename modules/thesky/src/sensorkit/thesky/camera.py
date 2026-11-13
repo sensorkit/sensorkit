@@ -281,13 +281,13 @@ class TheSkyCamera(TheSkyDevice):
         if graph := await sk.device().data_graph():
             source = graph.app_source()
 
-            instrume = await self.execute("""SelectedHardware.cameraModel;""")
+            detector = await self.execute("""SelectedHardware.cameraModel;""")
             cmd.context.set(
                 ImageInfo(array=array_info, binning=(int(binx), int(biny))),
                 ExposureInfo(
                     date_obs=Time(jd, format="jd", scale="utc").to_datetime(timezone=UTC),
                     exposure_time=cmd.integration_time,
-                    instrument=instrume,
+                    detector=detector,
                     image_type=cmd.frame_type,
                     ccd_temperature=temp,
                 ),

@@ -323,7 +323,7 @@ class NinaCamera(NinaDevice):
                 ExposureInfo(
                     date_obs=exposure_start,
                     exposure_time=exposure_seconds,
-                    instrument=history.get("CameraName", str(sk.device().entity)),
+                    detector=history.get("CameraName", str(sk.device().entity)),
                     image_type=cmd.frame_type,
                 ),
             )

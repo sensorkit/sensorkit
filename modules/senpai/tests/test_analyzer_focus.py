@@ -72,7 +72,7 @@ def focus_frame(
             ExposureInfo(
                 date_obs=datetime(2026, 11, 10, 8, 30, tzinfo=UTC),
                 exposure_time=0.01,
-                instrument="QHY600M",
+                detector="QHY600M",
             )
         )
 

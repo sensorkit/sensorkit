@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-from datetime import UTC
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import AwareDatetime, BaseModel
 
@@ -149,16 +150,14 @@ class CameraCapture(AcquireData):
 class ExposureInfo(BaseModel):
     """Parameters of the exposure that produced an image.
 
-    Captures the acquisition-time settings and measurements describing *how* an exposure
-    was taken -- the circumstances of the shot as recorded by us. This is distinct from
-    `ImageInfo`, which carries only what is needed to interpret the pixel buffer itself and
-    is therefore recoverable from any image regardless of origin. `ExposureInfo` fields map
-    onto the conventional FITS cards written for a science frame.
+    Records the capture time, duration, detector, and camera settings.
+    Fields supply the corresponding FITS header cards.
 
     Attributes:
         date_obs: Start of the exposure, as a timezone-aware datetime. -> DATE-OBS
         exposure_time: Actual exposure duration in seconds. -> EXPTIME
-        instrument: Instrument / camera identifier. -> INSTRUME
+        detector: Detector name reported by the device, such as a camera model or sensor
+            chip. -> DETECTOR
         image_type: Frame type (light, dark, bias, flat). -> IMAGETYP
         readout_mode: Camera readout mode, as an index or a name. -> READOUTM
         gain: Camera gain. -> GAIN
@@ -170,7 +169,7 @@ class ExposureInfo(BaseModel):
 
     date_obs: AwareDatetime
     exposure_time: float
-    instrument: str
+    detector: str | None = None
     image_type: FrameType | None = None
     readout_mode: int | str | None = None
     gain: float | None = None
@@ -184,8 +183,9 @@ class ExposureInfo(BaseModel):
 
         yield "DATE-OBS", (utc.isoformat(), "UTC start of exposure")
         yield "EXPTIME", (self.exposure_time, "Exposure time [s]")
-        yield "INSTRUME", (self.instrument, "Instrument name")
 
+        if self.detector is not None:
+            yield "DETECTOR", (self.detector, "Detector name")
         if self.image_type is not None:
             yield "IMAGETYP", (str(self.image_type), "Frame type")
         if self.readout_mode is not None:
@@ -200,6 +200,39 @@ class ExposureInfo(BaseModel):
             yield "SET-TEMP", (self.set_temperature, "Cooler setpoint [C]")
         if self.max_adu is not None:
             yield "SATURATE", (self.max_adu, "Saturation level [ADU]")
+
+    @classmethod
+    def from_fits_header(cls, header: Mapping[str, object]) -> Self | None:
+        """Read exposure metadata from FITS header cards.
+
+        DATE-OBS values without a time zone are interpreted as UTC.
+
+        Returns:
+            Exposure metadata, or None if DATE-OBS or EXPTIME is absent.
+
+        Raises:
+            ValueError: If DATE-OBS is not an ISO 8601 time.
+            ValidationError: If another card value is invalid.
+        """
+        if not all(card in header for card in ("DATE-OBS", "EXPTIME")):
+            return None
+
+        start = datetime.fromisoformat(str(header["DATE-OBS"]))
+
+        return cls.model_validate(
+            {
+                "date_obs": start if start.tzinfo else start.replace(tzinfo=UTC),
+                "exposure_time": header["EXPTIME"],
+                "detector": header.get("DETECTOR"),
+                "image_type": header.get("IMAGETYP"),
+                "readout_mode": header.get("READOUTM"),
+                "gain": header.get("GAIN"),
+                "offset": header.get("OFFSET"),
+                "ccd_temperature": header.get("CCD-TEMP"),
+                "set_temperature": header.get("SET-TEMP"),
+                "max_adu": header.get("SATURATE"),
+            }
+        )
 
 
 StandardCamera = sk.declare_archetype(

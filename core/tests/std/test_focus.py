@@ -42,7 +42,7 @@ def exposure(**overrides) -> ExposureInfo:
     fields = {
         "date_obs": datetime(2026, 10, 14, 8, 30, tzinfo=UTC),
         "exposure_time": 2.0,
-        "instrument": "QHY600M",
+        "detector": "QHY600M",
         "image_type": FrameType.LIGHT,
         "readout_mode": 1,
         "gain": 26.0,
@@ -105,11 +105,12 @@ def failed_sweep_analysis(**overrides) -> FocusSweepAnalysis:
     return sweep_analysis(**(fields | overrides))
 
 
-def header_from(context: FocusSweepContext) -> fits.Header:
+def header_from(*providers) -> fits.Header:
     header = fits.Header()
 
-    for keyword, card in context.get_fits_cards():
-        header[keyword] = card
+    for provider in providers:
+        for keyword, card in provider.get_fits_cards():
+            header[keyword] = card
 
     # Pass through the serialized header text, as a reader of the image file would.
     return fits.Header.fromstring(header.tostring())
@@ -248,6 +249,58 @@ class TestFocusSweepContext:
             FocusSweepContext.from_fits_header(header)
 
 
+class TestCaptureMetadataCards:
+    def test_focus_position_round_trip(self):
+        position = FocusPosition(position=1012.5)
+
+        assert FocusPosition.from_fits_header(header_from(position)) == position
+
+    def test_header_without_focus_position(self):
+        assert FocusPosition.from_fits_header(header_from(sweep_context())) is None
+
+    def test_exposure_round_trip(self):
+        recorded = exposure(
+            offset=10.0, ccd_temperature=-10.0, set_temperature=-10.0, max_adu=65535
+        )
+
+        assert ExposureInfo.from_fits_header(header_from(recorded)) == recorded
+
+    def test_exposure_round_trip_keeps_only_written_cards(self):
+        recorded = ExposureInfo(
+            date_obs=datetime(2026, 10, 14, 8, 30, 1, 250000, tzinfo=UTC),
+            exposure_time=0.5,
+            readout_mode="High",
+        )
+
+        assert ExposureInfo.from_fits_header(header_from(recorded)) == recorded
+
+    @pytest.mark.parametrize("card", ["DATE-OBS", "EXPTIME"])
+    def test_header_without_an_exposure_record(self, card):
+        header = header_from(exposure())
+        del header[card]
+
+        assert ExposureInfo.from_fits_header(header) is None
+
+    def test_exposure_time_zone_is_kept(self):
+        header = header_from(exposure())
+        header["DATE-OBS"] = "2026-10-14T18:30:00+10:00"
+
+        assert ExposureInfo.from_fits_header(header).date_obs == exposure().date_obs
+
+    @pytest.mark.parametrize(("card", "value"), [("DATE-OBS", "evening"), ("EXPTIME", "long")])
+    def test_invalid_exposure_card_raises_value_error(self, card, value):
+        header = header_from(exposure())
+        header[card] = value
+
+        with pytest.raises(ValueError):
+            ExposureInfo.from_fits_header(header)
+
+    def test_instrument_card_names_the_controller_instrument(self):
+        header = header_from(exposure(), sk.InstrumentInfo(name="cam-east", devices=("foc",)))
+
+        assert (header["INSTRUME"], header["DETECTOR"]) == ("cam-east", "QHY600M")
+
+
 class TestFocusAnalysis:
     def test_keyword_round_trip_keeps_exposure(self):
         result = analysis()
@@ -271,12 +324,6 @@ class TestFocusAnalysis:
 
         with pytest.raises(ValidationError, match="exposure"):
             FocusAnalysis.model_validate(data)
-
-    def test_camera_label_may_differ_from_instrument(self):
-        result = analysis(exposure=exposure(instrument="ZWO ASI6200MM"))
-
-        assert result.instrument == "camera"
-        assert result.exposure.instrument == "ZWO ASI6200MM"
 
     def test_invalid_measurement_keeps_evidence(self):
         result = invalid_analysis(median_fwhm_pixels=9.5, source_count=2, reason="too few stars")

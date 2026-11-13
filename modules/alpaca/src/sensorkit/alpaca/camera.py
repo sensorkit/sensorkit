@@ -416,7 +416,7 @@ class AlpacaCamera(AlpacaDevice):
                     if last_exposure_duration is not None
                     else exposure_seconds
                 ),
-                instrument=await self.get(self.camera, "SensorName", ""),
+                detector=await self.get(self.camera, "SensorName", None) or None,
                 image_type=cmd.frame_type,
                 readout_mode=await self.get(self.camera, "ReadoutMode", None),
                 gain=await self.get(self.camera, "Gain", None),

@@ -664,7 +664,7 @@ class DaoCamera:
             ExposureInfo(
                 date_obs=started or anchor,
                 exposure_time=actual_exposure,
-                instrument=str(sk.device().entity),
+                detector=str(sk.device().entity),
                 image_type=frame_type,
                 readout_mode=self._mode_label,
                 ccd_temperature=self._last_temp,

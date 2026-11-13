@@ -72,6 +72,10 @@ class InstrumentInfo(BaseModel):
     devices: tuple[str, ...] = ()
     """Optional opaque device IDs. Their order has no meaning."""
 
+    def get_fits_cards(self):
+        """Yield the controller instrument name as INSTRUME."""
+        yield "INSTRUME", (self.name, "Instrument name")
+
 
 class ControllerDetails(EntityDetails):
     """Controller info."""

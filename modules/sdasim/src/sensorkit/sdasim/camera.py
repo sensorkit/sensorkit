@@ -354,7 +354,7 @@ class SdasimCamera:
             ExposureInfo(
                 date_obs=exposure_start,
                 exposure_time=exposure_seconds,
-                instrument=str(sk.device().entity),
+                detector=str(sk.device().entity),
                 image_type=FrameType(meta["frame_type"]),
                 readout_mode=self._readout_mode,
                 ccd_temperature=self._temperature,

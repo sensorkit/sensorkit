@@ -38,7 +38,7 @@ def sample(index: int, position: float, width: float | None, count: int = len(PO
         exposure=ExposureInfo(
             date_obs=datetime(2026, 11, 10, 8, 30, tzinfo=UTC),
             exposure_time=2.0,
-            instrument="QHY600M",
+            detector="QHY600M",
         ),
         sweep=context(index, position, count),
         median_fwhm_pixels=width,
