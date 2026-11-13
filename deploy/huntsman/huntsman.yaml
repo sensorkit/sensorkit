@@ -135,14 +135,8 @@ automation:
       tasking:
         - program: Burr
           priority: 10
-          contexts:
-            all:
-              program_name: burr
         - program: Otto
           priority: 9
-          contexts:
-            all:
-              program_name: otto
 
   contexts:
     all:
@@ -206,7 +200,7 @@ data_flow:
         - op: array_to_fits
         - op: compress_fits
         - op: write_file
-          directory: f"/opt/sk/data/raw/{program_name}/{controller_name}"
+          directory: f"/opt/sk/data/raw/{Program.program_id}/{controller_name}"
   - entity: SENPAI
     consumer:
       nodes:

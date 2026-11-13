@@ -60,15 +60,10 @@ automation:
         - program: Otto
           priority: 9
           contexts:
-            all:
-              program_name: otto
             standard_collect:
               FileNameTemplate:
                 template: f"{Task.task_id}_{Collect.frame_number}.fits"
 
-  contexts:
-    all:
-      controller_name: OmniSim
 
 data_flow:
   - entity: sdasimCamera
@@ -124,7 +119,7 @@ data_flow:
               comment: total requested frame count
         - op: array_to_fits
         - op: write_file
-          directory: f"/path/to/data/raw/{program_name}/{controller_name}"
+          directory: f"/path/to/data/raw/{Program.program_id}/{Task.controller_id}"
   - entity: SENPAI
     consumer:
       nodes:

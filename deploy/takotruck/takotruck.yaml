@@ -82,19 +82,10 @@ automation:
       tasking:
         - program: Burr
           priority: 10
-          contexts:
-            all:
-              program_name: burr
         - program: Otto
           priority: 9
-          contexts:
-            all:
-              program_name: otto
         - program: UDL
           priority: 1
-          contexts:
-            all:
-              program_name: udl
 
   contexts:
     all:
@@ -157,7 +148,7 @@ data_flow:
               comment: total requested frame count
         - op: array_to_fits
         - op: write_file
-          directory: f"/opt/sk/data/raw/{program_name}/{controller_name}"
+          directory: f"/opt/sk/data/raw/{Program.program_id}/{controller_name}"
   - entity: SENPAI
     consumer:
       nodes:
