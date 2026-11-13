@@ -311,13 +311,13 @@ class TestBatching:
     def test_done_memory_stays_bounded(self):
         groups = processors_mod.FrameGroups()
 
-        for n in range(processors_mod.DONE_MEMORY + 10):
+        for n in range(processors_mod.MAX_CLOSED_GROUPS + 10):
             groups.open(f"task-{n}", [], stall_after_s=1.0)
             groups.close(f"task-{n}")
 
         assert not groups.is_done("task-9")  # oldest evicted
         assert groups.is_done("task-10")
-        assert groups.is_done(f"task-{processors_mod.DONE_MEMORY + 9}")
+        assert groups.is_done(f"task-{processors_mod.MAX_CLOSED_GROUPS + 9}")
 
     @pytest.mark.asyncio
     async def test_publish_failure_does_not_drop_remaining_results(

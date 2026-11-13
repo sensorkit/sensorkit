@@ -15,7 +15,7 @@ from loguru import logger
 import sensorkit.api as sk
 from sensorkit.data.context import Context
 from sensorkit.data.filesys import FileInfo
-from sensorkit.senpai.focus import FocusSweep, fit_focus_sweep
+from sensorkit.senpai.focus import FocusSweep
 from sensorkit.senpai.models import SenpaiResult
 from sensorkit.senpai.pipeline import FrameInput, SenpaiPipeline, run_engine
 from sensorkit.std.focus import FocusAnalysis, FocusPosition, FocusSweepAnalysis, FocusSweepContext
@@ -30,7 +30,7 @@ Covers readout, dither, and file-write latency beyond the exposure time.
 STALL_DEFAULT_S = 120.0
 """Stall limit of a collect sequence whose frames carry no exposure time."""
 
-DONE_MEMORY = 256
+MAX_CLOSED_GROUPS = 256
 """Number of closed collect and sweep keys retained to reject late deliveries."""
 
 CALIBRATION_FRAME_TYPES = {"dark", "bias", "flat"}
@@ -90,7 +90,7 @@ class FrameGroups[K, G]:
         del self._deadlines[key]
         self._done[key] = None
 
-        while len(self._done) > DONE_MEMORY:
+        while len(self._done) > MAX_CLOSED_GROUPS:
             del self._done[next(iter(self._done))]
 
         return group
@@ -185,10 +185,8 @@ class StandardProcessor:
 
             batch = self.batches.open(inp.task_id, [], stall_after)
 
-        # A file can be announced twice, e.g. a Docker bind mount raises `created`
-        # when the file appears and again when its data lands. A second copy would
-        # complete the batch early and give SENPAI two frames with one timestamp,
-        # hence a zero frame gap and an infinite track rate.
+        # Duplicate file events can complete a batch early and produce a zero
+        # frame interval in SENPAI's track-rate calculation.
         if inp.file_path and any(held.file_path == inp.file_path for held in batch):
             logger.debug(
                 f"sequence ({inp.task_id}): ignoring duplicate delivery of {inp.file_path}"
@@ -300,15 +298,15 @@ class FocusSweepProcessor:
         reason = (
             f"sample {index} has no exposure metadata"
             if exposure is None
-            else sweep.conflict(membership)
+            else sweep.sample_conflict_reason(membership)
         )
 
         if reason is not None:
             self.sweeps.close(key)
-            yield self._report(sweep.failure(reason))
+            yield self._log_result(sweep.failure(reason))
             return
 
-        if sweep.holds(membership):
+        if sweep.has_sample(membership):
             logger.debug(f"focus sweep ({membership.sweep_id}): ignoring duplicate sample {index}")
             return
 
@@ -335,15 +333,15 @@ class FocusSweepProcessor:
 
         if sweep.complete:
             self.sweeps.close(key)
-            yield self._report(fit_focus_sweep(sweep.evidence()))
+            yield self._log_result(sweep.fit())
 
     async def flush_stalled(self) -> AsyncIterator[FocusSweepAnalysis]:
         """Fail each stalled sweep with the samples it received."""
         for _, sweep in self.sweeps.pop_stalled():
             received = f"{len(sweep.samples)} of {sweep.sample_count} samples"
-            yield self._report(sweep.failure(f"sweep stalled with {received}"))
+            yield self._log_result(sweep.failure(f"sweep stalled with {received}"))
 
-    def _report(self, result: FocusSweepAnalysis) -> FocusSweepAnalysis:
+    def _log_result(self, result: FocusSweepAnalysis) -> FocusSweepAnalysis:
         if result.outcome == "success":
             logger.info(
                 f"focus sweep ({result.sweep_id}): best focus {result.disposition} "

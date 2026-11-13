@@ -134,9 +134,13 @@ The fit requires five distinct positions with usable measurements.
 | Nonpositive fitted minimum inside the sampled positions | Failure |
 | Fewer than five usable positions | Failure |
 
-A sweep also fails when a sample contradicts the sample count or an earlier commanded position,
-when a frame lacks exposure metadata,
-or when no new sample arrives for the exposure time plus 60 seconds.
+A sweep also fails in these cases:
+
+- A sample changes the expected sample count.
+- A repeated sample index changes its commanded position.
+- A frame lacks exposure metadata.
+- No new sample arrives within the exposure duration plus 60 seconds.
+
 A failure retains the measurements received so far.
 
 The analyzer rejects the engine's default summary of exactly 4 pixels with a count of one.

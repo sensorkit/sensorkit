@@ -7,7 +7,7 @@ from uuid import UUID
 import pytest
 
 import sensorkit.api as sk
-from sensorkit.senpai.focus import FocusSweep, fit_focus_sweep
+from sensorkit.senpai.focus import FocusSweep
 from sensorkit.std.focus import FocusAnalysis, FocusSweepContext
 from sensorkit.std.instrument import ExposureInfo
 
@@ -48,16 +48,31 @@ def sample(index: int, position: float, width: float | None, count: int = len(PO
     )
 
 
-def sweep_of(widths: list[float | None], positions: list[float] = POSITIONS):
+def samples_of(widths: list[float | None], positions: list[float] = POSITIONS):
     return [
         sample(index, position, width, count=len(positions))
         for index, (position, width) in enumerate(zip(positions, widths, strict=True))
     ]
 
 
+def sweep_of(widths: list[float | None], positions: list[float] = POSITIONS) -> FocusSweep:
+    return received(samples_of(widths, positions))
+
+
+def received(samples: list[FocusAnalysis]) -> FocusSweep:
+    """A sweep holding `samples`, in the order given."""
+    return FocusSweep(
+        controller_id="controller",
+        instrument="camera",
+        sweep_id=SWEEP_ID,
+        sample_count=len(samples),
+        samples={s.sweep.sample_index: s for s in samples},
+    )
+
+
 class TestFit:
     def test_interior_minimum(self):
-        result = fit_focus_sweep(sweep_of([v_curve(p) for p in POSITIONS]))
+        result = sweep_of([v_curve(p) for p in POSITIONS]).fit()
 
         assert (result.outcome, result.disposition) == ("success", "equals")
         assert result.position == pytest.approx(1140.0)
@@ -67,22 +82,22 @@ class TestFit:
         noise = [0.04, -0.03, 0.02, -0.04, 0.03, -0.02, 0.04]
         widths = [v_curve(p) + n for p, n in zip(POSITIONS, noise, strict=True)]
 
-        result = fit_focus_sweep(sweep_of(widths))
+        result = sweep_of(widths).fit()
 
         assert result.disposition == "equals"
         assert result.position == pytest.approx(1140.0, abs=5.0)
         assert 0 < result.rms_residual_pixels < 0.1
 
     def test_arrival_order_does_not_change_fit(self):
-        samples = sweep_of([v_curve(p) for p in POSITIONS])
+        samples = samples_of([v_curve(p) for p in POSITIONS])
 
-        assert fit_focus_sweep(samples[::-1]).position == fit_focus_sweep(samples).position
+        assert received(samples[::-1]).fit().position == received(samples).fit().position
 
     def test_repeated_positions_count_once(self):
         positions = [*POSITIONS, 1000.0, 1000.0, 1000.0]
         widths = [v_curve(p) for p in POSITIONS] + [9.0, v_curve(1000.0), 1.0]
 
-        result = fit_focus_sweep(sweep_of(widths, positions))
+        result = sweep_of(widths, positions).fit()
 
         # The median of the repeats is the true width, so the outliers do not move the fit.
         assert result.position == pytest.approx(1140.0)
@@ -93,7 +108,7 @@ class TestFit:
         positions = [*POSITIONS, 1350.0]
         widths = [*(v_curve(p) for p in POSITIONS), None]
 
-        result = fit_focus_sweep(sweep_of(widths, positions))
+        result = sweep_of(widths, positions).fit()
 
         assert result.position == pytest.approx(1140.0)
         assert [s.valid for s in result.samples] == [True] * 7 + [False]
@@ -106,7 +121,7 @@ class TestFit:
         ],
     )
     def test_minimum_outside_sweep_gives_direction(self, best, disposition, position):
-        result = fit_focus_sweep(sweep_of([v_curve(p, best) for p in POSITIONS]))
+        result = sweep_of([v_curve(p, best) for p in POSITIONS]).fit()
 
         assert (result.outcome, result.disposition) == ("success", disposition)
         assert result.position == position
@@ -122,7 +137,7 @@ class TestFit:
         noise = [0.02, -0.02, 0.01, -0.01, 0.02, -0.02, 0.01]
         widths = [8.0 + slope * (p - 1150.0) + n for p, n in zip(POSITIONS, noise, strict=True)]
 
-        result = fit_focus_sweep(sweep_of(widths))
+        result = sweep_of(widths).fit()
 
         assert (result.disposition, result.position) == (disposition, position)
         assert result.rms_residual_pixels > 0
@@ -130,7 +145,7 @@ class TestFit:
     def test_flat_widths_fail(self):
         widths = [3.05, 2.95, 3.05, 2.95, 3.05, 2.95, 3.05]
 
-        result = fit_focus_sweep(sweep_of(widths))
+        result = sweep_of(widths).fit()
 
         assert (result.outcome, result.position, result.disposition) == ("failure", None, None)
         assert "too little" in result.reason
@@ -141,12 +156,12 @@ class TestFit:
     def test_constant_widths_fail(self, count, width):
         positions = [1000.0 + 50.0 * index for index in range(count)]
 
-        result = fit_focus_sweep(sweep_of([width] * count, positions))
+        result = sweep_of([width] * count, positions).fit()
 
         assert (result.outcome, result.position, result.disposition) == ("failure", None, None)
 
     def test_peak_inside_sweep_fails(self):
-        result = fit_focus_sweep(sweep_of([10.0 - v_curve(p) for p in POSITIONS]))
+        result = sweep_of([10.0 - v_curve(p) for p in POSITIONS]).fit()
 
         assert result.outcome == "failure"
         assert "peak" in result.reason
@@ -154,7 +169,7 @@ class TestFit:
     def test_too_few_usable_positions_fail(self):
         widths = [v_curve(p) for p in POSITIONS[:4]] + [None, None, None]
 
-        result = fit_focus_sweep(sweep_of(widths))
+        result = sweep_of(widths).fit()
 
         assert result.outcome == "failure"
         assert "got 4" in result.reason
@@ -164,7 +179,7 @@ class TestFit:
     def test_repeats_do_not_count_as_distinct_positions(self):
         positions = [1000.0, 1000.0, 1050.0, 1100.0, 1150.0, 1150.0]
 
-        result = fit_focus_sweep(sweep_of([v_curve(p) for p in positions], positions))
+        result = sweep_of([v_curve(p) for p in positions], positions).fit()
 
         assert "got 4" in result.reason
 
@@ -189,34 +204,36 @@ class TestFocusSweep:
         sweep.add(sample(1, 1001.0, 3.0, count=3))
 
         assert sweep.complete
-        assert [s.sweep.sample_index for s in sweep.evidence()] == [0, 1, 2]
+        assert [s.sweep.sample_index for s in sweep.ordered_samples()] == [0, 1, 2]
 
-    def test_holds_measured_index(self):
+    def test_has_sample_at_measured_index(self):
         sweep = self.make()
         sweep.add(sample(1, 1001.0, 3.0, count=3))
 
-        assert sweep.holds(context(1, 1001.0, count=3))
-        assert not sweep.holds(context(2, 1001.0, count=3))
+        assert sweep.has_sample(context(1, 1001.0, count=3))
+        assert not sweep.has_sample(context(2, 1001.0, count=3))
 
     def test_same_position_at_another_index_is_no_conflict(self):
         sweep = self.make()
         sweep.add(sample(0, 1000.0, 3.0, count=3))
 
-        assert sweep.conflict(context(1, 1000.0, count=3)) is None
-        assert sweep.conflict(context(0, 1000.0, count=3)) is None
+        assert sweep.sample_conflict_reason(context(1, 1000.0, count=3)) is None
+        assert sweep.sample_conflict_reason(context(0, 1000.0, count=3)) is None
 
     def test_conflicting_sample_count(self):
         sweep = self.make()
 
-        assert "expected 3" in sweep.conflict(context(0, 1000.0, count=5))
+        assert "expected 3" in sweep.sample_conflict_reason(context(0, 1000.0, count=5))
 
     def test_conflicting_position_for_measured_index(self):
         sweep = self.make()
         sweep.add(sample(0, 1000.0, 3.0, count=3))
 
-        assert "different commanded position" in sweep.conflict(context(0, 1010.0, count=3))
+        assert "different commanded position" in sweep.sample_conflict_reason(
+            context(0, 1010.0, count=3)
+        )
 
-    def test_failure_keeps_ordered_evidence(self):
+    def test_failure_keeps_ordered_samples(self):
         sweep = self.make()
         sweep.add(sample(2, 1002.0, 3.0, count=3))
         sweep.add(sample(0, 1000.0, None, count=3))
