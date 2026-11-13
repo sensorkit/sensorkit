@@ -49,6 +49,7 @@ from sensorkit.std.mount import (
     MountAxis,
     MountStatus,
     RADecArcseconds,
+    RateSource,
     SetAzimuthWrapRangeMin,
     Slewing,
     StandardMount,
