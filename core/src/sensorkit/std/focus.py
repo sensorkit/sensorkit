@@ -161,7 +161,7 @@ class FocusSweepContext(BaseModel):
 class FocusAnalysis(BaseModel):
     """Focus measurement and capture metadata for one image.
 
-    Invalid measurements include a reason and may retain diagnostic evidence.
+    Invalid measurements include a reason and may retain a measured FWHM and measurement count.
 
     Attributes:
         controller_id: The controller that owns the instrument.
@@ -171,7 +171,7 @@ class FocusAnalysis(BaseModel):
         reported_position: Focuser position reported at capture, if known.
         sweep: Sweep membership, or None for an image outside a sweep.
         median_fwhm_pixels: Median point-source FWHM in image pixels.
-        source_count: Number of sources contributing to the measurement.
+        measurement_count: Number of FWHM measurements represented by the result.
         valid: Whether the measurement is usable.
         reason: Why the measurement is unusable.
     """
@@ -183,7 +183,7 @@ class FocusAnalysis(BaseModel):
     reported_position: FiniteFloat | None = None
     sweep: FocusSweepContext | None = None
     median_fwhm_pixels: FiniteFloat | None = Field(default=None, gt=0)
-    source_count: int = Field(ge=0)
+    measurement_count: int = Field(ge=0)
     valid: bool
     reason: str | None = Field(default=None, min_length=1)
 
@@ -194,8 +194,8 @@ class FocusAnalysis(BaseModel):
                 raise ValueError("reason: a valid measurement has no failure reason")
             case FocusAnalysis(valid=True, median_fwhm_pixels=None):
                 raise ValueError("median_fwhm_pixels: a valid measurement requires a FWHM")
-            case FocusAnalysis(valid=True, source_count=0):
-                raise ValueError("source_count: a valid measurement requires a source")
+            case FocusAnalysis(valid=True, measurement_count=0):
+                raise ValueError("measurement_count: a valid measurement requires a measurement")
             case FocusAnalysis(valid=False, reason=None):
                 raise ValueError("reason: an invalid measurement requires a reason")
 

@@ -324,7 +324,7 @@ class FocusSweepProcessor:
             reported_position=position.position if position is not None else None,
             sweep=membership,
             median_fwhm_pixels=measurement.median_fwhm_pixels,
-            source_count=measurement.source_count,
+            measurement_count=measurement.measurement_count,
             valid=measurement.reason is None,
             reason=measurement.reason,
         )

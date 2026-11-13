@@ -111,7 +111,8 @@ The DataGraph must supply the following capture metadata with each FITS image.
 Sweep frames skip calibration filtering and sequence batching.
 Each frame is measured alone with source detection only, without a plate solution.
 The measurement is the engine's median point-source FWHM in image pixels.
-In detection-only mode, the engine supplies an aggregate count of one for each width summary.
+In detection-only mode, the engine supplies one aggregate FWHM measurement.
+The `measurement_count` field records this aggregate count.
 A `FocusAnalysis` is published for each frame, including frames with no usable measurement.
 
 A sweep is identified by controller, instrument, and sweep ID.

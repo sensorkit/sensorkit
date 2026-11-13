@@ -42,7 +42,7 @@ def sample(index: int, position: float, width: float | None, count: int = len(PO
         ),
         sweep=context(index, position, count),
         median_fwhm_pixels=width,
-        source_count=0 if width is None else 1,
+        measurement_count=0 if width is None else 1,
         valid=width is not None,
         reason="no stars" if width is None else None,
     )

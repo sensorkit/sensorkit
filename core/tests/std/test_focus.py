@@ -69,14 +69,19 @@ def analysis(**overrides) -> FocusAnalysis:
         "reported_position": 1001.0,
         "sweep": sweep_context(),
         "median_fwhm_pixels": 3.2,
-        "source_count": 42,
+        "measurement_count": 42,
         "valid": True,
     }
     return FocusAnalysis(**(fields | overrides))
 
 
 def invalid_analysis(**overrides) -> FocusAnalysis:
-    fields = {"valid": False, "median_fwhm_pixels": None, "source_count": 0, "reason": "no stars"}
+    fields = {
+        "valid": False,
+        "median_fwhm_pixels": None,
+        "measurement_count": 0,
+        "reason": "no stars",
+    }
     return analysis(**(fields | overrides))
 
 
@@ -326,9 +331,11 @@ class TestFocusAnalysis:
             FocusAnalysis.model_validate(data)
 
     def test_invalid_measurement_keeps_evidence(self):
-        result = invalid_analysis(median_fwhm_pixels=9.5, source_count=2, reason="too few stars")
+        result = invalid_analysis(
+            median_fwhm_pixels=9.5, measurement_count=2, reason="too few stars"
+        )
 
-        assert (result.median_fwhm_pixels, result.source_count) == (9.5, 2)
+        assert (result.median_fwhm_pixels, result.measurement_count) == (9.5, 2)
 
     def test_controller_round_trips_as_name(self):
         result = analysis()
@@ -358,11 +365,11 @@ class TestFocusAnalysis:
         [
             ({"reason": "blurred"}, "no failure reason"),
             ({"median_fwhm_pixels": None}, "requires a FWHM"),
-            ({"source_count": 0}, "requires a source"),
+            ({"measurement_count": 0}, "requires a measurement"),
             ({"valid": False}, "requires a reason"),
             ({"median_fwhm_pixels": 0.0}, "greater than 0"),
             ({"median_fwhm_pixels": math.inf}, "finite"),
-            ({"source_count": -1}, "greater than or equal to 0"),
+            ({"measurement_count": -1}, "greater than or equal to 0"),
             ({"reason": ""}, "at least 1 character"),
         ],
     )

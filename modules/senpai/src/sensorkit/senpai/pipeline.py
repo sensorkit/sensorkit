@@ -53,12 +53,12 @@ class FocusMeasurement:
 
     Attributes:
         median_fwhm_pixels: Median point-source FWHM in image pixels, if measured.
-        source_count: Source count supplied by the engine.
+        measurement_count: FWHM measurement count supplied by the engine.
         reason: Why the measurement is unusable, or None if it is usable.
     """
 
     median_fwhm_pixels: float | None
-    source_count: int
+    measurement_count: int
     reason: str | None
 
 
@@ -228,7 +228,7 @@ class SenpaiPipeline:
 
         return FocusMeasurement(
             median_fwhm_pixels=median,
-            source_count=count,
+            measurement_count=count,
             reason=None if usable else reason,
         )
 

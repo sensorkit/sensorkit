@@ -255,7 +255,7 @@ async def test_starless_image_is_an_invalid_sample(senpai):
     result = await published.wait_for(FocusSweepAnalysis, timeout=30.0)
     sample = published.latest(FocusAnalysis)
 
-    assert (sample.valid, sample.median_fwhm_pixels, sample.source_count) == (False, None, 0)
+    assert (sample.valid, sample.median_fwhm_pixels, sample.measurement_count) == (False, None, 0)
     assert sample.reason is not None
     assert result.outcome == "failure"
     assert result.samples == [sample]
