@@ -595,7 +595,7 @@ def sample_altaz_series(
                 except Exception:
                     out.append((-90.0, 0.0))
                     continue
-                teme = TEME(x=teme_p[0]*u.km, y=teme_p[1]*u.km, z=teme_p[2]*u.km, obstime=t_ast)
+                teme = TEME(x=teme_p[0]*u.m, y=teme_p[1]*u.m, z=teme_p[2]*u.m, obstime=t_ast)
                 a = teme.transform_to(make_altaz_frame(loc, t_ast))
                 out.append((a.alt.deg, norm_az_deg(a.az.deg)))
             return out
