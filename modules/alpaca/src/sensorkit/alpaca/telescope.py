@@ -12,7 +12,7 @@ from loguru import logger
 from pydantic import BaseModel, model_validator
 
 import sensorkit.api as sk
-from alpaca.telescope import Telescope
+from alpaca.telescope import PierSide, Telescope
 from sensorkit.alpaca.device import (
     AlpacaDevice,
     AlpacaDeviceConfig,
@@ -78,11 +78,6 @@ class AlpacaTelescopeStatus(BaseModel):
     alignment_mode: str | None = None
     does_refraction: bool | None = None
 
-
-_ALIGNMENT_MODES = {0: "AltAz", 1: "Polar", 2: "GermanPolar"}
-_DRIVE_RATES = {0: "Sidereal", 1: "Lunar", 2: "Solar", 3: "King"}
-_PIER_SIDES = {-1: "Unknown", 0: "East", 1: "West"}
-_EQUATORIAL_SYSTEMS = {0: "Other", 1: "Topocentric", 2: "J2000", 3: "J2050", 4: "B1950"}
 
 # Max time to wait for a commanded slew to *start* (Slewing -> True) before
 # treating the command as a positional no-op. See _wait_for_telescope.
@@ -240,11 +235,8 @@ class AlpacaTelescope(AlpacaDevice):
         self._aperture_diameter = await self.get(t, "ApertureDiameter", None)
         self._aperture_area = await self.get(t, "ApertureArea", None)
         self._focal_length = await self.get(t, "FocalLength", None)
-        eq_sys = await self.get(t, "EquatorialSystem", None)
-        self._equatorial_system = (
-            None if eq_sys is None else _EQUATORIAL_SYSTEMS.get(eq_sys, f"Unknown({eq_sys})")
-        )
-        self._alignment_mode = _ALIGNMENT_MODES.get(await self.get(t, "AlignmentMode", -1))
+        self._equatorial_system = await self.get(t, "EquatorialSystem", None)
+        self._alignment_mode = await self.get(t, "AlignmentMode", None)
         self._does_refraction = await self.get(t, "DoesRefraction", None)
 
         # Site location
@@ -785,9 +777,7 @@ class AlpacaTelescope(AlpacaDevice):
 
         tracking_rate = await self.get(t, "TrackingRate", None)
 
-        # Pier side
-        side_of_pier = await self.get(t, "SideOfPier", -1)
-        side_of_pier = _PIER_SIDES.get(side_of_pier, "Unknown")
+        side_of_pier = await self.get(t, "SideOfPier", PierSide.pierUnknown)
 
         # Sidereal time
         sidereal_time = await self.get(t, "SiderealTime", None)
@@ -802,8 +792,8 @@ class AlpacaTelescope(AlpacaDevice):
 
         if tracking_rate is not None:
             properties["tracking_rate"] = tracking_rate
-        if side_of_pier != "Unknown":
-            properties["side_of_pier"] = side_of_pier
+        if side_of_pier != PierSide.pierUnknown:
+            properties["side_of_pier"] = side_of_pier.name.removeprefix("pier")
         if sidereal_time is not None:
             properties["sidereal_time"] = sidereal_time
 
@@ -812,13 +802,16 @@ class AlpacaTelescope(AlpacaDevice):
             ("_aperture_diameter", "aperture_diameter"),
             ("_aperture_area", "aperture_area"),
             ("_focal_length", "focal_length"),
-            ("_equatorial_system", "equatorial_system"),
-            ("_alignment_mode", "alignment_mode"),
             ("_does_refraction", "does_refraction"),
         ):
             val = getattr(self, attr, None)
             if val is not None:
                 properties[key] = val
+
+        if self._equatorial_system is not None:
+            properties["equatorial_system"] = self._equatorial_system.name.removeprefix("equ")
+        if self._alignment_mode is not None:
+            properties["alignment_mode"] = self._alignment_mode.name.removeprefix("alg")
 
         await device.publish(AlpacaTelescopeStatus(**properties))
 

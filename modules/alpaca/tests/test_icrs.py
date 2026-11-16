@@ -4,6 +4,7 @@
 import astropy.units as u
 import pytest
 import pytest_asyncio
+from alpaca.telescope import PierSide
 from astropy.coordinates import EarthLocation
 
 from sensorkit.alpaca.telescope import (
@@ -55,7 +56,7 @@ async def telescope():
         CanSync=False,
         CanSyncAltAz=False,
         TrackingRates=[],
-        SideOfPier=-1,
+        SideOfPier=PierSide.pierUnknown,
         SiderealTime=0.0,
     )
     t.telescope = device

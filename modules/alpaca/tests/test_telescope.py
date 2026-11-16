@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for Alpaca telescope device (lifecycle only)."""
+"""Tests for Alpaca telescope lifecycle commands and status fields."""
 
 import pytest
+from alpaca.telescope import AlignmentModes, DriveRates, EquatorialCoordinateType, PierSide
 
 from sensorkit.alpaca.telescope import (
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
+    AlpacaTelescopeStatus,
 )
 from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 from sensorkit.common.aio import AsyncLoop
@@ -127,3 +129,20 @@ async def test_telescope_park(telescope):
 async def test_telescope_stop(telescope):
     await telescope.telescope_stop(Stop())
     assert telescope._tracking is False
+
+
+@pytest.mark.asyncio
+async def test_status_names_ascom_enums(telescope, recorder):
+    published = await recorder()
+    telescope.telescope._properties.update(
+        SideOfPier=PierSide.pierWest, SiderealTime=0.0, TrackingRate=DriveRates.driveSidereal
+    )
+    telescope._equatorial_system = EquatorialCoordinateType.equTopocentric
+    telescope._alignment_mode = AlignmentModes.algGermanPolar
+
+    await telescope.status_publish()
+    status = await published.wait_for(AlpacaTelescopeStatus)
+
+    assert status.side_of_pier == "West"
+    assert status.equatorial_system == "Topocentric"
+    assert status.alignment_mode == "GermanPolar"
