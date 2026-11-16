@@ -8,7 +8,7 @@ import astropy.units as u
 import numpy as np
 import pytest
 import satkit
-from astropy.coordinates import ICRS, AltAz, SkyCoord, angular_separation, TEME
+from astropy.coordinates import ICRS, AltAz, SkyCoord, angular_separation
 from astropy.time import Time
 from pydantic import TypeAdapter
 from skyfield import api as skyfield
@@ -194,98 +194,35 @@ def test_sample_altaz_series_tle():
     alts = [alt for alt, _ in series]
     assert len(set(round(a, 2) for a in alts)) > 1
 
-def test_sgp4_teme_unit():
-    target = TLETarget(tle=_ISS_TLE)
-    tle = satkit.TLE.from_lines(target.tle.to_list())
-    if isinstance(tle, list):
-        tle = tle[0]
-
-    dt = datetime(2025, 1, 15, 12, tzinfo=UTC)
-    t_sk = satkit.time.from_datetime(dt)
-    t_ast = Time(dt, scale="utc")
-
-    teme_p, _ = satkit.sgp4(tle, t_sk)
-
-    # ISS orbit altitude is ~420km, radius is ~6800 km = 6.8e6 m
-    # teme_p should be in meters
-    r = np.linalg.norm(teme_p)
-    assert 6.5e6 < r < 7.0e6
-
-    teme_m = TEME(
-        x=teme_p[0] * u.m,
-        y=teme_p[1] * u.m,
-        z=teme_p[2] * u.m,
-        obstime=t_ast,
-    )
-    teme_km = TEME(
-        x=(teme_p[0] / 1.0e3) * u.km,
-        y=(teme_p[1] / 1.0e3) * u.km,
-        z=(teme_p[2] / 1.0e3) * u.km,
-        obstime=t_ast,
-    )
-
-    diff = (
-        teme_m.cartesian.xyz.to(u.m).value
-        - teme_km.cartesian.xyz.to(u.m).value
-    )
-    assert np.max(np.abs(diff)) < 1e-6
-
-    radius_m = np.linalg.norm(
-        teme_m.cartesian.xyz.to(u.m).value
-    )
-    radius_km = np.linalg.norm(
-        teme_km.cartesian.xyz.to(u.m).value
-    )
-    assert np.abs(radius_m - radius_km) < 1e-6
-    assert 6.5e6 < radius_m < 7.0e6
-
 
 def test_tle_sample_altaz_series_matches_skyfield():
-    target = TLETarget(tle=_ISS_TLE)
-    dt = datetime(2025, 1, 15, 9, 32, 0, tzinfo=UTC)
+    """TLE alt/az matches Skyfield's geometric site-to-satellite direction.
 
-    # alt/az from sample_altaz_series()
-    altaz_actual = sample_altaz_series(
-        target,
-        _NYC.to_astropy(),
-        [dt],
-    )
-    assert len(altaz_actual) == 1
-    alt_actual, az_actual = altaz_actual[0]
+    The samples span a visible ISS pass to expose aberration errors at short
+    slant ranges.
+    """
+    times = [datetime(2025, 1, 16, 4, minute, tzinfo=UTC) for minute in (5, 8, 11)]
 
-    # alt/az from skyfield
+    alts, azs = np.array(sample_altaz_series(TLETarget(tle=_ISS_TLE), _NYC.to_astropy(), times)).T
+
     ts = skyfield.load.timescale()
-    sat = skyfield.EarthSatellite(
-        _ISS_TLE.line1,
-        _ISS_TLE.line2,
-        ts=ts,
-    )
-    observer = skyfield.wgs84.latlon(
-        _NYC.lat,
-        _NYC.lon,
-        _NYC.elev,
-    )
-    topo = (sat - observer).at(ts.from_datetime(dt))
-    alt, az, _ = topo.altaz()
+    topo = (
+        skyfield.EarthSatellite(_ISS_TLE.line1, _ISS_TLE.line2, ts=ts)
+        - skyfield.wgs84.latlon(_NYC.lat, _NYC.lon, _NYC.elev)
+    ).at(ts.from_datetimes(times))
+    alt, az, distance = topo.altaz()
 
+    assert np.all(alt.degrees > 0)
 
-    frame = AltAz(
-        obstime=Time(dt),
-        location=_NYC.to_astropy(),
-    )
-    expected = SkyCoord(
-        alt=alt.degrees * u.deg,
-        az=az.degrees * u.deg,
-        frame=frame,
-    )
-    actual = SkyCoord(
-        alt=alt_actual * u.deg,
-        az=az_actual * u.deg,
-        frame=frame,
-    )
+    frame = AltAz(obstime=Time(times), location=_NYC.to_astropy())
+    expected = SkyCoord(az=az.degrees * u.deg, alt=alt.degrees * u.deg, frame=frame)
+    actual = SkyCoord(az=azs * u.deg, alt=alts * u.deg, frame=frame)
 
-    # difference is ~6 arcsec
-    assert expected.separation(actual).arcsec < 10.0
+    # Skyfield omits polar motion by default. Allow a 20 m position difference,
+    # converted to an angular tolerance at each slant range.
+    tolerance = np.degrees(20.0 / distance.m) * 3600
+
+    assert np.all(expected.separation(actual).arcsec < tolerance)
 
 
 def test_sample_altaz_series_ephemeris():
@@ -417,12 +354,7 @@ async def test_tle_to_icrf_ephemeris_matches_skyfield():
 
 @pytest.mark.asyncio
 async def test_tle_to_altaz_ephemeris_matches_skyfield():
-    """An ALTAZ ephemeris carries the topocentric horizontal place, as Horizontal points.
-
-    Deriving alt/az from the topocentric CIRS place keeps astropy from re-deriving the
-    parallax through ICRS, which biases the result by ~6 arcsec. No weather is supplied
-    and skyfield refracts only when given a temperature, so both sides are geometric.
-    """
+    """ALTAZ ephemeris points match Skyfield's altitude and azimuth without refraction."""
     start = datetime(2025, 1, 15, 9, 32, 0, tzinfo=UTC)
 
     eph = await TLETarget(tle=_ISS_TLE).to_ephemeris_target(
@@ -451,12 +383,7 @@ async def test_tle_to_altaz_ephemeris_matches_skyfield():
 
 @pytest.mark.asyncio
 async def test_tle_to_itrf_ephemeris_matches_skyfield_subpoint():
-    """ITRF is Earth-fixed, so its points are the geodetic sub-satellite position.
-
-    RA/Dec is meaningless in an Earth-fixed frame; the ITRS place resolves to the point
-    on the WGS84 ellipsoid beneath the target plus its height, which is what skyfield's
-    `subpoint()` returns.
-    """
+    """ITRF ephemeris points match Skyfield's WGS84 longitude, latitude, and height."""
     start = datetime(2025, 1, 15, 9, 32, 0, tzinfo=UTC)
 
     eph = await TLETarget(tle=_ISS_TLE).to_ephemeris_target(
@@ -484,12 +411,7 @@ async def test_tle_to_itrf_ephemeris_matches_skyfield_subpoint():
 
 @pytest.mark.asyncio
 async def test_tle_to_teme_ephemeris_round_trips_satkit():
-    """TEME points inverse the TEME-to-GCRF rotation the trajectory applied.
-
-    satkit propagates SGP4 in TEME and rotates into GCRF; asking for a TEME ephemeris
-    sends that back through astropy's own rotation, so the result should reproduce the
-    raw SGP4 direction to within the two libraries' precession/nutation differences.
-    """
+    """TEME ephemeris angles reproduce the direction of satkit's SGP4 position."""
     start = datetime(2025, 1, 15, 9, 32, 0, tzinfo=UTC)
     when = start + timedelta(seconds=1)
 

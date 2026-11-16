@@ -16,6 +16,7 @@ from astropy.coordinates import (
     CIRS,
     GCRS,
     ICRS,
+    ITRS,
     TEME,
     AltAz,
     BaseCoordinateFrame,
@@ -563,7 +564,12 @@ def sample_altaz_series(
     loc: EarthLocation,
     times: list[datetime],
 ) -> list[tuple[float, float]]:
-    """Return a list of `(altitude_deg, azimuth_deg)` tuples for the target at each time."""
+    """Return `(altitude_deg, azimuth_deg)` for the target at each time.
+
+    TLE samples give the geometric site-to-satellite direction.
+    ICRF coordinates are interpreted as astrometric RA/Dec.
+    ICRF ephemerides must use *loc* as their observing site.
+    """
     out: list[tuple[float, float]] = []
 
     match target:
@@ -596,7 +602,16 @@ def sample_altaz_series(
                     out.append((-90.0, 0.0))
                     continue
                 teme = TEME(x=teme_p[0]*u.m, y=teme_p[1]*u.m, z=teme_p[2]*u.m, obstime=t_ast)
-                a = teme.transform_to(make_altaz_frame(loc, t_ast))
+
+                # Form the site-to-satellite vector explicitly to avoid stellar
+                # aberration changes during the geocentric-to-topocentric transform.
+                itrs = teme.transform_to(ITRS(obstime=t_ast))
+                topo = ITRS(
+                    itrs.cartesian - loc.get_itrs(t_ast).cartesian,
+                    obstime=t_ast,
+                    location=loc,
+                )
+                a = topo.transform_to(make_altaz_frame(loc, t_ast))
                 out.append((a.alt.deg, norm_az_deg(a.az.deg)))
             return out
 
