@@ -90,6 +90,8 @@ async def test_mount_system_round_trips_to_icrs(telescope, recorder, system, con
     assert reported.to_value(u.arcsec) < 0.01
 
 
+_SIDEREAL_RATE_DEG_S = 360.0 / u.sday.to(u.s)
+
 # ICRS motion of the rate target, in deg/s: RA only, about 36 arcsec/s.
 _ICRS_RA_RATE = 0.01
 
@@ -140,7 +142,7 @@ async def test_topocentric_mount_rates_publish_in_icrs(telescope, recorder):
     telescope.telescope._properties.update(
         RightAscension=ra / 15.0,
         Declination=dec,
-        RightAscensionRate=ra_rate * 3600.0 / 15.0,
+        RightAscensionRate=ra_rate / _SIDEREAL_RATE_DEG_S,
         DeclinationRate=dec_rate * 3600.0,
     )
 
@@ -150,3 +152,19 @@ async def test_topocentric_mount_rates_publish_in_icrs(telescope, recorder):
 
     assert rates.right_ascension.velocity == pytest.approx(_ICRS_RA_RATE, abs=5e-6)
     assert rates.declination.velocity == pytest.approx(0.0, abs=5e-6)
+
+
+@pytest.mark.asyncio
+async def test_sidereal_offset_rate_is_one(telescope):
+    """A sidereal angular offset rate writes RightAscensionRate=1."""
+    target = RateTarget(
+        frame=ReferenceFrame.ICRF,
+        rates=Equatorial(ra=_SIDEREAL_RATE_DEG_S, dec=0.0),
+        initial_time=datetime.now(UTC),
+        initial_frame=ReferenceFrame.ICRF,
+        initial_coords=_STAR.coords,
+    )
+
+    await telescope.telescope_follow_target(FollowTarget(target=target))
+
+    assert telescope.telescope.RightAscensionRate == pytest.approx(1.0, rel=1e-6)

@@ -26,7 +26,12 @@ from loguru import logger
 from pydantic import BaseModel
 
 import sensorkit.api as sk
-from sensorkit.alpaca.telescope import AlpacaTelescope, AlpacaTelescopeConfig, AlpacaTelescopeState
+from sensorkit.alpaca.telescope import (
+    AlpacaTelescope,
+    AlpacaTelescopeConfig,
+    AlpacaTelescopeState,
+    ra_rate_to_ascom,
+)
 from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
 from sensorkit.astro.coords import Geodetic
 from sensorkit.astro.target import (
@@ -398,7 +403,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
                 await self._wait_for_telescope(tracking=True)
                 # ASCOM offset rates (deg/s -> RA sec/sidereal-sec, arcsec/s)
                 await self.put(
-                    self.telescope, "RightAscensionRate", target.rates.ra * 3600.0 / 15.0
+                    self.telescope, "RightAscensionRate", ra_rate_to_ascom(target.rates.ra)
                 )
                 await self.put(self.telescope, "DeclinationRate", target.rates.dec * 3600.0)
                 self._icrf_rate = (target.rates.ra, target.rates.dec)
@@ -420,7 +425,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
                 await self._wait_for_telescope(tracking=True)
                 ra_rate, dec_rate = _icrf_rate_from_samples(target.jds, target.points)
                 self._icrf_rate = (ra_rate, dec_rate)
-                await self.put(self.telescope, "RightAscensionRate", ra_rate * 3600.0 / 15.0)
+                await self.put(self.telescope, "RightAscensionRate", ra_rate_to_ascom(ra_rate))
                 await self.put(self.telescope, "DeclinationRate", dec_rate * 3600.0)
                 self.fast_loop.start()
 

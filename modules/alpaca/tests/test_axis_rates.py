@@ -1,15 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression tests for the alt/az AxisRates derived in _publish_telescope_status.
+"""Tests for ICRS angular rates and their altitude/azimuth projection.
 
-radec_rates_to_altaz_rates() advances obstime by dt, so it captures the full
-physical alt/az motion -- both the RA/Dec offset term and the diurnal
-(Earth-rotation) term -- directly from the inertial RA/Dec rate.
-_publish_telescope_status feeds it the ICRF offset rates as-is; there is no
-hour-angle (offset - sidereal) pre-correction.
-
-Regression: a near-GEO rate track (inertial RA rate ~ sidereal, ~0 Dec) is nearly
-fixed in alt/az, so its alt/az axis rates ~ 0; a pure sidereal track (offset 0)
-still moves the alt/az axes at the diurnal rate.
+The altitude/azimuth calculation includes Earth's rotation.
+A sidereal RA offset with zero Dec motion approximates a target fixed
+in altitude and azimuth.
 """
 
 import astropy.units as u
@@ -19,16 +13,16 @@ from astropy.coordinates import EarthLocation
 from sensorkit.alpaca.telescope import (
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
+    ra_rate_from_ascom,
     radec_rates_to_altaz_rates,
 )
 from sensorkit.alpaca.testing import FakeAlpacaSDKDevice
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import AxisRates
 
-_SIDEREAL_RATE_DEG_S = 15.04107 / 3600.0
-# ASCOM RightAscensionRate (seconds of RA / SI second) that yields an inertial
-# RA offset of exactly the sidereal rate: ra_offset_deg_s = rate * 15 / 3600.
-_SIDEREAL_RA_RATE = 15.04107 / 15.0
+_SIDEREAL_RATE_DEG_S = 360.0 / u.sday.to(u.s)
+# One second of RA per sidereal second gives a sidereal angular offset rate.
+_SIDEREAL_RA_RATE = 1.0
 
 _SITE_LAT, _SITE_LON, _SITE_ELEV = 20.82028, -156.27944, 1000.0
 
@@ -65,8 +59,7 @@ def telescope():
 
 @pytest.mark.asyncio
 async def test_near_geo_rate_track_altaz_rates_near_zero(telescope, recorder):
-    """A near-GEO rate track (RA offset == sidereal, Dec offset 0) is nearly
-    fixed in alt/az -> alt/az axis rates ~ 0."""
+    """A sidereal RA offset with zero Dec offset yields near-zero alt/az rates."""
     published = await recorder()
     telescope.telescope.RightAscensionRate = _SIDEREAL_RA_RATE
     telescope.telescope.DeclinationRate = 0.0
@@ -84,10 +77,10 @@ async def test_near_geo_rate_track_altaz_rates_near_zero(telescope, recorder):
 
 @pytest.mark.asyncio
 async def test_altaz_rates_fed_inertial_offset(telescope, recorder, monkeypatch):
-    """The alt/az axis rates are the obstime-advancing conversion fed the ICRF
-    offset directly (NOT offset - sidereal). Uses a non-GEO rate track with
-    distinct nonzero offsets and a pinned time so the expected values are
-    deterministic."""
+    """Published alt/az rates include ICRS target motion and Earth's rotation.
+
+    The observation time is fixed for both coordinate calculations.
+    """
     from astropy.time import Time
 
     published = await recorder()
@@ -100,7 +93,7 @@ async def test_altaz_rates_fed_inertial_offset(telescope, recorder, monkeypatch)
 
     monkeypatch.setattr("sensorkit.alpaca.telescope.Time", _FixedTime)
 
-    ra_rate_ascom = 2.0  # seconds of RA / s  -> ra_offset = 2*15/3600 deg/s
+    ra_rate_ascom = 2.0  # seconds of RA per sidereal second, twice the sidereal rate
     dec_rate_arcsec = 30.0  # DeclinationRate is arcsec/s
     telescope.telescope.RightAscensionRate = ra_rate_ascom
     telescope.telescope.DeclinationRate = dec_rate_arcsec
@@ -108,7 +101,7 @@ async def test_altaz_rates_fed_inertial_offset(telescope, recorder, monkeypatch)
     await telescope._publish_telescope_status()
     rates = await published.wait_for(AxisRates)
 
-    ra_offset = ra_rate_ascom * 15.0 / 3600.0
+    ra_offset = ra_rate_from_ascom(ra_rate_ascom)
     dec_offset = dec_rate_arcsec / 3600.0
 
     def altaz_for(ra_rate_deg_s):

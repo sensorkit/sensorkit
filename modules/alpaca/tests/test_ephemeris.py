@@ -19,7 +19,7 @@ from sensorkit.astro.target import EphemerisTarget
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.std import FollowTarget
 
-_UTC_TO_SIDEREAL = 1.00273791
+_SIDEREAL_RATE_DEG_S = 360.0 / u.sday.to(u.s)
 
 
 @pytest_asyncio.fixture
@@ -108,11 +108,11 @@ async def telescope():
 
 @pytest.mark.asyncio
 async def test_telescope_follow_ephemeris(telescope):
-    """An ICRF EphemerisTarget collapses to a slew plus constant ASCOM offset rate.
+    """ICRF ephemeris samples set a slew position and constant tracking offsets.
 
-    A linear path moving 0.02 deg in RA and 0.01 deg in Dec per 2 s sample should
-    produce a RightAscensionRate of 0.01 deg/s (sidereal-scaled, seconds of RA per
-    sidereal second) and a DeclinationRate of 18 arcsec/s.
+    The samples imply 0.01 deg/s in RA and 0.005 deg/s in Dec. The RA offset
+    uses seconds of RA per sidereal second. The Dec offset is 18 arcseconds
+    per SI second.
     """
     step_days = 2.0 / 86400.0
     now_jd = Time.now().jd
@@ -129,7 +129,7 @@ async def test_telescope_follow_ephemeris(telescope):
     # Tracking must be enabled to apply equatorial offset rates.
     assert telescope._tracking is True
 
-    expected_ra_rate = 0.02 / 2.0 / 15.0 * 3600.0 * _UTC_TO_SIDEREAL  # ~2.4066
+    expected_ra_rate = 0.01 / _SIDEREAL_RATE_DEG_S  # ~2.3934
     expected_dec_rate = 0.01 / 2.0 * 3600.0  # 18.0 arcsec/s
 
     # rel=1e-3 absorbs float64 precision loss from differencing ~2.46e6-magnitude

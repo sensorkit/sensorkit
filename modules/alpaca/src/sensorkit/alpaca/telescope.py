@@ -100,7 +100,8 @@ _TELESCOPE_ONSET_TIMEOUT = 2.0
 _TLE_REACQUIRE_MAX_PASSES = 3
 _TLE_REACQUIRE_TOL_ARCSEC = 5.0
 
-_UTC_TO_SIDEREAL = 1.00273791
+# SI seconds in one sidereal second.
+_SECONDS_PER_SIDEREAL_SECOND = 0.9972695677
 
 
 def equatorial_frame(
@@ -150,6 +151,16 @@ def transform_radec_rates(
     # Wrap the RA difference into [-180, 180] deg to survive 0/360 crossings.
     dra_deg = (end.ra.deg - start.ra.deg + 180.0) % 360.0 - 180.0
     return dra_deg / dt, (end.dec.deg - start.dec.deg) / dt
+
+
+def ra_rate_to_ascom(ra_rate: float) -> float:
+    """Convert degrees per SI second to ASCOM RA seconds per sidereal second."""
+    return ra_rate / 15.0 * 3600.0 * _SECONDS_PER_SIDEREAL_SECOND
+
+
+def ra_rate_from_ascom(ascom_rate: float) -> float:
+    """Convert ASCOM RA seconds per sidereal second to degrees per SI second."""
+    return ascom_rate / _SECONDS_PER_SIDEREAL_SECOND * 15.0 / 3600.0
 
 
 def radec_rates_to_altaz_rates(
@@ -722,12 +733,10 @@ class AlpacaTelescope(AlpacaDevice):
             ra_deg, dec_deg, ra_rate, dec_rate, lambda _: ICRS(), self._mount_frame
         )
 
-        # ASCOM RightAscensionRate: seconds of RA per sidereal second
-        # ASCOM DeclinationRate: arcseconds per second
         if self._can_set_right_ascension_rate:
-            ascom_ra_rate = mount_ra_rate / 15.0 * 3600.0 * _UTC_TO_SIDEREAL
-            await self.put(self.telescope, "RightAscensionRate", ascom_ra_rate)
+            await self.put(self.telescope, "RightAscensionRate", ra_rate_to_ascom(mount_ra_rate))
         if self._can_set_declination_rate:
+            # DeclinationRate is in arcseconds per SI second.
             await self.put(self.telescope, "DeclinationRate", mount_dec_rate * 3600.0)
 
     async def _publish_telescope_status(self):
@@ -762,8 +771,8 @@ class AlpacaTelescope(AlpacaDevice):
             await self.get(t, "DeclinationRate", 0.0) if self._can_set_declination_rate else 0.0
         )
 
-        # Convert to deg/s offsets
-        ra_offset_deg_s = alpaca_ra_rate * 15.0 / 3600.0
+        # Convert mount-coordinate offsets to degrees per SI second.
+        ra_offset_deg_s = ra_rate_from_ascom(alpaca_ra_rate)
         dec_offset_deg_s = alpaca_dec_rate / 3600.0
 
         tracking = self._tracking or False

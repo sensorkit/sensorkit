@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Autoslew telescope EphemerisTarget — reduced to position + constant offset rate."""
+"""Tests for Autoslew ephemeris slews and constant tracking offsets."""
 
+import astropy.units as u
 import pytest
 from astropy.time import Time
 
@@ -24,14 +25,16 @@ async def test_follow_ephemeris_reduces_to_position_and_rate(telescope):
 
     assert telescope._tracking is True
 
-    # Slewed to the first sample, converted ICRS -> JNow (not the raw ICRS value).
+    # The slew uses the first sample converted from ICRS to JNow.
     slews = telescope.telescope.calls("SlewToCoordinatesAsync")
     assert slews
     ra_hours, _dec = slews[-1][0]
     exp_ra, _ = icrs_to_jnow(90.0, 20.0, Time.now(), telescope._location)
     assert ra_hours == pytest.approx(exp_ra / 15.0, abs=1e-2)
 
-    # A non-zero constant offset rate was applied from the finite difference.
+    # Check RA in seconds of RA per sidereal second and Dec in arcseconds per SI second.
+    # The tolerance allows for precision loss when subtracting Julian dates.
+    sidereal_rate = 360.0 / u.sday.to(u.s)
     props = telescope.telescope._properties
-    assert props.get("RightAscensionRate", 0.0) != 0.0
-    assert props.get("DeclinationRate", 0.0) != 0.0
+    assert props["RightAscensionRate"] == pytest.approx(0.01 / sidereal_rate, rel=1e-3)
+    assert props["DeclinationRate"] == pytest.approx(18.0, rel=1e-3)

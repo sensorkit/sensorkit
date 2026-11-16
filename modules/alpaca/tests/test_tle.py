@@ -47,5 +47,5 @@ async def test_telescope_follow_tle(telescope):
     assert separations.min().to_value(u.arcsec) < 2.0
 
     # Near-geostationary motion requires about one RA second per sidereal second.
-    assert telescope.telescope.RightAscensionRate == pytest.approx(1.0, rel=0.01)
+    assert telescope.telescope.RightAscensionRate == pytest.approx(1.0, rel=0.003)
     assert abs(telescope.telescope.DeclinationRate) < 1.0
