@@ -296,20 +296,10 @@ class NinaMount(NinaDevice):
                 # For now, adapt to ICRSTarget and slew to current position.
                 logger.warning("TLE tracking via NINA is best-effort (no native offset rates)")
 
-                observer = None
-                if self._site_lat is not None and self._site_lon is not None:
-                    from sensorkit.astro.coords import Geodetic
-
-                    observer = Geodetic(
-                        lon=self._site_lon,
-                        lat=self._site_lat,
-                        elev=(self._site_elev or 0.0) / 1000.0,
-                    )
-
                 adapted = await target.adapt(
                     ICRSTarget,
                     (FrameTarget, ReferenceFrame.ICRF),
-                    observer=observer,
+                    observer=self._geodetic,
                 )
 
                 if isinstance(adapted, ICRSTarget):
