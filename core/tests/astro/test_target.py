@@ -43,10 +43,9 @@ _ISS_TLE = TLE(
 
 _NYC = Geodetic(lon=-74.0060, lat=40.7128, elev=10.0)
 
-# Tolerance for the skyfield cross-checks below. The satkit/skyfield SGP4 and TEME-to-GCRF
-# floor is a ~20 m position difference, so its angular size runs inversely with slant
-# range: ~0.5 arcsec at the 6473 km of the epoch both tests pin, but ~9 arcsec on a close
-# overhead pass. Retuning either test to a new epoch means re-deriving this number.
+# Allow for differences in Earth-orientation data and frame transformations
+# at the fixed epochs below. Close passes need an angular tolerance derived
+# from a position tolerance and the slant range.
 _SKYFIELD_TOL_ARCSEC = 1.5
 
 
@@ -321,15 +320,9 @@ async def test_adapt_allows_geocentric_frame_without_observer():
 
 @pytest.mark.asyncio
 async def test_tle_to_icrf_ephemeris_matches_skyfield():
-    """An ICRF ephemeris carries the astrometric topocentric place, free of aberration.
-
-    Skyfield is the reference: its topocentric `radec()` is the geometric direction from
-    the site to the satellite, which is what an equatorial mount must be commanded to.
-    Routing the propagated GCRS position through AltAz and back would instead remove an
-    annual aberration the satellite never had, biasing RA/Dec by ~13 arcsec at this epoch
-    and up to ~20 arcsec in general.
-    """
+    """ICRF ephemeris RA/Dec converts to Skyfield's geometric alt/az."""
     start = datetime(2025, 1, 15, 9, 32, 0, tzinfo=UTC)
+    when = start + timedelta(seconds=1)
 
     eph = await TLETarget(tle=_ISS_TLE).to_ephemeris_target(
         start_time=start,
@@ -343,11 +336,14 @@ async def test_tle_to_icrf_ephemeris_matches_skyfield():
     topo = (
         skyfield.EarthSatellite(_ISS_TLE.line1, _ISS_TLE.line2, ts=ts)
         - skyfield.wgs84.latlon(_NYC.lat, _NYC.lon, _NYC.elev)
-    ).at(ts.from_datetime(start + timedelta(seconds=1)))
-    ra, dec, _ = topo.radec()
+    ).at(ts.from_datetime(when))
+    alt, az, _ = topo.altaz()
 
-    expected = SkyCoord(ra=ra.degrees * u.deg, dec=dec.degrees * u.deg, frame=ICRS())
-    actual = SkyCoord(ra=eph.points[0].ra * u.deg, dec=eph.points[0].dec * u.deg, frame=ICRS())
+    frame = AltAz(obstime=Time(when), location=_NYC.to_astropy())
+    expected = SkyCoord(az=az.degrees * u.deg, alt=alt.degrees * u.deg, frame=frame)
+    actual = SkyCoord(
+        ra=eph.points[0].ra * u.deg, dec=eph.points[0].dec * u.deg, frame=ICRS()
+    ).transform_to(frame)
 
     assert expected.separation(actual).arcsec < _SKYFIELD_TOL_ARCSEC
 

@@ -75,8 +75,14 @@ def _topocentric_cartesian(gcrs: GCRS, location: EarthLocation) -> CartesianRepr
 
 
 def _topocentric_icrs(gcrs: GCRS, location: EarthLocation) -> ICRS:
-    return ICRS(
-        _topocentric_cartesian(gcrs, location).represent_as(UnitSphericalRepresentation)
+    """Return astrometric RA/Dec for the site-to-target direction.
+
+    Converting these angular coordinates to AltAz at the same time and location
+    recovers the geometric direction. No light-time correction is applied.
+    """
+    cirs = _topocentric_cirs(gcrs, location)
+    return cirs.realize_frame(cirs.represent_as(UnitSphericalRepresentation)).transform_to(
+        ICRS()
     )
 
 
@@ -91,10 +97,11 @@ def _output_frame_transform(
     location: EarthLocation | None,
     weather: BasicWeather | None,
 ) -> Callable[[GCRS], BaseCoordinateFrame]:
-    """Return the GCRS-to-*frame* conversion used to build ephemeris points.
+    """Return the conversion from GCRS to the requested ephemeris frame.
 
-    ICRF, CIRF and ALTAZ are observer-relative and are all built from the topocentric
-    vector; anything else is a geocentric frame astropy can reach from GCRS on its own.
+    ICRF, CIRF, and ALTAZ require an observer and use the site-to-target
+    direction. ICRF output contains astrometric RA/Dec. Other output frames
+    retain the geocentric origin.
     """
     if location is None and frame in _OBSERVER_RELATIVE_FRAMES:
         raise RuntimeError(f"an observer location is required for {frame}")
@@ -467,7 +474,12 @@ class RateTarget(FrameTarget):
 
 
 class EphemerisTarget(FrameTarget):
-    """A target moving according to a precomputed ephemeris."""
+    """A target moving according to a precomputed ephemeris.
+
+    ICRF points contain astrometric RA/Dec for the observing site. Use the
+    sample time and the same site when converting them to local pointing
+    coordinates.
+    """
     target_type: Literal["ephemeris"] = "ephemeris"
     jds: Sequence[float]
     points: Sequence[Coordinates]
