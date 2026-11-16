@@ -53,6 +53,7 @@ def telescope():
     t._can_set_right_ascension_rate = True
     t._can_set_declination_rate = True
     t._tracking = True
+    t._equatorial_system = None
     t._location = EarthLocation(
         lat=_SITE_LAT * u.deg, lon=_SITE_LON * u.deg, height=_SITE_ELEV * u.m
     )

@@ -5,14 +5,23 @@ import asyncio
 from typing import Any, Literal, override
 
 import astropy.units as u
-from astropy.coordinates import ICRS, AltAz, EarthLocation, SkyCoord
+from astropy.coordinates import (
+    FK4,
+    FK5,
+    ICRS,
+    TETE,
+    AltAz,
+    BaseCoordinateFrame,
+    EarthLocation,
+    SkyCoord,
+)
 from astropy.time import Time
 from astropy.utils import iers
 from loguru import logger
 from pydantic import BaseModel, model_validator
 
 import sensorkit.api as sk
-from alpaca.telescope import PierSide, Telescope
+from alpaca.telescope import EquatorialCoordinateType, PierSide, Telescope
 from sensorkit.alpaca.device import (
     AlpacaDevice,
     AlpacaDeviceConfig,
@@ -90,6 +99,25 @@ _TLE_REACQUIRE_MAX_PASSES = 3
 _TLE_REACQUIRE_TOL_ARCSEC = 5.0
 
 
+def equatorial_frame(
+    system: EquatorialCoordinateType | None, obstime: Time, location: EarthLocation | None
+) -> BaseCoordinateFrame:
+    """Return the frame for the mount's equatorial coordinate system.
+
+    Topocentric coordinates use *obstime* and *location*. Missing or
+    unspecified systems use the same ICRS frame as J2000.
+    """
+    match system:
+        case EquatorialCoordinateType.equTopocentric:
+            return TETE(obstime=obstime, location=location)
+        case EquatorialCoordinateType.equJ2050:
+            return FK5(equinox="J2050")
+        case EquatorialCoordinateType.equB1950:
+            return FK4(equinox="B1950")
+        case _:
+            return ICRS()
+
+
 def radec_rates_to_altaz_rates(
     ra_hr: float,
     dec_deg: float,
@@ -162,6 +190,7 @@ class AlpacaTelescope(AlpacaDevice):
         self._slewing: bool | None = None
         self._geodetic: Geodetic | None = None
         self._location: EarthLocation | None = None
+        self._equatorial_system: EquatorialCoordinateType | None = None
 
         self.status_loop = AsyncLoop(
             self.status_publish, interval=self.config.status_frequency, log=True
@@ -236,6 +265,10 @@ class AlpacaTelescope(AlpacaDevice):
         self._aperture_area = await self.get(t, "ApertureArea", None)
         self._focal_length = await self.get(t, "FocalLength", None)
         self._equatorial_system = await self.get(t, "EquatorialSystem", None)
+
+        if self._equatorial_system in (None, EquatorialCoordinateType.equOther):
+            logger.warning("mount does not specify its equatorial system; assuming J2000")
+
         self._alignment_mode = await self.get(t, "AlignmentMode", None)
         self._does_refraction = await self.get(t, "DoesRefraction", None)
 
@@ -446,9 +479,6 @@ class AlpacaTelescope(AlpacaDevice):
             case ICRSTarget():
                 logger.debug("executing RADec follow")
 
-                ra_hours = target.coords.ra / 15.0
-                dec_deg = target.coords.dec
-
                 if self._can_set_right_ascension_rate:
                     await self.put(self.telescope, "RightAscensionRate", 0.0)
                 if self._can_set_declination_rate:
@@ -459,11 +489,7 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.put(self.telescope, "Tracking", True)
                     self._tracking = True
 
-                if self._can_slew_async:
-                    await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
-                elif self._can_slew:
-                    await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
-
+                await self._slew_to_icrs(target.coords.ra, target.coords.dec)
                 await self._wait_for_telescope(tracking=True)
                 self.fast_loop.start()
 
@@ -499,10 +525,7 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.put(self.telescope, "Tracking", True)
                     self._tracking = True
 
-                if self._can_slew_async:
-                    await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
-                elif self._can_slew:
-                    await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
+                await self._slew_to_icrs(ra_hours * 15.0, dec_deg)
                 await self._wait_for_telescope(tracking=True)
 
                 # Close the loop: the target moved during the slew, so the mount
@@ -514,19 +537,15 @@ class AlpacaTelescope(AlpacaDevice):
                     ra_hours, dec_deg, ra_rate, dec_rate = await asyncio.to_thread(
                         self._resolve_tle_position_and_rates, target
                     )
-                    cur_ra = await self.get(self.telescope, "RightAscension", ra_hours)
-                    cur_dec = await self.get(self.telescope, "Declination", dec_deg)
+                    mount_ra, mount_dec = self._to_mount(ra_hours * 15.0, dec_deg)
+                    cur_ra = await self.get(self.telescope, "RightAscension", mount_ra)
+                    cur_dec = await self.get(self.telescope, "Declination", mount_dec)
                     sep = SkyCoord(ra=cur_ra * 15.0 * u.deg, dec=cur_dec * u.deg).separation(
-                        SkyCoord(ra=ra_hours * 15.0 * u.deg, dec=dec_deg * u.deg)
+                        SkyCoord(ra=mount_ra * 15.0 * u.deg, dec=mount_dec * u.deg)
                     )
                     if sep.arcsec <= _TLE_REACQUIRE_TOL_ARCSEC:
                         break
-                    if self._can_slew_async:
-                        await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
-                    elif self._can_slew:
-                        await asyncio.to_thread(
-                            self.telescope.SlewToCoordinates, ra_hours, dec_deg
-                        )
+                    await self._slew_to_icrs(ra_hours * 15.0, dec_deg)
                     await self._wait_for_telescope(tracking=True)
 
                 if self._can_set_right_ascension_rate:
@@ -540,19 +559,12 @@ class AlpacaTelescope(AlpacaDevice):
             case RateTarget():
                 logger.debug("executing Rate follow")
 
-                ra_hours = target.initial_coords.ra / 15.0
-                dec_deg = target.initial_coords.dec
-
                 # Tracking must be enabled before slewing
                 if self._can_set_tracking:
                     await self.put(self.telescope, "Tracking", True)
                     self._tracking = True
 
-                if self._can_slew_async:
-                    await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
-                elif self._can_slew:
-                    await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
-
+                await self._slew_to_icrs(target.initial_coords.ra, target.initial_coords.dec)
                 await self._wait_for_telescope(tracking=True)
 
                 # Apply offset rates
@@ -582,9 +594,6 @@ class AlpacaTelescope(AlpacaDevice):
                 now_jd = Time.now().jd
                 i = min(range(len(jds) - 1), key=lambda j: abs(jds[j] - now_jd))
 
-                ra_hours = points[i].ra / 15.0
-                dec_deg = points[i].dec
-
                 dt_sec = (jds[i + 1] - jds[i]) * 86400.0
                 # Wrap the RA difference into [-180, 180] deg to survive 0/360 crossings.
                 dra_deg = (points[i + 1].ra - points[i].ra + 180.0) % 360.0 - 180.0
@@ -599,10 +608,7 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.put(self.telescope, "Tracking", True)
                     self._tracking = True
 
-                if self._can_slew_async:
-                    await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
-                elif self._can_slew:
-                    await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
+                await self._slew_to_icrs(points[i].ra, points[i].dec)
                 await self._wait_for_telescope(tracking=True)
 
                 if self._can_set_right_ascension_rate:
@@ -689,10 +695,32 @@ class AlpacaTelescope(AlpacaDevice):
                     break
                 await asyncio.sleep(0.1)
 
+    def _to_mount(self, ra_deg: float, dec_deg: float) -> tuple[float, float]:
+        """Convert ICRS RA/Dec in degrees to mount RA hours and Dec degrees."""
+        frame = equatorial_frame(self._equatorial_system, Time.now(), self._location)
+        coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame=ICRS()).transform_to(frame)
+        return coord.ra.hour, coord.dec.deg
+
+    def _from_mount(self, ra_hours: float, dec_deg: float) -> tuple[float, float]:
+        """Convert mount RA hours and Dec degrees to ICRS RA hours and Dec degrees."""
+        frame = equatorial_frame(self._equatorial_system, Time.now(), self._location)
+        coord = SkyCoord(ra=ra_hours * u.hourangle, dec=dec_deg * u.deg, frame=frame)
+        icrs = coord.transform_to(ICRS())
+        return icrs.ra.hour, icrs.dec.deg
+
+    async def _slew_to_icrs(self, ra_deg: float, dec_deg: float):
+        """Convert ICRS RA/Dec in degrees and slew in the mount's coordinate system."""
+        ra_hours, dec = self._to_mount(ra_deg, dec_deg)
+        if self._can_slew_async:
+            await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec)
+        elif self._can_slew:
+            await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec)
+
     async def _publish_telescope_status(self):
         t = self.telescope
-        ra_hours = await self.get(t, "RightAscension", 0.0)
-        dec_deg = await self.get(t, "Declination", 0.0)
+        ra_hours, dec_deg = self._from_mount(
+            await self.get(t, "RightAscension", 0.0), await self.get(t, "Declination", 0.0)
+        )
         alt_deg = await self.get(t, "Altitude", 0.0)
         az_deg = await self.get(t, "Azimuth", 0.0)
 
