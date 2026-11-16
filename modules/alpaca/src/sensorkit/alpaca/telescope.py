@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, override
 
 import astropy.units as u
@@ -407,7 +408,7 @@ class AlpacaTelescope(AlpacaDevice):
         await self.call(self.telescope, "SetPark")
         logger.debug("set park position")
 
-    def _resolve_tle_position_and_rates(self, tle_target: TLETarget):
+    async def _resolve_tle_position_and_rates(self, tle_target: TLETarget):
         """Compute current ICRS position and RA/Dec offset rates from a TLE.
 
         Returns (ra_hours, dec_deg, ascom_ra_rate, ascom_dec_rate) where:
@@ -417,48 +418,38 @@ class AlpacaTelescope(AlpacaDevice):
         These are *offsets from sidereal tracking*, per the ASCOM spec.
         This is a best-effort snapshot — rates will drift over time.
         """
-        from datetime import UTC, datetime, timedelta
-
-        from skyfield.api import EarthSatellite, load, wgs84
-
         _UTC_TO_SIDEREAL = 1.00273791
 
-        ts = load.timescale()
-        sat = EarthSatellite(tle_target.tle.line1, tle_target.tle.line2, ts=ts)
-        loc = wgs84.latlon(self._site_lat, self._site_lon, (self._site_elev or 0.0))
+        # Samples start one step after the window opens, so this yields now and 1 s later.
+        eph = await tle_target.to_ephemeris_target(
+            start_time=datetime.now(UTC) - timedelta(seconds=1),
+            duration=timedelta(seconds=2),
+            step=timedelta(seconds=1),
+            frame=ReferenceFrame.ICRF,
+            observer=self._geodetic,
+        )
+        p0, p1 = eph.points
+        dt = (eph.jds[1] - eph.jds[0]) * 86400.0
 
-        now = datetime.now(UTC)
-        dt = 1.0  # seconds (UTC)
-        t0 = ts.from_datetime(now)
-        t1 = ts.from_datetime(now + timedelta(seconds=dt))
-
-        difference = sat - loc
-        topo0 = difference.at(t0)
-        topo1 = difference.at(t1)
-        ra0, dec0, _ = topo0.radec()
-        ra1, dec1, _ = topo1.radec()
-
-        ra_hours = ra0.hours
-        dec_deg = dec0.degrees
+        # Wrap the RA difference into [-180, 180] deg to survive 0/360 crossings.
+        dra_deg = (p1.ra - p0.ra + 180.0) % 360.0 - 180.0
 
         # RA offset rate: RA seconds per sidereal second
         # Convert from per-UTC-second to per-sidereal-second
-        ra_rate_ascom = (ra1.hours - ra0.hours) * 3600.0 / dt * _UTC_TO_SIDEREAL
+        ra_rate_ascom = dra_deg / 15.0 * 3600.0 / dt * _UTC_TO_SIDEREAL
 
         # Dec offset rate: arcseconds per second
-        dec_rate_ascom = (dec1.degrees - dec0.degrees) / dt * 3600.0
+        dec_rate_ascom = (p1.dec - p0.dec) / dt * 3600.0
 
-        return ra_hours, dec_deg, ra_rate_ascom, dec_rate_ascom
+        return p0.ra / 15.0, p0.dec, ra_rate_ascom, dec_rate_ascom
 
     @sk.command_handler
     async def telescope_follow_target(self, cmd: FollowTarget):
         await self.require_connected()
 
-        # ASCOM/Alpaca has no path-follow primitive, only slew + constant offset
-        # rate, so we accept an ICRF EphemerisTarget and collapse it to a
-        # position-plus-rate below. Propagatable inputs (TLE, state vector) are
-        # normalized to that ephemeris by adapt(); a direct TLE still passes
-        # through to the native skyfield handler.
+        # Follow ephemerides with a slew and constant tracking offsets.
+        # State-vector targets adapt to ICRF ephemerides. TLE targets retain
+        # their acquisition loop, which samples the position after each slew.
         target = await cmd.target.adapt(
             ICRSTarget,
             AltAzTarget,
@@ -512,12 +503,10 @@ class AlpacaTelescope(AlpacaDevice):
                 logger.debug("following AltAz target")
 
             case TLETarget():
-                # FIXME: Leaving TLETarget for now because it has been tested against sdasim.
-                # Once EphemerisTarget has been tested, TLETarget can be adapted to it.
                 logger.debug("executing TLE follow")
 
-                ra_hours, dec_deg, ra_rate, dec_rate = await asyncio.to_thread(
-                    self._resolve_tle_position_and_rates, target
+                ra_hours, dec_deg, ra_rate, dec_rate = (
+                    await self._resolve_tle_position_and_rates(target)
                 )
 
                 # Tracking must be enabled before slewing
@@ -528,14 +517,11 @@ class AlpacaTelescope(AlpacaDevice):
                 await self._slew_to_icrs(ra_hours * 15.0, dec_deg)
                 await self._wait_for_telescope(tracking=True)
 
-                # Close the loop: the target moved during the slew, so the mount
-                # settled behind it. Re-resolve at the now-current time and slew to
-                # correct until the residual is small (one pass suffices for a
-                # slow/GEO target; faster ones converge in a few). The offset rate
-                # then only has to hold position, not also recover the slew lag.
+                # Resample after the slew and correct the remaining angular separation.
+                # Apply the final tracking offsets after acquisition corrections finish.
                 for _ in range(_TLE_REACQUIRE_MAX_PASSES):
-                    ra_hours, dec_deg, ra_rate, dec_rate = await asyncio.to_thread(
-                        self._resolve_tle_position_and_rates, target
+                    ra_hours, dec_deg, ra_rate, dec_rate = (
+                        await self._resolve_tle_position_and_rates(target)
                     )
                     mount_ra, mount_dec = self._to_mount(ra_hours * 15.0, dec_deg)
                     cur_ra = await self.get(self.telescope, "RightAscension", mount_ra)
@@ -584,11 +570,8 @@ class AlpacaTelescope(AlpacaDevice):
             case EphemerisTarget():
                 logger.debug("executing Ephemeris follow")
 
-                # No path-follow primitive in ASCOM, so collapse the precomputed
-                # path to an initial position plus a constant offset rate: slew to
-                # the sample nearest now and finite-difference the two adjacent
-                # samples for the instantaneous RA/Dec rate. Like the TLE case,
-                # this is a best-effort snapshot that drifts over time.
+                # Choose the sample nearest now that has a following point.
+                # Estimate constant RA/Dec rates from that adjacent pair.
                 jds = target.jds
                 points = target.points
                 now_jd = Time.now().jd
