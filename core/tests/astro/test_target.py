@@ -8,7 +8,7 @@ import astropy.units as u
 import numpy as np
 import pytest
 import satkit
-from astropy.coordinates import ICRS, AltAz, SkyCoord, angular_separation
+from astropy.coordinates import ICRS, AltAz, SkyCoord, angular_separation, TEME
 from astropy.time import Time
 from pydantic import TypeAdapter
 from skyfield import api as skyfield
@@ -193,6 +193,51 @@ def test_sample_altaz_series_tle():
     # Alt/az should vary across 6-hour intervals due to target motion.
     alts = [alt for alt, _ in series]
     assert len(set(round(a, 2) for a in alts)) > 1
+
+def test_sgp4_teme_unit():
+    target = TLETarget(tle=_ISS_TLE)
+    tle = satkit.TLE.from_lines(target.tle.to_list())
+    if isinstance(tle, list):
+        tle = tle[0]
+
+    dt = datetime(2025, 1, 15, 12, tzinfo=UTC)
+    t_sk = satkit.time.from_datetime(dt)
+    t_ast = Time(dt, scale="utc")
+
+    teme_p, _ = satkit.sgp4(tle, t_sk)
+
+    # ISS orbit altitude is ~420km, radius is ~6800 km = 6.8e6 m
+    # teme_p should be in meters
+    r = np.linalg.norm(teme_p)
+    assert 6.5e6 < r < 7.0e6
+
+    teme_m = TEME(
+        x=teme_p[0] * u.m,
+        y=teme_p[1] * u.m,
+        z=teme_p[2] * u.m,
+        obstime=t_ast,
+    )
+    teme_km = TEME(
+        x=(teme_p[0] / 1.0e3) * u.km,
+        y=(teme_p[1] / 1.0e3) * u.km,
+        z=(teme_p[2] / 1.0e3) * u.km,
+        obstime=t_ast,
+    )
+
+    diff = (
+        teme_m.cartesian.xyz.to(u.m).value
+        - teme_km.cartesian.xyz.to(u.m).value
+    )
+    assert np.max(np.abs(diff)) < 1e-6
+
+    radius_m = np.linalg.norm(
+        teme_m.cartesian.xyz.to(u.m).value
+    )
+    radius_km = np.linalg.norm(
+        teme_km.cartesian.xyz.to(u.m).value
+    )
+    assert np.abs(radius_m - radius_km) < 1e-6
+    assert 6.5e6 < radius_m < 7.0e6
 
 
 def test_sample_altaz_series_ephemeris():
