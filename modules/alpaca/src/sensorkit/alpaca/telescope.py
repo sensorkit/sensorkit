@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, override
 
@@ -99,6 +100,8 @@ _TELESCOPE_ONSET_TIMEOUT = 2.0
 _TLE_REACQUIRE_MAX_PASSES = 3
 _TLE_REACQUIRE_TOL_ARCSEC = 5.0
 
+_UTC_TO_SIDEREAL = 1.00273791
+
 
 def equatorial_frame(
     system: EquatorialCoordinateType | None, obstime: Time, location: EarthLocation | None
@@ -117,6 +120,36 @@ def equatorial_frame(
             return FK4(equinox="B1950")
         case _:
             return ICRS()
+
+
+def transform_radec_rates(
+    ra_deg: float,
+    dec_deg: float,
+    ra_rate: float,
+    dec_rate: float,
+    source: Callable[[Time], BaseCoordinateFrame],
+    target: Callable[[Time], BaseCoordinateFrame],
+) -> tuple[float, float]:
+    """Transform RA/Dec rates between equatorial frames at the current time.
+
+    The position is in degrees in the source frame. Input and output rates
+    are in degrees per SI second. Changes in either frame with time
+    contribute to the result.
+    """
+    dt = 0.01  # seconds
+    t0 = Time.now()
+    t1 = t0 + dt * u.s
+
+    start = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame=source(t0))
+    end = SkyCoord(
+        ra=(ra_deg + ra_rate * dt) * u.deg, dec=(dec_deg + dec_rate * dt) * u.deg, frame=source(t1)
+    )
+    start = start.transform_to(target(t0))
+    end = end.transform_to(target(t1))
+
+    # Wrap the RA difference into [-180, 180] deg to survive 0/360 crossings.
+    dra_deg = (end.ra.deg - start.ra.deg + 180.0) % 360.0 - 180.0
+    return dra_deg / dt, (end.dec.deg - start.dec.deg) / dt
 
 
 def radec_rates_to_altaz_rates(
@@ -409,17 +442,12 @@ class AlpacaTelescope(AlpacaDevice):
         logger.debug("set park position")
 
     async def _resolve_tle_position_and_rates(self, tle_target: TLETarget):
-        """Compute current ICRS position and RA/Dec offset rates from a TLE.
+        """Return astrometric ICRS RA/Dec and rates estimated over one second.
 
-        Returns (ra_hours, dec_deg, ascom_ra_rate, ascom_dec_rate) where:
-        - ascom_ra_rate: seconds of RA time per sidereal second (ASCOM RightAscensionRate)
-        - ascom_dec_rate: arcseconds per second (ASCOM DeclinationRate)
-
-        These are *offsets from sidereal tracking*, per the ASCOM spec.
-        This is a best-effort snapshot — rates will drift over time.
+        Returns:
+            A `(ra_deg, dec_deg, ra_rate, dec_rate)` tuple. Angles are in degrees
+            and rates are in degrees per SI second.
         """
-        _UTC_TO_SIDEREAL = 1.00273791
-
         # Samples start one step after the window opens, so this yields now and 1 s later.
         eph = await tle_target.to_ephemeris_target(
             start_time=datetime.now(UTC) - timedelta(seconds=1),
@@ -434,14 +462,7 @@ class AlpacaTelescope(AlpacaDevice):
         # Wrap the RA difference into [-180, 180] deg to survive 0/360 crossings.
         dra_deg = (p1.ra - p0.ra + 180.0) % 360.0 - 180.0
 
-        # RA offset rate: RA seconds per sidereal second
-        # Convert from per-UTC-second to per-sidereal-second
-        ra_rate_ascom = dra_deg / 15.0 * 3600.0 / dt * _UTC_TO_SIDEREAL
-
-        # Dec offset rate: arcseconds per second
-        dec_rate_ascom = (p1.dec - p0.dec) / dt * 3600.0
-
-        return p0.ra / 15.0, p0.dec, ra_rate_ascom, dec_rate_ascom
+        return p0.ra, p0.dec, dra_deg / dt, (p1.dec - p0.dec) / dt
 
     @sk.command_handler
     async def telescope_follow_target(self, cmd: FollowTarget):
@@ -505,8 +526,8 @@ class AlpacaTelescope(AlpacaDevice):
             case TLETarget():
                 logger.debug("executing TLE follow")
 
-                ra_hours, dec_deg, ra_rate, dec_rate = (
-                    await self._resolve_tle_position_and_rates(target)
+                ra_deg, dec_deg, ra_rate, dec_rate = await self._resolve_tle_position_and_rates(
+                    target
                 )
 
                 # Tracking must be enabled before slewing
@@ -514,16 +535,16 @@ class AlpacaTelescope(AlpacaDevice):
                     await self.put(self.telescope, "Tracking", True)
                     self._tracking = True
 
-                await self._slew_to_icrs(ra_hours * 15.0, dec_deg)
+                await self._slew_to_icrs(ra_deg, dec_deg)
                 await self._wait_for_telescope(tracking=True)
 
                 # Resample after the slew and correct the remaining angular separation.
                 # Apply the final tracking offsets after acquisition corrections finish.
                 for _ in range(_TLE_REACQUIRE_MAX_PASSES):
-                    ra_hours, dec_deg, ra_rate, dec_rate = (
+                    ra_deg, dec_deg, ra_rate, dec_rate = (
                         await self._resolve_tle_position_and_rates(target)
                     )
-                    mount_ra, mount_dec = self._to_mount(ra_hours * 15.0, dec_deg)
+                    mount_ra, mount_dec = self._to_mount(ra_deg, dec_deg)
                     cur_ra = await self.get(self.telescope, "RightAscension", mount_ra)
                     cur_dec = await self.get(self.telescope, "Declination", mount_dec)
                     sep = SkyCoord(ra=cur_ra * 15.0 * u.deg, dec=cur_dec * u.deg).separation(
@@ -531,13 +552,10 @@ class AlpacaTelescope(AlpacaDevice):
                     )
                     if sep.arcsec <= _TLE_REACQUIRE_TOL_ARCSEC:
                         break
-                    await self._slew_to_icrs(ra_hours * 15.0, dec_deg)
+                    await self._slew_to_icrs(ra_deg, dec_deg)
                     await self._wait_for_telescope(tracking=True)
 
-                if self._can_set_right_ascension_rate:
-                    await self.put(self.telescope, "RightAscensionRate", ra_rate)
-                if self._can_set_declination_rate:
-                    await self.put(self.telescope, "DeclinationRate", dec_rate)
+                await self._set_offset_rates(ra_deg, dec_deg, ra_rate, dec_rate)
                 self.fast_loop.start()
 
                 logger.debug("following TLE target")
@@ -553,16 +571,12 @@ class AlpacaTelescope(AlpacaDevice):
                 await self._slew_to_icrs(target.initial_coords.ra, target.initial_coords.dec)
                 await self._wait_for_telescope(tracking=True)
 
-                # Apply offset rates
-                # ASCOM RightAscensionRate: seconds of RA per sidereal second
-                # ASCOM DeclinationRate: arcseconds per second
-                _UTC_TO_SIDEREAL = 1.00273791
-                if self._can_set_right_ascension_rate:
-                    ra_rate = target.rates.ra / 15.0 * 3600.0 * _UTC_TO_SIDEREAL
-                    await self.put(self.telescope, "RightAscensionRate", ra_rate)
-                if self._can_set_declination_rate:
-                    dec_rate = target.rates.dec * 3600.0
-                    await self.put(self.telescope, "DeclinationRate", dec_rate)
+                await self._set_offset_rates(
+                    target.initial_coords.ra,
+                    target.initial_coords.dec,
+                    target.rates.ra,
+                    target.rates.dec,
+                )
                 self.fast_loop.start()
 
                 logger.debug("following Rate target")
@@ -582,10 +596,6 @@ class AlpacaTelescope(AlpacaDevice):
                 dra_deg = (points[i + 1].ra - points[i].ra + 180.0) % 360.0 - 180.0
                 ddec_deg = points[i + 1].dec - points[i].dec
 
-                _UTC_TO_SIDEREAL = 1.00273791
-                ra_rate = dra_deg / dt_sec / 15.0 * 3600.0 * _UTC_TO_SIDEREAL
-                dec_rate = ddec_deg / dt_sec * 3600.0
-
                 # Tracking must be enabled before slewing
                 if self._can_set_tracking:
                     await self.put(self.telescope, "Tracking", True)
@@ -594,10 +604,9 @@ class AlpacaTelescope(AlpacaDevice):
                 await self._slew_to_icrs(points[i].ra, points[i].dec)
                 await self._wait_for_telescope(tracking=True)
 
-                if self._can_set_right_ascension_rate:
-                    await self.put(self.telescope, "RightAscensionRate", ra_rate)
-                if self._can_set_declination_rate:
-                    await self.put(self.telescope, "DeclinationRate", dec_rate)
+                await self._set_offset_rates(
+                    points[i].ra, points[i].dec, dra_deg / dt_sec, ddec_deg / dt_sec
+                )
                 self.fast_loop.start()
 
                 logger.debug("following Ephemeris target")
@@ -678,15 +687,18 @@ class AlpacaTelescope(AlpacaDevice):
                     break
                 await asyncio.sleep(0.1)
 
+    def _mount_frame(self, obstime: Time) -> BaseCoordinateFrame:
+        return equatorial_frame(self._equatorial_system, obstime, self._location)
+
     def _to_mount(self, ra_deg: float, dec_deg: float) -> tuple[float, float]:
         """Convert ICRS RA/Dec in degrees to mount RA hours and Dec degrees."""
-        frame = equatorial_frame(self._equatorial_system, Time.now(), self._location)
+        frame = self._mount_frame(Time.now())
         coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame=ICRS()).transform_to(frame)
         return coord.ra.hour, coord.dec.deg
 
     def _from_mount(self, ra_hours: float, dec_deg: float) -> tuple[float, float]:
         """Convert mount RA hours and Dec degrees to ICRS RA hours and Dec degrees."""
-        frame = equatorial_frame(self._equatorial_system, Time.now(), self._location)
+        frame = self._mount_frame(Time.now())
         coord = SkyCoord(ra=ra_hours * u.hourangle, dec=dec_deg * u.deg, frame=frame)
         icrs = coord.transform_to(ICRS())
         return icrs.ra.hour, icrs.dec.deg
@@ -699,11 +711,30 @@ class AlpacaTelescope(AlpacaDevice):
         elif self._can_slew:
             await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec)
 
+    async def _set_offset_rates(
+        self, ra_deg: float, dec_deg: float, ra_rate: float, dec_rate: float
+    ):
+        """Set mount tracking offsets from ICRS RA/Dec and rates.
+
+        Position angles are in degrees. Rates are in degrees per SI second.
+        """
+        mount_ra_rate, mount_dec_rate = transform_radec_rates(
+            ra_deg, dec_deg, ra_rate, dec_rate, lambda _: ICRS(), self._mount_frame
+        )
+
+        # ASCOM RightAscensionRate: seconds of RA per sidereal second
+        # ASCOM DeclinationRate: arcseconds per second
+        if self._can_set_right_ascension_rate:
+            ascom_ra_rate = mount_ra_rate / 15.0 * 3600.0 * _UTC_TO_SIDEREAL
+            await self.put(self.telescope, "RightAscensionRate", ascom_ra_rate)
+        if self._can_set_declination_rate:
+            await self.put(self.telescope, "DeclinationRate", mount_dec_rate * 3600.0)
+
     async def _publish_telescope_status(self):
         t = self.telescope
-        ra_hours, dec_deg = self._from_mount(
-            await self.get(t, "RightAscension", 0.0), await self.get(t, "Declination", 0.0)
-        )
+        mount_ra_hours = await self.get(t, "RightAscension", 0.0)
+        mount_dec_deg = await self.get(t, "Declination", 0.0)
+        ra_hours, dec_deg = self._from_mount(mount_ra_hours, mount_dec_deg)
         alt_deg = await self.get(t, "Altitude", 0.0)
         az_deg = await self.get(t, "Azimuth", 0.0)
 
@@ -736,8 +767,18 @@ class AlpacaTelescope(AlpacaDevice):
         dec_offset_deg_s = alpaca_dec_rate / 3600.0
 
         tracking = self._tracking or False
-        icrf_ra_deg_s = ra_offset_deg_s if tracking else 0.0
-        icrf_dec_deg_s = dec_offset_deg_s if tracking else 0.0
+        icrf_ra_deg_s, icrf_dec_deg_s = (
+            transform_radec_rates(
+                mount_ra_hours * 15.0,
+                mount_dec_deg,
+                ra_offset_deg_s,
+                dec_offset_deg_s,
+                self._mount_frame,
+                lambda _: ICRS(),
+            )
+            if tracking
+            else (0.0, 0.0)
+        )
 
         # Compute and publish alt/az rates if location is available
         if self._location is not None:
