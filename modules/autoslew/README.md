@@ -22,23 +22,25 @@ The `autoslew` module provides integration for ASA Autoslew mounts via ASCOM Alp
 
 ## Supported Tracking Modes
 
-The `telescope` device handles `FollowTarget` commands. ASCOM/Alpaca has no
-generic path-follow primitive, but Autoslew runs the satellite ephemeris on the
-controller, so `TLETarget`s are followed natively (via ASA's `sat:*` flow) rather
-than collapsed to an offset rate; other moving targets slew to an initial position
-and apply a constant RA/Dec offset rate. Autoslew's ASCOM interface is JNow /
-of-date on both read and command, so RA/Dec is converted at the boundary — status
-is published as ICRF, and gotos are sent as JNow. The following target types are
-currently supported:
+The `telescope` device handles `FollowTarget` commands.
+TLE targets use ASA's native `sat:*` satellite tracking.
+Other moving targets use an initial slew and constant RA/Dec tracking offsets.
+
+Commanded positions and tracking offsets are converted from ICRS into the coordinate system returned by Autoslew's `EquatorialSystem` property.
+Reported pointing is converted back to ICRS and published as ICRF.
+Topocentric coordinates use the observation time and site (TETE/JNow).
+An unspecified system uses the shared J2000/ICRS fallback.
+Initialization warns when the reported system differs from the expected Topocentric system and continues using the reported value.
+The following target types are currently supported:
 
 | Target            | Frame        | Behavior                                                                 |
 | ----------------- | ------------ |-------------------------------------------------------------------------|
-| `ICRSTarget`      | ICRF         | Slew to fixed RA/Dec (converted ICRS→JNow) and enable sidereal tracking. |
+| `ICRSTarget`      | ICRF         | Convert RA/Dec to the reported equatorial system, slew, and enable sidereal tracking. |
 | `AltAzTarget`     | ALTAZ        | Slew to fixed Alt/Az.                                                   |
 | `TLETarget`       | TEME         | Native satellite following via Autoslew (`sat:*`).                      |
-| `RateTarget`      | ICRF         | Slew to an initial RA/Dec (JNow), then apply constant RA/Dec offset rates. |
-| `EphemerisTarget` | ICRF         | Reduced to the first sample's position plus a constant offset rate (Alpaca has no path primitive). |
-| `FrameTarget`     | ICRF / ALTAZ | Set tracking at current pointing: ICRF enables sidereal tracking, ALTAZ disables tracking (stop / hold in place). |
+| `RateTarget`      | ICRF         | Slew to initial coordinates and apply constant tracking offsets in the reported equatorial system. |
+| `EphemerisTarget` | ICRF         | Slew to the first sample and apply constant tracking offsets estimated from the first two samples. |
+| `FrameTarget`     | ICRF / ALTAZ | At the current pointing, ICRF enables sidereal tracking and ALTAZ disables it. |
 
 Propagatable inputs (e.g. a state vector) are normalized to an ICRF
 `EphemerisTarget` by `adapt()` before being followed.

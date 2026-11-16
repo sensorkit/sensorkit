@@ -4,9 +4,9 @@
 Initialization probes capabilities, clears stale motion, and enables the
 motors. Stopping also ends satellite tracking.
 
-The driver converts reported JNow coordinates to ICRS and outgoing ICRS slew
-coordinates to JNow. Native TLE following uses ASA satellite actions and waits
-for the motors before starting.
+Commanded positions and tracking offsets are converted from ICRS to the
+reported equatorial system. Pointing is published in ICRF. Native TLE
+following uses ASA satellite actions and waits for the motors before starting.
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from datetime import UTC, datetime, timedelta
 from typing import override
 
 import astropy.units as u
-from alpaca.telescope import Telescope
-from astropy.coordinates import ICRS, TETE, AltAz, EarthLocation, SkyCoord
+from alpaca.telescope import EquatorialCoordinateType, Telescope
+from astropy.coordinates import EarthLocation
 from astropy.time import Time
 from astropy.utils import iers
 from loguru import logger
@@ -30,7 +30,7 @@ from sensorkit.alpaca.telescope import (
     AlpacaTelescope,
     AlpacaTelescopeConfig,
     AlpacaTelescopeState,
-    ra_rate_to_ascom,
+    radec_rates_to_altaz_rates,
 )
 from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame, SitePosition
 from sensorkit.astro.coords import Geodetic
@@ -72,29 +72,6 @@ iers.conf.auto_max_age = None
 _SAT_ACQUIRE_TIMEOUT = 8.0
 
 
-# --------------------------------------------------------------------------- #
-# Frame conversion — JNow (apparent, of-date) <-> ICRS.
-# TETE = true-equator/true-equinox-of-date, astropy's apparent-place frame (~JNow).
-# `location` gives the topocentric term; negligible for stars, passed for rigor.
-# --------------------------------------------------------------------------- #
-def jnow_to_icrs(
-    ra_deg: float, dec_deg: float, obstime: Time, location: EarthLocation | None = None
-) -> tuple[float, float]:
-    coord = SkyCoord(
-        ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame=TETE(obstime=obstime, location=location)
-    )
-    icrs = coord.transform_to(ICRS())
-    return icrs.ra.deg, icrs.dec.deg
-
-
-def icrs_to_jnow(
-    ra_deg: float, dec_deg: float, obstime: Time, location: EarthLocation | None = None
-) -> tuple[float, float]:
-    coord = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame=ICRS())
-    jnow = coord.transform_to(TETE(obstime=obstime, location=location))
-    return jnow.ra.deg, jnow.dec.deg
-
-
 def _icrf_rate_from_samples(jds, points) -> tuple[float, float]:
     """Finite-difference an ICRF ephemeris into an (RA, Dec) rate in deg/s.
 
@@ -108,27 +85,6 @@ def _icrf_rate_from_samples(jds, points) -> tuple[float, float]:
         return 0.0, 0.0
     dra = (((points[1].ra - points[0].ra) + 180.0) % 360.0) - 180.0
     return dra / dt, (points[1].dec - points[0].dec) / dt
-
-
-def radec_rates_to_altaz_rates(
-    ra_deg: float,
-    dec_deg: float,
-    ra_rate_deg_s: float,
-    dec_rate_deg_s: float,
-    location: EarthLocation,
-    time: Time,
-) -> tuple[float, float]:
-    """Convert ICRS RA/Dec rates (deg/s) to Alt/Az rates (deg/s) by numerical difference."""
-    dt = 0.01
-    now = SkyCoord(ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame=ICRS()).transform_to(
-        AltAz(obstime=time, location=location)
-    )
-    later = SkyCoord(
-        ra=(ra_deg + ra_rate_deg_s * dt) * u.deg,
-        dec=(dec_deg + dec_rate_deg_s * dt) * u.deg,
-        frame=ICRS(),
-    ).transform_to(AltAz(obstime=time + dt * u.s, location=location))
-    return (later.alt.deg - now.alt.deg) / dt, (later.az.deg - now.az.deg) / dt
 
 
 @sk.declare_keyword
@@ -147,14 +103,7 @@ class AutoslewTelescopeState(AlpacaTelescopeState):
 
 @sk.declare_device(type=StandardMount)
 class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
-    """ASA Autoslew mount implementation.
-
-    Inherits `entity_deinit`/`telescope_connect`/`telescope_disconnect`/
-    `telescope_home`/`telescope_park`/`_wait_for_telescope` from `AlpacaTelescope`
-    unchanged — Autoslew's capability probe still populates the
-    `_can_find_home`/`_can_park` flags those rely on. Everything else is overridden
-    below for the ASA-specific init/stop/follow/status behavior.
-    """
+    """ASA Autoslew mount control through Alpaca and ASA extensions."""
 
     config: AutoslewTelescopeConfig
     device_name = "Telescope"
@@ -174,6 +123,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
         self._tle_target: TLETarget | None = None
         self._geodetic: Geodetic | None = None
         self._location: EarthLocation | None = None
+        self._equatorial_system: EquatorialCoordinateType | None = None
         self._can_slew_async = self._can_slew = False
         self._can_slew_altaz_async = self._can_slew_altaz = False
         self._can_park = self._can_unpark = self._can_find_home = False
@@ -199,6 +149,15 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
         self._can_park = await self.get(t, "CanPark", False)
         self._can_unpark = await self.get(t, "CanUnpark", False)
         self._can_find_home = await self.get(t, "CanFindHome", False)
+        self._can_set_right_ascension_rate = await self.get(t, "CanSetRightAscensionRate", False)
+        self._can_set_declination_rate = await self.get(t, "CanSetDeclinationRate", False)
+
+        self._equatorial_system = await self.get(t, "EquatorialSystem", None)
+        if self._equatorial_system != EquatorialCoordinateType.equTopocentric:
+            logger.warning(
+                f"Autoslew reports EquatorialSystem={self._equatorial_system}. "
+                "Expected Topocentric. Conversions follow the reported system."
+            )
 
         # Clean start: abort any in-flight slew AND clear a stale satellite track left
         # by a prior/crashed session, then engage the motors (required before any slew
@@ -339,13 +298,9 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
         match target:
             case ICRSTarget():
                 logger.debug("executing RADec follow")
-                # ICRS -> JNow: Autoslew interprets slew INPUT as of-date.
-                ra_jnow, dec_jnow = icrs_to_jnow(
-                    target.coords.ra, target.coords.dec, Time.now(), self._location
-                )
                 await self.put(self.telescope, "Tracking", True)
                 self._tracking = True
-                await self._slew_radec(ra_jnow / 15.0, dec_jnow)
+                await self._slew_to_icrs(target.coords.ra, target.coords.dec)
                 await self._wait_for_telescope(tracking=True)
                 self._sidereal = True
                 self.fast_loop.start()
@@ -394,18 +349,16 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
 
             case RateTarget():
                 logger.debug("executing Rate follow")
-                ra_jnow, dec_jnow = icrs_to_jnow(
-                    target.initial_coords.ra, target.initial_coords.dec, Time.now(), self._location
-                )
                 await self.put(self.telescope, "Tracking", True)
                 self._tracking = True
-                await self._slew_radec(ra_jnow / 15.0, dec_jnow)
+                await self._slew_to_icrs(target.initial_coords.ra, target.initial_coords.dec)
                 await self._wait_for_telescope(tracking=True)
-                # ASCOM offset rates (deg/s -> RA sec/sidereal-sec, arcsec/s)
-                await self.put(
-                    self.telescope, "RightAscensionRate", ra_rate_to_ascom(target.rates.ra)
+                await self._set_offset_rates(
+                    target.initial_coords.ra,
+                    target.initial_coords.dec,
+                    target.rates.ra,
+                    target.rates.dec,
                 )
-                await self.put(self.telescope, "DeclinationRate", target.rates.dec * 3600.0)
                 self._icrf_rate = (target.rates.ra, target.rates.dec)
                 self.fast_loop.start()
 
@@ -418,15 +371,13 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
                 # NB: EphemerisTarget subclasses FrameTarget, so this case MUST precede
                 # the bare FrameTarget case below or it would be caught as a sidereal hold.
                 p0 = target.points[0]
-                ra_jnow, dec_jnow = icrs_to_jnow(p0.ra, p0.dec, Time.now(), self._location)
                 await self.put(self.telescope, "Tracking", True)
                 self._tracking = True
-                await self._slew_radec(ra_jnow / 15.0, dec_jnow)
+                await self._slew_to_icrs(p0.ra, p0.dec)
                 await self._wait_for_telescope(tracking=True)
                 ra_rate, dec_rate = _icrf_rate_from_samples(target.jds, target.points)
                 self._icrf_rate = (ra_rate, dec_rate)
-                await self.put(self.telescope, "RightAscensionRate", ra_rate_to_ascom(ra_rate))
-                await self.put(self.telescope, "DeclinationRate", dec_rate * 3600.0)
+                await self._set_offset_rates(p0.ra, p0.dec, ra_rate, dec_rate)
                 self.fast_loop.start()
 
             case FrameTarget():
@@ -455,26 +406,20 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
         except Exception as e:
             logger.warning(f"Immediate mount status publish failed: {e}")
 
-    async def _slew_radec(self, ra_hours: float, dec_deg: float):
-        if self._can_slew_async:
-            await self.call(self.telescope, "SlewToCoordinatesAsync", ra_hours, dec_deg)
-        elif self._can_slew:
-            await asyncio.to_thread(self.telescope.SlewToCoordinates, ra_hours, dec_deg)
-
     async def _publish_telescope_status(self):
         t = self.telescope
-        ra_jnow_h = await self.get(t, "RightAscension", 0.0)  # JNow, hours
-        dec_jnow = await self.get(t, "Declination", 0.0)  # JNow, deg
+        mount_ra_hours = await self.get(t, "RightAscension", 0.0)
+        mount_dec_deg = await self.get(t, "Declination", 0.0)
         alt_deg = await self.get(t, "Altitude", 0.0)
         az_deg = await self.get(t, "Azimuth", 0.0)
 
-        # JNow -> ICRS, then publish explicit ICRF (never the implicit default).
-        ra_icrs, dec_icrs = jnow_to_icrs(ra_jnow_h * 15.0, dec_jnow, Time.now(), self._location)
+        # Convert reported pointing to ICRS for publication.
+        ra_icrs_hours, dec_icrs = self._from_mount(mount_ra_hours, mount_dec_deg)
 
         device = sk.device()
         await device.publish(
             RADecPointing(
-                right_ascension_hours=ra_icrs / 15.0,
+                right_ascension_hours=ra_icrs_hours,
                 declination_degrees=dec_icrs,
                 reference_frame=ReferenceFrame.ICRF,
             )
@@ -488,7 +433,7 @@ class AutoslewTelescope(AutoslewMixin, AlpacaTelescope):
         if self._location is not None and (ra_rate or dec_rate):
             with contextlib.suppress(Exception):
                 alt_rate, az_rate = radec_rates_to_altaz_rates(
-                    ra_icrs, dec_icrs, ra_rate, dec_rate, self._location, Time.now()
+                    ra_icrs_hours, dec_icrs, ra_rate, dec_rate, self._location, Time.now()
                 )
         await device.publish(
             AxisRates(

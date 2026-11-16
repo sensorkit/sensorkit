@@ -3,12 +3,13 @@
 
 import astropy.units as u
 import pytest
+from astropy.coordinates import ICRS, TETE, SkyCoord
 from astropy.time import Time
 
+from sensorkit.alpaca.telescope import transform_radec_rates
 from sensorkit.astro.common import ReferenceFrame
 from sensorkit.astro.coords import Equatorial
 from sensorkit.astro.target import EphemerisTarget
-from sensorkit.autoslew.telescope import icrs_to_jnow
 from sensorkit.std import FollowTarget
 
 
@@ -29,12 +30,22 @@ async def test_follow_ephemeris_reduces_to_position_and_rate(telescope):
     slews = telescope.telescope.calls("SlewToCoordinatesAsync")
     assert slews
     ra_hours, _dec = slews[-1][0]
-    exp_ra, _ = icrs_to_jnow(90.0, 20.0, Time.now(), telescope._location)
-    assert ra_hours == pytest.approx(exp_ra / 15.0, abs=1e-2)
+    jnow = SkyCoord(ra=90.0 * u.deg, dec=20.0 * u.deg, frame=ICRS()).transform_to(
+        TETE(obstime=Time.now(), location=telescope._location)
+    )
+    assert ra_hours == pytest.approx(jnow.ra.hour, abs=1e-2)
 
-    # Check RA in seconds of RA per sidereal second and Dec in arcseconds per SI second.
-    # The tolerance allows for precision loss when subtracting Julian dates.
+    # Convert the reference ICRS rates to the mount's Topocentric frame.
+    # Check ASCOM units with a tolerance for precision loss in Julian-date subtraction.
     sidereal_rate = 360.0 / u.sday.to(u.s)
+    ra_rate, dec_rate = transform_radec_rates(
+        90.0,
+        20.0,
+        0.01,
+        0.005,
+        lambda _: ICRS(),
+        lambda t: TETE(obstime=t, location=telescope._location),
+    )
     props = telescope.telescope._properties
-    assert props["RightAscensionRate"] == pytest.approx(0.01 / sidereal_rate, rel=1e-3)
-    assert props["DeclinationRate"] == pytest.approx(18.0, rel=1e-3)
+    assert props["RightAscensionRate"] == pytest.approx(ra_rate / sidereal_rate, rel=1e-3)
+    assert props["DeclinationRate"] == pytest.approx(dec_rate * 3600.0, rel=1e-3)

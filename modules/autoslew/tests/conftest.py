@@ -6,6 +6,7 @@ from __future__ import annotations
 import astropy.units as u
 import pytest
 import pytest_asyncio
+from alpaca.telescope import EquatorialCoordinateType
 from astropy.coordinates import EarthLocation
 
 from sensorkit.common.aio import AsyncLoop
@@ -20,7 +21,7 @@ def _autouse_device_context(device_impl):
 
 @pytest_asyncio.fixture
 async def telescope():
-    """A connected AutoslewTelescope wired to a fake, as entity_init would leave it."""
+    """A connected Autoslew mount with site coordinates, capabilities, and status loops."""
     from sensorkit.astro.coords import Geodetic
     from sensorkit.autoslew.telescope import AutoslewTelescopeConfig, AutoslewTelescopeState
 
@@ -57,6 +58,9 @@ async def telescope():
     t._can_slew = t._can_slew_async = True
     t._can_slew_altaz = t._can_slew_altaz_async = True
     t._can_park = t._can_unpark = t._can_find_home = True
+    t._can_set_right_ascension_rate = True
+    t._can_set_declination_rate = True
+    t._equatorial_system = EquatorialCoordinateType.equTopocentric
     t._site_lat, t._site_lon, t._site_elev = 20.7, 156.25, 3040.0
     t._location = EarthLocation(lat=20.7 * u.deg, lon=156.25 * u.deg, height=3040.0 * u.m)
     t._geodetic = Geodetic(lon=156.25, lat=20.7, elev=3040.0)

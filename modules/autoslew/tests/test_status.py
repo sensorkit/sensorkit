@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Autoslew telescope status — JNow reads must be published as ICRF."""
+"""Tests for publishing Topocentric Autoslew pointing as ICRF."""
 
+import astropy.units as u
 import pytest
+from astropy.coordinates import ICRS, TETE, SkyCoord
 from astropy.time import Time
 
 from sensorkit.astro.common import RADecPointing, ReferenceFrame
-from sensorkit.autoslew.telescope import jnow_to_icrs
 
 
 @pytest.mark.asyncio
@@ -18,11 +19,16 @@ async def test_status_publishes_icrf_converted_from_jnow(telescope, recorder):
 
     r = await published.wait_for(RADecPointing)
 
-    # Explicit ICRF, converted from the JNow reads (never the implicit default).
+    # Pointing carries an explicit ICRF frame after coordinate conversion.
     assert r.reference_frame == ReferenceFrame.ICRF
-    exp_ra, exp_dec = jnow_to_icrs(6.0 * 15.0, 20.0, Time.now(), telescope._location)
-    assert r.right_ascension_hours == pytest.approx(exp_ra / 15.0, abs=1e-2)
-    assert r.declination_degrees == pytest.approx(exp_dec, abs=1e-2)
+    jnow = SkyCoord(
+        ra=6.0 * u.hourangle,
+        dec=20.0 * u.deg,
+        frame=TETE(obstime=Time.now(), location=telescope._location),
+    )
+    icrs = jnow.transform_to(ICRS())
+    assert r.right_ascension_hours == pytest.approx(icrs.ra.hour, abs=1e-2)
+    assert r.declination_degrees == pytest.approx(icrs.dec.deg, abs=1e-2)
 
     # The conversion actually moved the coordinates off the raw JNow value.
     assert abs(r.right_ascension_hours - 6.0) > 1e-3
