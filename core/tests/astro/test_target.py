@@ -240,6 +240,54 @@ def test_sgp4_teme_unit():
     assert 6.5e6 < radius_m < 7.0e6
 
 
+def test_tle_sample_altaz_series_matches_skyfield():
+    target = TLETarget(tle=_ISS_TLE)
+    dt = datetime(2025, 1, 15, 9, 32, 0, tzinfo=UTC)
+
+    # alt/az from sample_altaz_series()
+    altaz_actual = sample_altaz_series(
+        target,
+        _NYC.to_astropy(),
+        [dt],
+    )
+    assert len(altaz_actual) == 1
+    alt_actual, az_actual = altaz_actual[0]
+
+    # alt/az from skyfield
+    ts = skyfield.load.timescale()
+    sat = skyfield.EarthSatellite(
+        _ISS_TLE.line1,
+        _ISS_TLE.line2,
+        ts=ts,
+    )
+    observer = skyfield.wgs84.latlon(
+        _NYC.lat,
+        _NYC.lon,
+        _NYC.elev,
+    )
+    topo = (sat - observer).at(ts.from_datetime(dt))
+    alt, az, _ = topo.altaz()
+
+
+    frame = AltAz(
+        obstime=Time(dt),
+        location=_NYC.to_astropy(),
+    )
+    expected = SkyCoord(
+        alt=alt.degrees * u.deg,
+        az=az.degrees * u.deg,
+        frame=frame,
+    )
+    actual = SkyCoord(
+        alt=alt_actual * u.deg,
+        az=az_actual * u.deg,
+        frame=frame,
+    )
+
+    # difference is ~6 arcsec
+    assert expected.separation(actual).arcsec < 10.0
+
+
 def test_sample_altaz_series_ephemeris():
     """EphemerisTarget maps precomputed ICRF RA/Dec samples to alt/az per time."""
 
