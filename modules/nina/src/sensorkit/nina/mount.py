@@ -6,6 +6,7 @@ from typing import Literal, override
 
 import astropy.units as u
 from astropy.coordinates import EarthLocation
+from astropy.time import Time
 from loguru import logger
 from pydantic import BaseModel
 
@@ -14,6 +15,7 @@ from sensorkit.astro.common import AltAzPointing, RADecPointing, ReferenceFrame,
 from sensorkit.astro.coords import Geodetic
 from sensorkit.astro.target import (
     AltAzTarget,
+    EphemerisTarget,
     FrameTarget,
     ICRSTarget,
     TLETarget,
@@ -293,33 +295,29 @@ class NinaMount(NinaDevice):
 
             case TLETarget():
                 # TODO: Implement PID-based rate tracking via core.
-                # For now, adapt to ICRSTarget and slew to current position.
-                logger.warning("TLE tracking via NINA is best-effort (no native offset rates)")
+                # Slew once to the ephemeris sample nearest the command time.
+                logger.warning("TLE follow uses a single slew with sidereal tracking")
 
-                adapted = await target.adapt(
-                    ICRSTarget,
-                    (FrameTarget, ReferenceFrame.ICRF),
-                    observer=self._geodetic,
+                eph = await target.adapt(
+                    (EphemerisTarget, ReferenceFrame.ICRF), observer=self._geodetic
+                )
+                now_jd = Time.now().jd
+                _, point = min(
+                    zip(eph.jds, eph.points, strict=True), key=lambda sample: abs(sample[0] - now_jd)
                 )
 
-                if isinstance(adapted, ICRSTarget):
-                    ra_hours = adapted.coords.ra / 15.0
-                    dec_deg = adapted.coords.dec
+                await self.client.get("/equipment/mount/tracking", enabled=True)
+                await self.client.get(
+                    "/equipment/mount/slew-radec",
+                    ra=point.ra / 15.0,
+                    dec=point.dec,
+                    waitToFinish=True,
+                )
 
-                    await self.client.get("/equipment/mount/tracking", enabled=True)
-                    await self.client.get(
-                        "/equipment/mount/slew-radec",
-                        ra=ra_hours,
-                        dec=dec_deg,
-                        waitToFinish=True,
-                    )
+                await self._wait_for_mount(tracking=True)
+                self.fast_loop.start()
 
-                    await self._wait_for_mount(tracking=True)
-                    self.fast_loop.start()
-
-                    logger.debug("following TLE target")
-                else:
-                    logger.warning(f"Could not adapt TLE to ICRSTarget: {type(adapted).__name__}")
+                logger.debug("slewed to sampled TLE position")
 
             case FrameTarget():
                 if target.frame == ReferenceFrame.ALTAZ:

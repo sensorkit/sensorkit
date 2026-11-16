@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
+import astropy.units as u
 import pytest
+from astropy.coordinates import ICRS, SkyCoord
 
-from sensorkit.astro.common import TLE
-from sensorkit.astro.target import TLETarget
-from sensorkit.nina.mount import NinaMountConfig, NinaMountState
+from sensorkit.astro.common import TLE, ReferenceFrame
+from sensorkit.astro.target import EphemerisTarget, TLETarget
 from sensorkit.std import FollowTarget
 
 from .fakes import FakeNinaClient
@@ -28,34 +29,25 @@ def client():
     )
 
 
-@pytest.fixture
-def mount(client):
-    config = NinaMountConfig(device_type="mount")
-    m = config.create_device()
-    m._client = client
-    m.state = NinaMountState()
-    m.device_connected = True
-    m._site_lat = 32.0
-    m._site_lon = -110.0
-    m._site_elev = 700.0
-    return m
-
-
-ISS_TLE = TLE(
-    line0="0 ISS (ZARYA)",
-    line1="1 25544U 98067A   24100.50000000  .00016717  00000-0  10270-3 0  9002",
-    line2="2 25544  51.6400 200.0000 0001234  90.0000 270.0000 15.49000000400000",
+# Use a near-geostationary orbit with zero modeled drag for this fixed test TLE.
+GEO_TLE = TLE(
+    line0="0 TEST GEO",
+    line1="1 99999U 24001A   24100.50000000  .00000000  00000-0  00000-0 0  9994",
+    line2="2 99999   0.0500 250.0000 0001000  90.0000 270.0000  1.00270000    19",
 )
 
 
-@pytest.mark.xfail(
-    reason="TLE tracking via NINA is best-effort; adapt may fail without live propagation"
-)
 @pytest.mark.asyncio
-async def test_mount_follow_tle(client, mount):
-    target = TLETarget(tle=ISS_TLE)
+async def test_mount_follow_tle_slews_to_current_position(client, mount):
+    target = TLETarget(tle=GEO_TLE)
+
     await mount.mount_follow_target(FollowTarget(target=target))
 
-    # Should have slewed to adapted ICRS position
-    slew_reqs = client.find_requests("/equipment/mount/slew-radec")
-    assert len(slew_reqs) == 1
+    eph = await target.adapt((EphemerisTarget, ReferenceFrame.ICRF), observer=mount._geodetic)
+    expected = SkyCoord(ra=eph.points[0].ra * u.deg, dec=eph.points[0].dec * u.deg, frame=ICRS())
+
+    ((_, params),) = client.find_requests("/equipment/mount/slew-radec")
+    actual = SkyCoord(ra=params["ra"] * 15.0 * u.deg, dec=params["dec"] * u.deg, frame=ICRS())
+
+    # Allow for motion between the slew request and the separate ephemeris calculation.
+    assert expected.separation(actual).arcmin < 1.0

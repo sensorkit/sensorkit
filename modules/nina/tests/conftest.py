@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
+from sensorkit.astro.coords import Geodetic
 from sensorkit.common.aio import AsyncLoop
 from sensorkit.nina.mount import NinaMountConfig, NinaMountState
 
@@ -17,7 +18,7 @@ def _autouse_device_context(device_impl):
 
 @pytest_asyncio.fixture
 async def mount(client):
-    """A connected mount, in the state it reaches once attach has run."""
+    """A connected mount with site coordinates and status loops initialized."""
     config = NinaMountConfig(device_type="mount")
     m = config.create_device()
     m._client = client
@@ -26,6 +27,7 @@ async def mount(client):
     m._site_lat = 32.0
     m._site_lon = -110.0
     m._site_elev = 700.0
+    m._geodetic = Geodetic(lon=m._site_lon, lat=m._site_lat, elev=m._site_elev)
     m._tracking = None
     m._slewing = None
     m.status_loop = AsyncLoop(m.status_publish, interval=config.status_frequency_slow)
