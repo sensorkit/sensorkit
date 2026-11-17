@@ -302,6 +302,10 @@ class DeclaredDevice(DeclaredEntity[DeviceImpl], DeviceDelegate):
         super().register_callback(kind, func)
 
         match kind:
+            case CallbackKind.ENABLE:
+                self.impl.on_enable(func)
+            case CallbackKind.DISABLE:
+                self.impl.on_disable(func)
             case CallbackKind.COMMAND_HANDLER:
                 command_type = introspect_param_type(func)
 
@@ -323,6 +327,10 @@ class DeclaredController(DeclaredEntity[ControllerImpl], ControllerDelegate):
         super().register_callback(kind, func)
 
         match kind:
+            case CallbackKind.ENABLE:
+                self.impl.on_enable(func)
+            case CallbackKind.DISABLE:
+                self.impl.on_disable(func)
             case CallbackKind.TASK_HANDLER:
                 annotation = introspect_param_type(func)
 

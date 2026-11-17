@@ -317,6 +317,32 @@ async def test_declared_device():
 
 
 @pytest.mark.asyncio
+async def test_declared_device_enable_hooks(kit, service):
+    dev = declare_device(name="enable_device")
+    calls: list[str] = []
+
+    @on_enable(dev)
+    async def on_device_enable():
+        calls.append("enable")
+
+    @on_disable(dev)
+    async def on_device_disable():
+        calls.append("disable")
+
+    service.add(dev)
+
+    async with asyncio.timeout(5.0):
+        await service.start()
+        assert calls == ["enable"]
+
+        cli = kit.device("enable_device")
+        await cli.disable()
+        await cli.enable()
+
+    assert calls == ["enable", "disable", "enable"]
+
+
+@pytest.mark.asyncio
 async def test_device_declared_device_traits(service):
     """A device missing a declared trait's commands fails service startup."""
     missing_trait = declare_trait("missing_trait", required_commands=(DevCmd,))
@@ -398,6 +424,31 @@ async def test_declared_controller():
         )
         await done.wait()
         await svc_decl.stop()
+
+
+@pytest.mark.asyncio
+async def test_declared_controller_enable_hooks(kit, service):
+    ctrl = declare_controller(name="enable_controller")
+    calls: list[str] = []
+
+    @on_enable(ctrl)
+    async def on_controller_enable():
+        calls.append("enable")
+
+    @on_disable(ctrl)
+    async def on_controller_disable():
+        calls.append("disable")
+
+    service.add(ctrl)
+
+    async with asyncio.timeout(5.0):
+        await service.start()
+
+        cli = kit.controller("enable_controller")
+        await cli.enable()
+        await cli.disable()
+
+    assert calls == ["enable", "disable"]
 
 
 @pytest.mark.asyncio
