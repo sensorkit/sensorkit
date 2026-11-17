@@ -852,7 +852,11 @@ class ProgramInterface(EntityInterface):
 
     @abstractmethod
     def task_factory(self, func: TaskFactoryFunc) -> TaskFactoryFunc:
-        """Register the task factory function that the program calls to generate tasks."""
+        """Register the task factory function that the program calls to generate tasks.
+
+        Raises:
+            RuntimeError: If the program already has a task factory.
+        """
         ...
 
     @abstractmethod

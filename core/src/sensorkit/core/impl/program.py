@@ -168,6 +168,9 @@ class ProgramImpl(EntityImpl, ProgramInterface):
 
     @override
     def task_factory(self, func: TaskFactoryFunc):
+        if self._task_factory is not None:
+            raise RuntimeError("program already has a task factory")
+
         self._task_factory = func
         return func
 

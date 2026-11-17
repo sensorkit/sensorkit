@@ -203,6 +203,25 @@ async def test_program_offering(kit):
 
 
 @pytest.mark.asyncio
+async def test_program_second_task_factory(kit):
+    async with asyncio.timeout(1.0):
+        sc = await kit.register_service("testservice", "0.1.0")
+        program = await sc.register_program("myprogram")
+
+    @program.task_factory
+    async def first_factory():
+        return
+        yield
+
+    with pytest.raises(RuntimeError, match="already has a task factory"):
+
+        @program.task_factory
+        async def second_factory():
+            return
+            yield
+
+
+@pytest.mark.asyncio
 async def test_program_tasking(kit):
     async with asyncio.timeout(1.0):
         sc = await kit.register_service("testservice", "0.1.0")
