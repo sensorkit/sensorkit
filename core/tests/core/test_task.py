@@ -125,10 +125,10 @@ class ProbeCollectTask(CollectTask):
 
 
 def test_task_info_context_round_trip():
-    info = TaskInfo(task=CollectTask(), task_id=uuid.uuid7(), controller_id="mycontroller")
+    info = TaskInfo(task=CollectTask(), id=uuid.uuid7(), controller_id="mycontroller")
     execution = TaskExecution(
         task=info.task,
-        task_id=info.task_id,
+        task_id=info.id,
         controller_id=info.controller_id,
         context=KeywordDict(info),
     )
@@ -146,12 +146,12 @@ def test_task_info_context_round_trip():
 
 
 def test_task_info_context_expressions():
-    info = TaskInfo(task=CollectTask(), task_id=uuid.uuid7(), controller_id="mycontroller")
+    info = TaskInfo(task=CollectTask(), id=uuid.uuid7(), controller_id="mycontroller")
     context = Context(info)
 
-    assert context.eval("Task.task_id") == info.task_id
-    assert context.resolve("=Task.task_id") == info.task_id
-    assert context.resolve("{Task.task_id}.fits") == f"{info.task_id}.fits"
+    assert context.eval("Task.id") == info.id
+    assert context.resolve("=Task.id") == info.id
+    assert context.resolve("{Task.id}.fits") == f"{info.id}.fits"
 
 
 @pytest.mark.parametrize(

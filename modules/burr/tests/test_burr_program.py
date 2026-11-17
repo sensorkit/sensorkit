@@ -216,7 +216,7 @@ async def test_instruments_receive_each_collect_and_label_its_files(
     assert (type(sidereal.task.target), type(streak.task.target)) == (ICRSTarget, RateTarget)
     assert requested(sidereal) == requested(streak) == expected
     assert sidereal.context["Burr"] == streak.context["Burr"]
-    assert sidereal.context[TaskInfo].task_id != streak.context[TaskInfo].task_id
+    assert sidereal.context[TaskInfo].id != streak.context[TaskInfo].id
     assert len({name.casefold() for name in names}) == len(names)
     assert not any("/" in name for name in names)
     assert {name.rsplit("_", 2)[1] for name in names} == {

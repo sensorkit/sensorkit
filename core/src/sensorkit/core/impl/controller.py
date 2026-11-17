@@ -261,7 +261,7 @@ class TaskRun:
 
         # Add task identity to the working context.
         execution.context.set(
-            TaskInfo(task=task, task_id=execution.task_id, controller_id=controller_id)
+            TaskInfo(task=task, id=execution.task_id, controller_id=controller_id)
         )
 
         return cls(execution, submitted)

@@ -23,7 +23,7 @@ from sensorkit.std import CameraParameterSet, FrameType, StandardCollectTask
 # Hex preserves case-sensitive instrument names and excludes path separators.
 _FILE_NAME_TEMPLATE = (
     'f"{datetime.now(UTC):%Y%m%dT%H%M%S}_{Burr.mode}_{Burr.targ}'
-    '_{Task.task_id}_{Instrument.name.encode().hex()}_f{Collect.frame_number}.fits"'
+    '_{Task.id}_{Instrument.name.encode().hex()}_f{Collect.frame_number}.fits"'
 )
 
 _SOURCE_FRAME_TYPES = {"twilight_flats": FrameType.FLAT}

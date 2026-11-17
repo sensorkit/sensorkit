@@ -90,7 +90,7 @@ def fits_focus_frame(index: int, position: float = 1000.0, *, count: int = len(P
         FocusSweepContext(
             sweep_id=SWEEP_ID, sample_index=index, sample_count=count, commanded_position=position
         ),
-        sk.TaskInfo(task=task, task_id=SWEEP_ID, controller_id="ctrl-a"),
+        sk.TaskInfo(task=task, id=SWEEP_ID, controller_id="ctrl-a"),
         sk.InstrumentInfo(name="cam-east", devices=("foc", "cam")),
         ExposureInfo(
             date_obs=datetime(2026, 11, 10, 8, 30, tzinfo=UTC),
@@ -230,7 +230,7 @@ async def test_malformed_fits_sweep_frame_skips_science_analysis(senpai):
 async def test_sweep_frames_bypass_science_batching(senpai):
     context, data = focus_frame(0, count=1)
     task = AutoFocus(instrument="cam-east", step=50.0, count=3, integration_time_seconds=0.01)
-    context.set(sk.TaskInfo(task=task, task_id=TASK_ID, controller_id="ctrl-task"))
+    context.set(sk.TaskInfo(task=task, id=TASK_ID, controller_id="ctrl-task"))
     context.set_value("task_id", str(TASK_ID))
     context.set_value("frame_count", 3)
 

@@ -168,7 +168,7 @@ When reading an envelope without a snapshot, the fallback captures its stored wo
 The working `context` includes task identity and can change during execution.
 Executions returned by `ControllerClient.start_task` can be awaited for the final result.
 `TaskInfo` records task identity in data-pipeline context under the keyword key `Task`.
-Configuration expressions use `Task.task_id`; Python code can access the keyword through `context[TaskInfo]`.
+Configuration expressions use `Task.id`; Python code can access the keyword through `context[TaskInfo]`.
 
 ---
 
@@ -434,7 +434,7 @@ Cameras report `ExposureInfo` under the keyword key `Exposure`, so expressions s
 
 Each task a program submits carries `ProgramInfo` under the keyword key `Program`.
 It replaces any `Program` value from the task factory or configured task contexts.
-Configuration expressions use `Program.program_id`; Python code can access the keyword through `context[ProgramInfo]`.
+Configuration expressions use `Program.id`; Python code can access the keyword through `context[ProgramInfo]`.
 
 ---
 

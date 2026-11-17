@@ -122,7 +122,7 @@ def file_names(submissions) -> list[str]:
     names = []
 
     for submission in submissions:
-        info = TaskInfo(task=submission.task, task_id=uuid.uuid4(), controller_id="ctrl")
+        info = TaskInfo(task=submission.task, id=uuid.uuid4(), controller_id="ctrl")
 
         for params in submission.task.exposures:
             instrument = InstrumentInfo(name=params.instrument or AUTOMATIC_INSTRUMENT)

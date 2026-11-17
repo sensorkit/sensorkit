@@ -199,7 +199,7 @@ class ProgramImpl(EntityImpl, ProgramInterface):
             contexts=contexts,
             task_group=self.task_group,
             on_tasking_change=_on_tasking_change,
-            overrides=KeywordDict(ProgramInfo(program_id=str(self.entity))),
+            overrides=KeywordDict(ProgramInfo(id=str(self.entity))),
         )
         loop = self._task_loop
 

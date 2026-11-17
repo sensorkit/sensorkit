@@ -62,10 +62,10 @@ automation:
           contexts:
             standard_collect:
               FileNameTemplate:
-                template: f"{Task.task_id}_{Collect.frame_number}.fits"
+                template: f"{Task.id}_{Collect.frame_number}.fits"
             autofocus:
               FileNameTemplate:
-                template: f"{Task.task_id}_focus{FocusSweep.sample_index}.fits"
+                template: f"{Task.id}_focus{FocusSweep.sample_index}.fits"
 
 data_flow:
   - entity: sdasimCamera
@@ -121,7 +121,7 @@ data_flow:
               comment: measured declination rate [deg/s]
         - op: array_to_fits
         - op: write_file
-          directory: f"/path/to/data/raw/{Program.program_id}/{Task.controller_id}"
+          directory: f"/path/to/data/raw/{Program.id}/{Task.controller_id}"
   - entity: SENPAI
     consumer:
       nodes:

@@ -60,7 +60,7 @@ def frame(task: sk.Task, contexts: TaskContextOverlay, *keywords) -> Context:
 
     return Context(
         contexts.build().get(task.task_type),
-        sk.TaskInfo(task=task, task_id=TASK_ID, controller_id="Huntsman"),
+        sk.TaskInfo(task=task, id=TASK_ID, controller_id="Huntsman"),
         sk.InstrumentInfo(name="ASI183MM", devices=("ASI183MM",)),
         ExposureInfo(
             date_obs=datetime(2026, 11, 11, 10, tzinfo=UTC),

@@ -644,11 +644,11 @@ async def test_program_reuses_task_instance(kit, service_context):
 
 
 def test_program_info_keyword():
-    info = ProgramInfo(program_id="myprogram")
+    info = ProgramInfo(id="myprogram")
     context = Context(info)
 
     assert set(KeywordDict(info)) == {"Program"}
-    assert context.resolve("=Program.program_id") == "myprogram"
+    assert context.resolve("=Program.id") == "myprogram"
     assert dict(info.get_fits_cards()) == {"SKPROG": ("myprogram", "SensorKit program name")}
 
 
@@ -660,7 +660,7 @@ async def test_program_identity_in_task_context(kit, service_context, source):
     program = await service_context.register_program("myprogram")
     await controller.report_state(OPERATE, KeywordDict())
 
-    spoofed = KeywordDict(ProgramInfo(program_id="spoofed"))
+    spoofed = KeywordDict(ProgramInfo(id="spoofed"))
     factory_context = spoofed if source == "factory" else None
     contexts = TaskContextMap(defaults=spoofed) if source == "config" else None
     received: list[TaskExecution] = []
@@ -687,7 +687,7 @@ async def test_program_identity_in_task_context(kit, service_context, source):
         await program_client.stop_tasking()
 
     [execution] = received
-    expected = ProgramInfo(program_id="myprogram")
+    expected = ProgramInfo(id="myprogram")
 
     assert execution.context[ProgramInfo] == expected
     assert execution.submitted_context[ProgramInfo] == expected

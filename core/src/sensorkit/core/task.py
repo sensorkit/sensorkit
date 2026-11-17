@@ -136,12 +136,12 @@ class CollectTask(Task):
 class TaskInfo(BaseModel):
     """Keyword describing a task that has been executed on a controller."""
     task: Task
-    task_id: uuid.UUID
+    id: uuid.UUID
     controller_id: str
 
     def get_fits_cards(self):
         yield "SKTASK", (self.task.task_type, "SensorKit task type")
-        yield "SKTASKID", (str(self.task_id), "SensorKit task ID")
+        yield "SKTASKID", (str(self.id), "SensorKit task ID")
         yield "SKCTRL", (self.controller_id, "SensorKit controller name")
 
 

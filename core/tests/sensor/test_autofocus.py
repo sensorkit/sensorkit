@@ -252,7 +252,7 @@ async def test_frames_carry_sweep_instrument_controller_and_focus_telemetry(
         assert context[sk.InstrumentInfo].name == "cam"
         assert set(context[sk.InstrumentInfo].devices) == {"mount", "foc", "wheel", "cam"}
         assert context[TaskInfo].controller_id == execution.controller_id
-        assert context[TaskInfo].task_id == sweep_id
+        assert context[TaskInfo].id == sweep_id
         assert context[FocusPosition] is not None
         assert context[SitePosition] == controller.site
         assert context.get(CollectInfo) is None

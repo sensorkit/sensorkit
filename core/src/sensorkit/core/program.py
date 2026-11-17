@@ -54,10 +54,10 @@ class ProgramOffering(BaseModel):
 class ProgramInfo(BaseModel):
     """Keyword identifying the program that submitted a task."""
 
-    program_id: str
+    id: str
 
     def get_fits_cards(self):
-        yield "SKPROG", (self.program_id, "SensorKit program name")
+        yield "SKPROG", (self.id, "SensorKit program name")
 
 
 class ProgramEnableState(Event):

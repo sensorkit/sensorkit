@@ -143,10 +143,10 @@ automation:
       controller_name: Huntsman
     standard_collect:
       FileNameTemplate:
-        template: f"{Task.task_id}_{Collect.frame_number}.fits"
+        template: f"{Task.id}_{Collect.frame_number}.fits"
     autofocus:
       FileNameTemplate:
-        template: f"{Task.task_id}_focus{FocusSweep.sample_index}.fits"
+        template: f"{Task.id}_focus{FocusSweep.sample_index}.fits"
 
 data_flow:
   - entity: ASI183MM
@@ -203,7 +203,7 @@ data_flow:
         - op: array_to_fits
         - op: compress_fits
         - op: write_file
-          directory: f"/opt/sk/data/raw/{Program.program_id}/{controller_name}"
+          directory: f"/opt/sk/data/raw/{Program.id}/{controller_name}"
   - entity: SENPAI
     consumer:
       nodes:
