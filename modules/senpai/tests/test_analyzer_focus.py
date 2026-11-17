@@ -72,8 +72,8 @@ def focus_frame(
     if exposure:
         context.set(
             ExposureInfo(
-                date_obs=datetime(2026, 11, 10, 8, 30, tzinfo=UTC),
-                exposure_time=0.01,
+                start=datetime(2026, 11, 10, 8, 30, tzinfo=UTC),
+                duration=0.01,
                 detector="QHY600M",
             )
         )
@@ -93,8 +93,8 @@ def fits_focus_frame(index: int, position: float = 1000.0, *, count: int = len(P
         sk.TaskInfo(task=task, id=SWEEP_ID, controller_id="ctrl-a"),
         sk.InstrumentInfo(name="cam-east", devices=("foc", "cam")),
         ExposureInfo(
-            date_obs=datetime(2026, 11, 10, 8, 30, tzinfo=UTC),
-            exposure_time=0.01,
+            start=datetime(2026, 11, 10, 8, 30, tzinfo=UTC),
+            duration=0.01,
             detector="QHY600M",
         ),
         FocusPosition(position=position + 0.5),
@@ -193,7 +193,7 @@ def test_sweep_cards_are_read_from_a_compressed_image():
     assert restored[sk.InstrumentInfo].name == "cam-east"
     assert restored["controller_name"] == "ctrl-a"
     assert restored[FocusPosition].position == POSITIONS[2] + 0.5
-    assert restored[ExposureInfo].exposure_time == 0.01
+    assert restored[ExposureInfo].duration == 0.01
 
 
 def test_frame_without_sweep_cards_is_not_a_sweep_frame():

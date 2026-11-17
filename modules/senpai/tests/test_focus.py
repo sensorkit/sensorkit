@@ -36,8 +36,8 @@ def sample(index: int, position: float, width: float | None, count: int = len(PO
         instrument="camera",
         image_id=f"frame-{index}.fits",
         exposure=ExposureInfo(
-            date_obs=datetime(2026, 11, 10, 8, 30, tzinfo=UTC),
-            exposure_time=2.0,
+            start=datetime(2026, 11, 10, 8, 30, tzinfo=UTC),
+            duration=2.0,
             detector="QHY600M",
         ),
         sweep=context(index, position, count),

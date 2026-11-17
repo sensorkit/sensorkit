@@ -40,10 +40,10 @@ OTHER_SWEEP_ID = UUID("0b8e6a52-91f4-4b7d-8c3e-5d6f7a8b9c0d")
 
 def exposure(**overrides) -> ExposureInfo:
     fields = {
-        "date_obs": datetime(2026, 10, 14, 8, 30, tzinfo=UTC),
-        "exposure_time": 2.0,
+        "start": datetime(2026, 10, 14, 8, 30, tzinfo=UTC),
+        "duration": 2.0,
         "detector": "QHY600M",
-        "image_type": FrameType.LIGHT,
+        "frame_type": FrameType.LIGHT,
         "readout_mode": 1,
         "gain": 26.0,
     }
@@ -303,15 +303,15 @@ class TestCaptureMetadataCards:
 
     def test_exposure_round_trip(self):
         recorded = exposure(
-            offset=10.0, ccd_temperature=-10.0, set_temperature=-10.0, max_adu=65535
+            offset=10.0, temperature=-10.0, set_temperature=-10.0, max_adu=65535
         )
 
         assert ExposureInfo.from_fits_header(header_from(recorded)) == recorded
 
     def test_exposure_round_trip_keeps_only_written_cards(self):
         recorded = ExposureInfo(
-            date_obs=datetime(2026, 10, 14, 8, 30, 1, 250000, tzinfo=UTC),
-            exposure_time=0.5,
+            start=datetime(2026, 10, 14, 8, 30, 1, 250000, tzinfo=UTC),
+            duration=0.5,
             readout_mode="High",
         )
 
@@ -328,7 +328,7 @@ class TestCaptureMetadataCards:
         header = header_from(exposure())
         header["DATE-OBS"] = "2026-10-14T18:30:00+10:00"
 
-        assert ExposureInfo.from_fits_header(header).date_obs == exposure().date_obs
+        assert ExposureInfo.from_fits_header(header).start == exposure().start
 
     @pytest.mark.parametrize(("card", "value"), [("DATE-OBS", "evening"), ("EXPTIME", "long")])
     def test_invalid_exposure_card_raises_value_error(self, card, value):

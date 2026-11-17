@@ -285,11 +285,11 @@ class TheSkyCamera(TheSkyDevice):
             cmd.context.set(
                 ImageInfo(array=array_info, binning=(int(binx), int(biny))),
                 ExposureInfo(
-                    date_obs=Time(jd, format="jd", scale="utc").to_datetime(timezone=UTC),
-                    exposure_time=cmd.integration_time,
+                    start=Time(jd, format="jd", scale="utc").to_datetime(timezone=UTC),
+                    duration=cmd.integration_time,
                     detector=detector,
-                    image_type=cmd.frame_type,
-                    ccd_temperature=temp,
+                    frame_type=cmd.frame_type,
+                    temperature=temp,
                 ),
             )
 

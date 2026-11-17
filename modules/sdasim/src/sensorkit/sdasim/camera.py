@@ -352,12 +352,12 @@ class SdasimCamera:
         context.set(
             ImageInfo(array=ArrayInfo.from_array(image), binning=(bin_factor, bin_factor)),
             ExposureInfo(
-                date_obs=exposure_start,
-                exposure_time=exposure_seconds,
+                start=exposure_start,
+                duration=exposure_seconds,
                 detector=str(sk.device().entity),
-                image_type=FrameType(meta["frame_type"]),
+                frame_type=FrameType(meta["frame_type"]),
                 readout_mode=self._readout_mode,
-                ccd_temperature=self._temperature,
+                temperature=self._temperature,
                 set_temperature=self._temperature,
             ),
         )

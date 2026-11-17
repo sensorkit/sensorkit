@@ -406,22 +406,22 @@ class AlpacaCamera(AlpacaDevice):
                 binning=(bin_x, bin_y),
             ),
             ExposureInfo(
-                date_obs=(
+                start=(
                     datetime.fromisoformat(last_exposure_start_time).replace(tzinfo=UTC)
                     if last_exposure_start_time
                     else date_obs_fallback
                 ),
-                exposure_time=(
+                duration=(
                     last_exposure_duration
                     if last_exposure_duration is not None
                     else exposure_seconds
                 ),
                 detector=await self.get(self.camera, "SensorName", None) or None,
-                image_type=cmd.frame_type,
+                frame_type=cmd.frame_type,
                 readout_mode=await self.get(self.camera, "ReadoutMode", None),
                 gain=await self.get(self.camera, "Gain", None),
                 offset=await self.get(self.camera, "Offset", None),
-                ccd_temperature=await self.get(self.camera, "CCDTemperature", None),
+                temperature=await self.get(self.camera, "CCDTemperature", None),
                 set_temperature=await self.get(self.camera, "SetCCDTemperature", None),
                 max_adu=await self.get(self.camera, "MaxADU", None),
             )

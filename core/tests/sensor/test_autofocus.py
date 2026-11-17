@@ -145,7 +145,7 @@ def analysis(
         instrument=instrument,
         image_id="frame-0",
         exposure=ExposureInfo(
-            date_obs=datetime(2026, 11, 11, tzinfo=UTC), exposure_time=0.1, detector="QHY600M"
+            start=datetime(2026, 11, 11, tzinfo=UTC), duration=0.1, detector="QHY600M"
         ),
         sweep=FocusSweepContext(
             sweep_id=sweep_id, sample_index=0, sample_count=1, commanded_position=START

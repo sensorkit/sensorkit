@@ -222,8 +222,8 @@ class TestCapture:
         assert image_info.array.dtype == "uint16"
         assert image_info.binning == (1, 1)
         exposure_info = context.get(ExposureInfo)
-        assert exposure_info.exposure_time == 0.0
-        assert exposure_info.image_type is FrameType.LIGHT
+        assert exposure_info.duration == 0.0
+        assert exposure_info.frame_type is FrameType.LIGHT
         assert context.get(FileNameTemplate)
 
     @pytest.mark.asyncio

@@ -63,8 +63,8 @@ def frame(task: sk.Task, contexts: TaskContextOverlay, *keywords) -> Context:
         sk.TaskInfo(task=task, id=TASK_ID, controller_id="Huntsman"),
         sk.InstrumentInfo(name="ASI183MM", devices=("ASI183MM",)),
         ExposureInfo(
-            date_obs=datetime(2026, 11, 11, 10, tzinfo=UTC),
-            exposure_time=1.0,
+            start=datetime(2026, 11, 11, 10, tzinfo=UTC),
+            duration=1.0,
             detector="ZWO ASI183MM",
         ),
         SitePosition(latitude_degrees=-33.8, longitude_degrees=151.1, altitude_km=0.1),

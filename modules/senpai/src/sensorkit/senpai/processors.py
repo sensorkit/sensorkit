@@ -335,7 +335,7 @@ class FocusSweepProcessor:
                     sweep_id=membership.sweep_id,
                     sample_count=membership.sample_count,
                 ),
-                (exposure.exposure_time if exposure else 0.0) + STALL_MARGIN_S,
+                (exposure.duration if exposure else 0.0) + STALL_MARGIN_S,
             )
 
         reason = (

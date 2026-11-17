@@ -103,10 +103,10 @@ class Bench:
         context = Context(command.context)
         context.set(
             ExposureInfo(
-                date_obs=datetime.now(UTC),
-                exposure_time=command.integration_time,
+                start=datetime.now(UTC),
+                duration=command.integration_time,
                 detector="QHY600M",
-                image_type=command.frame_type,
+                frame_type=command.frame_type,
             ),
             ArrayInfo.from_array(pixels),
             FileInfo(path=f"focus-{len(self.received['cam'])}.fits"),

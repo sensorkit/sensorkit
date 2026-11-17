@@ -321,10 +321,10 @@ class NinaCamera(NinaDevice):
                     top_down=row_order == "TOP-DOWN",
                 ),
                 ExposureInfo(
-                    date_obs=exposure_start,
-                    exposure_time=exposure_seconds,
+                    start=exposure_start,
+                    duration=exposure_seconds,
                     detector=history.get("CameraName", str(sk.device().entity)),
-                    image_type=cmd.frame_type,
+                    frame_type=cmd.frame_type,
                 ),
             )
 

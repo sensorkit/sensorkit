@@ -154,48 +154,48 @@ class ExposureInfo(BaseModel):
     Fields supply the corresponding FITS header cards.
 
     Attributes:
-        date_obs: Start of the exposure, as a timezone-aware datetime. -> DATE-OBS
-        exposure_time: Actual exposure duration in seconds. -> EXPTIME
+        start: Start of the exposure, as a timezone-aware datetime. -> DATE-OBS
+        duration: Actual exposure duration in seconds. -> EXPTIME
         detector: Detector name reported by the device, such as a camera model or sensor
             chip. -> DETECTOR
-        image_type: Frame type (light, dark, bias, flat). -> IMAGETYP
+        frame_type: Frame type (light, dark, bias, flat). -> IMAGETYP
         readout_mode: Camera readout mode, as an index or a name. -> READOUTM
         gain: Camera gain. -> GAIN
         offset: Camera offset / bias level. -> OFFSET
-        ccd_temperature: Sensor temperature during the exposure, in degrees Celsius. -> CCD-TEMP
+        temperature: Sensor temperature during the exposure, in degrees Celsius. -> CCD-TEMP
         set_temperature: Cooler setpoint, in degrees Celsius. -> SET-TEMP
         max_adu: Saturation level in ADU under the active readout configuration. -> SATURATE
     """
 
-    date_obs: AwareDatetime
-    exposure_time: float
+    start: AwareDatetime
+    duration: float
     detector: str | None = None
-    image_type: FrameType | None = None
+    frame_type: FrameType | None = None
     readout_mode: int | str | None = None
     gain: float | None = None
     offset: float | None = None
-    ccd_temperature: float | None = None
+    temperature: float | None = None
     set_temperature: float | None = None
     max_adu: int | None = None
 
     def get_fits_cards(self):
-        utc = self.date_obs.astimezone(UTC).replace(tzinfo=None)
+        utc = self.start.astimezone(UTC).replace(tzinfo=None)
 
         yield "DATE-OBS", (utc.isoformat(), "UTC start of exposure")
-        yield "EXPTIME", (self.exposure_time, "Exposure time [s]")
+        yield "EXPTIME", (self.duration, "Exposure time [s]")
 
         if self.detector is not None:
             yield "DETECTOR", (self.detector, "Detector name")
-        if self.image_type is not None:
-            yield "IMAGETYP", (str(self.image_type), "Frame type")
+        if self.frame_type is not None:
+            yield "IMAGETYP", (str(self.frame_type), "Frame type")
         if self.readout_mode is not None:
             yield "READOUTM", (self.readout_mode, "Readout mode")
         if self.gain is not None:
             yield "GAIN", (self.gain, "Camera gain")
         if self.offset is not None:
             yield "OFFSET", (self.offset, "Camera offset")
-        if self.ccd_temperature is not None:
-            yield "CCD-TEMP", (self.ccd_temperature, "CCD temperature [C]")
+        if self.temperature is not None:
+            yield "CCD-TEMP", (self.temperature, "CCD temperature [C]")
         if self.set_temperature is not None:
             yield "SET-TEMP", (self.set_temperature, "Cooler setpoint [C]")
         if self.max_adu is not None:
@@ -221,14 +221,14 @@ class ExposureInfo(BaseModel):
 
         return cls.model_validate(
             {
-                "date_obs": start if start.tzinfo else start.replace(tzinfo=UTC),
-                "exposure_time": header["EXPTIME"],
+                "start": start if start.tzinfo else start.replace(tzinfo=UTC),
+                "duration": header["EXPTIME"],
                 "detector": header.get("DETECTOR"),
-                "image_type": header.get("IMAGETYP"),
+                "frame_type": header.get("IMAGETYP"),
                 "readout_mode": header.get("READOUTM"),
                 "gain": header.get("GAIN"),
                 "offset": header.get("OFFSET"),
-                "ccd_temperature": header.get("CCD-TEMP"),
+                "temperature": header.get("CCD-TEMP"),
                 "set_temperature": header.get("SET-TEMP"),
                 "max_adu": header.get("SATURATE"),
             }
