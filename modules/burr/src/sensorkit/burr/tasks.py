@@ -22,7 +22,7 @@ from sensorkit.std import CameraParameterSet, FrameType, StandardCollectTask
 
 # Hex preserves case-sensitive instrument names and excludes path separators.
 _FILE_NAME_TEMPLATE = (
-    'f"{datetime.now(UTC):%Y%m%dT%H%M%S}_{Burr.mode}_{Burr.targ}'
+    'f"{datetime.now(UTC):%Y%m%dT%H%M%S}_{Burr.source}_{Burr.target}'
     '_{Task.id}_{Instrument.name.encode().hex()}_f{Collect.frame_number}.fits"'
 )
 
@@ -37,14 +37,14 @@ class BurrContext(BaseModel):
     `Burr.<field>`.
 
     Attributes:
-        seq: Identifier shared by tasks and frames from one requested exposure.
-        targ: Filename-safe target name.
-        mode: Task source, such as coverage, calsats, or twilight_flats.
+        sequence_id: Identifier shared by tasks and frames from one requested exposure.
+        target: Filename-safe target name.
+        source: Task source, such as coverage, calsats, or twilight_flats.
     """
 
-    seq: str
-    targ: str
-    mode: str
+    sequence_id: str
+    target: str
+    source: str
 
 
 def build_sk_tasks(
@@ -69,8 +69,8 @@ def build_sk_tasks(
     end_time = run.lighting_schedule.schedule_end_utc
     modes = [spec.tracking_mode for spec in request.exposure_map]
     frame_count = len(modes)
-    # Per-request identity (target name + source); seq is added per exposure.
-    targ, mode = _burr_identity(request)
+    # Per-request identity. A sequence ID is added per exposure.
+    target_name, source = _burr_identity(request)
 
     # Target for SIDEREAL/OFF frames. When any frame tracks sidereally we
     # freeze an AltAz/Lunar pointing to the ICRS coords it maps to *now*
@@ -97,15 +97,11 @@ def build_sk_tasks(
     frame_type = _SOURCE_FRAME_TYPES.get(request.source_name, FrameType.LIGHT)
 
     for exp_seconds in request.exposure_seconds:
-        # A fresh BurrContext.seq per exposure: every SK task, and thus every
-        # frame, fanned out from THIS exposure shares it — e.g. the ICRS
-        # sidereal frame and the RateTarget rate frames of one sidereal-then-
-        # rate collect carry the same seq — so downstream fitting regroups the
-        # frames of one collect. Distinct exposure_seconds entries differ.
-        # The FileNameTemplate resolves the identity via `Burr.<field>`
-        # when sensorkit's filesys.WriteFile renders it.
+        # Tasks and frames from one exposure share a sequence ID so downstream
+        # fitting can group them by BURRSEQ. Filenames resolve the task identity
+        # and source metadata through the context keywords.
         exposure_context = sk.KeywordDict(
-            BurrContext(seq=str(uuid.uuid4()), targ=targ, mode=mode),
+            BurrContext(sequence_id=str(uuid.uuid4()), target=target_name, source=source),
             FileNameTemplate(template=_FILE_NAME_TEMPLATE),
         )
 
@@ -401,16 +397,13 @@ def _altaz_to_equatorial(
 
 
 def _burr_identity(request: obs.ObservationRequest) -> tuple[str, str]:
-    """Resolve `(targ, mode)` for a request's BurrContext keyword.
+    """Resolve the filename-safe target name and source for a request.
 
-    `mode` is the task source name verbatim. `targ` is the best target
-    name the source supplied, picked from its metadata and sanitized for
-    filesystem safety (spaces / path separators → underscores) since it also
-    lands in the FITS filename. Falls back to the request's `task_id` when a
-    source supplies no name (e.g. flats, lunar).
+    The target name uses source metadata with spaces and path separators
+    replaced by underscores. It falls back to the request's `task_id`.
     """
     metadata = request.metadata or {}
-    targ = (
+    target_name = (
         metadata.get("target_name")
         or metadata.get("star_name")  # photometry
         or metadata.get("satellite_name")  # calsats
@@ -418,8 +411,8 @@ def _burr_identity(request: obs.ObservationRequest) -> tuple[str, str]:
         or metadata.get("norad_id")
         or request.task_id
     )
-    safe_targ = str(targ).replace(" ", "_").replace("/", "_").replace("\\", "_")
-    return safe_targ, request.source_name
+    safe_target = str(target_name).replace(" ", "_").replace("/", "_").replace("\\", "_")
+    return safe_target, request.source_name
 
 
 def _is_rates_then_nonrate(modes: list[TrackingMode]) -> bool:

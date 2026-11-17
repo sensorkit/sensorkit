@@ -238,10 +238,10 @@ def test_every_task_requests_each_configured_instrument(run, pattern, config):
 
     contexts = [submission.context.get(BurrContext) for submission in submissions]
 
-    assert {(context.targ, context.mode) for context in contexts} == {("field_7", "coverage")}
+    assert {(context.target, context.source) for context in contexts} == {("field_7", "coverage")}
     # One sequence identifies all tasks from an exposure.
-    assert len({context.seq for context in contexts}) == 2
-    assert len({context.seq for context in contexts[: len(expected)]}) == 1
+    assert len({context.sequence_id for context in contexts}) == 2
+    assert len({context.sequence_id for context in contexts[: len(expected)]}) == 1
 
 
 @pytest.mark.parametrize("config", CONFIGS)

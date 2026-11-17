@@ -99,7 +99,7 @@ data_flow:
         - op: app_source
         - op: fits_header
           option:
-            TASKID: =Burr.seq
+            TASKID: =Burr.sequence_id
         - op: fits_header
           include: all
           option:
