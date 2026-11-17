@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from loguru import logger
 from pydantic import AfterValidator, BaseModel, Field
@@ -50,12 +50,6 @@ class AgentConfig(BaseModel):
     def model_post_init(self, __context: Any):
         for config in self.controllers.values():
             config.propagate_config(self.contexts)
-
-
-class Capabilities(BaseModel):
-    """Deprecated agent capability descriptor published to the KV store."""
-    type: Literal["agent"] = "agent"
-    controllers: ControllerConfigMap
 
 
 class AgentControllerInfo(BaseModel):
@@ -320,10 +314,6 @@ async def agent_service(service: sk.Service):
             await asyncio.sleep(1)
 
     _publish_task = asyncio.create_task(publish())
-
-    await service.context.kv_put_model(Capabilities(
-        controllers=config.controllers
-    ))
 
     # Run the service.
     await service.run()

@@ -13,7 +13,6 @@ import sensorkit.api as sk
 from sensorkit.astro.common import AltAzPointing
 from sensorkit.common.filewatch import FileEventKind, watch_dir
 from sensorkit.sky_transmission.models import (
-    Capabilities,
     FrameState,
     SkyTransmission,
     SkyTransmissionConfig,
@@ -80,20 +79,25 @@ class SkyTransmissionAnalyzer:
             task.cancel()
 
     async def _discover_mounts(self) -> set[str]:
-        """Mount entities controlled by any configured controller, for overlay.
-
-        Each controller publishes its device map (Capabilities). We don't need
-        an explicit `mounts` list — we derive it from `controllers`.
-        """
+        """Return controlled devices that advertise altitude/azimuth pointing."""
         mounts: set[str] = set()
         for controller in self.config.controllers:
             try:
-                caps = await self._sk.controller(controller).kv_get_model(Capabilities)
+                details = await self._sk.controller(controller).get_details()
             except Exception:
                 logger.warning(f"could not get devices for controller '{controller}'")
                 continue
-            if caps.devices.mount:
-                mounts.add(caps.devices.mount)
+
+            for device in details.controlled_devices:
+                try:
+                    device_details = await self._sk.device(device).get_details()
+                except Exception:
+                    logger.warning(f"could not get device details for '{device}'")
+                    continue
+
+                if "AltAzPointing" in device_details.published_keywords:
+                    mounts.add(device)
+
         return mounts
 
     async def _monitor_pointing(self, mount: str):

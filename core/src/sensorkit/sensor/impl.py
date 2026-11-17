@@ -11,10 +11,9 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
-from typing import Literal
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 import sensorkit.api as sk
 from sensorkit.astro.common import SitePosition
@@ -25,7 +24,6 @@ from sensorkit.sensor.autofocus import (
     focus_source,
     translate_autofocus,
 )
-from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.client import Sensor
 from sensorkit.sensor.definition import SensorDefinition
 from sensorkit.sensor.dispatch import DeviceContexts, Dispatcher
@@ -36,16 +34,11 @@ from sensorkit.sensor.policies import (
     compose_deadlines,
     compose_tables,
 )
-from sensorkit.sensor.selection import Supports
 from sensorkit.sensor.standard_task import translate
 from sensorkit.sensor.topology import Placement, Structure
 from sensorkit.sensor.workflow import ExecutableWorkflow
 from sensorkit.std.collect import StandardCollectTask
-from sensorkit.std.enclosure import CloseEnclosure
-from sensorkit.std.focus import AutoFocus, ChangeFocusPosition, FocusSweepAnalysis
-from sensorkit.std.instrument import ChangeRotatorPosition
-from sensorkit.std.mount import FollowTarget
-from sensorkit.std.optics import CloseMirrorCover, SetFilter
+from sensorkit.std.focus import AutoFocus, FocusSweepAnalysis
 
 
 class SensorConfig(BaseModel):
@@ -102,14 +95,6 @@ class SensorController:
         for name, target in self.instruments.items():
             chain = bound.topology.chain(target)
             controller.register_instrument(name, devices=[p.device for p in chain])
-
-        # Publish device roles for consumers of the legacy capability model.
-        await controller.kv_put_model(
-            Capabilities(
-                tasks=controller.entity_info().details.supported_tasks,
-                devices=SensorDevices.infer(bound),
-            )
-        )
 
     @sk.on_detach
     async def on_detach(self):
@@ -346,61 +331,6 @@ class SensorController:
                 f"{failure}; returning focuser '{focuser.device}' to {focuser.start} "
                 f"also failed: {error}"
             ) from failure
-
-
-class SensorDevices(BaseModel):
-    """Legacy device roles, with focusers and filter wheels paired to cameras.
-
-    Each paired list follows camera order. An empty key marks a camera without
-    that device. The list is empty when no camera has that device.
-    """
-
-    mount: str | None = None
-    camera: list[str] = Field(default_factory=list)
-    focuser: list[str] = Field(default_factory=list)
-    rotator: str | None = None
-    filter_wheel: list[str] = Field(default_factory=list)
-    mirror_cover: str | None = None
-    dome: str | None = None
-
-    @classmethod
-    def infer(cls, sensor: BoundSensor) -> SensorDevices:
-        """Assign roles by the commands each device reports.
-
-        Each instrument is a camera. Its focuser and filter wheel are the first
-        supporting devices along its chain.
-        """
-        topology = sensor.topology
-        placements = topology.placements()
-        cameras = topology.instruments()
-
-        def supporting(
-            command: type[sk.DeviceCommand], choices: tuple[Placement, ...]
-        ) -> str | None:
-            return next(iter(Supports(supports=command).refs(choices, sensor)), None)
-
-        def paired(command: type[sk.DeviceCommand]) -> list[str]:
-            keys = [supporting(command, topology.chain(camera)) or "" for camera in cameras]
-
-            return keys if any(keys) else []
-
-        return cls(
-            mount=supporting(FollowTarget, placements),
-            camera=[camera.device for camera in cameras],
-            focuser=paired(ChangeFocusPosition),
-            rotator=supporting(ChangeRotatorPosition, placements),
-            filter_wheel=paired(SetFilter),
-            mirror_cover=supporting(CloseMirrorCover, placements),
-            dome=supporting(CloseEnclosure, placements),
-        )
-
-
-class Capabilities(BaseModel):
-    """Legacy model of a sensor controller's tasks and device roles."""
-
-    type: Literal["controller"] = "controller"
-    tasks: list[str]
-    devices: SensorDevices
 
 
 sk.declare_config_section(
