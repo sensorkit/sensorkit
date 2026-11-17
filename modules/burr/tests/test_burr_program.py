@@ -270,7 +270,7 @@ async def test_omitted_instrument_skips_validation(kit, context, burr, until):
         ("unknown_configured", "Controller 'ctrl' has no instrument 'cam/West'"),
         ("mismatch", "requires controller 'ctrl', but this program is assigned to 'other'"),
         ("missing", "EntityInfo"),
-        ("not_controller", "Entity 'ctrl' has no controller details"),
+        ("not_controller", "Entity 'ctrl' has no advertised details"),
     ],
 )
 async def test_invalid_selection_fails_before_any_collect(kit, context, burr, case, error):

@@ -181,6 +181,20 @@ class EntityClient(EntityBase):
         self._online_observer = AsyncObserver(False)
         self._event_mux = EventStreamConsumer(self._stream)
 
+    async def get_details(self) -> EntityDetails:
+        """Fetch the entity's current advertised details.
+
+        Raises:
+            KeyNotFound: The entity has no stored metadata.
+            ValueError: The metadata has no entity details.
+        """
+        info = await self.kv_get_model(EntityInfo)
+
+        if info.details is None:
+            raise ValueError(f"Entity '{self.entity}' has no advertised details")
+
+        return info.details
+
     async def _monitor_online_state(self):
         stream = await self._kv.monitor("EntityLease")
 

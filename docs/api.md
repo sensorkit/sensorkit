@@ -250,16 +250,22 @@ Publish from inside a service with `sk.entity().publish(model)`; consume remotel
 Base client for any remote entity:
 
 - `kv_get_model(ModelType)` / `kv_put_model(model)` — typed KV access in the entity's namespace.
+- `get_details() -> EntityDetails` - fetch current advertised details from `EntityInfo`.
 - `monitor(ModelType)` — async generator of keyword updates.
 - `monitor_event(EventType)` / `monitor_all_events()` — async generators of events.
 - `observe_online_state()` — async generator of `True`/`False` liveness transitions.
 - `call(request, payload)` — invoke a typed request/response.
 
+`get_details()` raises `KeyNotFound` when metadata is missing and `ValueError` when details are absent.
+
 ### `DeviceClient`
 
-Adds: `command(cmd) -> Call`, `enable()` / `disable()`, `get_details()`, and trait queries (`has_trait`, `get_traits`, `get_archetype`).
+Adds: `command(cmd) -> Call`, `enable()` / `disable()`, and trait queries (`has_trait`, `get_traits`, `get_archetype`).
+Its `get_details() -> DeviceDetails` validates that device details are present.
 
 ### `ControllerClient`
+
+Its `get_details() -> ControllerDetails` validates that controller details are present.
 
 Adds:
 
@@ -397,14 +403,13 @@ Instruments can share device associations or have none.
 Call `use_device()` separately for device dependencies.
 A TCS integration can expose instruments without SensorKit devices.
 
-Read the controller's `EntityInfo` to discover its instruments.
+Read the controller's details to discover its instruments.
 
 ```python
-info = await kit.controller("MySensor").kv_get_model(sk.EntityInfo)
+details = await kit.controller("MySensor").get_details()
 
-if isinstance(info.details, sk.ControllerDetails):
-    for instrument in info.details.instruments:
-        print(instrument.name, instrument.devices)
+for instrument in details.instruments:
+    print(instrument.name, instrument.devices)
 ```
 
 Set `CameraParameterSet.instrument` to select an instrument for the entire sequence.

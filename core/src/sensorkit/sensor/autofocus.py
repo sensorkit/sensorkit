@@ -176,11 +176,11 @@ async def focus_source(controller: sk.ControllerImpl) -> sk.EntityClient:
         raise ValueError(f"Focus analysis source '{name}' is offline")
 
     try:
-        info = await source.kv_get_model(sk.EntityInfo)
-    except KeyNotFound:
-        info = None
+        details = await source.get_details()
+    except (KeyNotFound, ValueError):
+        raise ValueError(f"'{name}' does not publish focus analysis") from None
 
-    if info is None or not FocusProvider.match(info.details):
+    if not FocusProvider.match(details):
         raise ValueError(f"'{name}' does not publish focus analysis")
 
     return source

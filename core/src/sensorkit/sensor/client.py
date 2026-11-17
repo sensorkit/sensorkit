@@ -19,7 +19,7 @@ import sensorkit.api as sk
 from sensorkit.backend.base import KeyNotFound
 from sensorkit.common.aio import AsyncObserver
 from sensorkit.common.keyword import KeywordDict
-from sensorkit.core.entity import DeviceDetails, EntityInfo
+from sensorkit.core.entity import DeviceDetails
 from sensorkit.sensor.binding import BoundSensor
 from sensorkit.sensor.collect import CollectIntent, compile_collect, pack
 from sensorkit.sensor.definition import SensorDefinition
@@ -102,14 +102,11 @@ class Sensor:
 
         for key, client in clients.items():
             try:
-                info = await client.kv_get_model(EntityInfo)
+                details = await client.get_details()
             except KeyNotFound:
                 continue
 
-            if not isinstance(info.details, DeviceDetails):
-                raise ValueError(f"'{key}' is not a device")
-
-            reported[key] = info.details
+            reported[key] = details
 
         # Report all missing devices in one binding error.
         sensor = BoundSensor.bind(topology, reported)

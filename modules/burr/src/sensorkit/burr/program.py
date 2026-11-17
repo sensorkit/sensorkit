@@ -203,12 +203,8 @@ class BurrProgram:
                 f"but this program is assigned to '{assigned}'"
             )
 
-        info = await self.config.controller.require().kv_get_model(sk.EntityInfo)
-
-        if not isinstance(info.details, sk.ControllerDetails):
-            raise ValueError(f"Entity '{assigned}' has no controller details")
-
-        available = {item.name for item in info.details.instruments}
+        details = await self.config.controller.require().get_details()
+        available = {item.name for item in details.instruments}
 
         if missing := [name for name in names if name not in available]:
             listed = ", ".join(f"'{name}'" for name in missing)

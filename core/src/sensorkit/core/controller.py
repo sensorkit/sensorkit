@@ -30,7 +30,7 @@ from sensorkit.backend.request import Call, declare_long_request, declare_reques
 from sensorkit.common.aio import AsyncObserver, OverflowPolicy, defer_cancellation
 from sensorkit.common.keyword import KeywordDict
 from sensorkit.core.device import DeviceClient
-from sensorkit.core.entity import EntityClient, EntityInterface, EntityRef
+from sensorkit.core.entity import ControllerDetails, EntityClient, EntityInterface, EntityRef
 from sensorkit.core.state import EventSourcedState
 from sensorkit.core.task import Task, TaskExecution
 from sensorkit.data.context import Context, ContextSubscription
@@ -304,6 +304,20 @@ abort_task_request = declare_long_request(
 
 class ControllerClient(EntityClient):
     """Object that exposes client-side functionality of a Controller."""
+
+    async def get_details(self) -> ControllerDetails:
+        """Fetch the controller's current advertised details.
+
+        Raises:
+            KeyNotFound: The entity has no stored metadata.
+            ValueError: The metadata has no controller details.
+        """
+        details = await super().get_details()
+
+        if not isinstance(details, ControllerDetails):
+            raise ValueError(f"Entity '{self.entity}' has no controller details")
+
+        return details
 
     async def enable(self):
         """Enable the controller's task handlers."""

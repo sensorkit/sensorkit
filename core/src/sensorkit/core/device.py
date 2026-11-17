@@ -14,7 +14,6 @@ from sensorkit.common.model import ModelRegistry, RegistryBaseModel
 from sensorkit.core.entity import (
     DeviceDetails,
     EntityClient,
-    EntityInfo,
     EntityInterface,
     EntityRef,
 )
@@ -96,10 +95,6 @@ run_command_request = declare_long_request(
 class DeviceClient(EntityClient):
     """Object that exposes client-side functionality of a Device."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._details: DeviceDetails | None = None
-
     async def enable(self):
         """Enable device command handlers."""
         return await self.call(
@@ -122,17 +117,18 @@ class DeviceClient(EntityClient):
         )
 
     async def get_details(self) -> DeviceDetails:
-        """Fetch and cache the device's supported command details.
+        """Fetch the device's current advertised details.
 
-        The result is cached because a device's supported commands do not change at
-        runtime.
+        Raises:
+            KeyNotFound: The entity has no stored metadata.
+            ValueError: The metadata has no device details.
         """
-        if self._details is None:
-            info = await self.kv_get_model(EntityInfo)
-            if not isinstance(info.details, DeviceDetails):
-                raise ValueError(f"Entity is not a device: {self.entity}")
-            self._details = info.details
-        return self._details
+        details = await super().get_details()
+
+        if not isinstance(details, DeviceDetails):
+            raise ValueError(f"'{self.entity}' is not a device")
+
+        return details
 
     async def has_trait(self, trait: Trait) -> bool:
         """Return True if this device satisfies the given trait."""
