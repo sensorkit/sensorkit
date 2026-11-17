@@ -175,5 +175,9 @@ class DeviceInterface(EntityInterface):
         self,
         command_type: type[DeviceCommand],
     ) -> Callable[..., CommandHandlerCallback]:
-        """Register a handler for the given command type and return a decorator."""
+        """Return a decorator that registers the handler for a command type.
+
+        Raises:
+            RuntimeError: If the decorator is applied when the command type already has a handler.
+        """
         ...

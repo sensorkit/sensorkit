@@ -144,6 +144,9 @@ class DeviceImpl(EntityImpl, DeviceInterface):
         key = command_type.model_tag()
 
         def decorator(func: CommandHandlerCallback):
+            if key in self._handlers:
+                raise RuntimeError("multiple handlers for command type")
+
             self._handlers[key] = func
             return func
 

@@ -33,21 +33,42 @@ async def test_device_command(kit):
     async with asyncio.timeout(1.0):
         await kit.device("mydevice").command(MyCommand(my_key="value"))
 
-    done.clear()
+    class MyQuery(DeviceCommand):
+        command_id: Literal["MyQuery"] = "MyQuery"
+        my_key: str
 
     class MyData(BaseModel):
         val: int
 
-    @dev.command_handler(MyCommand)
-    async def my_responder(cmd: MyCommand):
+    @dev.command_handler(MyQuery)
+    async def my_responder(cmd: MyQuery):
         assert cmd.my_key == "value2"
-        done.set()
         return MyData(val=42)
 
     async with asyncio.timeout(1.0):
-        result = await kit.device("mydevice").command(MyCommand(my_key="value2"))
+        result = await kit.device("mydevice").command(MyQuery(my_key="value2"))
         data = MyData.model_validate(result.data)
         assert data.val == 42
+
+
+@pytest.mark.asyncio
+async def test_device_duplicate_command_handler(kit):
+    async with asyncio.timeout(1.0):
+        sc = await kit.register_service("testservice", "0.1.0")
+        dev = await sc.register_device("mydevice")
+
+    class DuplicateCommand(DeviceCommand):
+        command_id: Literal["DuplicateCommand"] = "DuplicateCommand"
+
+    @dev.command_handler(DuplicateCommand)
+    async def my_handler(cmd: DuplicateCommand):
+        pass
+
+    with pytest.raises(RuntimeError, match="multiple handlers"):
+
+        @dev.command_handler(DuplicateCommand)
+        async def my_other_handler(cmd: DuplicateCommand):
+            pass
 
 
 @pytest.mark.asyncio
