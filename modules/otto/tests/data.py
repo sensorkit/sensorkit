@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import httpx
+
 from sensorkit.astro.common import TLE
 from sensorkit.astro.target import TLETarget
 from sensorkit.otto.models import CollectConfig, OttoConfig, PublishConfig, TaskConfig
@@ -20,6 +22,26 @@ ISS_TLE = TLE(
 def line2_with_mean_motion(mean_motion: float) -> str:
     """A valid TLE line 2 with the given mean motion (columns 53-63)."""
     return ISS_TLE.line2[:52] + f"{mean_motion:11.8f}" + ISS_TLE.line2[63:]
+
+
+def tle_lines(norad_id: str, line2: str = ISS_TLE.line2) -> list[str]:
+    """Build catalog lines with the given NORAD ID and ISS orbital elements."""
+    return [f"1 {norad_id}U" + ISS_TLE.line1[8:], f"2 {norad_id}" + line2[7:]]
+
+
+def serve_spacebook(monkeypatch, text="", status_code=200, error=None):
+    """Serve a Spacebook response or raise the supplied request error."""
+
+    def handler(request):
+        if error:
+            raise error
+        return httpx.Response(status_code, text=text)
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "sensorkit.otto.tles.httpx.AsyncClient",
+        lambda **kwargs: client(transport=httpx.MockTransport(handler), **kwargs),
+    )
 
 
 def make_config(**overrides) -> OttoConfig:

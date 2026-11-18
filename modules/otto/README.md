@@ -20,6 +20,9 @@ supported features:
   altitude floor, rising or setting; re-promoted periodically), and a blacklist
   (no ephemeris data). Lists are persisted across restarts. A future `TODO` item
   will populate these lists from object SNR as measured by SENPAI.
+  A whitelisted NORAD ID moves to the blacklist when a successful Spacebook fetch lacks it.
+  A blacklisted NORAD ID returns to the whitelist once a later fetch includes it.
+  A failed fetch keeps the last good TLEs and leaves the lists unchanged.
 - **Collection** — `track_mode` selects per-frame tracking: `rate` (follow the
   target throughout), `rate_sidereal` (append a sidereally tracked frame to an
   otherwise rate tracked sequence), or `sidereal` (slew to the target and begin

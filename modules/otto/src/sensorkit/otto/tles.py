@@ -81,7 +81,8 @@ async def fetch(
     Returns:
         Tuple of (tles_dict, status_code) where:
         - tles_dict: Dict of {norad_id: {name, line0, line1, line2}}
-        - status_code: HTTP status code (200 for success, other for errors)
+        - status_code: HTTP status code (200 for success, other for errors).
+          A response without recognizable TLE pairs is an error.
     """
     tles = {}
     status_code = 0
@@ -106,15 +107,21 @@ async def fetch(
             # Convert requested objects to a set for O(1) lookup
             objects_set = set(objects)
 
+            # Count catalog entries before filtering by configured targets
+            pair_count = 0
+
             i = 0
             while i + 1 < len(lines):
                 line1 = lines[i].strip()
                 line2 = lines[i + 1].strip()
 
                 # Validate TLE format
-                if not (line1.startswith('1 ') and line2.startswith('2 ')):
-                    i += 1
-                    continue
+                match line1[:2], line2[:2]:
+                    case "1 ", "2 ":
+                        pair_count += 1
+                    case _:
+                        i += 1
+                        continue
 
                 # Extract NORAD ID from line 1 (columns 3-7)
                 norad_id = line1[2:7].strip()
@@ -137,6 +144,10 @@ async def fetch(
                 if not orbits_set and len(tles) == len(objects_set):
                     logger.debug(f"Found all {len(objects_set)} requested satellites, stopping parse")
                     break
+
+            # An empty catalog cannot establish that configured IDs are absent
+            if not pair_count:
+                raise ValueError("Spacebook response contained no TLEs")
 
             # Warn if any requested satellites were not found
             missing = objects_set - set(tles.keys())

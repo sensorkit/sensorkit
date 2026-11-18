@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the TLE target source."""
 
-from types import SimpleNamespace
+import functools
 
+import httpx
 import pytest
 
 from sensorkit.otto import tles
 from sensorkit.otto.tles import _satellite
 from sensorkit.otto.utils import time_at
 
-from .data import line2_with_mean_motion
+from .data import line2_with_mean_motion, serve_spacebook
 
 LEO_LINE1 = "1 25544U 98067A   24100.50000000  .00016717  00000-0  10270-3 0  9002"
 LEO_LINE2 = "2 25544  51.6400 200.0000 0001234  90.0000 270.0000 15.49000000400000"
@@ -76,26 +77,7 @@ class TestFetch:
     @pytest.fixture
     def spacebook(self, monkeypatch):
         """Serve a canned Spacebook catalog response to tles.fetch."""
-
-        def set_response(text, status_code=200):
-            response = SimpleNamespace(text=text, status_code=status_code)
-
-            class FakeClient:
-                def __init__(self, **kwargs):
-                    pass
-
-                async def __aenter__(self):
-                    return self
-
-                async def __aexit__(self, *exc):
-                    return False
-
-                async def get(self, url):
-                    return response
-
-            monkeypatch.setattr("sensorkit.otto.tles.httpx.AsyncClient", FakeClient)
-
-        return set_response
+        return functools.partial(serve_spacebook, monkeypatch)
 
     @pytest.mark.asyncio
     async def test_filter_by_objects(self, spacebook):
@@ -123,3 +105,39 @@ class TestFetch:
         fetched, status = await tles.fetch(objects=["25544"], orbits=["GEO"])
         assert fetched == {}
         assert status == 503
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(httpx.ConnectError("getaddrinfo failed"), id="dns"),
+            pytest.param(httpx.ReadTimeout("timed out"), id="timeout"),
+        ],
+    )
+    async def test_request_error_returns_empty(self, spacebook, error):
+        spacebook(error=error)
+        fetched, status = await tles.fetch(objects=["25544"])
+        assert fetched == {}
+        assert status != 200
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("", id="empty"),
+            pytest.param("<html><body>Service Unavailable</body></html>", id="error-page"),
+        ],
+    )
+    async def test_ok_response_without_tles_is_an_error(self, spacebook, text):
+        """Treating it as a catalog would confirm every requested ID as missing."""
+        spacebook(text)
+        fetched, status = await tles.fetch(objects=["25544"], orbits=["GEO"])
+        assert fetched == {}
+        assert status != 200
+
+    @pytest.mark.asyncio
+    async def test_catalog_without_requested_ids_succeeds(self, spacebook):
+        spacebook(self.CATALOG)
+        fetched, status = await tles.fetch(objects=["42738"])
+        assert status == 200
+        assert fetched == {}

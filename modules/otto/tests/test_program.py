@@ -7,21 +7,31 @@ import time
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 import sensorkit.api as sk
 from sensorkit.astro.common import ReferenceFrame, SitePosition
 from sensorkit.astro.coords import Equatorial
 from sensorkit.astro.target import ICRSTarget
+from sensorkit.backend.base import KeyNotFound
 from sensorkit.data.context import Context
 from sensorkit.otto.horizons import HorizonsCache, HorizonsObject, HorizonsSample
 from sensorkit.otto.models import TaskConfig
 from sensorkit.otto.program import OttoContext, OttoProgram, OttoState
 from sensorkit.otto.stars import StarCache
 from sensorkit.otto.task_queue import TaskQueue
+from sensorkit.otto.tles import TLECache
 from sensorkit.otto.utils import ObjectListManager, to_jd
 
-from .data import ISS_TLE, line2_with_mean_motion, make_config, make_task
+from .data import (
+    ISS_TLE,
+    line2_with_mean_motion,
+    make_config,
+    make_task,
+    serve_spacebook,
+    tle_lines,
+)
 
 
 def _resolved_execution():
@@ -46,6 +56,16 @@ def set_state(program, **lists):
     """Replace the program's object lists, keeping its list manager pointed at them."""
     program.state = OttoState(**lists)
     program.list_manager = ObjectListManager(program.state, program._save_state)
+
+
+GEO_LINE2 = line2_with_mean_motion(1.0027)
+
+
+def tle_entry(norad_id, line2=ISS_TLE.line2):
+    """A cached TLE entry, re-stamped to a recent epoch so it propagates sanely."""
+    line1, line2 = tle_lines(norad_id, line2)
+    line1 = line1[:18] + "26300.50000000" + line1[32:]
+    return {"line0": f"0 {norad_id}", "line1": line1, "line2": line2}
 
 
 @pytest.fixture
@@ -227,9 +247,7 @@ def orbit_program(program):
     program.latitude = 33.0
     program.longitude = -117.0
     program.altitude_km = 0.1
-    program.tles = {
-        "19548": {"line0": ISS_TLE.line0, "line1": ISS_TLE.line1, "line2": ISS_TLE.line2}
-    }
+    program.tles = {"19548": {"line0": ISS_TLE.line0, "line1": ISS_TLE.line1, "line2": GEO_LINE2}}
     program.tles_dt = datetime.now(UTC)
     return program
 
@@ -383,7 +401,7 @@ class TestHorizonsTarget:
         now = datetime.now(UTC)
         samples = _horizons_samples(now)
         with patch("sensorkit.otto.horizons.fetch_ephemeris", AsyncMock(return_value=samples)):
-            target = await horizons_program._target_for("433", True, 120, now)
+            target = await horizons_program._target_for("433", 120, now)
 
         assert target.frame == ReferenceFrame.ICRF
         assert target.jds == [s.jd for s in samples]
@@ -401,7 +419,7 @@ class TestHorizonsTarget:
         horizons_program.config.task.end_time_deadband_seconds = 300
         fetch = AsyncMock(return_value=_horizons_samples(now))
         with patch("sensorkit.otto.horizons.fetch_ephemeris", fetch):
-            await horizons_program._target_for("433", True, 600, now)
+            await horizons_program._target_for("433", 600, now)
 
         kwargs = fetch.await_args.kwargs
         assert kwargs["command"] == "433;"
@@ -416,11 +434,11 @@ class TestHorizonsTarget:
 
         with patch("sensorkit.otto.horizons.fetch_ephemeris", fetch):
             horizons_program.config.task.end_time_deadband_seconds = 300
-            await horizons_program._target_for("433", True, 600, now)
+            await horizons_program._target_for("433", 600, now)
             modest = fetch.await_args.kwargs["intervals"]
 
             horizons_program.config.task.end_time_deadband_seconds = 3600
-            await horizons_program._target_for("433", True, 600, now)
+            await horizons_program._target_for("433", 600, now)
             huge = fetch.await_args.kwargs["intervals"]
 
         # A 12x deadband still buys intervals, but the 600s block keeps its own
@@ -439,7 +457,7 @@ class TestHorizonsTarget:
             patch("sensorkit.otto.horizons.fetch_ephemeris", AsyncMock(return_value=samples)),
             patch("sensorkit.otto.horizons.dither_offset", return_value=(0.02, -0.01)),
         ):
-            target = await horizons_program._target_for("433", True, 120, now)
+            target = await horizons_program._target_for("433", 120, now)
 
         for point, sample in zip(target.points, samples, strict=True):
             assert point.ra == pytest.approx(sample.ra + 0.02)
@@ -451,7 +469,7 @@ class TestHorizonsTarget:
             "sensorkit.otto.horizons.fetch_ephemeris",
             AsyncMock(side_effect=RuntimeError("Horizons unreachable")),
         ):
-            assert await horizons_program._target_for("433", True, 120, datetime.now(UTC)) is None
+            assert await horizons_program._target_for("433", 120, datetime.now(UTC)) is None
 
     @pytest.mark.asyncio
     async def test_single_sample_is_rejected(self, horizons_program):
@@ -461,16 +479,16 @@ class TestHorizonsTarget:
             "sensorkit.otto.horizons.fetch_ephemeris",
             AsyncMock(return_value=_horizons_samples(now, count=1)),
         ):
-            assert await horizons_program._target_for("433", True, 120, now) is None
+            assert await horizons_program._target_for("433", 120, now) is None
 
 
-async def _one_horizons_pass(program):
-    """Drive the Horizons updater through exactly one pass, then stop it.
+async def _one_pass(update_loop):
+    """Drive an updater loop through exactly one pass, then stop it.
 
     The loop's trailing sleep is the configured refresh interval — hours — so a brief yield
     lets the body run once and no more.
     """
-    updater = asyncio.create_task(program.update_horizons_loop())
+    updater = asyncio.create_task(update_loop())
     await asyncio.sleep(0.1)
     updater.cancel()
 
@@ -494,7 +512,7 @@ class TestHorizonsUpdate:
                 AsyncMock(return_value=_horizons_samples(now)),
             ),
         ):
-            await _one_horizons_pass(horizons_program)
+            await _one_pass(horizons_program.update_horizons_loop)
 
         assert horizons_program.horizons["433"].command == "433;"
         assert horizons_program.horizons["433"].name == "433 Eros (A898 PA)"
@@ -513,7 +531,7 @@ class TestHorizonsUpdate:
                 AsyncMock(return_value=_horizons_samples(datetime.now(UTC))),
             ),
         ):
-            await _one_horizons_pass(horizons_program)
+            await _one_pass(horizons_program.update_horizons_loop)
 
         resolve.assert_not_awaited()
 
@@ -533,7 +551,7 @@ class TestHorizonsUpdate:
             ),
         ):
             horizons_program.state.whitelist = ["Jupiter", "433"]
-            await _one_horizons_pass(horizons_program)
+            await _one_pass(horizons_program.update_horizons_loop)
 
         assert horizons_program.state.blacklist == ["Jupiter"]
         # The rest of the list keeps tasking
@@ -549,14 +567,14 @@ class TestHorizonsUpdate:
             "sensorkit.otto.horizons.fetch_ephemeris",
             AsyncMock(side_effect=RuntimeError("Horizons unreachable")),
         ):
-            await _one_horizons_pass(horizons_program)
+            await _one_pass(horizons_program.update_horizons_loop)
 
         assert horizons_program.horizons["433"].samples == previous
 
     @pytest.mark.asyncio
     async def test_removed_object_drops_out_of_the_cache(self, horizons_program):
         horizons_program.config.task.horizons = []
-        await _one_horizons_pass(horizons_program)
+        await _one_pass(horizons_program.update_horizons_loop)
         assert horizons_program.horizons == {}
 
 
@@ -611,7 +629,7 @@ class TestEphemerisCoversTheBlock:
         horizons_program.config.task.end_time_deadband_seconds = 0
         fetch = AsyncMock(return_value=_horizons_samples(now))
         with patch("sensorkit.otto.horizons.fetch_ephemeris", fetch):
-            await horizons_program._target_for("433", True, 600, now)
+            await horizons_program._target_for("433", 600, now)
 
         assert fetch.await_args.kwargs["stop"] == now + timedelta(seconds=600)
 
@@ -649,7 +667,7 @@ class TestStarTargets:
 
     @pytest.mark.asyncio
     async def test_builds_a_fixed_icrf_target(self, star_program):
-        target = await star_program._target_for("Vega", True, 0, datetime.now(UTC))
+        target = await star_program._target_for("Vega", 0, datetime.now(UTC))
 
         assert isinstance(target, ICRSTarget)
         assert target.frame == ReferenceFrame.ICRF
@@ -662,7 +680,7 @@ class TestStarTargets:
         star_program.config.collect.dither_amount_arcsec = 500
 
         with patch("sensorkit.otto.stars.dither_offset", return_value=(0.02, -0.01)):
-            target = await star_program._target_for("Vega", True, 0, datetime.now(UTC))
+            target = await star_program._target_for("Vega", 0, datetime.now(UTC))
 
         assert target.coords.ra == pytest.approx(279.23473 + 0.02)
         assert target.coords.dec == pytest.approx(38.78369 - 0.01)
@@ -793,15 +811,15 @@ class TestSetObjectsGraylist:
 
 
 class TestUnresolvedNamesAreNotMisfiled:
-    """A configured star/Horizons name whose resolution hasn't completed must
-    not fall through to the TLE path and be blacklisted as 'no TLE available'."""
+    """A configured star/Horizons name whose resolution hasn't completed is
+    skipped, not blacklisted."""
 
     @pytest.mark.asyncio
     async def test_unresolved_star_is_skipped_not_blacklisted(self, star_program):
         # TLEs are ready, but Vega hasn't resolved yet (startup race): the
         # whitelist filter passes it, and _object_position finds it nowhere
         star_program.stars = {}
-        star_program.tles = {"99999": {"line0": "0 99999"}}
+        star_program.tles = {"99999": tle_entry("99999")}
         star_program.tles_dt = datetime.now(UTC)
         star_program.config.collect.scan_mode = False
 
@@ -810,6 +828,202 @@ class TestUnresolvedNamesAreNotMisfiled:
         gen.cancel()
 
         assert star_program.state == OttoState(whitelist=["Vega"])
+
+
+SPACEBOOK_FAILURES = [
+    pytest.param({"error": httpx.ConnectError("getaddrinfo failed")}, id="dns"),
+    pytest.param({"error": httpx.ReadTimeout("timed out")}, id="timeout"),
+    pytest.param({"status_code": 429}, id="rate-limited"),
+    pytest.param({"status_code": 503}, id="server-error"),
+    pytest.param({"text": ""}, id="empty-ok"),
+    pytest.param({"text": "<html>Service Unavailable</html>"}, id="error-page-ok"),
+]
+
+
+@pytest.fixture
+def tle_program(program):
+    """Program tasking two satellites, both whitelisted, with every position above the floor."""
+    program.config.task.tles = ["25544", "42738"]
+    program.config.collect.altitude_min = -90.0
+    program.config.collect.dither = False
+    program.latitude, program.longitude, program.altitude_km = 33.0, -117.0, 0.1
+    return program
+
+
+async def stop_generation(program, generator):
+    """Cancel a generate_tasks run, draining its queue so the cancelled loop can exit."""
+    generator.cancel()
+    while await program.task_queue.pop_task():
+        pass
+
+    with contextlib.suppress(asyncio.CancelledError):
+        await generator
+
+
+class TestTLEUpdate:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("response", SPACEBOOK_FAILURES)
+    async def test_failed_fetch_keeps_the_cache(
+        self, tle_program, program_impl, monkeypatch, response
+    ):
+        cached = TLECache(
+            tles={"25544": tle_entry("25544"), "42738": tle_entry("42738")},
+            dt=datetime.now(UTC) - timedelta(hours=6),
+        )
+        tle_program.tles = cached.model_copy(deep=True).tles
+        tle_program.tles_dt = cached.dt
+        await program_impl.kv_put_model(cached)
+
+        set_state(tle_program, whitelist=["25544"], blacklist=["42738"])
+        await tle_program._save_state()
+        serve_spacebook(monkeypatch, **response)
+
+        await _one_pass(tle_program.update_tles_loop)
+
+        assert tle_program.tles == cached.tles
+        assert tle_program.tles_dt == cached.dt
+        assert await program_impl.kv_get_model(TLECache) == cached
+
+        expected = OttoState(whitelist=["25544"], blacklist=["42738"])
+        assert tle_program.state == expected
+        assert await program_impl.kv_get_model(OttoState) == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("response", SPACEBOOK_FAILURES)
+    async def test_failed_fetch_without_cache_keeps_the_lists(
+        self, tle_program, program_impl, monkeypatch, response
+    ):
+        serve_spacebook(monkeypatch, **response)
+
+        await _one_pass(tle_program.update_tles_loop)
+
+        assert tle_program.tles == {}
+        with pytest.raises(KeyNotFound):
+            await program_impl.kv_get_model(TLECache)
+        assert tle_program.state == OttoState(whitelist=["25544", "42738"])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("catalog", "expected"),
+        [
+            pytest.param(
+                tle_lines("25544") + tle_lines("19548", GEO_LINE2),
+                OttoState(whitelist=["25544"], blacklist=["42738"]),
+                id="one-missing",
+            ),
+            pytest.param(
+                tle_lines("19548", GEO_LINE2),
+                OttoState(blacklist=["25544", "42738"]),
+                id="none-requested",
+            ),
+        ],
+    )
+    async def test_catalog_without_an_id_blacklists_it(
+        self, tle_program, program_impl, monkeypatch, catalog, expected
+    ):
+        serve_spacebook(monkeypatch, "\n".join(catalog))
+
+        await _one_pass(tle_program.update_tles_loop)
+
+        assert set(tle_program.tles) == set(expected.whitelist)
+        assert await program_impl.kv_get_model(TLECache) == TLECache(
+            tles=tle_program.tles, dt=tle_program.tles_dt
+        )
+        assert tle_program.state == expected
+        assert await program_impl.kv_get_model(OttoState) == expected
+
+    @pytest.mark.asyncio
+    async def test_refresh_recovers_blacklisted_ids(self, tle_program, program_impl, monkeypatch):
+        """Graylisted satellites stay graylisted, and orbit members stay off the lists."""
+        tle_program.config.task.orbits = ["GEO"]
+        set_state(tle_program, blacklist=["25544"], graylist=["42738"])
+        catalog = tle_lines("25544") + tle_lines("42738") + tle_lines("19548", GEO_LINE2)
+        serve_spacebook(monkeypatch, "\n".join(catalog))
+
+        await _one_pass(tle_program.update_tles_loop)
+
+        assert set(tle_program.tles) == {"25544", "42738", "19548"}
+
+        expected = OttoState(whitelist=["25544"], graylist=["42738"])
+        assert tle_program.state == expected
+        assert await program_impl.kv_get_model(OttoState) == expected
+
+
+class TestMissingPosition:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scan_mode", [True, False], ids=["scan", "random"])
+    async def test_satellite_without_position_stays_whitelisted(self, tle_program, scan_mode):
+        # 25544 has no TLE, and the TLE for 42738 fails to propagate
+        tle_program.tles = {"42738": {"line0": "0 42738"}}
+        tle_program.tles_dt = datetime.now(UTC)
+        tle_program.config.collect.scan_mode = scan_mode
+
+        gen = asyncio.create_task(tle_program.generate_tasks())
+        try:
+            await asyncio.sleep(0.1)
+            queued = len(tle_program.task_queue)
+        finally:
+            await stop_generation(tle_program, gen)
+
+        assert queued == 0
+        assert tle_program.state == OttoState(whitelist=["25544", "42738"])
+
+    @pytest.mark.asyncio
+    async def test_skipped_satellite_is_retried_after_a_delay(self, tle_program, until):
+        tle_program.config.task.tles = ["25544"]
+        set_state(tle_program, whitelist=["25544"])
+        tle_program.tles = {"25544": {"line0": "0 25544"}}
+        tle_program.tles_dt = datetime.now(UTC)
+        tle_program.config.collect.scan_mode = False
+
+        gen = asyncio.create_task(tle_program.generate_tasks())
+        try:
+            await asyncio.sleep(0.1)
+
+            # The TLE becomes usable, but the skipped satellite waits out the delay
+            tle_program.tles["25544"] = tle_entry("25544")
+            await asyncio.sleep(0.5)
+            queued_during_delay = len(tle_program.task_queue)
+
+            await until(lambda: len(tle_program.task_queue) > 0, timeout=6.0)
+            tasked = {q.task.target_id for q in tle_program.task_queue.tasks}
+        finally:
+            await stop_generation(tle_program, gen)
+
+        assert queued_during_delay == 0
+        assert tasked == {"25544"}
+
+
+class TestCachedTLESelection:
+    """A cache retained across a failed refetch tasks only what the config selects."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("orbits", "tasked"),
+        [
+            pytest.param([], set(), id="removed-id-or-regime"),
+            pytest.param(["GEO"], set(), id="changed-regime"),
+            pytest.param(["LEO"], {"42738"}, id="kept-regime"),
+        ],
+    )
+    async def test_unlisted_cached_satellite(self, tle_program, until, orbits, tasked):
+        # The config now names only 25544, which the failed refetch never cached
+        tle_program.config.task.tles = ["25544"]
+        tle_program.config.task.orbits = orbits
+        set_state(tle_program, whitelist=["25544"])
+        tle_program.tles = {"42738": tle_entry("42738")}
+        tle_program.tles_dt = datetime.now(UTC)
+        tle_program.config.collect.scan_mode = True
+
+        gen = asyncio.create_task(tle_program.generate_tasks())
+        try:
+            with contextlib.suppress(TimeoutError):
+                await until(lambda: len(tle_program.task_queue) > 0, timeout=0.5)
+            queued = {q.task.target_id for q in tle_program.task_queue.tasks}
+        finally:
+            await stop_generation(tle_program, gen)
+
+        assert queued == tasked
 
 
 class TestStartupOrdering:

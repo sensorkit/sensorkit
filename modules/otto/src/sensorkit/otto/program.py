@@ -218,13 +218,22 @@ class OttoProgram:
             try:
                 logger.debug("updating TLEs from Spacebook")
 
-                # Fetch TLEs from Spacebook
-                self.tles, response = await tles.fetch(
+                # Retain the previous TLEs until a fetch succeeds
+                fetched_tles, response = await tles.fetch(
                     objects=self.config.task.tles, orbits=self.config.task.orbits
                 )
                 if response == 200:
-                    logger.debug(f"updated {len(self.tles)} TLEs from Spacebook")
+                    self.tles = fetched_tles
                     self.tles_dt = datetime.now(UTC)
+                    logger.debug(f"updated {len(self.tles)} TLEs from Spacebook")
+
+                    # Only a successful fetch can confirm a NORAD ID is absent
+                    for norad_id in self.config.task.tles:
+                        if norad_id in self.tles:
+                            await self._recover_blacklisted(norad_id)
+                        else:
+                            await self._blacklist_unresolved(norad_id)
+
                     # Large orbit regimes can exceed the KV payload limit; a failed
                     # put is caught below and only costs the restart cache
                     tle_cache = TLECache(tles=self.tles, dt=self.tles_dt)
@@ -317,24 +326,14 @@ class OttoProgram:
             await self.program.kv_put_model(StarCache(stars=resolved, dt=datetime.now(UTC)))
 
     async def _blacklist_unresolved(self, name: str):
-        """Blacklist a name its resolver could not resolve.
-
-        Just this name — the resolver's warning names any candidates — so the
-        rest of the list keeps tasking. `_recover_blacklisted` is the inverse.
-        """
+        """Blacklist a whitelisted name or NORAD ID that its source could not find."""
         if name in self.state.whitelist:
             await self.list_manager.move_object(name, ListType.WHITELIST, ListType.BLACKLIST)
 
     async def _recover_blacklisted(self, name: str):
-        """Return a name to the whitelist once it finally resolves.
-
-        A lookup failure blacklists the object, but the resolvers can't tell an
-        unknown name from an unreachable service — so a name that resolves on a
-        later retry was a transient outage, not a bad config, and belongs back
-        in rotation.
-        """
+        """Return a blacklisted target to the whitelist when its source finds it."""
         if name in self.state.blacklist:
-            logger.info(f"{name} resolved on retry, returning it to the whitelist")
+            logger.info(f"{name} found on retry, returning it to the whitelist")
             await self.list_manager.move_object(name, ListType.BLACKLIST, ListType.WHITELIST)
 
     async def promote_graylist_loop(self):
@@ -437,7 +436,7 @@ class OttoProgram:
         return None
 
     async def _target_for(
-        self, object: str, managed: bool, block_seconds: float, now: datetime
+        self, object: str, block_seconds: float, now: datetime
     ) -> BaseTarget | None:
         """Build the collect target for an object, dispatching on its source.
 
@@ -469,12 +468,6 @@ class OttoProgram:
 
         tle_data = self.tles.get(object)
         if tle_data is None:
-            # The TLE disappeared since the visibility check
-            if managed:
-                logger.warning(f"Removing object {object} from the whitelist (TLE removed)")
-                await self.list_manager.move_object(
-                    object, ListType.WHITELIST, ListType.BLACKLIST
-                )
             return None
         return tles.make_target(
             tle_data,
@@ -531,9 +524,19 @@ class OttoProgram:
                     continue
 
                 # Orbit-regime members come straight from the TLE fetch; they are
-                # selected by current visibility, never list-managed
+                # selected by current visibility, never list-managed. A retained
+                # cache can hold selections the current config has dropped.
                 known = set(self.state.whitelist + self.state.graylist + self.state.blacklist)
-                orbit_members = [oid for oid in self.tles if oid not in known] if tles_ready else []
+                orbits = set(self.config.task.orbits)
+                orbit_members = (
+                    [
+                        oid
+                        for oid, tle_data in self.tles.items()
+                        if oid not in known and tles.classify_orbit(tle_data["line2"]) in orbits
+                    ]
+                    if tles_ready
+                    else []
+                )
                 whitelist = [
                     obj
                     for obj in self.state.whitelist
@@ -581,21 +584,10 @@ class OttoProgram:
                     # Check current altitude, azimuth, and rising status
                     result = self._object_position(object)
                     if result is None:
-                        if object in self.config.task.horizons or object in self.config.task.stars:
-                            # Not resolved yet, or the cached ephemeris doesn't
-                            # reach the current time; that source's own updater
-                            # will refresh or blacklist it — don't misfile it
-                            # as a missing TLE
-                            logger.debug(f"object {object} has no current position, skipping")
-                        elif managed:
-                            logger.warning(
-                                f"Removing object {object} from the whitelist (no TLE available)"
-                            )
-                            await self.list_manager.move_object(
-                                object,
-                                ListType.WHITELIST,
-                                ListType.BLACKLIST,
-                            )
+                        # Each source's updater owns blacklisting, so a missing
+                        # position only skips this pass
+                        logger.debug(f"object {object} has no current position, skipping")
+                        await asyncio.sleep(5)
                         continue
                     altitude, azimuth, rising, _hour_angle = result
 
@@ -643,8 +635,9 @@ class OttoProgram:
                         * len(binnings)
                         * self.config.collect.num_frames
                     )
-                    target = await self._target_for(object, managed, block_seconds, now)
+                    target = await self._target_for(object, block_seconds, now)
                     if target is None:
+                        await asyncio.sleep(5)
                         continue
 
                     # One correlation id per visit to this target: every filter/exposure/binning
