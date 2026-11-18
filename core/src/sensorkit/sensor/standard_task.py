@@ -3,6 +3,7 @@
 intents.
 
 Target commands establish pointing before acquisition and stop it during cleanup.
+A collect without a target sends no mount pointing, tracking, or stop commands.
 Each camera parameter set supplies an acquisition request and its settings.
 A parameter set naming an instrument selects only that instrument. Packing
 resolves command targets and checks the requested settings.
@@ -69,10 +70,11 @@ def translate(
 
     Each exposure keeps its request ID and instrument assignment across tracking
     segments. `instruments` resolves published names to collection targets.
-    Untargeted exposures are assigned during packing.
+    Sequences without a named instrument are assigned during packing.
 
     Preparation points at the task's target, including when frame zero uses
-    sidereal tracking. Capture timeouts include `readout_margin_s`.
+    sidereal tracking. Without a target, the collect has no preparation or
+    cleanup. Capture timeouts include `readout_margin_s`.
 
     Raises:
         ValueError: An instrument name is unknown, a sidereal frame index is
@@ -104,7 +106,7 @@ def translate(
             for number, params in enumerate(exposures)
             if first < params.frame_count
         )
-        epochs.append(RequestEpoch(units=units, settings=(_pointing(target),)))
+        epochs.append(RequestEpoch(units=units, settings=_pointing(target)))
         first += count
 
     # Empty collects need no preparation or cleanup.
@@ -114,19 +116,15 @@ def translate(
     return CollectIntent(
         name=task.task_type,
         epochs=tuple(epochs),
-        prepare=(_pointing(task.target),),
-        cleanup=(
-            CommandRequest(
-                command=Stop(), subject="sensor", select=Supports(supports=FollowTarget)
-            ),
-        ),
+        prepare=_pointing(task.target),
+        cleanup=_stopping(task.target),
     )
 
 
 def _segment(
     task: StandardCollectTask,
     number: int,
-    target: Target,
+    target: Target | None,
     count: int,
     settings: tuple[CommandRequest, ...],
     selection: IsRef | None,
@@ -169,12 +167,25 @@ def instrument_selection(name: str | None, instruments: Mapping[str, Placement])
     return IsRef(device=instruments[name].device)
 
 
-def _pointing(target: Target) -> CommandRequest:
-    """Request FollowTarget on the common sensor target device."""
-    return CommandRequest(command=FollowTarget(target=target), subject="sensor")
+def _pointing(target: Target | None) -> tuple[CommandRequest, ...]:
+    """Request FollowTarget when a target is supplied."""
+    if target is None:
+        return ()
+
+    return (CommandRequest(command=FollowTarget(target=target), subject="sensor"),)
 
 
-def frame_targets(task: StandardCollectTask, count: int) -> tuple[Target, ...]:
+def _stopping(target: Target | None) -> tuple[CommandRequest, ...]:
+    """Request Stop when a target is supplied."""
+    if target is None:
+        return ()
+
+    return (
+        CommandRequest(command=Stop(), subject="sensor", select=Supports(supports=FollowTarget)),
+    )
+
+
+def frame_targets(task: StandardCollectTask, count: int) -> tuple[Target | None, ...]:
     """Return the target for each zero-based frame index.
 
     ICRS and catalog targets remain sidereal throughout. Other targets switch

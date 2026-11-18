@@ -49,13 +49,14 @@ class CollectInfo(BaseModel):
     that context records observed values separately from these requested settings.
 
     Attributes:
-        target: Target requested for this frame's tracking mode.
+        target: Target instruction for this frame, or None when the collect does
+            not control pointing or tracking. Mount telemetry supplies reported pointing.
         target_id: Optional target name or identifier.
         params: Requested camera settings and frame count.
         frame_number: Zero-based frame number on the assigned instrument.
     """
 
-    target: Target
+    target: Target | None
     target_id: str | None = None
     params: CameraParameterSet
     frame_number: int = 0
@@ -76,34 +77,38 @@ class CollectInfo(BaseModel):
 
     def get_fits_cards(self):
         yield "TARGET", (self.target_id, "Target ID")
+        # FIXME: Move TRKMODE to a mount keyword describing reported tracking behavior.
         yield "TRKMODE", (self.track_mode, "Tracking mode")
         yield "FRAMENUM", (self.frame_number, "Frame number")
 
 
 class StandardCollectTask(sk.CollectTask):
-    """Request camera frame sequences while following a target.
+    """Request camera frame sequences, optionally while following a target.
 
     The sensor controller matches each parameter set to an instrument and plans
-    pointing, camera configuration, capture, and cleanup. Shared devices determine
-    which sequences can run concurrently. Incompatible settings are placed in
-    separate configuration epochs.
+    pointing, camera configuration, capture, and cleanup. A collect without a
+    target sends no mount pointing, tracking, or stop commands. Shared devices
+    determine which sequences can run concurrently. Incompatible settings are
+    placed in separate configuration epochs.
 
     Each capture receives the execution context, requested collect metadata, and
     available telemetry from its instrument's device chain.
 
     Attributes:
         task_type: Discriminator for a standard collect task.
-        target: Target to follow.
+        target: Target to follow, or None to capture without controlling mount
+            pointing or tracking.
         camera_params: Settings for one sequence, or a list of sequences.
         end_time: Legacy advisory end time. Use execution expiry to enforce a deadline.
         sidereal_frames: Zero-based indices within each sequence that use sidereal
-            tracking. Instruments capturing concurrently switch together.
+            tracking. Instruments capturing concurrently switch together. Requires
+            a target.
         target_id: Optional target identifier. The sensor infers the NORAD ID for a
             TLE target or the object name for a catalog target when omitted.
     """
 
     task_type: Literal["standard_collect"] = "standard_collect"
-    target: Target
+    target: Target | None
     camera_params: CameraParameterSet | list[CameraParameterSet]
     end_time: datetime | None = None
     sidereal_frames: list[int] = Field(default_factory=list)
@@ -121,5 +126,14 @@ class StandardCollectTask(sk.CollectTask):
     def _check_exposures(self) -> Self:
         if not self.exposures:
             raise ValueError("camera_params: a collect takes at least one exposure")
+
+        return self
+
+    @model_validator(mode="after")
+    def _check_sidereal_frames(self) -> Self:
+        if self.target is None and self.sidereal_frames:
+            raise ValueError(
+                "sidereal_frames: a collect without a target does not control tracking"
+            )
 
         return self

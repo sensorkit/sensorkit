@@ -189,7 +189,7 @@ class SensorController:
 
     @sk.task_handler
     async def collect_task(self, execution: sk.TaskExecution[StandardCollectTask]):
-        """Point at the task's target and capture its exposures.
+        """Capture the task's exposures, following its target if it has one.
 
         Named parameter sets keep their instrument throughout the collect.
         Planning uses one snapshot of subscribed device keywords. Frame headers

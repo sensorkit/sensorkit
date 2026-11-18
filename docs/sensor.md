@@ -104,12 +104,14 @@ The controller responds to tasks — from the agent during autonomous operation,
 |--------------|----------------------------------------------------------------------------------|
 | **Init**     | Initialize the dome and mount, open the dome and mirror cover                  |
 | **Standby**  | Run the same device sequence as Init and establish STANDBY                              |
-| **Collect**  | Slew/track a target, set filter and binning, capture frames, stop the mount     |
+| **Collect**  | Configure instruments and capture frames; slew, track, and stop the mount when a target is supplied |
 | **AutoFocus** | Sweep an instrument's focuser, then move it to the analyzed best focus (beta) |
 | **Recover**  | Reconnect all devices and stop any in-progress motion after a fault             |
 | **Shutdown** | Close the mirror cover, deinitialize the mount, close the dome                  |
 
-During a collect, the controller commands the target and camera settings.
+During a collect, the controller applies the requested instrument settings and captures frames.
+It sends pointing, tracking, and stop commands only when a target is supplied.
+Sensor initialization still follows the configured lifecycle.
 Set a sequence's `instrument` field to select a collection target.
 Planning rejects unknown names, ordinary device IDs, and targets incompatible with the requested settings before sending commands.
 Before each frame, it samples subscribed device keywords from that instrument's

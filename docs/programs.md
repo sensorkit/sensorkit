@@ -108,11 +108,12 @@ Lifecycle hooks round out the picture: `@sk.on_enable` / `@sk.on_disable` fire w
 
 ## `StandardCollectTask`
 
-The standard collect task drives the whole observation — slew, track, filter, binning, N frames, stop:
+The standard collect task configures instruments and captures frames.
+When a target is supplied, it also slews, tracks, and stops the mount after collection.
 
 ```python
 StandardCollectTask(
-    target=...,                     # any Target (below)
+    target=...,                     # any Target (below), or None
     camera_params=CameraParameterSet(
         integration_time_seconds=5.0,
         frame_count=3,
@@ -127,6 +128,13 @@ StandardCollectTask(
 ```
 
 `sidereal_frames` is a small but practical SDA feature: within one rate-tracked satellite collect, chosen frame numbers switch the mount to sidereal tracking — giving you fixed-star frames for astrometric calibration in the same sequence.
+
+`target` is required but may be `None`.
+A collect with `target=None` captures frames without commanding pointing or tracking, for example darks and biases.
+It neither stops current tracking nor parks the mount.
+`sidereal_frames` must be empty when `target=None`.
+`Collect.target` in each frame's context records the requested target instruction.
+Mount telemetry supplies reported pointing.
 
 `camera_params` also takes a **list** of parameter sets, each describing a sequence of frames:
 

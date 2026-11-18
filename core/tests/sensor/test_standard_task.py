@@ -144,8 +144,9 @@ def test_pointing_is_preparation_and_stopping_it_is_cleanup():
         target=SIDEREAL)
 
 
-def test_a_collect_taking_no_frames_points_nowhere():
-    intent = translate(task(params(0)))
+@pytest.mark.parametrize("target", [TARGET, None], ids=["target", "no-target"])
+def test_a_collect_taking_no_frames_points_nowhere(target):
+    intent = translate(task(params(0), target=target))
 
     assert (intent.epochs, intent.prepare, intent.cleanup) == ((), (), ())
 
@@ -291,6 +292,39 @@ def test_cleanup_stops_the_mount_that_tracked(bench):
 
     assert [(s.target.device, s.command) for s in collect.cleanup] == [
         ("mount", Stop())]
+
+
+CALIBRATION = task(
+    CameraParameterSet(instrument="cam-w", frame_type=FrameType.DARK, integration_time_seconds=5.0,
+                       frame_count=2, gain=1.5),
+    CameraParameterSet(frame_type=FrameType.BIAS, integration_time_seconds=0.0, frame_count=3),
+    target=None, target_id="calibration")
+"""Darks on the west camera and biases on either, with no target."""
+
+
+def test_a_collect_without_a_target_commands_only_its_cameras(bench):
+    intent = translate(CALIBRATION, instruments=named(bench))
+    collect = pack(intent, bench)
+
+    assert counts(intent) == [[("exposure-0", 2), ("exposure-1", 3)]]
+    assert (collect.prepare, collect.cleanup) == ((), ())
+    assert [(s.target.device, s.command) for epoch in collect.epochs
+            for s in epoch.settings] == [("cam-w", ConfigureCameraSensor(gain=1.5))]
+
+
+def test_frames_without_a_target_keep_their_collect_metadata(bench):
+    collect = pack(translate(CALIBRATION, instruments=named(bench)), bench)
+    frames = {(u.acquisition.request, u.command.frame_type, u.command.integration_time)
+              for u in units_of(collect)}
+    infos = [u.acquisition.keywords[CollectInfo] for u in units_of(collect)]
+
+    assert cameras(collect)["exposure-0"] == {"cam-w"}
+    assert frames == {("exposure-0", FrameType.DARK, 5.0),
+                      ("exposure-1", FrameType.BIAS, 0.0)}
+    assert numbered(collect, "exposure-0") == [(0, 0), (1, 1)]
+    assert numbered(collect, "exposure-1") == [(0, 0), (1, 1), (2, 2)]
+    assert {(i.target, i.target_id) for i in infos} == {(None, "calibration")}
+    assert {dict(i.get_fits_cards())["TRKMODE"][0] for i in infos} == {"unknown"}
 
 
 @pytest.fixture(scope="module")

@@ -67,6 +67,36 @@ def test_parameter_sets_keep_their_instrument_names_on_the_wire():
     assert [p.instrument for p in restored.exposures] == ["cam-a", None]
 
 
+def test_a_null_target_survives_the_wire():
+    bias = CameraParameterSet(integration_time_seconds=0, frame_count=2, frame_type=FrameType.BIAS)
+    task = StandardCollectTask(target=None, camera_params=bias, target_id="calibration")
+    info = CollectInfo(target=None, target_id="calibration", params=bias, frame_number=1)
+    adapter = TypeAdapter(KeywordDict)
+    wire = adapter.dump_json(KeywordDict(info))
+
+    assert json.loads(task.model_dump_json())["target"] is None
+    assert StandardCollectTask.model_validate_json(task.model_dump_json()) == task
+    assert json.loads(wire)["Collect"]["target"] is None
+    assert adapter.validate_json(wire)[CollectInfo] == info
+
+
+@pytest.mark.parametrize("model", [StandardCollectTask, CollectInfo])
+def test_published_schemas_require_a_target_that_may_be_null(model):
+    schema = TypeAdapter(model).json_schema()
+
+    assert "target" in schema["required"]
+    assert {"type": "null"} in schema["properties"]["target"]["anyOf"]
+
+
+def test_sidereal_frames_need_a_target():
+    with pytest.raises(ValidationError, match="without a target does not control tracking"):
+        StandardCollectTask(
+            target=None,
+            camera_params=CameraParameterSet(integration_time_seconds=1, frame_count=2),
+            sidereal_frames=[1],
+        )
+
+
 def test_parameter_sets_without_an_instrument_leave_it_unset():
     params = CameraParameterSet.model_validate_json(
         '{"integration_time_seconds": 1.0, "frame_count": 1}'

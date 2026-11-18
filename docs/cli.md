@@ -109,6 +109,9 @@ sensorkit controller collect  -e ENTITY -t TARGET_JSON [-i SECONDS] [-c COUNT] [
 
 # Satellite TLE
 -t '{"target_type": "tle", "tle": {"line0": "ISS", "line1": "1 25544U ...", "line2": "2 25544 ..."}}'
+
+# No target; the collect sends no pointing or tracking commands
+-t null
 ```
 
 | Flag                              | Default | Description                 |

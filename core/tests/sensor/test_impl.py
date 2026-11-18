@@ -19,9 +19,10 @@ from sensorkit.sensor.execution import WorkflowError
 from sensorkit.sensor.impl import SensorConfig, SensorController
 from sensorkit.sensor.policies import SensorPolicies
 from sensorkit.std.collect import CameraParameterSet, CollectInfo, StandardCollectTask
+from sensorkit.std.instrument import FrameType
 from sensorkit.std.optics import Filter, Filters, SetFilter
 
-from .common import BENCH, TARGET, Rig, authored
+from .common import BENCH, TARGET, Rig, authored, reached
 
 
 @pytest.fixture
@@ -204,6 +205,50 @@ async def test_collect_headers_keep_task_context_without_keywords_from_other_cha
         assert capture.context.get(Filter) is None
     finally:
         await controller_impl.stop_device_subscriptions()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["completed", "failed", "aborted"])
+async def test_a_collect_without_a_target_never_commands_the_mount(
+        kit, rig, controller_impl, ending):
+    await attached(controller_impl, """
+        sensor:
+          components:
+            - device: mount
+            - device: cam
+              instrument: true
+        """)
+    client = kit.controller(str(controller_impl.entity))
+    await client.enable()
+    task = StandardCollectTask(target=None, camera_params=CameraParameterSet(
+        frame_type=FrameType.BIAS, integration_time_seconds=0.0, frame_count=2))
+
+    match ending:
+        case "completed":
+            await client.execute_task(task)
+            captures = rig["cam"].sent("CameraCapture")
+
+            assert [c.frame_type for c in captures] == [FrameType.BIAS] * 2
+            assert [c.context[CollectInfo].target for c in captures] == [None] * 2
+        case "failed":
+            rig["cam"].refusing["CameraCapture"] = 1
+
+            with pytest.raises(CallError):
+                await client.execute_task(task)
+        case "aborted":
+            rig["cam"].hold("CameraCapture")
+            execution = await client.start_task(task)
+            await reached(rig["cam"].arrival("CameraCapture"))
+            await client.abort_task(execution.task_id)
+
+            with pytest.raises(CallError):
+                async with asyncio.timeout(5.0):
+                    await execution
+
+            assert len(rig["cam"].sent("Abort")) == 1
+
+    assert rig["mount"].received == []
+    assert not rig.in_flight()
 
 
 # Filter assignment

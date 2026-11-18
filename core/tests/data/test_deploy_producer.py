@@ -129,13 +129,20 @@ async def test_a_focus_frame_without_collect_metadata_is_written(device_impl, tm
 
 
 @pytest.mark.asyncio
-async def test_a_science_frame_keeps_its_collect_cards_and_name(device_impl, tmp_path):
+@pytest.mark.parametrize(
+    ("target", "track_mode"), [(COLLECT.target, "fixed"), (None, "unknown")], ids=["target", "none"]
+)
+async def test_a_science_frame_keeps_its_collect_cards_and_name(
+    device_impl, tmp_path, target, track_mode
+):
     _, contexts = configured(tmp_path)
-    collect = CollectInfo(target=COLLECT.target, params=EXPOSURES, frame_number=3)
+    task = StandardCollectTask(target=target, camera_params=EXPOSURES)
+    collect = CollectInfo(target=target, params=EXPOSURES, frame_number=3)
 
-    path = await written(device_impl, tmp_path, frame(COLLECT, contexts, collect))
+    path = await written(device_impl, tmp_path, frame(task, contexts, collect))
     header = _header(path)
 
     assert path.name == f"{TASK_ID}_3.fits"
     assert (header["FILTER"], header["FRAMECNT"], header["FRAMENUM"]) == ("r", 5, 3)
+    assert header["TRKMODE"] == track_mode
     assert "FOCSWEEP" not in header
