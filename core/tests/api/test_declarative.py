@@ -359,7 +359,7 @@ async def test_device_declared_device_traits(service):
 
 @pytest.mark.asyncio
 async def test_declare_device_type_param(service):
-    """Test that the type= parameter on declare_device works like traits=."""
+    """A device missing its declared archetype's commands fails service startup."""
     arch = declare_archetype("test_arch_type_param", required_commands=(DevCmd,))
 
     @declare_device(type=arch)

@@ -73,6 +73,9 @@ class Bundle:
 ```
 
 - `declare_device(cls=None, *, name=None, type=None, traits=None)` — declare a device; `type` (an `Archetype`) and `traits` are validated against the registered command handlers when the service starts, so a device claiming "mount" that forgot its `Stop` handler fails at startup, not mid-slew.
+  `type` assigns the device's principal archetype identity.
+  Omitting `type` leaves the device without archetype identity, even when it structurally matches an archetype.
+  Archetypes supplied through `traits` validate capabilities without assigning identity.
 - `declare_controller(cls=None, *, name=None)` — declare a controller.
 - `declare_program(cls=None, *, name=None)` — declare a program.
 - `declare_entity(cls=None, *, name=None)` — a generic entity, for anything that just publishes/consumes data.
@@ -196,7 +199,8 @@ Standard commands are grouped by device capability and re-exported from `sensork
 | `sensorkit.std.instrument` | Data acquisition, camera configuration, and rotation |
 | `sensorkit.std.enclosure` | Enclosure opening, closing, and positioning |
 
-Devices implement whichever subset applies; traits and archetypes (below) describe the result.
+Devices implement whichever subset applies; structurally matched traits describe their capabilities.
+The declared archetype identifies the implementation's principal role.
 
 ---
 
@@ -215,9 +219,17 @@ TRACKING = sk.declare_trait("tracking", required_commands=(FollowTarget, Stop))
 - `Trait(name, required_commands, required_keywords)` — `match(details)` tests a device; declared via `declare_trait(...)`.
   A device that implements a trait's required commands is currently assumed to publish its required keywords.
   A trait with no required commands still needs its keywords declared.
-- `Archetype` — a trait a device should match at most one of (mount, camera, …), adding `required_traits` and non-matching `optional_commands`; declared via `declare_archetype(...)`.
+- `Archetype` — a device's declared principal role (mount, camera, etc.), adding `required_traits` and `optional_commands`; declared via `declare_archetype(...)`.
+  Required sub-traits contribute to structural matching; optional commands do not.
+  A device can structurally match multiple archetypes as traits while having at most one declared archetype identity.
 
-Declared traits/archetypes join global registries used for discovery (`SensorKit.list_devices()` reports each device's resolved traits and archetype) and for validation at device registration when passed to `declare_device(type=..., traits=[...])`.
+Declared traits and archetypes join global registries used for structural matching and validation at device registration when passed to `declare_device(type=..., traits=[...])`.
+Device discovery exposes structurally matched traits and the declared archetype.
+Clients use the archetype identity for classification and presentation, and traits for capability selection.
+`DeviceDetails.archetype` retains the published identity even if the archetype is unregistered locally.
+`DeviceDetails.get_archetype()` and `DeviceClient.get_archetype()` return the locally registered archetype, or `None` if omitted or unregistered.
+Metadata published without an archetype name has no archetype identity.
+Restart existing device services to publish their declared identity.
 
 ---
 
@@ -242,7 +254,7 @@ Publish from inside a service with `sk.entity().publish(model)`; consume remotel
 `SensorKit` is the client-side entrypoint — obtained from `sk.connect()` or `Service.client`:
 
 - `device(name)` / `controller(name)` / `program(name)` / `entity(name)` — typed clients for remote entities.
-- `list_services()`, `list_entities()`, `list_devices()` — discovery with online status; `list_devices()` includes resolved traits/archetypes.
+- `list_services()`, `list_entities()`, `list_devices()` — discovery with online status; device metadata includes structurally matched traits and the declared archetype.
 - `register_service(name, version)` — join the bus as a named service.
 
 ### `EntityClient`

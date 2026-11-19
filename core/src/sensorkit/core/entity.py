@@ -32,7 +32,7 @@ from sensorkit.common.keyword import (
     get_keyword_info,
     validate_keyword_json,
 )
-from sensorkit.core.trait import match_archetype, match_traits
+from sensorkit.core.trait import Archetype, get_trait, match_traits
 from sensorkit.data.graph import DataGraph
 
 if TYPE_CHECKING:
@@ -49,18 +49,22 @@ class EntityDetails(BaseModel):
 
 
 class DeviceDetails(EntityDetails):
-    """Device info."""
+    """Device identity and advertised capabilities."""
+
+    archetype: str | None = None
+    """Declared principal archetype, or None when omitted."""
 
     supported_commands: frozenset[str]
     """Identifiers of each command supported by this device."""
 
-    @functools.cached_property
-    def archetype(self):
-        return match_archetype(self)
+    def get_archetype(self) -> Archetype | None:
+        """Return the declared archetype if registered locally, otherwise None."""
+        archetype = get_trait(self.archetype) if self.archetype is not None else None
+        return archetype if isinstance(archetype, Archetype) else None
 
     @functools.cached_property
     def traits(self):
-        return match_traits(self, exclude_archetypes=True)
+        return match_traits(self)
 
 
 @declare_keyword(key="Instrument")

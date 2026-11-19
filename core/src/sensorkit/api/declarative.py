@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
+import itertools
 import warnings
 from collections.abc import Callable, Coroutine
 from enum import StrEnum, auto
@@ -47,23 +48,17 @@ AUTO_ENTITY_ATTR = "__sk_entity__"
 DECL_MARK_ATTR = "__sk_decl__"
 CALLBACK_MARK_ATTR = "__sk_callback__"
 REQUEST_ATTR = "__sk_request__"
-TRAIT_ANNOTATION_ATTR = "__sk_traits__"
 
 
-def _mark_decl_type(cls: type, decl_type: type[DeclaredEntity]):
-    setattr(cls, DECL_MARK_ATTR, decl_type)
+def _mark_decl_type(cls: type, decl_type: type[DeclaredEntity], **kwargs):
+    setattr(cls, DECL_MARK_ATTR, staticmethod(functools.partial(decl_type, **kwargs)))
     return cls
 
 
 def auto_create_decl(instance):
-    if decl_type := getattr(instance, DECL_MARK_ATTR, None):
-        decl = decl_type(None)
+    if decl_factory := getattr(instance, DECL_MARK_ATTR, None):
+        decl = decl_factory(None)
         setattr(instance, AUTO_ENTITY_ATTR, decl)
-
-        # Pick up advisory trait annotations for devices.
-        if isinstance(decl, DeclaredDevice):
-            if traits := getattr(instance, TRAIT_ANNOTATION_ATTR, None):
-                decl._declared_traits = list(traits)
 
     return instance
 
@@ -259,13 +254,25 @@ class DeclaredEntity[T: EntityImpl = EntityImpl](EntityDelegate):
 class DeclaredDevice(DeclaredEntity[DeviceImpl], DeviceDelegate):
     """Represents an eventual device registration."""
 
-    def __init__(self, name: str | None):
+    def __init__(
+        self,
+        name: str | None,
+        *,
+        archetype: Archetype | None = None,
+        traits: list[Trait] | None = None,
+    ):
         super().__init__(name)
-        self._declared_traits: list[Trait] = []
+        self.archetype = archetype
+        self.declared_traits = frozenset(
+            itertools.chain(
+                (archetype,) if archetype is not None else (),
+                traits or (),
+            )
+        )
 
     @override
     def create_impl(self, svc: ServiceContext):
-        return DeviceImpl.for_service_context(svc, self.name)
+        return DeviceImpl.for_service_context(svc, self.name, archetype=self.archetype)
 
     @override
     def validate_declaration(self):
@@ -273,7 +280,7 @@ class DeclaredDevice(DeclaredEntity[DeviceImpl], DeviceDelegate):
         #        This should be removed in favor of API that allows the device implementation
         #        to explicitly declare the keywords it publishes, which can then be used to
         #        validate whether its traits are satisfied.
-        for trait in self._declared_traits:
+        for trait in self.declared_traits:
             for kw_id in trait.effective_keyword_ids():
                 self.impl.declare_published_keyword(kw_id)
 
@@ -283,7 +290,7 @@ class DeclaredDevice(DeclaredEntity[DeviceImpl], DeviceDelegate):
         if not isinstance(details, DeviceDetails):
             raise RuntimeError("Device did not publish its details")
 
-        for trait in self._declared_traits:
+        for trait in self.declared_traits:
             if not trait.match(details):
                 missing = []
 
@@ -727,28 +734,23 @@ def declare_device(
     Can be used as a bare class decorator (`@sk.declare_device`), a keyword
     decorator (`@sk.declare_device(type=..., traits=[...])`), or an explicit declaration
     (`my_device = sk.declare_device(name="foo", type=..., traits=[...])`)
+
+    `type` assigns the device's principal archetype. Omitting it leaves the
+    device without archetype identity. Both `type` and `traits` are validated
+    against the implementation's capabilities.
     """
-    all_traits: list[Trait] | None = None
-    if type is not None or traits:
-        all_traits = ([type] if type is not None else []) + list(traits or [])
 
     if cls:
-        # Bare decorator: @sk.declare_device
-        if all_traits:
-            setattr(cls, TRAIT_ANNOTATION_ATTR, all_traits)
-        return _mark_decl_type(cls, DeclaredDevice)
+        return _mark_decl_type(cls, DeclaredDevice, archetype=type, traits=list(traits or []))
     elif name is not None:
-        # Explicit declaration: sk.declare_device(name="foo")
-        decl = DeclaredDevice(name)
-        if all_traits:
-            decl._declared_traits = all_traits
-        return decl
-    elif all_traits is not None:
-        # Keyword decorator: @sk.declare_device(type=..., traits=[...])
-        def decorator(decorated_cls):
-            setattr(decorated_cls, TRAIT_ANNOTATION_ATTR, all_traits)
-            return _mark_decl_type(decorated_cls, DeclaredDevice)
-        return decorator
+        return DeclaredDevice(name, archetype=type, traits=traits)
+    elif type is not None or traits:
+        return functools.partial(
+            _mark_decl_type,
+            decl_type=DeclaredDevice,
+            archetype=type,
+            traits=list(traits or []),
+        )
     else:
         return DeclaredDevice(None)
 

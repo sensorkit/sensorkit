@@ -17,7 +17,6 @@ from sensorkit.core.trait import (
     declare_trait,
     get_registered_archetypes,
     get_registered_traits,
-    match_archetype,
     match_traits,
     trait_keyword_ids,
 )
@@ -227,7 +226,7 @@ class TestMatchHelpers:
         assert match_traits(details, [provider, stoppable]) == [provider]
         assert match_traits(None, [provider, stoppable]) == []
 
-    def test_match_archetype(self):
+    def test_matching_archetype_is_a_trait_without_identity(self):
         can_stop = declare_trait("t_mh_cs", required_commands=(Stop,))
         arch = declare_archetype(
             "t_mh_arch",
@@ -235,7 +234,8 @@ class TestMatchHelpers:
             required_traits=(can_stop,),
         )
         details = DeviceDetails(supported_commands={"Init", "FollowTarget", "Stop"}, published_keywords=frozenset())
-        assert match_archetype(details) == arch
+        assert arch in details.traits
+        assert details.archetype is None
 
     def test_trait_keyword_ids(self):
         t1 = declare_trait("t_tk_1", required_commands=(Stop,), required_keywords=("KwA", "KwB"))
@@ -244,10 +244,9 @@ class TestMatchHelpers:
         details = DeviceDetails(supported_commands={"Stop"}, published_keywords=frozenset({"KwC"}))
         assert trait_keyword_ids(details, [t1, t2, t3]) == frozenset({"KwA", "KwB", "KwC"})
 
-    def test_match_archetype_no_match(self):
-        # With no matching archetype for this device, should return None.
+    def test_no_archetype_identity(self):
         details = DeviceDetails(supported_commands={"SomeUnknownCommand"}, published_keywords=frozenset())
-        assert match_archetype(details) is None
+        assert details.archetype is None
 
 
 class TestTraitIdentity:

@@ -27,12 +27,13 @@ class EntityImpl(EntityBase, EntityInterface):
     """The instance in the current execution context, if any."""
 
     @classmethod
-    def for_service_context(cls, context: ServiceContext, entity: str) -> Self:
-        """Return the entity in the current execution context."""
+    def for_service_context(cls, context: ServiceContext, entity: str, **kwargs) -> Self:
+        """Construct an entity implementation for the service context."""
         return cls(
             sensorkit=context.sensorkit(),
             entity=Entity.at(entity),
             task_group=context.task_group,
+            **kwargs,
         )
 
     def __init__(self, sensorkit: SensorKit, entity: Entity, *, task_group: asyncio.TaskGroup):

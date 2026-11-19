@@ -18,7 +18,7 @@ from sensorkit.core.impl.device import DeviceImpl
 from sensorkit.core.impl.entity import EntityImpl
 from sensorkit.core.impl.program import ProgramImpl
 from sensorkit.core.program import ProgramClient
-from sensorkit.core.trait import Trait
+from sensorkit.core.trait import Trait, declare_archetype
 
 
 @pytest.mark.asyncio
@@ -107,3 +107,36 @@ async def test_device_trait_matching_reads_republished_keywords(kit, service_con
     await impl.publish_entity_info()
 
     assert await client.has_trait(pointing)
+
+
+@pytest.mark.asyncio
+async def test_metadata_without_identity_does_not_infer_archetype(kit):
+    archetype = declare_archetype("legacy_role", required_keywords=("LegacyKeyword",))
+    info = EntityInfo.model_validate_json(
+        '{"entity_type": "device", "details": '
+        '{"supported_commands": [], "published_keywords": ["LegacyKeyword"]}}'
+    )
+    client = kit.device("legacy")
+    await client.kv_put_model(info)
+
+    details = await client.get_details()
+
+    assert details.archetype is None
+    assert await client.get_archetype() is None
+    assert archetype in details.traits
+
+
+@pytest.mark.asyncio
+async def test_unregistered_archetype_name_survives_publication(kit):
+    client = kit.device("custom")
+    await client.kv_put_model(
+        EntityInfo(
+            entity_type="device",
+            details=DeviceDetails(archetype="unregistered_custom_role", supported_commands=set()),
+        )
+    )
+
+    details = await client.get_details()
+
+    assert details.archetype == "unregistered_custom_role"
+    assert await client.get_archetype() is None

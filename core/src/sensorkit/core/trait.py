@@ -2,8 +2,8 @@
 """Entity traits and device archetypes.
 
 Traits match device commands or declared keyword publications. An entity can
-satisfy multiple traits. Archetypes describe a device category with required
-and optional traits and commands.
+satisfy multiple traits. Archetypes identify a device's declared principal role
+and specify required commands, required sub-traits, and optional commands.
 """
 
 from __future__ import annotations
@@ -70,10 +70,11 @@ class Trait:
 
 @dataclass(frozen=True, eq=False)
 class Archetype(Trait):
-    """A trait archetype: a device should match at most one.
+    """A device's principal role, assigned by declaration.
 
-    Extends Trait with support for required and optional sub-traits, and optional commands.
-    Optional traits and commands do not affect matching but describe extended capabilities.
+    A device can structurally satisfy multiple archetypes as traits.
+    Required sub-traits contribute to matching. Optional commands describe
+    extended capabilities and do not affect matching.
     """
 
     required_traits: tuple[Trait, ...] = ()
@@ -127,7 +128,7 @@ def declare_archetype(
 ) -> Archetype:
     """Declare an archetype and add it to the global registries.
 
-    Archetypes extend traits with required and optional sub-traits, and optional commands.
+    Archetypes extend traits with required sub-traits and optional commands.
     Sub-traits must themselves be plain Traits, not Archetypes.
     """
     for t in required_traits:
@@ -168,8 +169,6 @@ def get_registered_archetypes() -> frozenset[Archetype]:
 def match_traits(
     details: EntityDetails | None,
     traits: Iterable[Trait] | None = None,
-    *,
-    exclude_archetypes: bool = False,
 ) -> list[Trait]:
     """Return traits satisfied by the entity's advertised capabilities."""
     if traits is None:
@@ -178,9 +177,6 @@ def match_traits(
     output = []
 
     for trait in traits:
-        if exclude_archetypes and isinstance(trait, Archetype):
-            continue
-
         if trait.match(details):
             output.append(trait)
 
@@ -193,12 +189,3 @@ def trait_keyword_ids(
 ) -> frozenset[str]:
     """Return the keyword IDs required by every trait the device satisfies."""
     return frozenset().union(*(trait.effective_keyword_ids() for trait in match_traits(details, traits)))
-
-
-def match_archetype(details: DeviceDetails) -> Archetype | None:
-    """Return the first matching archetype for the given device details, or None."""
-    for archetype in _archetype_registry:
-        if archetype.match(details):
-            return archetype
-
-    return None

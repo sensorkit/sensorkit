@@ -93,7 +93,7 @@ class DeviceListing(EntityInfo):
     @model_validator(mode="after")
     def _populate_from_details(self):
         if isinstance(self.details, DeviceDetails):
-            self.archetype = self.details.archetype.name if self.details.archetype else None
+            self.archetype = self.details.archetype
             self.traits = [trait.name for trait in self.details.traits]
 
         return self

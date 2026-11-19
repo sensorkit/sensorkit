@@ -173,7 +173,9 @@ alpaca:
 
 Once connected, each device publishes:
 
-- **Details** — the commands it supports, from which SensorKit derives its *traits* (structural capabilities like "can slew", "can capture") and *archetype* (mount, camera, …). Controllers match devices by capability, not by driver.
+- **Details** — the device's declared *archetype* (its principal role, such as mount or camera) and advertised capabilities, from which SensorKit derives its *traits* (structural capabilities like "can slew" or "can capture").
+  An omitted archetype leaves the device without archetype identity.
+  Controllers match devices by capability.
 - **Keywords** - Typed telemetry, such as pointing, temperature, and weather readings.
   Polling intervals depend on the driver; INDIGO publishes property changes as they arrive.
 - **State** - Framework enablement and any driver-specific persisted state.

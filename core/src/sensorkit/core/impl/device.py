@@ -25,6 +25,7 @@ from sensorkit.core.device import (
 )
 from sensorkit.core.entity import DeviceDetails, EntityInfo
 from sensorkit.core.impl.entity import EntityImpl
+from sensorkit.core.trait import Archetype
 
 
 class DeviceImpl(EntityImpl, DeviceInterface):
@@ -32,9 +33,10 @@ class DeviceImpl(EntityImpl, DeviceInterface):
 
     current: ClassVar[ContextVar[DeviceImpl | None]] = ContextVar("current_device", default=None)
 
-    def __init__(self, **kwargs):
+    def __init__(self, *, archetype: Archetype | None = None, **kwargs):
         super().__init__(**kwargs)
 
+        self.archetype = archetype
         self._enable_hooks: list[Callable[[], None]] = []
         self._disable_hooks: list[Callable[[], None]] = []
         self._handlers: dict[str, CommandHandlerCallback] = {}
@@ -157,6 +159,7 @@ class DeviceImpl(EntityImpl, DeviceInterface):
         return EntityInfo(
             entity_type="device",
             details=DeviceDetails(
+                archetype=self.archetype.name if self.archetype is not None else None,
                 supported_commands=frozenset(self._handlers.keys()),
                 published_keywords=frozenset(self._published_keywords),
             ),

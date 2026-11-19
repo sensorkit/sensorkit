@@ -18,6 +18,7 @@ from sensorkit.core.controller import InternalControllerState
 from sensorkit.core.device import Abort
 from sensorkit.core.program import ProgramActiveStateResponse, set_active_state_request
 from sensorkit.core.task import CollectTask, InitTask, TaskExecution
+from sensorkit.core.trait import declare_archetype
 from sensorkit.webapi.fastapi import WebAPI, WebAPIConfig
 from sensorkit.webapi.forwarder import SKRecord
 
@@ -59,6 +60,33 @@ async def http(webapi_setup):
     """Shortcut: return just the httpx client."""
     _, _, _, _, _, _, client = webapi_setup
     return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("archetype_name", [None, "listing_principal", "unregistered_listing_role"])
+async def test_entity_listing_uses_published_archetype(webapi_setup, archetype_name):
+    _, _, dev, _, _, _, client = webapi_setup
+    principal = declare_archetype("listing_principal", required_keywords=("ListingKeyword",))
+    additional = declare_archetype("listing_additional", required_keywords=("ListingKeyword",))
+    dev.declare_published_keyword("ListingKeyword")
+    info = dev.entity_info()
+    info.details.archetype = archetype_name
+    await dev.kv_put_model(info)
+
+    async with asyncio.timeout(3):
+        while True:
+            response = await client.get("/entities")
+            assert response.status_code == 200
+            listing = next((item for item in response.json() if item["name"] == "mydevice"), None)
+
+            if listing is not None and "ListingKeyword" in listing["details"]["published_keywords"]:
+                break
+
+            await asyncio.sleep(0.01)
+
+    assert listing["archetype"] == archetype_name
+    assert listing["details"]["archetype"] == archetype_name
+    assert {principal.name, additional.name} <= set(listing["traits"])
 
 
 # ---------------------------------------------------------------------------

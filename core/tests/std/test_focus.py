@@ -19,7 +19,7 @@ from sensorkit.common.keyword import (
     validate_keyword_json,
 )
 from sensorkit.core.entity import DeviceDetails, EntityDetails
-from sensorkit.core.trait import match_archetype, trait_keyword_ids
+from sensorkit.core.trait import trait_keyword_ids
 from sensorkit.std import focus, optics
 from sensorkit.std.focus import (
     AutoFocus,
@@ -530,7 +530,7 @@ class TestTraits:
         details = DeviceDetails(supported_commands={"ChangeFocusPosition"})
 
         assert StandardFocuser.effective_keyword_ids() == {"FocusPosition"}
-        assert match_archetype(details) == StandardFocuser
+        assert StandardFocuser.match(details)
         assert "FocusPosition" in trait_keyword_ids(details)
 
     def test_focuser_identifiers_are_unchanged(self):

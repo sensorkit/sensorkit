@@ -18,7 +18,7 @@ from sensorkit.core.entity import (
     EntityRef,
 )
 from sensorkit.core.state import EventSourcedState
-from sensorkit.core.trait import Trait, match_archetype, match_traits
+from sensorkit.core.trait import Archetype, Trait, match_traits
 
 if TYPE_CHECKING:
     from sensorkit.core.client import SensorKit
@@ -140,10 +140,10 @@ class DeviceClient(EntityClient):
         details = await self.get_details()
         return match_traits(details, traits)
 
-    async def get_archetype(self) -> Trait | None:
-        """Return the matching archetype for this device, if any."""
+    async def get_archetype(self) -> Archetype | None:
+        """Return the declared archetype if registered locally, otherwise None."""
         details = await self.get_details()
-        return match_archetype(details)
+        return details.get_archetype()
 
 
 class DeviceRef(EntityRef[DeviceClient]):
