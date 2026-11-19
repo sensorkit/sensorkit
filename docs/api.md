@@ -223,7 +223,9 @@ TRACKING = sk.declare_trait("tracking", required_commands=(FollowTarget, Stop))
   Required sub-traits contribute to structural matching; optional commands do not.
   A device can structurally match multiple archetypes as traits while having at most one declared archetype identity.
 
-Declared traits and archetypes join global registries used for structural matching and validation at device registration when passed to `declare_device(type=..., traits=[...])`.
+Declared traits and archetypes share one registry keyed by name, used for structural matching and validation at device registration when passed to `declare_device(type=..., traits=[...])`.
+Every name must be unique across traits and archetypes.
+Declaring a name more than once raises `ValueError`, including identical declarations.
 Device discovery exposes structurally matched traits and the declared archetype.
 Clients use the archetype identity for classification and presentation, and traits for capability selection.
 `DeviceDetails.archetype` retains the published identity even if the archetype is unregistered locally.

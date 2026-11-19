@@ -11,12 +11,12 @@ from sensorkit.core.entity import ControllerDetails, DeviceDetails, EntityDetail
 from sensorkit.core.trait import (
     Archetype,
     Trait,
-    _archetype_registry,
     _trait_registry,
     declare_archetype,
     declare_trait,
     get_registered_archetypes,
     get_registered_traits,
+    get_trait,
     match_traits,
     trait_keyword_ids,
 )
@@ -30,15 +30,12 @@ from sensorkit.std import (
 
 
 @pytest.fixture(autouse=True)
-def _clean_trait_registries():
-    """Snapshot and restore the global trait registries around each test."""
+def _clean_trait_registry():
+    """Snapshot and restore registered trait definitions around each test."""
     saved_traits = _trait_registry.copy()
-    saved_archetypes = _archetype_registry.copy()
     yield
     _trait_registry.clear()
     _trait_registry.update(saved_traits)
-    _archetype_registry.clear()
-    _archetype_registry.update(saved_archetypes)
 
 
 class TestTraitMatching:
@@ -198,14 +195,43 @@ class TestRegistry:
         t = declare_trait("t_reg_1", required_commands=(Stop,))
         assert t in get_registered_traits()
 
-    def test_archetype_registered_in_both(self):
+    def test_registered_archetype_is_available_as_a_trait(self):
         arch = declare_archetype("t_reg_2", required_commands=(Init,))
         assert arch in get_registered_traits()
         assert arch in get_registered_archetypes()
 
-    def test_non_archetype_not_in_archetype_registry(self):
+    def test_registered_archetypes_exclude_plain_traits(self):
         t = declare_trait("t_reg_3", required_commands=(Stop,))
         assert t not in get_registered_archetypes()
+
+    @pytest.mark.parametrize("first_declaration", [declare_trait, declare_archetype])
+    @pytest.mark.parametrize("second_declaration", [declare_trait, declare_archetype])
+    @pytest.mark.parametrize("second_commands", [(), (Init,)])
+    def test_duplicate_name_is_rejected(
+        self, first_declaration, second_declaration, second_commands
+    ):
+        original = first_declaration("duplicate_role")
+
+        with pytest.raises(ValueError, match="Trait name 'duplicate_role' is already registered"):
+            second_declaration("duplicate_role", required_commands=second_commands)
+
+        assert get_trait("duplicate_role") is original
+        assert (original in get_registered_archetypes()) is isinstance(original, Archetype)
+
+    def test_lookup_distinguishes_traits_and_archetypes(self):
+        trait = declare_trait("lookup_capability")
+        archetype = declare_archetype("lookup_principal_role")
+
+        assert get_trait(trait.name) is trait
+        assert get_trait(archetype.name) is archetype
+        assert get_trait("unregistered_role") is None
+        assert (
+            DeviceDetails(archetype=trait.name, supported_commands=set()).get_archetype() is None
+        )
+        assert (
+            DeviceDetails(archetype=archetype.name, supported_commands=set()).get_archetype()
+            is archetype
+        )
 
 
 class TestMatchHelpers:

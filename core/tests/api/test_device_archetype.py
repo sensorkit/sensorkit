@@ -86,7 +86,9 @@ async def test_published_archetype_identity(kit, service, form, identity):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("form", ["decorator", "named"])
 async def test_declared_archetype_requires_commands(service, form):
-    archetype = sk.declare_archetype("required_role_command", required_commands=(RoleCommand,))
+    archetype = sk.declare_archetype(
+        f"required_role_command_{form}", required_commands=(RoleCommand,)
+    )
 
     match form:
         case "decorator":

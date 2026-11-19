@@ -17,9 +17,7 @@ if TYPE_CHECKING:
     from sensorkit.core.device import DeviceCommand
     from sensorkit.core.entity import DeviceDetails, EntityDetails
 
-# Global registries, auto-populated by declare_trait() and declare_archetype().
-_trait_registry: set[Trait] = set()
-_archetype_registry: set[Archetype] = set()
+_trait_registry: dict[str, Trait] = {}
 
 
 @dataclass(frozen=True, eq=False)
@@ -108,13 +106,20 @@ def declare_trait(
     required_commands: tuple[type[DeviceCommand], ...] = (),
     required_keywords: tuple[str, ...] = (),
 ) -> Trait:
-    """Declare an entity trait and add it to the registry."""
+    """Declare an entity trait and add it to the registry.
+
+    Raises:
+        ValueError: The name is already registered as a trait or archetype.
+    """
+    if name in _trait_registry:
+        raise ValueError(f"Trait name '{name}' is already registered")
+
     trait = Trait(
         name=name,
         required_commands=required_commands,
         required_keywords=required_keywords,
     )
-    _trait_registry.add(trait)
+    _trait_registry[name] = trait
     return trait
 
 
@@ -126,11 +131,17 @@ def declare_archetype(
     required_traits: tuple[Trait, ...] = (),
     optional_commands: tuple[type[DeviceCommand], ...] = (),
 ) -> Archetype:
-    """Declare an archetype and add it to the global registries.
+    """Declare an archetype and add it to the trait registry.
 
     Archetypes extend traits with required sub-traits and optional commands.
     Sub-traits must themselves be plain Traits, not Archetypes.
+
+    Raises:
+        ValueError: The name is already registered, or a sub-trait is an archetype.
     """
+    if name in _trait_registry:
+        raise ValueError(f"Trait name '{name}' is already registered")
+
     for t in required_traits:
         if isinstance(t, Archetype):
             raise ValueError(
@@ -145,25 +156,24 @@ def declare_archetype(
         optional_commands=optional_commands,
     )
 
-    _trait_registry.add(archetype)
-    _archetype_registry.add(archetype)
+    _trait_registry[name] = archetype
 
     return archetype
 
 
 def get_registered_traits() -> frozenset[Trait]:
     """Return all registered traits (including archetypes)."""
-    return frozenset(_trait_registry)
+    return frozenset(_trait_registry.values())
 
 
 def get_trait(name: str) -> Trait | None:
     """Return the registered trait or archetype with this name, or None."""
-    return next((t for t in _trait_registry if t.name == name), None)
+    return _trait_registry.get(name)
 
 
 def get_registered_archetypes() -> frozenset[Archetype]:
     """Return all registered archetypes."""
-    return frozenset(_archetype_registry)
+    return frozenset(trait for trait in _trait_registry.values() if isinstance(trait, Archetype))
 
 
 def match_traits(
@@ -172,7 +182,7 @@ def match_traits(
 ) -> list[Trait]:
     """Return traits satisfied by the entity's advertised capabilities."""
     if traits is None:
-        traits = _trait_registry
+        traits = _trait_registry.values()
 
     output = []
 

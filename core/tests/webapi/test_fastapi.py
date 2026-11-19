@@ -62,12 +62,19 @@ async def http(webapi_setup):
     return client
 
 
+@pytest.fixture(scope="module")
+def listing_archetypes():
+    return (
+        declare_archetype("listing_principal", required_keywords=("ListingKeyword",)),
+        declare_archetype("listing_additional", required_keywords=("ListingKeyword",)),
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("archetype_name", [None, "listing_principal", "unregistered_listing_role"])
-async def test_entity_listing_uses_published_archetype(webapi_setup, archetype_name):
+async def test_entity_listing_uses_published_archetype(webapi_setup, archetype_name, listing_archetypes):
     _, _, dev, _, _, _, client = webapi_setup
-    principal = declare_archetype("listing_principal", required_keywords=("ListingKeyword",))
-    additional = declare_archetype("listing_additional", required_keywords=("ListingKeyword",))
+    principal, additional = listing_archetypes
     dev.declare_published_keyword("ListingKeyword")
     info = dev.entity_info()
     info.details.archetype = archetype_name
