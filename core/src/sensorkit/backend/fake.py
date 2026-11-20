@@ -350,15 +350,15 @@ class FakeBackendImpl(BackendImpl):
     ):
         key = target.full_path()
 
-        if revision is None:
-            revision = 0
-        elif self._kv.defined(key):
-            entry = self._kv.element(key).history[-1]
+        if self._kv.defined(key):
+            last_revision = self._kv.element(key).history[-1].revision
 
-            if revision != entry.revision:
+            if revision is not None and revision != last_revision:
                 raise RevisionError("revision does not match")
 
-        revision += 1
+            revision = last_revision
+
+        revision = (revision or 0) + 1
 
         # Determine whether there is an applicable TTL, and if so, enforce it by creating tasks
         # to send a `kv_delete` at expiry.

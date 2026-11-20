@@ -6,7 +6,7 @@ import asyncio
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from sensorkit.backend.base import Entity, SpecialProperty, Subject
+from sensorkit.backend.base import Entity, RevisionError, SpecialProperty, Subject
 from sensorkit.backend.fake import FakeBackendImpl
 
 ENTITY = Entity.at("mydevice")
@@ -37,6 +37,27 @@ def subscriptions(fake: FakeBackendImpl, subject: Subject) -> int:
             return len(fake._kv.element(subject.path).deep_wildcard)
         case _:
             return len(fake._kv.element(subject.full_path()).direct)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delete_first", [False, True])
+async def test_unconditional_kv_write_advances_revision(backend, delete_first):
+    kv = backend.key_value(ENTITY)
+    original = await kv.create("mykey", b"original")
+
+    if delete_first:
+        await kv.delete("mykey")
+
+    replacement = await kv.update("mykey", b"replacement")
+    assert replacement.revision == original.revision + (2 if delete_first else 1)
+
+    with pytest.raises(RevisionError):
+        await kv.update("mykey", b"stale", revision=original.revision)
+
+    with pytest.raises(RevisionError):
+        await kv.delete("mykey", revision=original.revision)
+
+    assert await kv.get("mykey") == replacement
 
 
 # KV monitor release
