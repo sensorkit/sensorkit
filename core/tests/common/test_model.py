@@ -100,6 +100,40 @@ async def test_registry_with_external_discriminator():
     assert isinstance(obj1, MyModel2)
 
 
+def test_discriminator_uses_only_views_from_its_registry():
+    class RegisteredModel(BaseModel):
+        kind: Literal["shared"] = "shared"
+
+    class ScopedModel(RegisteredModel): ...
+
+    class UnrelatedModel(RegisteredModel): ...
+
+    registry = ModelRegistry(RegisteredModel, discriminator="kind")
+    registry.add(ScopedModel, namespace="site")
+    scoped_view = registry.create_resolved_view(["site"])
+    unrelated_registry = ModelRegistry(UnrelatedModel, discriminator="kind")
+    unrelated_view = unrelated_registry.create_resolved_view([])
+    adapter = TypeAdapter(Annotated[RegisteredModel, registry.discriminator()])
+    data = {"kind": "shared"}
+    unrelated_context = {ModelRegistryView.REGISTRY_CONTEXT: unrelated_view}
+
+    assert type(adapter.validate_python(data, context=unrelated_context)) is RegisteredModel
+
+    with unrelated_view.as_current():
+        assert type(adapter.validate_python(data)) is RegisteredModel
+        instance = RegisteredModel()
+        assert adapter.validate_python(instance) is instance
+
+        with pytest.raises(ValidationError, match="model UnrelatedModel not in registry"):
+            adapter.validate_python(UnrelatedModel())
+
+        scoped_context = {ModelRegistryView.REGISTRY_CONTEXT: scoped_view}
+        assert type(adapter.validate_python(data, context=scoped_context)) is ScopedModel
+
+    with scoped_view.as_current():
+        assert type(adapter.validate_python(data, context=unrelated_context)) is ScopedModel
+
+
 @pytest.mark.parametrize("mode", ["control", "str", "context"])
 def test_registry_performance(
     mode: Literal["control", "str", "context"],

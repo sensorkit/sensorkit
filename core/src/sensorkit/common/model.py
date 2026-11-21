@@ -230,13 +230,18 @@ class ModelRegistryView[T](ModelRegistryBase[T]):
     Call `update` to refresh the view after the registry changes.
     """
 
-    def __init__(self, registry: ModelRegistry, precedence: Iterable[str] = ()):
+    def __init__(self, registry: ModelRegistry[T], precedence: Iterable[str] = ()):
         self._registry = registry
         self._precedence: dict[str, int] = {ns: i for i, ns in enumerate(precedence)}
         self._resolved: dict[str, type[T]] = {}
         self._index: dict[type[T], str] = {}
 
         self.update()
+
+    @property
+    def registry(self) -> ModelRegistry[T]:
+        """The model registry this view resolves."""
+        return self._registry
 
     def _resolve(self, tag: str, namespaces: tuple[str | None, ...]):
         logger.debug(f"resolving tag '{tag}' with namespaces: {namespaces}")
@@ -339,31 +344,25 @@ class RegistryDiscriminator:
         self.registry = registry
 
     def _validate(self, data: Any, _handler: ModelWrapValidatorHandler, info: ValidationInfo):
-        model_type = type(data)
+        registry: ModelRegistryBase = self.registry
 
-        # Look for a registry view in the validation context. If none is found, fallback to the
-        # contextvar.
-        registry_view: ModelRegistryBase | None = (
-            info.context and info.context.get(ModelRegistryView.REGISTRY_CONTEXT)
-        ) or _registry_var.get()
+        for view in (
+            info.context and info.context.get(ModelRegistryView.REGISTRY_CONTEXT),
+            _registry_var.get(),
+        ):
+            if isinstance(view, ModelRegistryView) and view.registry is self.registry:
+                registry = view
+                break
 
-        # If a concrete model instance is provided, accept it if it's part of the registry.
         if isinstance(data, BaseModel):
-            exists = model_type in registry_view if registry_view else model_type in self.registry
+            model_type = type(data)
 
-            if not exists:
+            if model_type not in registry:
                 raise ValueError(f"model {model_type.__name__} not in registry")
 
             return data
 
-        # Validate using the registry view if available. This is guaranteed to be conflict-free
-        # since namespaces have been resolved.
-        if registry_view is not None:
-            return registry_view.validate(data, info=info)
-
-        # Otherwise, validate against the entire deep registry. This will fail if the tag is
-        # defined in multiple namespaces.
-        return self.registry.validate(data, info=info)
+        return registry.validate(data, info=info)
 
     def __get_pydantic_core_schema__(
         self,
